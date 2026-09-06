@@ -245,12 +245,28 @@
 | 9 | 整改总览文档 | docs/20-任务文档/23-dsh-整改总览-V1.2-20260906.md | 12 项任务执行结果汇总 | 文件存在 |
 | 10 | 工作快照 | docs/00-统筹入口/06-工作快照.md | 补全整改 V1.2 章节 | 章节存在 |
 
-### 9.3 待用户确认的中风险清理（5 项）
-- 11：scripts/_archived-20260831/（27 个已归档 fix 脚本）
-- 12：scripts/ 一次性探针（ctypes-click / force-show / check-* 等）
-- 13：backups/dsh-director-backup-*（2 个目录）
-- 14：backups/client.js.tmp + client-v2.js（约 555KB 临时文件）
-- 15：snapshots/manual-bak-batch1（2811 文件的快照目录）
+### 9.3 清理段执行结果（2026-09-06 22:30-22:39 · 用户授权「除了 git 其他都同意」）
+
+| 编号 | 任务 | 删除前 | 删除后 | 释放 | 状态 |
+|:----:|------|:------:|:------:|:----:|:----:|
+| T-V12-001 | scripts/_archived-20260831/ | 28 文件 | 0 | 90KB | ✅ |
+| T-V12-002 | scripts/ 一次性探针 | 49 文件 | 0 | ~140KB | ✅ |
+| T-V12-003 | V10 V3 整改辅助脚本 | 4 文件 | 0 | ~10KB | ✅（含在 T-V12-002） |
+| T-V12-004 | V10 测试早期版 | 2 文件 | 0 | ~11KB | ✅（含在 T-V12-002） |
+| T-V12-005 | backups/dsh-director-backup-* | 2 目录 ~40MB | 0 | ~40MB | ✅ |
+| T-V12-006 | backups/client.js.tmp + client-v2.js | 2 文件 555KB | 0 | 555KB | ✅ |
+| T-V12-007 | snapshots/manual-bak-batch1 | 1 文件 583KB | 0 | 583KB | ✅ |
+| **合计** | | **80 文件 + 2 目录** | **0** | **~41MB** | ✅ |
+
+**安全措施**:
+- 删除前 MANIFEST.md 入仓（commit `2d75531`，204 insertions），万一需恢复有据可查
+- 保留 client.js.bak-20260901-zb2（1.1MB）作为 V9.4 zb2 整改后的版本回滚锚点
+- 保留 snapshots/ 下 5+ 个 snapshot.ps1 自动生成的快照目录
+
+**scripts/ 清理前后对比**:
+- 删除前: 91 文件（含 _archived 28 + 探针 49 + 核心 14）
+- 删除后: 15 文件（A 类 11 核心 PS1 + B 类 dsh_docs_index.txt + C 类 full-audit.py + gui_test_v3.py）
+- 完美对齐审核报告 §六最终建议
 
 ### 9.4 教训沉淀（V1.2 新增）
 1. **方法论锚定**：整改任务一定要先选方法论（本次选 execution-unified-standards V2.0.0 L3 12 步），不凭经验干跑。
