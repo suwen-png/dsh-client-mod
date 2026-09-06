@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-09-06T03:19:48.872Z",
+  "total": 1,
+  "passed": 0,
+  "failed": 1,
+  "passRate": "0.0%",
+  "results": [
+    {
+      "name": "整体执行",
+      "passed": false,
+      "message": "page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:20562/?dsh-desktop-platform=win32\nCall log:\n\u001b[2m  - navigating to \"http://127.0.0.1:20562/?dsh-desktop-platform=win32\", waiting until \"networkidle\"\u001b[22m\n",
+      "time": "2026-09-06T03:19:48.872Z"
+    }
+  ]
+}

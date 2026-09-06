@@ -1,0 +1,194 @@
+{
+  "pass": 46,
+  "total": 46,
+  "results": [
+    {
+      "name": "页面标题",
+      "ok": true
+    },
+    {
+      "name": "V10控制台挂载(.dsh-dir-app)",
+      "ok": true
+    },
+    {
+      "name": "V10控制台挂载(重试)",
+      "ok": true
+    },
+    {
+      "name": "A-驾驶舱7项菜单齐全",
+      "ok": true
+    },
+    {
+      "name": "A/F-03-风险查看定位总览",
+      "ok": true
+    },
+    {
+      "name": "A/F-05-项目下拉列出两项目",
+      "ok": true
+    },
+    {
+      "name": "A/F-05-切换项目动作执行",
+      "ok": true
+    },
+    {
+      "name": "A/F-04-导出日志不报错",
+      "ok": true
+    },
+    {
+      "name": "A-驾驶舱进入思维导图",
+      "ok": true
+    },
+    {
+      "name": "对话区-切回对话流",
+      "ok": true
+    },
+    {
+      "name": "对话-发送并收到总监回复",
+      "ok": true
+    },
+    {
+      "name": "对话-清空按钮出现",
+      "ok": true
+    },
+    {
+      "name": "B/F-15-统一编辑总览入口",
+      "ok": true
+    },
+    {
+      "name": "B-总览编辑表单完整(记忆/风险/待办)",
+      "ok": true
+    },
+    {
+      "name": "B/U-01-风险待办多行文本框",
+      "ok": true
+    },
+    {
+      "name": "D/F-01-技能卡有应用技能按钮",
+      "ok": true
+    },
+    {
+      "name": "D/F-01-应用技能填入触发词",
+      "ok": true
+    },
+    {
+      "name": "D/F-01b-技能名无undefined",
+      "ok": true
+    },
+    {
+      "name": "D-智能体切换对话按钮",
+      "ok": true
+    },
+    {
+      "name": "D-切换智能体出现系统消息",
+      "ok": true
+    },
+    {
+      "name": "D-执行逻辑应用按钮",
+      "ok": true
+    },
+    {
+      "name": "D/F-17-搜索出现清除✕",
+      "ok": true
+    },
+    {
+      "name": "D/F-17-点✕清空搜索",
+      "ok": true
+    },
+    {
+      "name": "D/F-08-空名称时保存禁用",
+      "ok": true
+    },
+    {
+      "name": "D/F-08-空名称红名提示",
+      "ok": true
+    },
+    {
+      "name": "D/F-08b-填名后保存可用",
+      "ok": true
+    },
+    {
+      "name": "D-新建项出现在列表",
+      "ok": true
+    },
+    {
+      "name": "D-编辑弹窗回填名称",
+      "ok": true
+    },
+    {
+      "name": "F-11-Esc关闭弹窗",
+      "ok": true
+    },
+    {
+      "name": "D/F-07-自定义删除确认弹窗",
+      "ok": true
+    },
+    {
+      "name": "设置弹窗打开",
+      "ok": true
+    },
+    {
+      "name": "F-10-外观三项受控控件",
+      "ok": true
+    },
+    {
+      "name": "F-10b-主题色切换即时生效",
+      "ok": true
+    },
+    {
+      "name": "F-10c-字号档位含特大",
+      "ok": true
+    },
+    {
+      "name": "M-思维导图根节点渲染",
+      "ok": true
+    },
+    {
+      "name": "M-思维导图工具条",
+      "ok": true
+    },
+    {
+      "name": "M-新建分支自定义弹窗",
+      "ok": true
+    },
+    {
+      "name": "M-创建分支节点出现",
+      "ok": true
+    },
+    {
+      "name": "M-节点删除弹确认",
+      "ok": true
+    },
+    {
+      "name": "M-确认后节点删除",
+      "ok": true
+    },
+    {
+      "name": "模式-对话tab切换",
+      "ok": true
+    },
+    {
+      "name": "模式-轨迹tab切换有内容",
+      "ok": true
+    },
+    {
+      "name": "模式-右上X关闭总监覆盖层",
+      "ok": true
+    },
+    {
+      "name": "模式-左下角入口重新打开",
+      "ok": true
+    },
+    {
+      "name": "F-12-无file://协议错误",
+      "ok": true
+    },
+    {
+      "name": "运行时无致命JS错误",
+      "ok": true
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED"
+  ]
+}

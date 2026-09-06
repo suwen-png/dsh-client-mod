@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dsh-client-mod 智能体差距分析报告</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f7fa; color: #1a1a2e; line-height: 1.6; padding: 24px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; color: #1a1a2e; }
+  .subtitle { color: #666; font-size: 14px; margin-bottom: 24px; }
+  .section { background: #fff; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .section-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid #e8ecf1; display: flex; align-items: center; gap: 8px; }
+  .section-title .icon { font-size: 20px; }
+
+  /* 状态总览 */
+  .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .status-card { padding: 16px; border-radius: 8px; border: 1px solid #e8ecf1; }
+  .status-card.done { background: #f0fdf4; border-color: #bbf7d0; }
+  .status-card.partial { background: #fffbeb; border-color: #fde68a; }
+  .status-card.gap { background: #fef2f2; border-color: #fecaca; }
+  .status-card h4 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .status-card.done h4 { color: #166534; }
+  .status-card.partial h4 { color: #92400e; }
+  .status-card.gap h4 { color: #991b1b; }
+  .status-card ul { list-style: none; font-size: 13px; color: #444; }
+  .status-card li { padding: 2px 0; padding-left: 16px; position: relative; }
+  .status-card li::before { content: "•"; position: absolute; left: 4px; }
+  .status-card.done li::before { color: #22c55e; }
+  .status-card.partial li::before { color: #f59e0b; }
+  .status-card.gap li::before { color: #ef4444; }
+
+  /* 优先级矩阵 */
+  .matrix { display: grid; grid-template-columns: 80px 1fr 1fr; gap: 0; border: 1px solid #e8ecf1; border-radius: 8px; overflow: hidden; }
+  .matrix-header { background: #f8fafc; padding: 10px; font-size: 12px; font-weight: 600; text-align: center; border-bottom: 1px solid #e8ecf1; border-right: 1px solid #e8ecf1; color: #666; }
+  .matrix-header:last-child { border-right: none; }
+  .matrix-label { background: #f8fafc; padding: 12px 8px; font-size: 12px; font-weight: 600; text-align: center; border-bottom: 1px solid #e8ecf1; border-right: 1px solid #e8ecf1; display: flex; align-items: center; justify-content: center; }
+  .matrix-cell { padding: 12px; border-bottom: 1px solid #e8ecf1; border-right: 1px solid #e8ecf1; min-height: 80px; }
+  .matrix-cell:last-child { border-right: none; }
+  .matrix-row:last-child .matrix-cell, .matrix-row:last-child .matrix-label { border-bottom: none; }
+  .p0 { background: #fef2f2; }
+  .p1 { background: #fffbeb; }
+  .p2 { background: #f0f9ff; }
+  .p3 { background: #f8fafc; }
+  .gap-item { font-size: 12px; padding: 4px 0; color: #333; }
+  .gap-item strong { color: #1a1a2e; }
+  .p0-badge { display: inline-block; background: #ef4444; color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; margin-right: 4px; }
+  .p1-badge { display: inline-block; background: #f59e0b; color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; margin-right: 4px; }
+  .p2-badge { display: inline-block; background: #3b82f6; color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; margin-right: 4px; }
+  .p3-badge { display: inline-block; background: #6b7280; color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; margin-right: 4px; }
+
+  /* 差距详情 */
+  .gap-detail { margin-bottom: 16px; padding: 16px; border-radius: 8px; border-left: 4px solid; background: #fafbfc; }
+  .gap-detail.p0 { border-left-color: #ef4444; }
+  .gap-detail.p1 { border-left-color: #f59e0b; }
+  .gap-detail.p2 { border-left-color: #3b82f6; }
+  .gap-detail.p3 { border-left-color: #6b7280; }
+  .gap-detail h4 { font-size: 15px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .gap-detail .desc { font-size: 13px; color: #555; margin-bottom: 8px; }
+  .gap-detail .evidence { font-size: 12px; color: #888; background: #f0f0f0; padding: 8px 12px; border-radius: 4px; font-family: monospace; margin-bottom: 8px; }
+  .gap-detail .impact { font-size: 13px; color: #b91c1c; }
+  .gap-detail .impact::before { content: "⚠️ 影响："; font-weight: 600; }
+
+  /* 路线图 */
+  .roadmap { position: relative; padding-left: 32px; }
+  .roadmap::before { content: ""; position: absolute; left: 11px; top: 0; bottom: 0; width: 2px; background: #e8ecf1; }
+  .phase { position: relative; margin-bottom: 24px; }
+  .phase::before { content: ""; position: absolute; left: -26px; top: 6px; width: 14px; height: 14px; border-radius: 50%; border: 3px solid #fff; }
+  .phase.s1::before { background: #ef4444; }
+  .phase.s2::before { background: #f59e0b; }
+  .phase.s3::before { background: #3b82f6; }
+  .phase.s4::before { background: #6b7280; }
+  .phase h4 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .phase .phase-desc { font-size: 13px; color: #666; margin-bottom: 8px; }
+  .phase ul { list-style: none; }
+  .phase li { font-size: 13px; color: #444; padding: 3px 0; padding-left: 20px; position: relative; }
+  .phase li::before { content: "→"; position: absolute; left: 0; color: #999; }
+
+  /* 对比表 */
+  .compare-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .compare-table th { background: #f8fafc; padding: 10px 12px; text-align: left; font-weight: 600; border-bottom: 2px solid #e8ecf1; color: #555; }
+  .compare-table td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  .compare-table tr:last-child td { border-bottom: none; }
+  .compare-table .current { color: #b91c1c; }
+  .compare-table .ideal { color: #166534; }
+  .compare-table .module { font-weight: 600; color: #1a1a2e; white-space: nowrap; }
+
+  .footer { text-align: center; color: #999; font-size: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e8ecf1; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔍 dsh-client-mod 智能体差距分析报告</h1>
+  <p class="subtitle">核对日期：2026-09-02 ｜ 项目版本：V9 总监驾驶舱 ｜ Harness：0.1.0-rc.11</p>
+
+  <!-- 一、状态总览 -->
+  <div class="section">
+    <div class="section-title"><span class="icon">📊</span>一、当前状态总览</div>
+    <div class="status-grid">
+      <div class="status-card done">
+        <h4>✅ 已完整实现（UI+逻辑）</h4>
+        <ul>
+          <li>三tab共存（总监/对话/轨迹）</li>
+          <li>小窗分屏布局 + 全局单输入框</li>
+          <li>总监对话处理流水线（5步骤）</li>
+          <li>自动转发到原对话系统</li>
+          <li>四重持久化（cookie+LS+IDB+文件）</li>
+          <li>53篇文档索引 + 布局探针</li>
+          <li>设置面板（外观4色/密度/职责开关）</li>
+          <li>工程链路（备份/修改/应用/复原）</li>
+        </ul>
+      </div>
+      <div class="status-card partial">
+        <h4>🟡 UI有了，逻辑没接通</h4>
+        <ul>
+          <li>5个智能体按钮 → 只发系统消息</li>
+          <li>6个技能 → 只弹toast</li>
+          <li>4个职责开关 → 仅规则匹配，非AI</li>
+          <li>R2项目总览 → 纯展示，不参与决策</li>
+          <li>切换项目 → 只改名称，数据不隔离</li>
+          <li>分支创建 → 只存记录，无上下文隔离</li>
+        </ul>
+      </div>
+      <div class="status-card gap">
+        <h4>🔴 核心能力缺失</h4>
+        <ul>
+          <li>本地模型默认关闭（总监=规则模板机）</li>
+          <li>智能体不执行任何实际任务</li>
+          <li>技能没有实际执行逻辑</li>
+          <li>项目记忆/文档不注入对话上下文</li>
+          <li>无RAG文档检索能力</li>
+          <li>无任务管理与跟踪</li>
+          <li>无模型路由（所有任务同一模型）</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 二、核心差距对比 -->
+  <div class="section">
+    <div class="section-title"><span class="icon">⚖️</span>二、当前 vs 理想：核心差距对比</div>
+    <table class="compare-table">
+      <thead>
+        <tr><th style="width:120px">模块</th><th style="width:40%">当前状态</th><th>理想状态</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="module">总监大脑</td>
+          <td class="current">本地模型默认关闭；用正则替换+关键词匹配做"整理"，输出固定模板。本质是文本整理器，不是AI。</td>
+          <td class="ideal">默认启用本地qwen2:7b；真正理解用户意图、推理、创作、给出专业建议；Ollama未启动时引导用户启动。</td>
+        </tr>
+        <tr>
+          <td class="module">智能体</td>
+          <td class="current">5个按钮（代码/文档/调研/测试/审核），点击只存一条分支记录+发系统消息"已创建分支"。无任何实际产出。</td>
+          <td class="ideal">每个智能体有独立system prompt+角色定位；点击后实际调用模型生成产出（架构师出方案、开发写代码、测试写用例）；智能体间可协作。</td>
+        </tr>
+        <tr>
+          <td class="module">技能</td>
+          <td class="current">6个预设技能标签，左键弹toast"已调用技能"，右键禁用。无执行逻辑。</td>
+          <td class="ideal">技能=可执行的prompt模板+工作流；点击后注入对话上下文并触发总监处理；代码生成技能真的生成代码，文档总结真的总结。</td>
+        </tr>
+        <tr>
+          <td class="module">项目记忆</td>
+          <td class="current">有核心记忆/项目索引/执行约束三个tab面板，用户可浏览。但总监处理消息时只取最近10条对话，不读取项目记忆。</td>
+          <td class="ideal">处理每条消息时自动注入核心记忆+相关文档片段；总监知道项目定位、目标、规范约束；记忆可被检索和引用。</td>
+        </tr>
+        <tr>
+          <td class="module">文档系统</td>
+          <td class="current">53篇文档索引（JSON 333KB），可在面板中浏览列表和内容。无检索能力。</td>
+          <td class="ideal">基于用户问题做RAG检索，自动匹配最相关的文档片段注入上下文；总监回答时可引用具体文档。</td>
+        </tr>
+        <tr>
+          <td class="module">执行逻辑</td>
+          <td class="current">4个职责开关（语言整理/上下文记忆/执行逻辑/返回审核）。语言整理=正则替换；执行逻辑=代码任务加一句模板建议；返回审核=只记录长度。</td>
+          <td class="ideal">多阶段AI处理流水线：每阶段由模型实际执行（语言润色、上下文分析、执行规划、返回质量审核）；阶段间有审核门。</td>
+        </tr>
+        <tr>
+          <td class="module">分支管理</td>
+          <td class="current">创建分支只存IndexedDB记录。所有分支消息混在同一对话流，无上下文隔离，无法切换分支查看。</td>
+          <td class="ideal">每个分支有独立对话历史和上下文；可在分支间切换；分支可合并回主线；支持多任务并行。</td>
+        </tr>
+        <tr>
+          <td class="module">自动转发</td>
+          <td class="current">总监分析后300ms自动转发到原对话系统，无审核环节，用户无法干预。</td>
+          <td class="ideal">总监整理后先展示结果，用户确认/编辑后再转发；支持"一键转发"和"编辑后转发"两种模式。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 三、优先级矩阵 -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🎯</span>三、差距优先级矩阵</div>
+    <div class="matrix">
+      <div class="matrix-header">优先级</div>
+      <div class="matrix-header">核心能力（让总监"活"起来）</div>
+      <div class="matrix-header">完善增强（让总监更"好用"）</div>
+
+      <div class="matrix-row" style="display:contents">
+        <div class="matrix-label p0" style="color:#991b1b">P0<br>致命</div>
+        <div class="matrix-cell p0">
+          <div class="gap-item"><span class="p0-badge">P0</span><strong>本地模型默认关闭</strong> — 总监是规则模板机，不是AI</div>
+          <div class="gap-item"><span class="p0-badge">P0</span><strong>智能体不执行任务</strong> — 5个按钮只发系统消息</div>
+          <div class="gap-item"><span class="p0-badge">P0</span><strong>技能无执行逻辑</strong> — 6个技能只弹toast</div>
+        </div>
+        <div class="matrix-cell p0" style="background:#fef2f2">
+          <div class="gap-item"><span class="p0-badge">P0</span><strong>Ollama未启动无引导</strong> — 用户不知道怎么开启真正AI</div>
+        </div>
+      </div>
+
+      <div class="matrix-row" style="display:contents">
+        <div class="matrix-label p1" style="color:#92400e">P1<br>重要</div>
+        <div class="matrix-cell p1">
+          <div class="gap-item"><span class="p1-badge">P1</span><strong>项目记忆不注入上下文</strong> — 总监不知道项目背景</div>
+          <div class="gap-item"><span class="p1-badge">P1</span><strong>文档无RAG检索</strong> — 53篇文档只是摆设</div>
+          <div class="gap-item"><span class="p1-badge">P1</span><strong>分支无上下文隔离</strong> — 多任务上下文混乱</div>
+        </div>
+        <div class="matrix-cell p1">
+          <div class="gap-item"><span class="p1-badge">P1</span><strong>转发无审核环节</strong> — 错误结果直接发给模型</div>
+        </div>
+      </div>
+
+      <div class="matrix-row" style="display:contents">
+        <div class="matrix-label p2" style="color:#1e40af">P2<br>一般</div>
+        <div class="matrix-cell p2">
+          <div class="gap-item"><span class="p2-badge">P2</span><strong>执行逻辑非AI</strong> — 4个职责只是正则+模板</div>
+          <div class="gap-item"><span class="p2-badge">P2</span><strong>多项目数据不隔离</strong> — 切换项目只改名称</div>
+        </div>
+        <div class="matrix-cell p2">
+          <div class="gap-item"><span class="p2-badge">P2</span><strong>无任务管理</strong> — 待办数只是个数字</div>
+          <div class="gap-item"><span class="p2-badge">P2</span><strong>无模型路由</strong> — 所有任务同一模型</div>
+        </div>
+      </div>
+
+      <div class="matrix-row" style="display:contents">
+        <div class="matrix-label p3" style="color:#374151">P3<br>锦上添花</div>
+        <div class="matrix-cell p3">
+          <div class="gap-item"><span class="p3-badge">P3</span>智能体间协作（架构→开发→测试）</div>
+          <div class="gap-item"><span class="p3-badge">P3</span>分支合并回主线</div>
+        </div>
+        <div class="matrix-cell p3">
+          <div class="gap-item"><span class="p3-badge">P3</span>自动化测试覆盖</div>
+          <div class="gap-item"><span class="p3-badge">P3</span>CI/CD流水线</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 四、关键差距详情 -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🔬</span>四、P0 关键差距详情（代码级证据）</div>
+
+    <div class="gap-detail p0">
+      <h4><span class="p0-badge">P0</span>1. 本地模型默认关闭 — 总监是"规则模板机"</h4>
+      <p class="desc">config.localModel.enabled 默认 false。关闭时，directorProcess 跳过 callLocalModel，只用 polishLanguage（正则替换）+ classifyTask（关键词匹配）做处理，输出固定模板的"总监分析"。</p>
+      <div class="evidence">第6224行：localModel: { enabled: false, endpoint: "http://localhost:11434", model: "qwen2:7b" }<br>第6708行：if (config.localModel?.enabled) { ... 才调用 callLocalModel ... }</div>
+      <p class="impact">总监没有真正的推理、理解、创作能力。用户看到的"总监分析"是模板化输出，不是AI思考的结果。这是整个项目最核心的差距。</p>
+    </div>
+
+    <div class="gap-detail p0">
+      <h4><span class="p0-badge">P0</span>2. 智能体不执行任何任务 — 只是"按钮+系统消息"</h4>
+      <p class="desc">5个智能体（代码/文档/调研/测试/审核）的 onClick 只调用 window.__dshCreateBranch，该函数只做三件事：存一条记录到 IndexedDB、设置 window.__dshCurrentBranch、发一条"已创建分支"系统消息。</p>
+      <div class="evidence">第9325行：onClick = () => window.__dshCreateBranch(agent.key, agent.label)<br>第5836-5868行：__dshCreateBranch 只存IDB + 发消息 + toast，无模型调用</div>
+      <p class="impact">点击智能体后没有任何实际产出。架构师不会出方案，开发不会写代码，测试不会写用例。智能体系统完全是装饰性UI。</p>
+    </div>
+
+    <div class="gap-detail p0">
+      <h4><span class="p0-badge">P0</span>3. 技能没有实际执行逻辑 — 只是"标签+toast"</h4>
+      <p class="desc">6个预设技能（代码生成/文档总结/深度调研/代码审查/翻译润色/测试用例），左键点击只调用 invokeSkill，该函数只弹 toast + 写调试日志。没有将技能 prompt 注入对话，没有触发总监处理，没有任何实际执行。</p>
+      <div class="evidence">第9343行：onClick = () => invokeSkill(skill)<br>invokeSkill 函数：只 __dshShowToast + __dshDebug.log，无其他逻辑</div>
+      <p class="impact">技能系统名存实亡。"代码生成"技能不会生成代码，"文档总结"不会总结，"深度调研"不会调研。</p>
+    </div>
+
+    <div class="gap-detail p1">
+      <h4><span class="p1-badge">P1</span>4. 项目记忆/文档索引不注入对话上下文</h4>
+      <p class="desc">有核心记忆/项目索引/执行约束三个tab，有53篇文档索引。但 directorProcess 处理用户消息时，只取最近10条对话历史作为上下文，完全不读取项目记忆和文档。总监不知道项目定位、目标、规范约束。</p>
+      <div class="evidence">第6693行：const history = store.getState().messages.slice(-10).map(...) — 只取对话历史<br>无任何读取 __dshDocsIndex 或项目记忆注入上下文的代码</div>
+      <p class="impact">总监是"失忆"的。每次对话都从零开始，不知道项目背景，不能基于文档回答问题，不能引用规范约束。53篇文档只是摆设。</p>
+    </div>
+  </div>
+
+  <!-- 五、补齐路线图 -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🗺️</span>五、建议补齐路线图（4阶段）</div>
+    <div class="roadmap">
+      <div class="phase s1">
+        <h4>第一阶段：让总监真正"活"起来（P0，预计2-3天）</h4>
+        <p class="phase-desc">核心目标：从"规则模板机"升级为"真正的AI总监"</p>
+        <ul>
+          <li>本地模型默认开启 + Ollama 状态检测 + 未启动时一键启动引导</li>
+          <li>智能体实际执行：每个智能体有独立 system prompt，点击后调用本地模型生成实际产出</li>
+          <li>技能实际执行：技能 = 预设 prompt 模板，点击后注入对话并触发总监处理流程</li>
+          <li>验证：发送一条复杂需求，总监能给出真正的AI分析（非模板输出）</li>
+        </ul>
+      </div>
+      <div class="phase s2">
+        <h4>第二阶段：让总监"懂"项目（P1，预计2-3天）</h4>
+        <p class="phase-desc">核心目标：从"失忆总监"升级为"有项目记忆的总监"</p>
+        <ul>
+          <li>项目记忆注入：处理消息时自动读取核心记忆（定位/目标/阶段）作为系统上下文</li>
+          <li>文档 RAG 检索：基于用户问题从53篇文档中检索最相关的片段，注入上下文</li>
+          <li>分支上下文隔离：每个分支有独立对话历史，可切换查看</li>
+          <li>转发审核环节：总监整理后先展示，用户确认后再转发</li>
+          <li>验证：问一个项目相关问题，总监能引用项目记忆和文档内容回答</li>
+        </ul>
+      </div>
+      <div class="phase s3">
+        <h4>第三阶段：让总监"能"执行（P2，预计3-5天）</h4>
+        <p class="phase-desc">核心目标：从"对话总监"升级为"能管理任务的执行总监"</p>
+        <ul>
+          <li>执行逻辑流水线化：4个职责每阶段由模型实际执行（AI润色/AI分析/AI规划/AI审核）</li>
+          <li>任务管理面板：R2 总览的待办数可点击，展开任务列表，支持创建/分配/状态跟踪</li>
+          <li>多项目数据隔离：切换项目时切换对话历史/记忆/文档上下文</li>
+          <li>模型路由：根据任务类型自动选择模型（代码→deepseek-coder，对话→deepseek-chat）</li>
+          <li>验证：创建一个任务，分配给智能体，跟踪任务状态变化</li>
+        </ul>
+      </div>
+      <div class="phase s4">
+        <h4>第四阶段：完善体验与工程（P3，持续迭代）</h4>
+        <p class="phase-desc">核心目标：从"能用"升级为"好用+稳定"</p>
+        <ul>
+          <li>智能体间协作：架构师出方案 → 开发写代码 → 测试写用例，自动流转</li>
+          <li>分支合并：分支完成后可合并回主线对话</li>
+          <li>自动化测试：为核心功能补充测试用例</li>
+          <li>性能优化：大文档索引的检索性能、对话历史的渲染性能</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 六、一句话总结 -->
+  <div class="section" style="background: linear-gradient(135deg, #fef2f2 0%, #fffbeb 100%); border: 1px solid #fecaca;">
+    <div class="section-title" style="border-bottom-color: #fecaca;"><span class="icon">💡</span>六、一句话总结</div>
+    <p style="font-size: 15px; line-height: 1.8; color: #1a1a2e;">
+      当前项目的 <strong>UI 骨架和工程链路已经非常完整</strong>（三tab、小窗分屏、R1-R6布局、53文档索引、四重持久化、备份-修改-应用全链路），但 <strong style="color:#991b1b">核心智能能力是"空壳"</strong>：本地模型默认关闭导致总监是规则模板机、智能体只发消息不干活、技能只弹toast不执行、项目记忆和文档不注入上下文。<br><br>
+      <strong>最关键的一步是第一阶段</strong>：开启本地模型 + 让智能体和技能实际调用模型。只要这一步完成，整个总监驾驶舱就从"UI原型"变成了"真正能用的AI助手"。后续阶段都是在此基础上增强记忆、执行和协作能力。
+    </p>
+  </div>
+
+  <div class="footer">
+    dsh-client-mod 智能体差距分析报告 ｜ 生成时间：2026-09-02 ｜ 基于代码级核对
+  </div>
+</div>
+</body>
+</html>

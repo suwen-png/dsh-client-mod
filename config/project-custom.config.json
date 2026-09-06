@@ -1,0 +1,28 @@
+{
+  "projectShortPrefix": "dsh_",
+  "projectName": "dsh-client-mod",
+  "projectShortName": "dsh-client-mod",
+  "projectPath": "D:\\hermes-data\\dsh-client-mod",
+  "projectType": "Harness客户端修改工作区",
+  "techStack": "JavaScript / PowerShell / Junction符号链接 / Ollama本地模型",
+  "mainCommandList": {
+    "backup": "powershell -ExecutionPolicy Bypass -File scripts/backup.ps1",
+    "initWorkspace": "powershell -ExecutionPolicy Bypass -File scripts/init-workspace.ps1",
+    "apply": "powershell -ExecutionPolicy Bypass -File scripts/apply.ps1",
+    "restore": "powershell -ExecutionPolicy Bypass -File scripts/restore.ps1",
+    "status": "powershell -ExecutionPolicy Bypass -File scripts/status.ps1",
+    "diff": "powershell -ExecutionPolicy Bypass -File scripts/diff.ps1",
+    "syntaxCheck": "node --check workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js"
+  },
+  "envConfig": {
+    "harnessInstallRoot": "D:\\软件安装\\DeepSeek-Harness-Desktop\\DeepSeek Harness\\resources\\host\\node_modules\\@deepseek-ai",
+    "ollamaEndpoint": "http://localhost:11434",
+    "ollamaModel": "qwen2:7b"
+  },
+  "schedule": {
+    "16h": false,
+    "clean": false
+  },
+  "docVersion": "V1.0",
+  "created": "2026-08-24"
+}

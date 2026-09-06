@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>总监-对话小窗布局草图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 20px; }
+  h2 { margin-bottom: 12px; color: #333; font-size: 16px; }
+  .layout { display: flex; height: 400px; border: 2px solid #999; border-radius: 8px; overflow: hidden; margin-bottom: 30px; background: #fff; }
+  
+  /* 通用区域样式 */
+  .area { display: flex; flex-direction: column; position: relative; }
+  .area-header { padding: 8px 12px; background: #e8e8e8; border-bottom: 1px solid #ccc; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .area-body { flex: 1; overflow-y: auto; padding: 12px; font-size: 12px; color: #666; }
+  .area-input { padding: 8px 12px; border-top: 1px solid #ccc; background: #fafafa; }
+  .area-input input { width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; }
+  
+  /* 拖拽条 */
+  .resizer { width: 5px; background: #ccc; cursor: col-resize; flex-shrink: 0; position: relative; }
+  .resizer:hover { background: #1976d2; }
+  .resizer::after { content: '⋮⋮'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #888; font-size: 10px; }
+  
+  /* 标签 */
+  .tag { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: #1976d2; color: #fff; }
+  .tag-mini { background: #ff9800; }
+  .tag-main { background: #4caf50; }
+  
+  /* 消息气泡 */
+  .msg { margin-bottom: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 85%; }
+  .msg-user { background: #e3f2fd; align-self: flex-end; margin-left: auto; }
+  .msg-assistant { background: #f5f5f5; }
+  .msg-system { background: #fff3cd; font-size: 11px; color: #856404; }
+  
+  .msg-list { display: flex; flex-direction: column; gap: 6px; }
+  
+  .note { font-size: 11px; color: #999; margin-top: 4px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- ========== 布局A：总监tab（总监主 + 对话小窗在右） ========== -->
+<h2>布局A — 总监 Tab（总监主区域 + 右侧对话小窗）</h2>
+<div class="layout">
+  <!-- 总监主区域 -->
+  <div class="area" style="flex: 1; min-width: 200px;">
+    <div class="area-header">
+      <span>总监 <span class="tag tag-main">主区域</span></span>
+      <span style="font-size:10px;color:#888;">待命</span>
+    </div>
+    <div class="area-body">
+      <div class="msg-list">
+        <div class="msg msg-user">帮我分析一下这个报错</div>
+        <div class="msg msg-assistant">
+          <div style="font-weight:600;margin-bottom:4px;">总监处理结果</div>
+          <div>整理后指令：分析报错日志，定位根因</div>
+          <div style="color:#888;font-size:11px;margin-top:2px;">模型建议：DeepSeek-V4-Flash</div>
+          <div style="color:#888;font-size:11px;">分支建议：标准对话</div>
+        </div>
+        <div class="msg msg-system">已自动转发到对话 →</div>
+      </div>
+      <div class="note">总监tab时：输入消息 → 总监预处理 → 自动转发到对话小窗</div>
+    </div>
+    <!-- 总监主区域也有输入框（全局composer，此处示意） -->
+    <div class="area-input">
+      <input placeholder="输入消息，总监将预处理后转发..." />
+    </div>
+  </div>
+  
+  <!-- 拖拽条 -->
+  <div class="resizer" title="拖拽调节宽度"></div>
+  
+  <!-- 对话小窗（右侧） -->
+  <div class="area" style="width: 320px; min-width: 200px; max-width: 60%;">
+    <div class="area-header" style="background:#fff3e0;">
+      <span>对话 <span class="tag tag-mini">小窗</span></span>
+      <span style="font-size:10px;color:#888;">可拖拽调节</span>
+    </div>
+    <div class="area-body" style="background:#fffbf5;">
+      <div class="msg-list">
+        <div class="msg msg-user">分析报错日志，定位根因</div>
+        <div class="msg msg-assistant">好的，正在分析...</div>
+        <div class="msg msg-assistant">根据日志，错误出现在...</div>
+      </div>
+      <div class="note">点击小窗可聚焦，输入消息直接发给对话（不经过总监）</div>
+    </div>
+    <div class="area-input">
+      <input placeholder="在此输入直接发给对话..." />
+    </div>
+  </div>
+</div>
+
+<!-- ========== 布局B：对话tab（总监小窗在左 + 对话主） ========== -->
+<h2>布局B — 对话 Tab（左侧总监小窗 + 对话主区域）</h2>
+<div class="layout">
+  <!-- 总监小窗（左侧） -->
+  <div class="area" style="width: 320px; min-width: 200px; max-width: 60%;">
+    <div class="area-header" style="background:#e8f5e9;">
+      <span>总监 <span class="tag tag-mini">小窗</span></span>
+      <span style="font-size:10px;color:#888;">可拖拽调节</span>
+    </div>
+    <div class="area-body" style="background:#f5fff7;">
+      <div class="msg-list">
+        <div class="msg msg-user">帮我写个函数</div>
+        <div class="msg msg-assistant">
+          <div style="font-weight:600;">整理后：实现一个防抖函数</div>
+          <div style="color:#888;font-size:11px;">模型：V4-Flash</div>
+        </div>
+        <div class="msg msg-system">→ 已转发</div>
+      </div>
+      <div class="note">总监小窗允许输入：消息经总监预处理后转发到对话主区域</div>
+    </div>
+    <div class="area-input">
+      <input placeholder="输入消息，总监预处理后转发..." />
+    </div>
+  </div>
+  
+  <!-- 拖拽条 -->
+  <div class="resizer" title="拖拽调节宽度"></div>
+  
+  <!-- 对话主区域 -->
+  <div class="area" style="flex: 1; min-width: 200px;">
+    <div class="area-header">
+      <span>对话 <span class="tag tag-main">主区域</span></span>
+      <span style="font-size:10px;color:#888;">标准模式</span>
+    </div>
+    <div class="area-body">
+      <div class="msg-list">
+        <div class="msg msg-user">实现一个防抖函数</div>
+        <div class="msg msg-assistant">好的，这是一个标准的防抖函数实现：<br><br>function debounce(fn, delay) {...}</div>
+        <div class="msg msg-user">能加上立即执行选项吗</div>
+        <div class="msg msg-assistant">当然可以，修改如下...</div>
+      </div>
+    </div>
+    <div class="area-input">
+      <input placeholder="输入消息直接发给对话..." />
+    </div>
+  </div>
+</div>
+
+<!-- ========== 交互说明 ========== -->
+<h2>交互逻辑说明</h2>
+<div style="background:#fff; padding:16px; border-radius:8px; border:1px solid #ddd; font-size:13px; line-height:1.8; color:#444;">
+  <p><b>1. 总监 Tab（布局A）：</b></p>
+  <ul style="margin-left:20px; margin-bottom:12px;">
+    <li>左侧总监主区域：显示总监对话流（用户消息 + 总监处理结果）</li>
+    <li>右侧对话小窗：显示原对话流，可拖拽调节宽度（200px ~ 60%）</li>
+    <li>底部全局输入框：输入消息 → 总监预处理 → 自动转发到对话</li>
+    <li>点击对话小窗的输入框：消息直接发给对话（不经过总监）</li>
+  </ul>
+  <p><b>2. 对话 Tab（布局B）：</b></p>
+  <ul style="margin-left:20px; margin-bottom:12px;">
+    <li>左侧总监小窗：显示总监对话流，可拖拽调节宽度，允许输入</li>
+    <li>右侧对话主区域：显示原对话流（标准模式）</li>
+    <li>总监小窗输入：消息经总监预处理后转发到对话主区域</li>
+    <li>对话主区域输入：消息直接发给对话（原逻辑不变）</li>
+  </ul>
+  <p><b>3. 小窗通用特性：</b></p>
+  <ul style="margin-left:20px;">
+    <li>拖拽中间分隔条调节宽度（最小200px，最大60%）</li>
+    <li>宽度记忆：下次打开保持上次调节的宽度</li>
+    <li>小窗可折叠/展开（点击标题栏的折叠按钮）</li>
+    <li>小窗内消息流独立滚动，不影响主区域</li>
+  </ul>
+</div>
+
+</body>
+</html>

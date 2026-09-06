@@ -1,0 +1,50 @@
+[
+  {
+    "id": "language-polish",
+    "name": "语言规范整理",
+    "icon": "📋",
+    "description": "自动整理用户输入语言，去除口语化，修正错别字",
+    "rules": "1. 去除用户输入中的口语化表达（如\"那个\"\"这个\"\"就是说\"），保留核心意图\n2. 修正明显的错别字和语法错误\n3. 整理为简洁明确的指令格式\n4. 保留用户的原始意图，不改变需求内容\n5. 整理后的指令应可直接用于 AI 调用",
+    "enabled": true,
+    "triggerMode": "global",
+    "triggerPhase": "input",
+    "triggerCount": 0,
+    "createdAt": 1756800000000
+  },
+  {
+    "id": "context-memory",
+    "name": "上下文记忆",
+    "icon": "📋",
+    "description": "自动关联历史对话上下文，保持对话连贯性",
+    "rules": "1. 自动检索历史对话中与当前问题相关的内容\n2. 将相关上下文整合到当前问题中，保持对话连贯\n3. 识别用户提到的\"上面说的\"\"之前的\"\"那个\"等指代，关联到具体内容\n4. 上下文冲突时，以最新内容为准\n5. 不引入与当前问题无关的历史内容",
+    "enabled": true,
+    "triggerMode": "global",
+    "triggerPhase": "input",
+    "triggerCount": 0,
+    "createdAt": 1756800000000
+  },
+  {
+    "id": "execution-logic",
+    "name": "执行逻辑分析",
+    "icon": "📋",
+    "description": "自动分析用户需求，给出执行建议和分步方案",
+    "rules": "1. 分析用户需求的核心目标和约束条件\n2. 拆解为可执行的步骤，按优先级排序\n3. 识别潜在风险和依赖关系\n4. 给出多种可行方案，评估优缺点\n5. 推荐最优方案并说明理由",
+    "enabled": true,
+    "triggerMode": "global",
+    "triggerPhase": "input",
+    "triggerCount": 0,
+    "createdAt": 1756800000000
+  },
+  {
+    "id": "return-review",
+    "name": "对话返回审核",
+    "icon": "📋",
+    "description": "审核模型返回内容质量，确保准确、完整、可用",
+    "rules": "1. 检查返回内容是否准确回答了用户问题\n2. 检查是否有遗漏的关键点\n3. 检查代码是否可运行、文档是否完整\n4. 识别可能的错误或误导性内容\n5. 对不完整或有问题的返回，给出补充或修正建议",
+    "enabled": true,
+    "triggerMode": "global",
+    "triggerPhase": "output",
+    "triggerCount": 0,
+    "createdAt": 1756800000000
+  }
+]

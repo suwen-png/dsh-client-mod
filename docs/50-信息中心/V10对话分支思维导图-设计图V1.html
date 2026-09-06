@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>对话分支思维导图 · 设计图 V1.0</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  body { background:#f8f9ff; color:#1a1a2e; padding:24px; }
+  h1 { font-size:20px; background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent; margin-bottom:4px; }
+  .sub { font-size:12px;color:#888;margin-bottom:20px; }
+  .panel { background:#fff;border:1px solid #e8ecf4;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.04); }
+  .panel h2 { font-size:15px;margin-bottom:14px;color:#667eea;display:flex;align-items:center;gap:8px; }
+  /* ===== 思维导图画布 ===== */
+  .canvas { position:relative;background:linear-gradient(135deg,#fafbff,#f0f4ff);border:1px solid #e8ecf4;border-radius:10px;height:440px;overflow:auto;padding:30px; }
+  .tree { position:relative; min-width:900px; height:380px; }
+  svg.links { position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none; }
+  .node { position:absolute;width:150px;background:#fff;border:2px solid #e8ecf4;border-radius:10px;padding:10px 12px;box-shadow:0 2px 8px rgba(0,0,0,.06);transition:all .2s;cursor:pointer; }
+  .node:hover { border-color:#667eea;transform:translateX(3px);box-shadow:0 6px 18px rgba(102,126,234,.25); }
+  .node.root { background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border-color:transparent;width:160px; }
+  .node .n-head { display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600; }
+  .node .n-meta { font-size:10px;color:#888;margin-top:4px;display:flex;align-items:center;gap:6px; }
+  .node.root .n-meta { color:rgba(255,255,255,.85); }
+  .dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+  .dot.idle{background:#9e9e9e}.dot.busy{background:#f59e0b;box-shadow:0 0 6px #f59e0b;animation:pulse 1.5s infinite}.dot.error{background:#ef4444}
+  .node .n-ops { display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #e8ecf4;gap:4px; }
+  .node:hover .n-ops { display:flex; }
+  .op { flex:1;font-size:10px;padding:3px 0;text-align:center;background:#f0f4ff;color:#667eea;border-radius:4px;cursor:pointer;border:none; }
+  .op:hover { background:#667eea;color:#fff; }
+  .op.danger:hover{background:#d32f2f;}
+  @keyframes pulse{50%{opacity:.4}}
+  /* 节点定位（横向树） */
+  .n-root{left:20px;top:160px;}
+  .n-l1{left:260px;}
+  .n-l2{left:520px;}
+  .n-a{top:30px}.n-b{top:150px}.n-c{top:270px}
+  .n-a1{top:0}.n-a2{top:70px}
+  /* 工具栏 */
+  .toolbar { display:flex;gap:8px;margin-bottom:12px;align-items:center; }
+  .tbtn { padding:6px 14px;font-size:12px;border:1px solid #e0e4ec;background:#fff;border-radius:8px;cursor:pointer;color:#555; }
+  .tbtn.active { background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;font-weight:600; }
+  .legend { display:flex;gap:16px;font-size:11px;color:#666;margin-left:auto; }
+  .legend span{display:flex;align-items:center;gap:4px;}
+  table { width:100%;border-collapse:collapse;font-size:12px; }
+  th,td { border:1px solid #e8ecf4;padding:8px 10px;text-align:left; }
+  th { background:#f0f4ff;color:#667eea;font-weight:600; }
+  .tag{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;}
+  .tag.new{background:#e8f5e9;color:#388e3c}.tag.chg{background:#fff3e0;color:#f57c00}
+</style>
+</head>
+<body>
+<h1>对话分支思维导图 · 高保真设计图 V1.0</h1>
+<div class="sub">一个对话=一棵树｜根节点=主对话，点智能体"切换对话"=从当前节点分叉新分支｜横向树布局</div>
+
+<div class="panel">
+  <h2>🧠 视图切换 + 导图画布（对话区标题栏切换：💬对话流 / 🧠思维导图）</h2>
+  <div class="toolbar">
+    <button class="tbtn">💬 对话流</button>
+    <button class="tbtn active">🧠 思维导图</button>
+    <button class="tbtn">➕ 新建分支</button>
+    <button class="tbtn">🔍 适应屏幕</button>
+    <button class="tbtn">＋ 放大</button>
+    <button class="tbtn">－ 缩小</button>
+    <div class="legend">
+      <span><i class="dot idle"></i>空闲</span>
+      <span><i class="dot busy"></i>忙碌</span>
+      <span><i class="dot error"></i>错误</span>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="tree">
+      <svg class="links" viewBox="0 0 900 380" preserveAspectRatio="none">
+        <!-- 根 -> 三个一级分支 贝塞尔曲线 -->
+        <path d="M180,185 C220,185 220,70 260,70" stroke="#667eea" stroke-width="2" fill="none" opacity=".5"/>
+        <path d="M180,185 C220,185 220,190 260,190" stroke="#667eea" stroke-width="2" fill="none" opacity=".5"/>
+        <path d="M180,185 C220,185 220,310 260,310" stroke="#667eea" stroke-width="2" fill="none" opacity=".5"/>
+        <!-- 一级a -> 两个二级 -->
+        <path d="M410,70 C460,70 460,30 520,30" stroke="#764ba2" stroke-width="1.5" fill="none" opacity=".4" stroke-dasharray="4 3"/>
+        <path d="M410,70 C460,70 460,100 520,100" stroke="#764ba2" stroke-width="1.5" fill="none" opacity=".4" stroke-dasharray="4 3"/>
+      </svg>
+      <!-- 根节点 -->
+      <div class="node root n-root">
+        <div class="n-head">🎯 主对话（总监）</div>
+        <div class="n-meta"><i class="dot busy"></i>进行中 · 12条消息</div>
+        <div class="n-ops"><button class="op">➕子分支</button><button class="op">📂打开</button></div>
+      </div>
+      <!-- 一级 -->
+      <div class="node n-l1 n-a">
+        <div class="n-head">💻 代码工程师</div>
+        <div class="n-meta"><i class="dot busy"></i>忙碌 · qwen2:7b · 8条</div>
+        <div class="n-ops"><button class="op">➕分叉</button><button class="op">📂</button><button class="op">🔀</button><button class="op danger">🗑️</button></div>
+      </div>
+      <div class="node n-l1 n-b">
+        <div class="n-head">📄 文档专家</div>
+        <div class="n-meta"><i class="dot idle"></i>空闲 · 3条</div>
+        <div class="n-ops"><button class="op">➕分叉</button><button class="op">📂</button><button class="op">🔀</button><button class="op danger">🗑️</button></div>
+      </div>
+      <div class="node n-l1 n-c">
+        <div class="n-head">🔍 调研分析师</div>
+        <div class="n-meta"><i class="dot error"></i>错误 · 2条</div>
+        <div class="n-ops"><button class="op">➕分叉</button><button class="op">📂</button><button class="op">🔀</button><button class="op danger">🗑️</button></div>
+      </div>
+      <!-- 二级（从代码工程师分叉） -->
+      <div class="node n-l2 n-a1">
+        <div class="n-head">🧪 测试用例分支</div>
+        <div class="n-meta"><i class="dot idle"></i>空闲 · 派生自代码</div>
+        <div class="n-ops"><button class="op">📂打开</button><button class="op">🔀合并</button></div>
+      </div>
+      <div class="node n-l2 n-a2">
+        <div class="n-head">🔎 代码审查分支</div>
+        <div class="n-meta"><i class="dot idle"></i>空闲 · 派生自代码</div>
+        <div class="n-ops"><button class="op">📂打开</button><button class="op">🔀合并</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>📋 节点交互定义（点击后正确效果）</h2>
+  <table>
+    <tr><th>操作</th><th>触发</th><th>正确效果</th><th>类型</th></tr>
+    <tr><td>选中节点</td><td>单击节点体</td><td>紫色描边高亮，右侧/对话区显示该分支消息</td><td><span class="tag chg">状态</span></td></tr>
+    <tr><td>➕子分支/分叉</td><td>悬浮操作条</td><td>从该节点派生新分支（=新对话），自动连一条曲线，弹出命名框</td><td><span class="tag new">新增</span></td></tr>
+    <tr><td>📂打开</td><td>悬浮操作条</td><td>切到该分支独立对话流，加载其历史消息</td><td><span class="tag chg">切换</span></td></tr>
+    <tr><td>🔀合并</td><td>悬浮操作条</td><td>把该分支结论作为一条system消息回收父节点，节点标记"已合并"变灰</td><td><span class="tag new">新增</span></td></tr>
+    <tr><td>🗑️删除</td><td>悬浮操作条</td><td>自定义确认弹窗；删除后其子分支上提挂到父节点（不丢失）</td><td><span class="tag chg">安全</span></td></tr>
+    <tr><td>滚轮缩放/拖拽</td><td>画布</td><td>0.5x~2x缩放，空白处拖拽平移，适应屏幕重置</td><td><span class="tag new">新增</span></td></tr>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>🔗 数据结构变更（向后兼容）</h2>
+  <table>
+    <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+    <tr><td>parentId</td><td>string | null</td><td>父分支id，null=根（主对话）；旧数据自动视为根</td></tr>
+    <tr><td>summary</td><td>string</td><td>分支一句话摘要，显示在节点上</td></tr>
+    <tr><td>branchColor</td><td>string</td><td>分支连线/节点配色（按类型默认，可改）</td></tr>
+    <tr><td>merged</td><td>boolean</td><td>是否已合并（合并后变灰保留，不删除）</td></tr>
+  </table>
+</div>
+</body>
+</html>

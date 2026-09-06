@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V10总监控制台 - 美化设计图 V2.0</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    padding: 20px;
+  }
+  .design-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .design-header h1 {
+    font-size: 24px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .design-header p {
+    color: #666;
+    font-size: 13px;
+  }
+  .mockup {
+    width: 1400px;
+    margin: 0 auto;
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+    overflow: hidden;
+  }
+  .mockup-titlebar {
+    height: 40px;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 8px;
+  }
+  .mockup-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #febc2e; }
+  .dot-green { background: #28c840; }
+  .mockup-title {
+    color: rgba(255,255,255,0.7);
+    font-size: 12px;
+    margin-left: 12px;
+  }
+  .app-container {
+    display: flex;
+    flex-direction: column;
+    height: 800px;
+  }
+  /* A区导航栏 */
+  .nav-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
+    border-bottom: 1px solid #e8ecf4;
+    flex-shrink: 0;
+  }
+  .nav-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .nav-tab {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .nav-tab.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+  }
+  .nav-tab:not(.active) {
+    background: #fff;
+    color: #555;
+    border: 1px solid #e0e4ec;
+  }
+  .nav-tab:not(.active):hover {
+    border-color: #667eea;
+    color: #667eea;
+    transform: translateY(-1px);
+  }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #28c840;
+    box-shadow: 0 0 8px rgba(40,200,64,0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #fff;
+    border: 1px solid #e0e4ec;
+    color: #555;
+  }
+  .nav-btn:hover {
+    border-color: #667eea;
+    color: #667eea;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(102,126,234,0.2);
+  }
+  .nav-btn.icon-only {
+    padding: 6px 8px;
+    font-size: 14px;
+  }
+  /* B区项目总览 */
+  .overview-bar {
+    background: #fff;
+    border-bottom: 1px solid #e8ecf4;
+    flex-shrink: 0;
+  }
+  .overview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 20px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #888;
+    transition: background 0.2s;
+  }
+  .overview-header:hover {
+    background: #f8f9ff;
+  }
+  .overview-content {
+    padding: 12px 20px;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 16px;
+  }
+  .overview-card {
+    background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
+    border-radius: 10px;
+    padding: 12px;
+    border: 1px solid #e8ecf4;
+  }
+  .overview-card.memory {
+    grid-column: 1;
+    background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+    border-color: #667eea30;
+  }
+  .card-label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .card-value {
+    font-size: 13px;
+    color: #333;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  .progress-bar {
+    height: 8px;
+    background: #e8ecf4;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    border-radius: 4px;
+    transition: width 0.5s ease;
+  }
+  .risk-box {
+    background: #fff0f0;
+    border: 1px solid #ffcdd2;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #d32f2f;
+    margin-top: 6px;
+    max-height: 50px;
+    overflow-y: auto;
+  }
+  .todo-box {
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #f57c00;
+    margin-top: 6px;
+    max-height: 50px;
+    overflow-y: auto;
+  }
+  /* 主内容区 */
+  .main-content {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+  /* 对话流 */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #fafbff;
+    border-right: 1px solid #e8ecf4;
+  }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  .chat-empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: #aaa;
+  }
+  .chat-empty-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+  }
+  .chat-message {
+    margin-bottom: 16px;
+    display: flex;
+  }
+  .chat-message.user {
+    justify-content: flex-end;
+  }
+  .chat-bubble {
+    max-width: 70%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .chat-message.user .chat-bubble {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .chat-message.assistant .chat-bubble {
+    background: #fff;
+    color: #333;
+    border: 1px solid #e8ecf4;
+    border-bottom-left-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .chat-input-area {
+    padding: 16px 20px;
+    background: #fff;
+    border-top: 1px solid #e8ecf4;
+  }
+  .chat-input-wrapper {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .chat-input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid #e0e4ec;
+    border-radius: 10px;
+    font-size: 13px;
+    resize: none;
+    height: 60px;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .chat-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102,126,234,0.1);
+  }
+  .send-btn {
+    padding: 10px 24px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .send-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+  }
+  /* D区 */
+  .d-area {
+    width: 340px;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+  }
+  .d-tabs {
+    display: flex;
+    border-bottom: 1px solid #e8ecf4;
+    background: #fafbff;
+  }
+  .d-tab {
+    flex: 1;
+    padding: 12px 8px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #888;
+    border-bottom: 2px solid transparent;
+  }
+  .d-tab.active {
+    color: #667eea;
+    border-bottom-color: #667eea;
+    background: #fff;
+  }
+  .d-tab:hover:not(.active) {
+    color: #667eea;
+    background: #f0f4ff;
+  }
+  .d-toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e8ecf4;
+  }
+  .d-search {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #e0e4ec;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .d-search:focus {
+    outline: none;
+    border-color: #667eea;
+  }
+  .d-filter {
+    padding: 6px 8px;
+    border: 1px solid #e0e4ec;
+    border-radius: 6px;
+    font-size: 11px;
+    background: #fff;
+  }
+  .d-new-btn {
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .d-new-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(102,126,234,0.3);
+  }
+  .d-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+  }
+  .d-card {
+    background: #fff;
+    border: 1px solid #e8ecf4;
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .d-card:hover {
+    border-color: #667eea;
+    box-shadow: 0 4px 12px rgba(102,126,234,0.15);
+    transform: translateY(-2px);
+  }
+  .d-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .d-card-icon {
+    font-size: 20px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #f0f4ff 0%, #e8ecf4 100%);
+    border-radius: 8px;
+  }
+  .d-card-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+    flex: 1;
+  }
+  .d-card-status {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .status-enabled {
+    background: #e8f5e9;
+    color: #388e3c;
+  }
+  .status-disabled {
+    background: #ffebee;
+    color: #d32f2f;
+  }
+  .d-card-desc {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  .d-card-trigger {
+    display: inline-block;
+    padding: 2px 6px;
+    background: #e3f2fd;
+    color: #1976d2;
+    border-radius: 4px;
+    font-size: 10px;
+    margin-bottom: 8px;
+    font-family: monospace;
+  }
+  .d-card-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .d-action-btn {
+    flex: 1;
+    padding: 5px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+    font-weight: 500;
+  }
+  .d-action-btn.primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+  }
+  .d-action-btn.primary:hover {
+    box-shadow: 0 2px 8px rgba(102,126,234,0.3);
+  }
+  .d-action-btn.secondary {
+    background: #f5f5f5;
+    color: #666;
+  }
+  .d-action-btn.secondary:hover {
+    background: #e8ecf4;
+  }
+  .d-action-btn.danger {
+    background: #fff;
+    color: #d32f2f;
+    border: 1px solid #ffcdd2;
+  }
+  .d-action-btn.danger:hover {
+    background: #ffebee;
+  }
+  /* 设计说明 */
+  .design-notes {
+    max-width: 1400px;
+    margin: 24px auto;
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  }
+  .design-notes h2 {
+    font-size: 18px;
+    margin-bottom: 16px;
+    color: #1a1a2e;
+  }
+  .design-notes h3 {
+    font-size: 14px;
+    margin: 16px 0 8px;
+    color: #667eea;
+  }
+  .design-notes table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .design-notes th, .design-notes td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #e8ecf4;
+  }
+  .design-notes th {
+    background: #f8f9ff;
+    font-weight: 600;
+    color: #555;
+  }
+  .design-notes ul {
+    padding-left: 20px;
+    font-size: 12px;
+    line-height: 1.8;
+    color: #555;
+  }
+  .color-palette {
+    display: flex;
+    gap: 12px;
+    margin: 12px 0;
+  }
+  .color-swatch {
+    width: 60px;
+    height: 60px;
+    border-radius: 8px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 4px;
+    font-size: 9px;
+    color: #fff;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<div class="design-header">
+  <h1>V10 总监控制台 - 美化设计图 V2.0</h1>
+  <p>优雅统一风格 · 所有交互可用 · 对话流程完善 · 原子化测试覆盖</p>
+</div>
+
+<div class="mockup">
+  <div class="mockup-titlebar">
+    <div class="mockup-dot dot-red"></div>
+    <div class="mockup-dot dot-yellow"></div>
+    <div class="mockup-dot dot-green"></div>
+    <span class="mockup-title">DeepSeek Harness - 总监控制台 V10</span>
+  </div>
+  
+  <div class="app-container">
+    <!-- A区导航栏 -->
+    <div class="nav-bar">
+      <div class="nav-left">
+        <div class="nav-tab active">
+          🎯 总监 <span class="status-dot"></span>
+        </div>
+        <div class="nav-tab">📁 dsh-client-mod ▾</div>
+        <div class="nav-tab">🚀 驾驶舱 ▾</div>
+      </div>
+      <div class="nav-right">
+        <div class="nav-btn">📂 选择 ▾</div>
+        <div class="nav-btn icon-only">⚙️</div>
+        <div class="nav-btn icon-only">▼</div>
+      </div>
+    </div>
+    
+    <!-- B区项目总览 -->
+    <div class="overview-bar">
+      <div class="overview-header">
+        <span>▾ 项目总览（核心记忆 / 进度 / 风险 / 待办）</span>
+        <span>点击收起</span>
+      </div>
+      <div class="overview-content">
+        <div class="overview-card memory">
+          <div class="card-label">🧠 核心记忆</div>
+          <div class="card-value">V10总监控制台 — 项目核心记忆与目标定位</div>
+        </div>
+        <div class="overview-card">
+          <div class="card-label">📊 进度</div>
+          <div class="card-value" style="font-size:20px;font-weight:700;color:#667eea;">65%</div>
+          <div class="progress-bar"><div class="progress-fill" style="width:65%"></div></div>
+        </div>
+        <div class="overview-card">
+          <div class="card-label">⚠️ 风险 (2项)</div>
+          <div class="risk-box">1. V10 UI迁移风险<br>2. Ollama服务未启动</div>
+        </div>
+        <div class="overview-card">
+          <div class="card-label">📋 待办 (5项)</div>
+          <div class="todo-box">1. 完成V10 UI迁移<br>2. 启动Ollama服务<br>3. 完善智能体功能</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 主内容区 -->
+    <div class="main-content">
+      <!-- 对话流 -->
+      <div class="chat-area">
+        <div class="chat-messages">
+          <div class="chat-empty">
+            <div class="chat-empty-icon">🎯</div>
+            <div style="font-size:14px;margin-bottom:8px;">总监对话流为空，输入消息开始</div>
+            <div style="font-size:12px;color:#f57c00;">⚠️ Ollama 未检测到，将使用模拟回复</div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input-wrapper">
+            <textarea class="chat-input" placeholder="输入消息，按Enter发送..."></textarea>
+            <button class="send-btn">发送</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- D区 -->
+      <div class="d-area">
+        <div class="d-tabs">
+          <div class="d-tab active">🤖 智能体</div>
+          <div class="d-tab">⚡ 技能</div>
+          <div class="d-tab">📋 执行逻辑</div>
+        </div>
+        <div class="d-toolbar">
+          <input class="d-search" placeholder="搜索...">
+          <select class="d-filter"><option>全部</option></select>
+          <button class="d-new-btn">+ 新建</button>
+        </div>
+        <div class="d-list">
+          <div class="d-card">
+            <div class="d-card-header">
+              <div class="d-card-icon">💻</div>
+              <div class="d-card-name">代码工程师</div>
+              <span class="d-card-status status-enabled">启用</span>
+            </div>
+            <div class="d-card-desc">资深全栈开发工程师</div>
+            <div class="d-card-actions">
+              <button class="d-action-btn primary">切换对话</button>
+              <button class="d-action-btn secondary">编辑</button>
+              <button class="d-action-btn danger">删除</button>
+            </div>
+          </div>
+          <div class="d-card">
+            <div class="d-card-header">
+              <div class="d-card-icon">📄</div>
+              <div class="d-card-name">文档专家</div>
+              <span class="d-card-status status-enabled">启用</span>
+            </div>
+            <div class="d-card-desc">技术文档撰写专家</div>
+            <div class="d-card-actions">
+              <button class="d-action-btn primary">切换对话</button>
+              <button class="d-action-btn secondary">编辑</button>
+              <button class="d-action-btn danger">删除</button>
+            </div>
+          </div>
+          <div class="d-card">
+            <div class="d-card-header">
+              <div class="d-card-icon">🔍</div>
+              <div class="d-card-name">调研分析师</div>
+              <span class="d-card-status status-enabled">启用</span>
+            </div>
+            <div class="d-card-desc">深度调研分析专家</div>
+            <div class="d-card-actions">
+              <button class="d-action-btn primary">切换对话</button>
+              <button class="d-action-btn secondary">编辑</button>
+              <button class="d-action-btn danger">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="design-notes">
+  <h2>🎨 设计规范与交互清单</h2>
+  
+  <h3>配色方案</h3>
+  <div class="color-palette">
+    <div class="color-swatch" style="background:#667eea;">主色</div>
+    <div class="color-swatch" style="background:#764ba2;">辅色</div>
+    <div class="color-swatch" style="background:#1a1a2e;">深色</div>
+    <div class="color-swatch" style="background:#f8f9ff;">背景</div>
+    <div class="color-swatch" style="background:#e8ecf4;border:1px solid #ddd;color:#999;">边框</div>
+  </div>
+  
+  <h3>原子化交互功能清单（50+项）</h3>
+  <table>
+    <tr><th>区域</th><th>功能</th><th>交互方式</th><th>预期结果</th><th>状态</th></tr>
+    <tr><td>A区</td><td>总监tab</td><td>点击</td><td>显示总监控制台</td><td>✅</td></tr>
+    <tr><td>A区</td><td>文件夹选择</td><td>点击下拉</td><td>显示项目列表，可切换</td><td>✅</td></tr>
+    <tr><td>A区</td><td>驾驶舱</td><td>点击下拉</td><td>显示快捷操作面板</td><td>✅</td></tr>
+    <tr><td>A区</td><td>选择按钮</td><td>点击下拉</td><td>显示项目选择器</td><td>✅</td></tr>
+    <tr><td>A区</td><td>设置按钮</td><td>点击</td><td>打开设置弹窗</td><td>✅</td></tr>
+    <tr><td>A区</td><td>折叠按钮</td><td>点击</td><td>折叠/展开导航栏</td><td>✅</td></tr>
+    <tr><td>A区</td><td>状态指示灯</td><td>自动</td><td>绿色=在线，橙色=处理中</td><td>✅</td></tr>
+    <tr><td>B区</td><td>项目总览折叠</td><td>点击标题</td><td>折叠/展开总览</td><td>✅</td></tr>
+    <tr><td>B区</td><td>核心记忆编辑</td><td>点击编辑</td><td>可编辑核心记忆文本</td><td>✅</td></tr>
+    <tr><td>B区</td><td>进度条</td><td>编辑时拖动</td><td>更新进度百分比</td><td>✅</td></tr>
+    <tr><td>B区</td><td>风险文本</td><td>显示</td><td>红色背景显示风险列表</td><td>✅</td></tr>
+    <tr><td>B区</td><td>待办文本</td><td>显示</td><td>橙色背景显示待办列表</td><td>✅</td></tr>
+    <tr><td>B区</td><td>保存按钮</td><td>点击</td><td>保存编辑到localStorage</td><td>✅</td></tr>
+    <tr><td>对话</td><td>输入框</td><td>输入文本</td><td>可输入多行文本</td><td>✅</td></tr>
+    <tr><td>对话</td><td>发送按钮</td><td>点击/Enter</td><td>发送消息，显示回复</td><td>✅</td></tr>
+    <tr><td>对话</td><td>消息气泡</td><td>显示</td><td>用户右侧，AI左侧</td><td>✅</td></tr>
+    <tr><td>对话</td><td>Ollama状态</td><td>自动检测</td><td>未启动显示警告</td><td>✅</td></tr>
+    <tr><td>对话</td><td>智能体切换</td><td>点击切换对话</td><td>清空对话，加载智能体提示词</td><td>✅</td></tr>
+    <tr><td>对话</td><td>执行逻辑应用</td><td>点击应用逻辑</td><td>添加系统提示词</td><td>✅</td></tr>
+    <tr><td>D区</td><td>tab切换</td><td>点击智能体/技能/执行逻辑</td><td>切换显示对应列表</td><td>✅</td></tr>
+    <tr><td>D区</td><td>搜索</td><td>输入关键词</td><td>实时过滤列表</td><td>✅</td></tr>
+    <tr><td>D区</td><td>筛选</td><td>选择全部/启用/禁用</td><td>按状态过滤</td><td>✅</td></tr>
+    <tr><td>D区</td><td>新建按钮</td><td>点击</td><td>打开新建弹窗</td><td>✅</td></tr>
+    <tr><td>D区</td><td>卡片hover</td><td>鼠标悬停</td><td>上浮+阴影+边框变色</td><td>✅</td></tr>
+    <tr><td>D区</td><td>切换对话</td><td>点击</td><td>切换到该智能体</td><td>✅</td></tr>
+    <tr><td>D区</td><td>编辑按钮</td><td>点击</td><td>打开编辑弹窗</td><td>✅</td></tr>
+    <tr><td>D区</td><td>删除按钮</td><td>点击</td><td>删除该项（确认）</td><td>✅</td></tr>
+    <tr><td>D区</td><td>启用/禁用</td><td>编辑时切换</td><td>更新状态标签</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>名称输入</td><td>输入</td><td>更新名称</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>图标选择</td><td>输入emoji</td><td>更新图标</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>颜色选择</td><td>取色器</td><td>更新颜色（智能体）</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>描述输入</td><td>输入</td><td>更新描述</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>系统提示词</td><td>多行输入</td><td>更新提示词</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>触发词</td><td>输入</td><td>更新触发词（技能）</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>触发模式</td><td>下拉选择</td><td>更新模式（执行逻辑）</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>保存按钮</td><td>点击</td><td>保存到localStorage+列表</td><td>✅</td></tr>
+    <tr><td>弹窗</td><td>取消按钮</td><td>点击/ESC</td><td>关闭弹窗不保存</td><td>✅</td></tr>
+    <tr><td>设置</td><td>通用设置</td><td>tab切换</td><td>显示配置信息</td><td>✅</td></tr>
+    <tr><td>设置</td><td>外观设置</td><td>tab切换</td><td>主题色/字体/宽度</td><td>✅</td></tr>
+    <tr><td>设置</td><td>数据设置</td><td>tab切换</td><td>重新加载/清除缓存</td><td>✅</td></tr>
+  </table>
+  
+  <h3>对话流程测试清单</h3>
+  <ul>
+    <li>✅ 正常对话：输入消息 → 发送 → 显示AI回复</li>
+    <li>✅ 智能体切换：点击"切换对话" → 清空对话 → 加载智能体系统提示词 → 发送消息</li>
+    <li>✅ 执行逻辑应用：点击"应用逻辑" → 添加系统提示词 → 后续回复按逻辑执行</li>
+    <li>✅ 技能触发：输入触发词（如/code） → 自动加载技能提示词</li>
+    <li>✅ Ollama降级：Ollama未启动 → 显示警告 → 使用模拟回复</li>
+    <li>✅ 多轮对话：连续发送多条消息 → 上下文保持</li>
+    <li>✅ 空消息保护：输入为空 → 发送按钮禁用</li>
+    <li>✅ 处理中状态：发送后 → 显示"正在思考" → 禁止重复发送</li>
+  </ul>
+  
+  <h3>两种总监模式</h3>
+  <ul>
+    <li><strong>模式1：正常对话加总监</strong> — 在对话页面左下角点击总监按钮，弹出总监面板，不覆盖原对话</li>
+    <li><strong>模式2：覆盖式总监</strong> — 点击顶部"总监"tab，总监页面覆盖原对话，右上角有x关闭按钮</li>
+  </ul>
+  
+  <h3>美化要点</h3>
+  <ul>
+    <li>渐变主色：#667eea → #764ba2（紫色渐变，优雅专业）</li>
+    <li>卡片hover：上浮2px + 阴影 + 边框变色</li>
+    <li>按钮hover：上浮1px + 阴影</li>
+    <li>状态指示灯：脉冲动画</li>
+    <li>进度条：渐变填充 + 过渡动画</li>
+    <li>圆角统一：导航8px / 卡片10px / 按钮6-10px</li>
+    <li>阴影层次：卡片0 2px 8px / hover 0 4px 12px / 弹窗0 20px 60px</li>
+    <li>间距系统：4px / 8px / 12px / 16px / 20px / 24px</li>
+  </ul>
+</div>
+
+</body>
+</html>

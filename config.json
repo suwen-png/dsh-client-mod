@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "name": "dsh-client-mod",
+    "description": "DeepSeek Harness 原客户端代码修改工作区 — 备份-修改-符号链接-复原 全链路",
+    "version": "1.2.0",
+    "created": "2026-08-24",
+    "last_modified": "2026-09-06",
+    "harness_version": "0.1.0-rc.11"
+  },
+  "paths": {
+    "harness_install_root": "D:\\软件安装\\DeepSeek-Harness-Desktop\\DeepSeek Harness\\resources\\host\\node_modules\\@deepseek-ai",
+    "workspace_root": "D:\\hermes-data\\dsh-client-mod",
+    "original_dir": "D:\\hermes-data\\dsh-client-mod\\original\\@deepseek-ai",
+    "workspace_dir": "D:\\hermes-data\\dsh-client-mod\\workspace\\@deepseek-ai",
+    "patches_dir": "D:\\hermes-data\\dsh-client-mod\\patches",
+    "snapshots_dir": "D:\\hermes-data\\dsh-client-mod\\snapshots",
+    "logs_dir": "D:\\hermes-data\\dsh-client-mod\\logs"
+  },
+  "target_packages": [
+    {
+      "name": "dsh-client-ui-layout",
+      "purpose": "主布局 AppFrame，main.page / conversation / sidebar 渲染逻辑，openPrimaryPage",
+      "key_files": ["lib/client.js"]
+    },
+    {
+      "name": "dsh-client-ui-conversation",
+      "purpose": "对话页根组件 ConversationRoot / ConversationSession / ChatView，对话/轨迹 tab 注册，ConversationController 对话服务，输入栏 InputBar",
+      "key_files": ["lib/client.js"]
+    },
+    {
+      "name": "dsh-client-ui-trajectory",
+      "purpose": "轨迹视图 tab（conversation.view id=trajectory），TrajectoryView 组件，展示工具调用/请求/响应完整轨迹",
+      "key_files": ["lib/client.js"]
+    },
+    {
+      "name": "dsh-client-ui-sidebar",
+      "purpose": "侧边栏 slot 与新建会话逻辑",
+      "key_files": ["lib/client.js"]
+    },
+    {
+      "name": "dsh-client-ui-slots",
+      "purpose": "通用插槽服务 register/inject",
+      "key_files": ["lib/index.js"]
+    },
+    {
+      "name": "dsh-client-runtime",
+      "purpose": "__ModuleLoader__ / defineStore / inject 定义",
+      "key_files": ["lib/client.js"]
+    },
+    {
+      "name": "dsh-client-web-react",
+      "purpose": "renderSlot / storeOf / keyed 选择逻辑",
+      "key_files": ["lib/index.js"]
+    },
+    {
+      "name": "dsh-client-web",
+      "purpose": "Web 壳/启动 boot 图、插件物化",
+      "key_files": ["lib/index.js"]
+    }
+  ],
+  "rules": {
+    "backup_before_modify": true,
+    "snapshot_before_apply": true,
+    "use_junction": true,
+    "restore_from_original": true,
+    "log_all_operations": true
+  }
+}

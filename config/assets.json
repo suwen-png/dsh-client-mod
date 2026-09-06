@@ -1,0 +1,22 @@
+﻿{
+    "packages":  8,
+    "snapshots":  53,
+    "docs":  {
+                 "total":  65,
+                 "byType":  {
+                                "core_memory":  3,
+                                "task_docs":  12,
+                                "test_docs":  5,
+                                "constraints":  8,
+                                "project_index":  5,
+                                "info":  10,
+                                "dev_docs":  10
+                            }
+             },
+    "generatedAt":  "2026-09-05T23:45:51+08:00",
+    "scripts":  11,
+    "codeLines":  {
+                      "clientJs":  13523,
+                      "totalModified":  3200
+                  }
+}

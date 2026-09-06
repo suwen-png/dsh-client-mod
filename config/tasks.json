@@ -1,0 +1,35 @@
+[
+  {
+    "id": 1,
+    "title": "完成 V10 布局重构设计文档",
+    "status": "done",
+    "priority": "high",
+    "createdAt": 1756800000000,
+    "completedAt": 1756886400000,
+    "branch": "main",
+    "description": "完成 A/B/D 三区详细设计文档和数据模型设计",
+    "assignee": "总监"
+  },
+  {
+    "id": 2,
+    "title": "V10 数据层准备",
+    "status": "doing",
+    "priority": "high",
+    "createdAt": 1756886400000,
+    "completedAt": null,
+    "branch": "main",
+    "description": "创建8个数据文件 + apply.ps1增加assets.json生成",
+    "assignee": "总监"
+  },
+  {
+    "id": 3,
+    "title": "V10 State和函数层",
+    "status": "todo",
+    "priority": "high",
+    "createdAt": 1756890000000,
+    "completedAt": null,
+    "branch": "main",
+    "description": "23个state + 30个函数",
+    "assignee": "总监"
+  }
+]

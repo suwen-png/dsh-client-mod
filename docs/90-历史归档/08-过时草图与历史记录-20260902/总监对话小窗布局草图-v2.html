@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>总监-对话小窗布局草图 v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 20px; }
+  h2 { margin-bottom: 12px; color: #333; font-size: 16px; }
+  .layout { display: flex; flex-direction: column; height: 440px; border: 2px solid #999; border-radius: 8px; overflow: hidden; margin-bottom: 30px; background: #fff; }
+  
+  /* 内容区（左右分栏） */
+  .content-row { display: flex; flex: 1; min-height: 0; }
+  
+  /* 通用区域样式 */
+  .area { display: flex; flex-direction: column; position: relative; }
+  .area.focused { outline: 2px solid #1976d2; outline-offset: -2px; }
+  .area-header { padding: 8px 12px; background: #e8e8e8; border-bottom: 1px solid #ccc; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .area.focused .area-header { background: #bbdefb; }
+  .area-body { flex: 1; overflow-y: auto; padding: 12px; font-size: 12px; color: #666; cursor: pointer; }
+  .area.focused .area-body { background: #f0f7ff; }
+  
+  /* 全局输入框（唯一） */
+  .global-input { padding: 10px 16px; border-top: 2px solid #999; background: #fafafa; display: flex; align-items: center; gap: 8px; }
+  .global-input input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  .global-input .target-badge { font-size: 11px; padding: 3px 8px; border-radius: 3px; background: #1976d2; color: #fff; white-space: nowrap; }
+  .global-input .target-badge.chat { background: #4caf50; }
+  .global-input button { padding: 8px 16px; background: #1976d2; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  
+  /* 拖拽条 */
+  .resizer { width: 5px; background: #ccc; cursor: col-resize; flex-shrink: 0; position: relative; }
+  .resizer:hover { background: #1976d2; }
+  .resizer::after { content: '⋮⋮'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #888; font-size: 10px; }
+  
+  /* 标签 */
+  .tag { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: #1976d2; color: #fff; }
+  .tag-mini { background: #ff9800; }
+  .tag-main { background: #4caf50; }
+  .focus-indicator { font-size: 10px; color: #1976d2; font-weight: 700; }
+  
+  /* 消息气泡 */
+  .msg { margin-bottom: 8px; padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 85%; }
+  .msg-user { background: #e3f2fd; align-self: flex-end; margin-left: auto; }
+  .msg-assistant { background: #f5f5f5; }
+  .msg-system { background: #fff3cd; font-size: 11px; color: #856404; }
+  .msg-list { display: flex; flex-direction: column; gap: 6px; }
+  .note { font-size: 11px; color: #999; margin-top: 4px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- ========== 布局A：总监tab（总监主 + 对话小窗在右） ========== -->
+<h2>布局A — 总监 Tab（总监主区域 + 右侧对话小窗）</h2>
+<div class="layout">
+  <div class="content-row">
+    <!-- 总监主区域（当前焦点） -->
+    <div class="area focused" style="flex: 1; min-width: 200px;">
+      <div class="area-header">
+        <span>总监 <span class="tag tag-main">主区域</span></span>
+        <span class="focus-indicator">● 当前输入目标</span>
+      </div>
+      <div class="area-body">
+        <div class="msg-list">
+          <div class="msg msg-user">帮我分析一下这个报错</div>
+          <div class="msg msg-assistant">
+            <div style="font-weight:600;margin-bottom:4px;">总监处理结果</div>
+            <div>整理后指令：分析报错日志，定位根因</div>
+            <div style="color:#888;font-size:11px;margin-top:2px;">模型建议：DeepSeek-V4-Flash</div>
+            <div style="color:#888;font-size:11px;">分支建议：标准对话</div>
+          </div>
+          <div class="msg msg-system">已自动转发到对话小窗 →</div>
+        </div>
+        <div class="note">点击此区域 → 全局输入框消息发给总监（预处理后转发）</div>
+      </div>
+    </div>
+    
+    <!-- 拖拽条 -->
+    <div class="resizer" title="拖拽调节宽度"></div>
+    
+    <!-- 对话小窗（右侧，无输入框） -->
+    <div class="area" style="width: 300px; min-width: 180px; max-width: 55%;">
+      <div class="area-header" style="background:#fff3e0;">
+        <span>对话 <span class="tag tag-mini">小窗</span></span>
+      </div>
+      <div class="area-body" style="background:#fffbf5;">
+        <div class="msg-list">
+          <div class="msg msg-user">分析报错日志，定位根因</div>
+          <div class="msg msg-assistant">好的，正在分析...</div>
+          <div class="msg msg-assistant">根据日志，错误出现在...</div>
+        </div>
+        <div class="note">点击此区域 → 全局输入框消息直接发给对话（不经过总监）</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 全局输入框（唯一，根据焦点决定发给谁） -->
+  <div class="global-input">
+    <span class="target-badge">→ 总监</span>
+    <input placeholder="输入消息... 当前焦点：总监主区域，消息将经总监预处理后转发" />
+    <button>发送</button>
+  </div>
+</div>
+
+<!-- ========== 布局B：对话tab（总监小窗在左 + 对话主） ========== -->
+<h2>布局B — 对话 Tab（左侧总监小窗 + 对话主区域）</h2>
+<div class="layout">
+  <div class="content-row">
+    <!-- 总监小窗（左侧，无输入框） -->
+    <div class="area" style="width: 300px; min-width: 180px; max-width: 55%;">
+      <div class="area-header" style="background:#e8f5e9;">
+        <span>总监 <span class="tag tag-mini">小窗</span></span>
+      </div>
+      <div class="area-body" style="background:#f5fff7;">
+        <div class="msg-list">
+          <div class="msg msg-user">帮我写个函数</div>
+          <div class="msg msg-assistant">
+            <div style="font-weight:600;">整理后：实现一个防抖函数</div>
+            <div style="color:#888;font-size:11px;">模型：V4-Flash</div>
+          </div>
+          <div class="msg msg-system">→ 已转发到对话主区域</div>
+        </div>
+        <div class="note">点击此区域 → 全局输入框消息发给总监（预处理后转发）</div>
+      </div>
+    </div>
+    
+    <!-- 拖拽条 -->
+    <div class="resizer" title="拖拽调节宽度"></div>
+    
+    <!-- 对话主区域（当前焦点） -->
+    <div class="area focused" style="flex: 1; min-width: 200px;">
+      <div class="area-header">
+        <span>对话 <span class="tag tag-main">主区域</span></span>
+        <span class="focus-indicator">● 当前输入目标</span>
+      </div>
+      <div class="area-body">
+        <div class="msg-list">
+          <div class="msg msg-user">实现一个防抖函数</div>
+          <div class="msg msg-assistant">好的，这是一个标准的防抖函数实现：<br><br>function debounce(fn, delay) {...}</div>
+          <div class="msg msg-user">能加上立即执行选项吗</div>
+          <div class="msg msg-assistant">当然可以，修改如下...</div>
+        </div>
+        <div class="note">点击此区域 → 全局输入框消息直接发给对话（原逻辑不变）</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 全局输入框（唯一） -->
+  <div class="global-input">
+    <span class="target-badge chat">→ 对话</span>
+    <input placeholder="输入消息... 当前焦点：对话主区域，消息直接发给对话" />
+    <button>发送</button>
+  </div>
+</div>
+
+<!-- ========== 交互说明 ========== -->
+<h2>交互逻辑说明</h2>
+<div style="background:#fff; padding:16px; border-radius:8px; border:1px solid #ddd; font-size:13px; line-height:1.8; color:#444;">
+  <p><b>核心原则：全局只有一个输入框，根据鼠标点击的焦点区域决定提交目标。</b></p>
+  <br>
+  <p><b>1. 焦点切换：</b></p>
+  <ul style="margin-left:20px; margin-bottom:12px;">
+    <li>点击任意区域（主区域或小窗）→ 该区域获得焦点，蓝色边框高亮</li>
+    <li>全局输入框左侧显示当前目标徽章（→ 总监 / → 对话）</li>
+    <li>输入框 placeholder 同步显示当前目标说明</li>
+  </ul>
+  <p><b>2. 消息提交：</b></p>
+  <ul style="margin-left:20px; margin-bottom:12px;">
+    <li>焦点在总监区域（主区域或小窗）→ 消息经总监预处理 → 自动转发到对话</li>
+    <li>焦点在对话区域（主区域或小窗）→ 消息直接发给对话（原逻辑不变）</li>
+    <li>按回车或点击发送按钮提交</li>
+  </ul>
+  <p><b>3. 小窗特性：</b></p>
+  <ul style="margin-left:20px; margin-bottom:12px;">
+    <li>小窗只显示对话流，<b>没有独立输入框</b></li>
+    <li>拖拽中间分隔条调节宽度（最小180px，最大55%）</li>
+    <li>宽度记忆：下次打开保持上次调节的宽度</li>
+    <li>小窗可折叠/展开（点击标题栏的折叠按钮）</li>
+    <li>小窗内消息流独立滚动，不影响主区域</li>
+  </ul>
+  <p><b>4. Tab 切换：</b></p>
+  <ul style="margin-left:20px;">
+    <li>总监 Tab：总监主区域在左 + 对话小窗在右</li>
+    <li>对话 Tab：总监小窗在左 + 对话主区域在右</li>
+    <li>轨迹 Tab：无小窗，保持原逻辑</li>
+    <li>切换 Tab 时，焦点默认在主区域</li>
+  </ul>
+</div>
+
+</body>
+</html>

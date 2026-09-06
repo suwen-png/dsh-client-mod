@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>总监驾驶舱 V10 布局设计图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
+  h1 { font-size: 20px; margin-bottom: 6px; color: #1a1a1a; }
+  .subtitle { font-size: 13px; color: #666; margin-bottom: 24px; }
+  .section { margin-bottom: 32px; }
+  .section-title { font-size: 15px; font-weight: 600; margin-bottom: 10px; padding-left: 10px; border-left: 4px solid #1976d2; }
+  .frame { border: 2px dashed #999; border-radius: 8px; padding: 2px; background: #fff; position: relative; }
+  .frame-label { position: absolute; top: -10px; left: 12px; background: #f5f5f5; padding: 0 8px; font-size: 12px; font-weight: 600; color: #666; }
+
+  /* A区：整合导航栏 */
+  .nav-bar { display: flex; align-items: center; height: 40px; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 0 12px; gap: 0; }
+  .nav-item { display: flex; align-items: center; gap: 5px; padding: 0 10px; height: 100%; font-size: 13px; cursor: pointer; border-right: 1px solid #f0f0f0; transition: background 0.15s; white-space: nowrap; }
+  .nav-item:hover { background: #f5f5f5; }
+  .nav-item.active { background: #e3f2fd; color: #1565c0; font-weight: 600; }
+  .nav-icon { font-size: 14px; }
+  .nav-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #e3f2fd; color: #1565c0; }
+  .nav-spacer { flex: 1; }
+  .nav-right { display: flex; align-items: center; gap: 4px; }
+  .nav-btn { padding: 4px 8px; font-size: 11px; border: 1px solid #ddd; border-radius: 4px; background: #fff; cursor: pointer; color: #555; }
+  .nav-btn:hover { background: #f5f5f5; }
+  .nav-settings { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 4px; cursor: pointer; font-size: 16px; }
+  .nav-settings:hover { background: #f0f0f0; }
+
+  /* B区：项目总览 */
+  .overview-bar { background: #fafafa; border-bottom: 1px solid #e0e0e0; }
+  .overview-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; cursor: pointer; font-size: 12px; color: #666; }
+  .overview-header:hover { background: #f5f5f5; }
+  .overview-body { display: flex; gap: 16px; padding: 8px 12px; border-top: 1px dashed #e0e0e0; background: #fff; flex-wrap: wrap; }
+  .ov-card { flex: 1; min-width: 140px; padding: 8px 10px; background: #fafafa; border-radius: 6px; border: 1px solid #eee; }
+  .ov-card-title { font-size: 10px; color: #999; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .ov-card-value { font-size: 13px; color: #333; font-weight: 500; line-height: 1.4; }
+  .ov-card-value.green { color: #2e7d32; }
+  .ov-card-value.orange { color: #e65100; }
+  .ov-card-value.red { color: #c62828; }
+  .ov-progress { height: 4px; background: #e0e0e0; border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .ov-progress-fill { height: 100%; background: #1976d2; border-radius: 2px; }
+
+  /* D区：功能面板 */
+  .d-panel { display: flex; background: #fff; min-height: 200px; }
+  .d-nav { width: 100px; background: #fafafa; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 8px 0; }
+  .d-nav-item { padding: 10px 14px; font-size: 13px; cursor: pointer; border-left: 3px solid transparent; transition: all 0.15s; }
+  .d-nav-item:hover { background: #f0f0f0; }
+  .d-nav-item.active { background: #fff; border-left-color: #1976d2; color: #1976d2; font-weight: 600; }
+  .d-nav-count { font-size: 10px; color: #999; margin-left: 4px; }
+  .d-content { flex: 1; display: flex; flex-direction: column; }
+  .d-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; background: #fafafa; }
+  .d-search { flex: 1; max-width: 200px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; }
+  .d-filter { padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 11px; background: #fff; cursor: pointer; color: #555; }
+  .d-new-btn { padding: 4px 12px; background: #1976d2; color: #fff; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; margin-left: auto; }
+  .d-new-btn:hover { background: #1565c0; }
+  .d-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .d-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 6px; cursor: pointer; transition: all 0.15s; background: #fff; }
+  .d-item:hover { border-color: #1976d2; box-shadow: 0 1px 4px rgba(25,118,210,0.15); }
+  .d-item-icon { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .d-item-body { flex: 1; min-width: 0; }
+  .d-item-name { font-size: 13px; font-weight: 600; color: #333; margin-bottom: 2px; }
+  .d-item-desc { font-size: 11px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .d-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .d-item-btn { padding: 3px 8px; font-size: 10px; border: 1px solid #ddd; border-radius: 3px; background: #fff; cursor: pointer; color: #666; }
+  .d-item-btn:hover { background: #f5f5f5; }
+  .d-item-btn.primary { background: #1976d2; color: #fff; border-color: #1976d2; }
+  .d-item-btn.primary:hover { background: #1565c0; }
+
+  /* 标注 */
+  .annotation { position: absolute; font-size: 11px; color: #fff; padding: 2px 8px; border-radius: 3px; font-weight: 600; z-index: 10; }
+  .ann-a { background: #1976d2; top: -12px; left: 8px; }
+  .ann-b { background: #388e3c; top: -12px; left: 8px; }
+  .ann-d { background: #7b1fa2; top: -12px; left: 8px; }
+  .ann-nav { background: #f57c00; }
+
+  /* 说明表格 */
+  .spec-table { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .spec-table th { background: #1976d2; color: #fff; padding: 8px 12px; text-align: left; font-weight: 600; }
+  .spec-table td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  .spec-table tr:last-child td { border-bottom: none; }
+  .spec-table tr:hover { background: #fafafa; }
+  .code-tag { font-family: "Consolas", monospace; font-size: 11px; background: #f0f0f0; padding: 1px 5px; border-radius: 3px; color: #c62828; }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+  .tag-new { background: #e8f5e9; color: #2e7d32; }
+  .tag-modify { background: #fff3e0; color: #e65100; }
+  .tag-remove { background: #ffebee; color: #c62828; }
+  .tag-keep { background: #e3f2fd; color: #1565c0; }
+
+  .flow-note { background: #fffde7; border-left: 4px solid #fbc02d; padding: 10px 14px; border-radius: 0 6px 6px 0; font-size: 12px; color: #5d4037; line-height: 1.6; margin-top: 12px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+</style>
+</head>
+<body>
+
+<h1>总监驾驶舱 V10 — 布局重构设计图</h1>
+<div class="subtitle">基于 V9 现状重构：A+C 合并导航栏 / B 项目总览标准化 / D 三栏统一管理面板</div>
+
+<!-- ==================== 整体布局 ==================== -->
+<div class="section">
+  <div class="section-title">一、整体布局结构（从上到下）</div>
+  <div class="frame" style="padding: 0; overflow: hidden;">
+    <!-- A区：整合导航栏 -->
+    <div style="position: relative;">
+      <div class="annotation ann-a">A 区 · 整合导航栏（原 A + C）</div>
+      <div class="nav-bar" style="margin-top: 8px;">
+        <div class="nav-item active"><span class="nav-icon">🎯</span>总监</div>
+        <div class="nav-item"><span class="nav-icon">📁</span>dsh-client-mod <span style="font-size:10px;color:#999;">▾</span></div>
+        <div class="nav-item"><span class="nav-icon">🏷️</span>阶段 V9 <span class="nav-badge">开发中</span></div>
+        <div class="nav-item"><span class="nav-icon">🚀</span>驾驶舱</div>
+        <div class="nav-spacer"></div>
+        <div class="nav-right">
+          <span style="font-size:11px;color:#999;margin-right:4px;">b0902-1033</span>
+          <div class="nav-settings" title="设置（含自动转发/导出日志/清除缓存）">⚙️</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- B区：项目总览 -->
+    <div style="position: relative; margin-top: 2px;">
+      <div class="annotation ann-b">B 区 · 项目总览（标准化架构，数据驱动）</div>
+      <div class="overview-bar" style="margin-top: 8px;">
+        <div class="overview-header">
+          <span>▾ 项目总览（定位 / 目标 / 阶段 / 进度 / 风险 / 待办 / 资产统计）</span>
+          <span style="font-size:10px;color:#999;">点击折叠 · 数据由总监文档维护</span>
+        </div>
+        <div class="overview-body">
+          <div class="ov-card"><div class="ov-card-title">定位</div><div class="ov-card-value">DeepSeek Harness 原客户端修改工作区</div></div>
+          <div class="ov-card"><div class="ov-card-title">目标</div><div class="ov-card-value">完成 V10 总监驾驶舱重构</div></div>
+          <div class="ov-card"><div class="ov-card-title">进度</div><div class="ov-card-value">65%</div><div class="ov-progress"><div class="ov-progress-fill" style="width:65%"></div></div></div>
+          <div class="ov-card"><div class="ov-card-title">风险</div><div class="ov-card-value red">2 项</div></div>
+          <div class="ov-card"><div class="ov-card-title">待办</div><div class="ov-card-value orange">5 项</div></div>
+          <div class="ov-card"><div class="ov-card-title">项目资产</div><div class="ov-card-value green">53 文档 · 8 包 · 17 脚本</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- D区：功能面板 -->
+    <div style="position: relative; margin-top: 2px;">
+      <div class="annotation ann-d">D 区 · 统一功能面板（智能体 / 技能 / 执行逻辑 三态切换）</div>
+      <div class="d-panel" style="margin-top: 8px;">
+        <!-- 左侧导航 -->
+        <div class="d-nav">
+          <div class="d-nav-item active">🤖 智能体<span class="d-nav-count">5</span></div>
+          <div class="d-nav-item">⚡ 技能<span class="d-nav-count">6</span></div>
+          <div class="d-nav-item">📋 执行逻辑<span class="d-nav-count">4</span></div>
+        </div>
+        <!-- 右侧内容 -->
+        <div class="d-content">
+          <div class="d-toolbar">
+            <input class="d-search" placeholder="搜索名称/描述...">
+            <button class="d-filter">全部 ▾</button>
+            <button class="d-filter">已启用 ▾</button>
+            <button class="d-new-btn">+ 新建</button>
+          </div>
+          <div class="d-list">
+            <div class="d-item">
+              <div class="d-item-icon" style="background:#e3f2fd;">💻</div>
+              <div class="d-item-body">
+                <div class="d-item-name">代码工程师</div>
+                <div class="d-item-desc">资深全栈开发，擅长代码生成、调试、架构设计</div>
+              </div>
+              <div class="d-item-actions">
+                <button class="d-item-btn">查看</button>
+                <button class="d-item-btn">编辑</button>
+                <button class="d-item-btn primary">调用 →</button>
+              </div>
+            </div>
+            <div class="d-item">
+              <div class="d-item-icon" style="background:#e8f5e9;">📄</div>
+              <div class="d-item-body">
+                <div class="d-item-name">文档专家</div>
+                <div class="d-item-desc">技术文档撰写，API文档、用户手册、需求文档</div>
+              </div>
+              <div class="d-item-actions">
+                <button class="d-item-btn">查看</button>
+                <button class="d-item-btn">编辑</button>
+                <button class="d-item-btn primary">调用 →</button>
+              </div>
+            </div>
+            <div class="d-item" style="opacity:0.5;">
+              <div class="d-item-icon" style="background:#f5f5f5;">🔍</div>
+              <div class="d-item-body">
+                <div class="d-item-name">调研分析师 <span style="font-size:10px;color:#999;">（已禁用）</span></div>
+                <div class="d-item-desc">深度调研、信息整理、趋势分析</div>
+              </div>
+              <div class="d-item-actions">
+                <button class="d-item-btn">查看</button>
+                <button class="d-item-btn">编辑</button>
+                <button class="d-item-btn primary" disabled style="opacity:0.5;">调用 →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== A区详细说明 ==================== -->
+<div class="section">
+  <div class="section-title">二、A 区 · 整合导航栏详细设计（原 A 区 + C 区合并）</div>
+  <table class="spec-table">
+    <tr><th style="width:120px;">元素</th><th style="width:80px;">类型</th><th>功能与交互</th><th style="width:100px;">数据来源</th><th style="width:80px;">改动</th></tr>
+    <tr>
+      <td>🎯 总监</td><td>Tab切换</td>
+      <td>点击切换到总监视图（当前激活态）。与原"总监/对话/轨迹"三 tab 中的"总监"对应</td>
+      <td><span class="code-tag">currentView</span></td>
+      <td><span class="tag tag-keep">保留</span></td>
+    </tr>
+    <tr>
+      <td>📁 项目名 ▾</td><td>下拉选择</td>
+      <td>点击展开项目列表，切换项目。切换时保存当前项目对话历史，加载新项目数据</td>
+      <td><span class="code-tag">projects / currentProject</span></td>
+      <td><span class="tag tag-modify">增强</span></td>
+    </tr>
+    <tr>
+      <td>🏷️ 阶段</td><td>标签+徽标</td>
+      <td>显示当前项目阶段（V9开发中/测试/已发布等）。点击可快速编辑阶段。徽标颜色随阶段变化</td>
+      <td><span class="code-tag">overview.phase</span></td>
+      <td><span class="tag tag-new">新增</span></td>
+    </tr>
+    <tr>
+      <td>🚀 驾驶舱</td><td>按钮</td>
+      <td>点击展开/收起驾驶舱快捷面板（快速操作：新建会话、清除缓存、重启提示等）</td>
+      <td>静态+<span class="code-tag">localStorage</span></td>
+      <td><span class="tag tag-new">新增</span></td>
+    </tr>
+    <tr>
+      <td>版本号</td><td>只读文本</td>
+      <td>显示当前构建版本（b0902-1033），来自文档索引生成时间戳</td>
+      <td><span class="code-tag">DSH_DOCS_INDEX.generatedAt</span></td>
+      <td><span class="tag tag-keep">保留</span></td>
+    </tr>
+    <tr>
+      <td>⚙️ 设置</td><td>弹窗</td>
+      <td><strong>整合原 C 区所有操作按钮</strong>：自动转发开关、导出日志（对话历史导出）、清除缓存、滚到底、Ollama配置、外观设置、执行逻辑职责开关、数据管理</td>
+      <td><span class="code-tag">state.config</span></td>
+      <td><span class="tag tag-modify">整合</span></td>
+    </tr>
+  </table>
+  <div class="flow-note">
+    <strong>高度约束：</strong>A 区高度固定 40px，与原 A 区一致。B 区使用折叠功能（点击 header 展开/收起），展开时不影响 A 区高度。<br>
+    <strong>原 C 区删除：</strong>"总监待命"状态标签移入 A 区设置弹窗的状态栏，"自动转发开/导出日志/滚到底"按钮全部移入设置弹窗。
+  </div>
+</div>
+
+<!-- ==================== B区详细说明 ==================== -->
+<div class="section">
+  <div class="section-title">三、B 区 · 项目总览标准化架构设计</div>
+  <div class="two-col">
+    <div>
+      <table class="spec-table">
+        <tr><th>卡片</th><th>数据来源</th><th>维护方式</th></tr>
+        <tr><td>定位</td><td><span class="code-tag">project_overview.md</span></td><td>总监文档编辑</td></tr>
+        <tr><td>目标</td><td><span class="code-tag">project_overview.md</span></td><td>总监文档编辑</td></tr>
+        <tr><td>阶段</td><td><span class="code-tag">overview.phase</span></td><td>下拉选择+文档同步</td></tr>
+        <tr><td>进度</td><td>待办完成率自动计算</td><td>自动统计（可手动覆盖）</td></tr>
+        <tr><td>风险</td><td><span class="code-tag">risks.md</span> 未关闭项</td><td>总监文档维护+自动统计</td></tr>
+        <tr><td>待办</td><td><span class="code-tag">tasks.json</span> 未完成项</td><td>任务管理面板+自动统计</td></tr>
+        <tr><td>项目资产</td><td>实时扫描统计</td><td>自动：文档数/包数/脚本数/代码行数</td></tr>
+      </table>
+    </div>
+    <div>
+      <div style="background:#fff;padding:14px;border-radius:6px;border:1px solid #e0e0e0;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#1976d2;">📐 代码架构说明（AI 修改指南）</div>
+        <div style="font-size:12px;line-height:1.8;color:#555;">
+          B 区数据分为<strong>三层</strong>：<br>
+          ① <strong>文档层</strong>（<span class="code-tag">docs/</span> 下的 markdown）— 总监负责维护，是数据源<br>
+          ② <strong>状态层</strong>（<span class="code-tag">overview state</span>）— 从文档加载到 React state，驱动 UI<br>
+          ③ <strong>统计层</strong>（<span class="code-tag">computeStats()</span>）— 自动计算进度/风险数/待办数/资产数<br><br>
+          <strong>新增卡片步骤：</strong><br>
+          1. 在 <span class="code-tag">overview</span> state 加字段<br>
+          2. 在 <span class="code-tag">loadOverviewFromDocs()</span> 加文档解析<br>
+          3. 在 B 区 JSX 加 <span class="code-tag">ov-card</span><br>
+          4. 如需统计，在 <span class="code-tag">computeStats()</span> 加逻辑
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="flow-note">
+    <strong>核心变更：</strong>不再前端写死目标/风险/待办数字。所有数据由总监文档（project_overview.md / risks.md / tasks.json）维护，UI 只读展示+自动统计。编辑功能通过"编辑"按钮打开文档编辑器，修改后自动重新统计。
+  </div>
+</div>
+
+<!-- ==================== D区详细说明 ==================== -->
+<div class="section">
+  <div class="section-title">四、D 区 · 统一功能面板详细设计（最大改动）</div>
+
+  <div style="background:#fff;padding:14px;border-radius:6px;border:1px solid #e0e0e0;margin-bottom:16px;">
+    <div style="font-size:14px;font-weight:600;margin-bottom:10px;color:#7b1fa2;">D 区整体结构：左侧导航 + 右侧内容（工具栏 + 列表）</div>
+    <div style="display:flex;gap:20px;font-size:12px;line-height:1.7;">
+      <div style="flex:1;">
+        <strong>左侧导航（100px）</strong><br>
+        • 智能体（5个）<br>
+        • 技能（6个）<br>
+        • 执行逻辑（4个）<br>
+        <span style="color:#999;">点击切换右侧内容，带数量徽标</span>
+      </div>
+      <div style="flex:2;">
+        <strong>右侧内容区</strong><br>
+        • 工具栏：搜索框 + 筛选下拉 + 启用状态筛选 + 新建按钮<br>
+        • 列表：每项含图标/名称/描述 + 查看/编辑/调用 三按钮<br>
+        • 查看：弹出详情面板，显示完整 system prompt / 技能描述 / 逻辑规则<br>
+        • 编辑：弹出编辑器，修改 system prompt / 技能逻辑 / 执行规则，持久化保存
+      </div>
+    </div>
+  </div>
+
+  <table class="spec-table">
+    <tr><th style="width:90px;">导航项</th><th>列表项结构</th><th>点击"调用"行为</th><th>数据存储</th><th style="width:80px;">改动</th></tr>
+    <tr>
+      <td><strong>🤖 智能体</strong></td>
+      <td>图标 + 名称 + 描述（system prompt 摘要）+ 查看/编辑/调用</td>
+      <td><strong>创建新分支（新对话）</strong>，将智能体的 system prompt 作为分支上下文，用户在新分支中与该智能体对话</td>
+      <td><span class="code-tag">agents.json</span>（可扩展）</td>
+      <td><span class="tag tag-modify">重构</span></td>
+    </tr>
+    <tr>
+      <td><strong>⚡ 技能</strong></td>
+      <td>图标 + 名称 + 触发词（如 /code）+ 描述 + 查看/编辑/调用</td>
+      <td><strong>在当前对话中注入技能 prompt</strong>，相当于输入 /技能名，总监按技能逻辑处理当前消息</td>
+      <td><span class="code-tag">skills.json</span>（可扩展）</td>
+      <td><span class="tag tag-new">新增内容</span></td>
+    </tr>
+    <tr>
+      <td><strong>📋 执行逻辑</strong></td>
+      <td>图标 + 名称 + 规则摘要 + 启用开关 + 查看/编辑/强制执行</td>
+      <td><strong>强制 AI 按该逻辑执行</strong>，如"文件生成标准"则所有文件生成必须遵循命名/格式/注释规范；"回复标准"则所有回复必须遵循格式</td>
+      <td><span class="code-tag">state.config.duties</span> + 规则文档</td>
+      <td><span class="tag tag-modify">增强</span></td>
+    </tr>
+  </table>
+
+  <div class="flow-note">
+    <strong>技能内容修复：</strong>当前技能栏显示"2个已禁用"且技能内容为空。V10 中每个技能都有完整的：名称、触发词（/code、/doc 等）、system prompt、描述、启用状态。点击"查看"可看到完整 prompt，点击"编辑"可修改。<br><br>
+    <strong>智能体 vs 技能 vs 执行逻辑 的区别：</strong><br>
+    • 智能体 = 角色（创建新分支，以该角色身份持续对话）<br>
+    • 技能 = 工具（在当前对话中一次性注入特定处理逻辑，类似 / 命令）<br>
+    • 执行逻辑 = 规则（全局强制约束 AI 的行为标准，如回复格式、文件规范）
+  </div>
+</div>
+
+<!-- ==================== 改动清单 ==================== -->
+<div class="section">
+  <div class="section-title">五、代码改动清单（确认后按此执行）</div>
+  <table class="spec-table">
+    <tr><th style="width:60px;">序号</th><th>改动内容</th><th style="width:100px;">位置</th><th style="width:80px;">类型</th></tr>
+    <tr><td>1</td><td>A 区导航栏重构：总监/项目/阶段/驾驶舱/设置，删除原 C 区状态条</td><td>DirectorView JSX</td><td><span class="tag tag-modify">修改</span></td></tr>
+    <tr><td>2</td><td>设置弹窗整合：自动转发、导出日志、清除缓存、滚到底、Ollama配置、外观、执行逻辑、数据管理</td><td>settingsOpen 面板</td><td><span class="tag tag-modify">修改</span></td></tr>
+    <tr><td>3</td><td>B 区项目总览标准化：6+1 卡片（定位/目标/阶段/进度/风险/待办/资产），数据从文档加载</td><td>overview state + JSX</td><td><span class="tag tag-modify">修改</span></td></tr>
+    <tr><td>4</td><td>新增 loadOverviewFromDocs() / computeStats() 函数，从总监文档加载数据并自动统计</td><td>DirectorView 函数区</td><td><span class="tag tag-new">新增</span></td></tr>
+    <tr><td>5</td><td>D 区统一面板：左侧导航（智能体/技能/执行逻辑）+ 右侧工具栏 + 列表</td><td>DirectorView JSX</td><td><span class="tag tag-new">重构</span></td></tr>
+    <tr><td>6</td><td>智能体数据结构化：agents.json 存储，含 name/icon/systemPrompt/description/enabled，支持查看/编辑</td><td>新增 agents state</td><td><span class="tag tag-new">新增</span></td></tr>
+    <tr><td>7</td><td>技能数据结构化：skills.json 存储，含 name/trigger/prompt/description/enabled，修复空内容问题</td><td>skills state 重构</td><td><span class="tag tag-modify">修改</span></td></tr>
+    <tr><td>8</td><td>执行逻辑规则化：每个职责有详细规则文档，支持查看/编辑/强制执行</td><td>duties state 增强</td><td><span class="tag tag-modify">修改</span></td></tr>
+    <tr><td>9</td><td>智能体"调用"= 创建分支（新对话），技能"调用"= 注入 prompt，执行逻辑"强制执行"= 全局规则生效</td><td>handleAgentClick / invokeSkill</td><td><span class="tag tag-modify">修改</span></td></tr>
+    <tr><td>10</td><td>查看/编辑弹窗组件：统一的详情查看和编辑弹窗，支持三类数据</td><td>新增 Modal 组件</td><td><span class="tag tag-new">新增</span></td></tr>
+  </table>
+</div>
+
+<div class="flow-note" style="background:#e3f2fd;border-color:#1976d2;color:#0d47a1;">
+  <strong>下一步：</strong>请确认以上设计图的四个区域划分、每个区域的功能和交互、以及改动清单。确认后我将按序号 1→10 逐项修改代码，修改完成后 apply + 重启验证。<br><br>
+  如有需要调整的地方（如区域顺序、卡片内容、交互方式），请直接指出，我修改设计图后再确认。
+</div>
+
+</body>
+</html>

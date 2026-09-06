@@ -1,0 +1,62 @@
+# =============================================
+# dsh-client-mod — Git Ignore
+# 创建：2026-09-06（整改 V1.2 配套）
+# 说明：本项目核心产物小、状态信息大，git 入仓只保留"可重建物"
+# =============================================
+
+# === 1. Harness 安装目录引用（备份在 original/，不在仓） ===
+# original/ 是只读复原源，但单个 client.js > 400KB 且与 Harness 安装版本 1:1，建议不入仓
+original/
+# workspace/ 是修改中的中间产物（最终修改的 client.js 才入仓）
+workspace/
+
+# === 2. 快照（每次 apply 前自动生成，量大） ===
+snapshots/
+# 手动备份
+backups/
+
+# === 3. 运行时日志与缓存 ===
+logs/*.png
+logs/*.bmp
+logs/*.log
+logs/*.json
+# 真实日志只保留 .log 的纯文本，不入仓二进制与截图
+!logs/*.md
+
+# === 4. 配置文件（个人凭据不入仓） ===
+.credentials.yaml
+.credentials.yaml.bak
+
+# === 5. IDE / 编辑器 ===
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# === 6. Python（脚本探针性 Python 文件不入仓主分支，避免污染） ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# === 7. Node（如果有） ===
+node_modules/
+package-lock.json
+
+# === 8. 用户级临时 ===
+*.tmp
+*.bak
+*.bak-*
+*.backup
+*.old
+
+# === 9. 测试输出 ===
+.vitest/
+coverage/
+.nyc_output/
+
+# === 10. 体系级未跟踪 ===
+.workbuddy/
+.cache/

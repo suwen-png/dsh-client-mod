@@ -1,0 +1,110 @@
+{
+  "total": 17,
+  "passed": 11,
+  "failed": 6,
+  "results": [
+    {
+      "name": "页面标题",
+      "passed": true,
+      "msg": "DeepSeek Harness",
+      "time": "2026-09-06T04:04:22.870Z"
+    },
+    {
+      "name": "点击总监tab",
+      "passed": false,
+      "msg": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('总监', { exact: true }).first()\u001b[22m\n\u001b[2m    - locator resolved to <span class=\"dsh-dir-sidebar-text\">总监</span>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <textarea placeholder=\"输入消息，按Enter发送（Shift+Enter换行）...\"></textarea> from <div data-shell-overlay=\"true\" class=\"OrjXgq_overlayLayer\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <textarea placeholder=\"输入消息，按Enter发送（Shift+Enter换行）...\"></textarea> from <div data-shell-overlay=\"true\" class=\"OrjXgq_overlayLayer\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    55 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <textarea placeholder=\"输入消息，按Enter发送（Shift+Enter换行）...\"></textarea> from <div data-shell-overlay=\"true\" class=\"OrjXgq_overlayLayer\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+      "time": "2026-09-06T04:04:52.916Z"
+    },
+    {
+      "name": "UI元素-A区-总监",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:04:52.925Z"
+    },
+    {
+      "name": "UI元素-A区-文件夹",
+      "passed": false,
+      "msg": "locator.waitFor: Timeout 3000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('文件夹').first() to be visible\u001b[22m\n",
+      "time": "2026-09-06T04:04:55.928Z"
+    },
+    {
+      "name": "UI元素-A区-驾驶舱",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:04:55.934Z"
+    },
+    {
+      "name": "UI元素-B区-项目总览",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:04:55.941Z"
+    },
+    {
+      "name": "UI元素-D区-智能体",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:04:55.947Z"
+    },
+    {
+      "name": "UI元素-D区-技能",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:04:55.950Z"
+    },
+    {
+      "name": "UI元素-D区-执行逻辑",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:04:55.956Z"
+    },
+    {
+      "name": "B区展开/折叠",
+      "passed": false,
+      "msg": "locator.waitFor: Timeout 3000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('点击展开').first() to be visible\u001b[22m\n",
+      "time": "2026-09-06T04:04:58.964Z"
+    },
+    {
+      "name": "设置弹窗显示",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:05:00.254Z"
+    },
+    {
+      "name": "设置弹窗关闭",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:05:00.774Z"
+    },
+    {
+      "name": "D区切换-技能",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:05:01.336Z"
+    },
+    {
+      "name": "D区切换-执行逻辑",
+      "passed": true,
+      "msg": "",
+      "time": "2026-09-06T04:05:01.887Z"
+    },
+    {
+      "name": "D区切换-智能体",
+      "passed": false,
+      "msg": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('智能体').first()\u001b[22m\n\u001b[2m    - locator resolved to <div>1. 完成V10 UI迁移↵2. 启动Ollama服务↵3. 完善智能体功能↵4. 测试所有交互↵…</div>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div>…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div>…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    55 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div>…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+      "time": "2026-09-06T04:06:01.915Z"
+    },
+    {
+      "name": "消息发送",
+      "passed": false,
+      "msg": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('总监', { exact: true }).first()\u001b[22m\n\u001b[2m    - locator resolved to <span class=\"dsh-dir-sidebar-text\">总监</span>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div>…</div> from <div data-shell-overlay=\"true\" class=\"OrjXgq_overlayLayer\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div>…</div> from <div data-shell-overlay=\"true\" class=\"OrjXgq_overlayLayer\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    55 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div>…</div> from <div data-shell-overlay=\"true\" class=\"OrjXgq_overlayLayer\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+      "time": "2026-09-06T04:06:32.136Z"
+    },
+    {
+      "name": "智能体切换对话",
+      "passed": false,
+      "msg": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('切换对话').first()\u001b[22m\n\u001b[2m    - locator resolved to <button class=\"v10-btn-hover\">切换对话</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div>…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div>…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    55 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div>…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+      "time": "2026-09-06T04:07:02.150Z"
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V9 总监驾驶舱 · 视觉稿 V1（阶段3：颜色样式）</title>
+<style>
+  :root {
+    --bg0:#0f0f12; --bg1:#16161a; --bg2:#1e1e24; --bg3:#26262e;
+    --bd:rgba(255,255,255,.08); --bd2:rgba(255,255,255,.16);
+    --t1:#e6e6ea; --t2:#9a9aa4; --t3:#62626c;
+    --ac:#4d6bfe; --ac-soft:rgba(77,107,254,.14);
+    --ac2:#38bdf8; --mem:#a78bfa; --mem-soft:rgba(167,139,250,.12);
+    --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+    --r-s:4px; --r-m:6px; --r-l:8px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg0); color:var(--t1); padding:16px; font-size:12px; }
+  h1 { font-size:15px; font-weight:500; margin-bottom:4px; }
+  .sub { font-size:12px; color:var(--t3); margin-bottom:14px; }
+
+  #viewport { margin:0 auto; border:1px solid var(--bd2); border-radius:12px; background:var(--bg0); overflow:hidden; display:flex; height:680px; }
+  #native-side { width:200px; flex-shrink:0; background:var(--bg1); border-right:1px solid var(--bd); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--t3); font-size:11px; }
+  #native-side .lock { border:1px solid var(--bd); border-radius:var(--r-m); padding:4px 12px; color:var(--t2); }
+
+  #plugin { flex:1; display:flex; flex-direction:column; min-width:0; font-size:11px; background:var(--bg0); }
+
+  /* R1 */
+  #r1 { height:38px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between; padding:0 12px; background:var(--bg1); border-bottom:1px solid var(--bd); position:relative; }
+  #r1 .grp { display:flex; gap:8px; align-items:center; }
+  .chip { border:1px solid var(--bd); border-radius:var(--r-s); padding:2px 8px; font-size:10px; color:var(--t2); background:var(--bg2); }
+  .chip.ac { color:var(--ac); border-color:var(--ac); background:var(--ac-soft); }
+  .chip.ghost { border-style:dashed; color:var(--t3); }
+  .chip.btn { cursor:pointer; }
+  .chip.btn:hover { border-color:var(--bd2); color:var(--t1); }
+  #settings { position:absolute; top:42px; right:10px; width:240px; background:var(--bg2); border:1px solid var(--bd2); border-radius:var(--r-l); padding:12px; z-index:10; display:none; box-shadow:0 8px 24px rgba(0,0,0,.5); }
+  #settings.open { display:block; }
+  #settings h3 { font-size:11px; font-weight:500; margin-bottom:10px; }
+  #settings .row { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; font-size:10px; color:var(--t2); }
+  .sw { display:flex; gap:6px; }
+  .sw i { width:16px; height:16px; border-radius:var(--r-s); cursor:pointer; border:1px solid var(--bd2); }
+  .sw i.on { outline:2px solid var(--t1); outline-offset:1px; }
+  #settings .reset { font-size:10px; color:var(--t2); border:1px solid var(--bd); border-radius:var(--r-s); padding:3px 10px; cursor:pointer; }
+  #settings .reset:hover { color:var(--t1); border-color:var(--bd2); }
+
+  /* R2 */
+  #r2 { min-height:58px; flex-shrink:0; display:flex; align-items:center; gap:14px; padding:8px 12px; background:var(--bg1); border-bottom:1px solid var(--bd); flex-wrap:wrap; position:relative; }
+  #r2 .kv { font-size:10px; color:var(--t3); }
+  #r2 .kv b { color:var(--t1); font-weight:500; margin-left:4px; }
+  #r2 .bar { width:110px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; }
+  #r2 .bar i { display:block; width:45%; height:100%; background:var(--ac); }
+  #r2 .num-w { color:var(--warn); } #r2 .num-b { color:var(--ac2); }
+  .fold { font-size:11px; color:var(--t3); border:1px solid var(--bd); border-radius:var(--r-s); padding:0 7px; cursor:pointer; background:var(--bg2); }
+  .fold:hover { color:var(--t1); border-color:var(--bd2); }
+  #r2 .fold { position:absolute; right:10px; top:8px; }
+  #r2.min { min-height:26px; }
+  #r2.min .body { display:none; }
+
+  /* R3 */
+  #r3 { min-height:50px; flex-shrink:0; display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--bd); flex-wrap:wrap; }
+  .seg { display:flex; border:1px solid var(--bd2); border-radius:var(--r-m); overflow:hidden; flex-shrink:0; }
+  .seg span { padding:4px 14px; font-size:11px; cursor:pointer; color:var(--t2); }
+  .seg span.on { background:var(--ac-soft); color:var(--ac); }
+  .agent { border:1px solid var(--bd); border-radius:var(--r-m); padding:4px 10px; font-size:10px; color:var(--t1); background:var(--bg2); cursor:pointer; white-space:nowrap; text-align:center; }
+  .agent:hover { border-color:var(--ac); background:var(--ac-soft); }
+  .agent small { display:block; font-size:8px; color:var(--t3); }
+  .skill { border:1px dashed var(--bd2); border-radius:var(--r-m); padding:4px 10px; font-size:10px; color:var(--t2); cursor:pointer; white-space:nowrap; }
+  .skill:hover { border-color:var(--ac2); color:var(--ac2); }
+  .sinput { background:var(--bg1); border:1px solid var(--bd); border-radius:var(--r-s); color:var(--t1); font-size:10px; padding:4px 8px; width:96px; outline:none; }
+  .sinput:focus { border-color:var(--ac); }
+  .rnote { font-size:10px; color:var(--t3); margin-left:auto; }
+
+  /* R4/R6 */
+  #r4 { height:118px; flex-shrink:0; display:flex; flex-direction:column; border-bottom:1px solid var(--bd); }
+  .hd { display:flex; align-items:center; justify-content:space-between; padding:4px 10px 0; }
+  .tabs { display:flex; gap:2px; }
+  .tabs span { font-size:10px; padding:4px 10px; cursor:pointer; color:var(--t3); border-bottom:2px solid transparent; }
+  .tabs span:hover { color:var(--t2); }
+  .tabs span.on { color:var(--ac); border-bottom-color:var(--ac); }
+  #r6 .tabs span.on { color:var(--mem); border-bottom-color:var(--mem); }
+  .pane { flex:1; padding:6px 12px; font-size:10px; color:var(--t2); overflow:auto; line-height:1.8; }
+  .pane .f { cursor:pointer; color:var(--t2); }
+  .pane .f:hover { color:var(--ac2); text-decoration:underline; }
+  .dnd-y { height:5px; background:var(--bg1); cursor:ns-resize; flex-shrink:0; text-align:center; font-size:8px; color:var(--t3); line-height:5px; }
+  #r4.min, #r6.min { height:26px !important; }
+  #r4.min .body, #r6.min .body { display:none; }
+
+  /* 中栏 */
+  #mid { flex:1; display:flex; min-height:0; }
+  #r5 { flex:1; display:flex; flex-direction:column; min-width:0; padding:10px 14px; gap:8px; overflow:auto; cursor:pointer; background:var(--bg0); }
+  #r5.focused { box-shadow:inset 0 0 0 1px var(--ac); }
+  .msg { max-width:78%; border-radius:var(--r-l); padding:8px 12px; font-size:11px; line-height:1.6; }
+  .msg.u { align-self:flex-end; background:var(--ac); color:#fff; }
+  .msg.d { align-self:flex-start; background:var(--bg2); color:var(--t1); border:1px solid var(--bd); }
+  .msg .acts { margin-top:6px; display:flex; gap:6px; }
+  .msg .acts span { font-size:9px; border:1px solid var(--bd2); border-radius:var(--r-s); padding:2px 8px; cursor:pointer; color:var(--t2); }
+  .msg .acts span:hover { color:var(--ac); border-color:var(--ac); }
+  .brcard { align-self:stretch; border:1px solid var(--bd2); border-left:3px solid var(--warn); border-radius:var(--r-m); padding:8px 12px; font-size:10px; background:var(--bg1); display:flex; justify-content:space-between; align-items:center; color:var(--t1); }
+  .brcard .st { color:var(--warn); }
+  .brcard .acts span { font-size:9px; border:1px solid var(--bd); border-radius:var(--r-s); padding:2px 8px; cursor:pointer; margin-left:6px; color:var(--t2); background:var(--bg2); }
+  .brcard .acts span:hover { color:var(--ac); border-color:var(--ac); }
+  .dnd-x { width:5px; background:var(--bg1); cursor:ew-resize; flex-shrink:0; }
+
+  /* R7 */
+  #r7 { width:clamp(240px,26%,420px); flex-shrink:0; display:flex; flex-direction:column; border-left:1px solid var(--bd); background:var(--bg1); cursor:pointer; }
+  #r7.focused { box-shadow:inset 0 0 0 1px var(--ac2); }
+  #r7 .pane { color:var(--t2); }
+  #r7.rail { width:28px !important; }
+  #r7.rail .body { display:none; }
+  #r7 .railtxt { writing-mode:vertical-rl; font-size:10px; color:var(--t3); letter-spacing:2px; display:none; margin:auto; padding:8px 0; }
+  #r7.rail .railtxt { display:block; }
+
+  /* R6 */
+  #r6 { height:96px; flex-shrink:0; display:flex; flex-direction:column; border-top:1px solid var(--bd); background:var(--bg1); cursor:pointer; }
+  #r6 .hd .note { font-size:9px; color:var(--t3); }
+
+  /* R8 */
+  #r8 { height:56px; flex-shrink:0; display:flex; align-items:center; gap:10px; padding:0 12px; border-top:1px solid var(--bd); background:var(--bg1); }
+  #r8 .target { font-size:10px; border:1px solid var(--ac); border-radius:12px; padding:3px 12px; color:var(--ac); background:var(--ac-soft); white-space:nowrap; }
+  #r8 .box { flex:1; border:1px solid var(--bd); border-radius:var(--r-m); padding:8px 12px; font-size:11px; color:var(--t3); background:var(--bg0); }
+  #r8 .send { border:none; border-radius:var(--r-m); padding:7px 16px; font-size:11px; color:#fff; background:var(--ac); cursor:pointer; white-space:nowrap; }
+  .hidden { display:none !important; }
+
+  /* 规范表 */
+  h2 { font-size:13px; font-weight:500; margin:18px 0 8px; }
+  table { border-collapse:collapse; font-size:11px; margin-top:6px; width:100%; }
+  td, th { border:1px solid var(--bd); padding:5px 10px; text-align:left; }
+  th { color:var(--t1); font-weight:500; background:var(--bg1); }
+  td { color:var(--t2); }
+  .dot { display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-2px; margin-right:6px; }
+</style>
+</head>
+<body>
+<h1>V9 总监驾驶舱 · 视觉稿 V1（沿用 Harness 暗色 · 主色可在设置中切换）</h1>
+<div class="sub">点 ⚙ 设置 → 切换主强调色（蓝/青/紫/橙），全舱实时生效 —— 即「颜色可调」设计演示。</div>
+
+<div id="viewport">
+  <div id="native-side">
+    <div class="lock">Harness 原生侧边栏</div>
+    <div>插件不覆盖 · 完整保留</div>
+  </div>
+
+  <div id="plugin">
+    <div id="r1">
+      <div class="grp">
+        <span class="chip">📁 dsh-client-mod</span>
+        <span class="chip">阶段 V9</span>
+        <span class="chip ac">驾驶舱</span>
+      </div>
+      <div class="grp">
+        <span class="chip ghost">切换项目 · V10</span>
+        <span class="chip btn" onclick="document.getElementById('settings').classList.toggle('open'); event.stopPropagation();">⚙ 设置</span>
+      </div>
+      <div id="settings">
+        <h3>驾驶舱设置</h3>
+        <div class="row"><span>主强调色</span><span class="sw">
+          <i class="on" style="background:#4d6bfe" onclick="setAc(this,'#4d6bfe','rgba(77,107,254,.14)')"></i>
+          <i style="background:#14b8a6" onclick="setAc(this,'#14b8a6','rgba(20,184,166,.14)')"></i>
+          <i style="background:#8b5cf6" onclick="setAc(this,'#8b5cf6','rgba(139,92,246,.14)')"></i>
+          <i style="background:#f59e0b" onclick="setAc(this,'#f59e0b','rgba(245,158,11,.14)')"></i>
+        </span></div>
+        <div class="row"><span>记忆高亮色</span><span class="sw">
+          <i class="on" style="background:#a78bfa" onclick="setMem(this,'#a78bfa')"></i>
+          <i style="background:#f472b6" onclick="setMem(this,'#f472b6')"></i>
+          <i style="background:#34d399" onclick="setMem(this,'#34d399')"></i>
+        </span></div>
+        <div class="row"><span>布局密度</span><span style="font-size:10px;"><u style="cursor:pointer" onclick="density(0.9)">紧凑</u> · <u style="cursor:pointer" onclick="density(1)">标准</u></span></div>
+        <span class="reset" onclick="resetTheme()">恢复默认（Harness 原生主题）</span>
+      </div>
+    </div>
+
+    <div id="r2">
+      <div class="body" style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+        <span class="kv">定位<b>Harness客户端修改</b></span>
+        <span class="kv">目标<b>总监驾驶舱</b></span>
+        <span class="kv">阶段<b>V9</b></span>
+        <span class="bar"><i></i></span>
+        <span class="kv">进度<b>45%</b></span>
+        <span class="kv">⚠ 风险<b class="num-w">3</b></span>
+        <span class="kv">待办<b class="num-b">5</b></span>
+      </div>
+      <span class="fold" onclick="this.parentElement.classList.toggle('min')">—</span>
+    </div>
+
+    <div id="r3">
+      <div class="seg">
+        <span class="on" id="segA" onclick="seg(0)">智能体</span><span id="segB" onclick="seg(1)">技能</span>
+      </div>
+      <div id="agents" style="display:flex; gap:6px; flex-wrap:wrap;">
+        <span class="agent" title="代码编写/调试/重构 · deepseek-coder">代码<small>coder</small></span>
+        <span class="agent" title="文档撰写/整理 · deepseek-chat">文档<small>chat</small></span>
+        <span class="agent" title="检索/分析/总结 · deepseek-reasoner">调研<small>reasoner</small></span>
+        <span class="agent" title="用例/执行/验证 · 本地">测试<small>local</small></span>
+        <span class="agent" title="6维度审核 · deepseek-reasoner">审核<small>reasoner</small></span>
+      </div>
+      <div id="skills" style="display:none; gap:6px; flex-wrap:wrap; align-items:center;">
+        <input class="sinput" placeholder="搜索技能…">
+        <span class="skill">代码审查</span><span class="skill">文档生成</span><span class="skill">网页检索</span><span class="skill">更多…</span>
+      </div>
+      <span class="rnote">调用：总监自动 ｜ 客户点击</span>
+    </div>
+
+    <div id="r4">
+      <div class="hd">
+        <div class="tabs">
+          <span class="on" onclick="tab4(this,0)">文档树</span><span onclick="tab4(this,1)">路线图/待办</span><span onclick="tab4(this,2)">关键文件</span>
+        </div>
+        <span class="fold" onclick="document.getElementById('r4').classList.toggle('min')">—</span>
+      </div>
+      <div class="body pane" id="r4p">
+        ▾ 00-统筹入口（12）<br>
+        &nbsp;&nbsp;<span class="f" onclick="openDoc('00-总统筹入口文档.md')">00-总统筹入口文档.md</span><br>
+        ▾ 20-任务文档（18）<br>
+        &nbsp;&nbsp;<span class="f" onclick="openDoc('17-总监统治架构方案-v9.md')">17-总监统治架构方案-v9.md</span><br>
+        &nbsp;&nbsp;<span class="f" onclick="openDoc('18-UI设计方案.md')">18-UI设计方案.md</span>
+      </div>
+    </div>
+    <div class="dnd-y">⋮⋮</div>
+
+    <div id="mid">
+      <div id="r5" class="focused" onclick="setFocus('director')">
+        <div class="msg u">帮我把 V9 剩余任务拆给分支执行</div>
+        <div class="msg d">已拆为 3 个分支任务，方案约束如下…
+          <div class="acts"><span>分派到分支</span><span>标记决策</span><span>生成方案文档</span></div>
+        </div>
+        <div class="brcard">
+          <span>🔀 分支 · 代码执行 &nbsp;<span class="st">● 待审核</span></span>
+          <span class="acts"><span>查看</span><span>通过</span><span>打回</span></span>
+        </div>
+      </div>
+      <div class="dnd-x"></div>
+      <div id="r7" onclick="if(this.classList.contains('rail')){this.classList.remove('rail');}else{setFocus('a2');}">
+        <div class="body" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+          <div class="hd">
+            <div class="tabs">
+              <span class="on" onclick="tab7(this,0); event.stopPropagation();">对话</span><span onclick="tab7(this,1); event.stopPropagation();">文档</span><span onclick="tab7(this,2); event.stopPropagation();">详情</span>
+            </div>
+            <span class="fold" onclick="document.getElementById('r7').classList.add('rail'); event.stopPropagation();">—</span>
+          </div>
+          <div class="pane" id="r7p" style="flex:1; overflow:auto;">a-2 对话消息流…<br><span style="color:var(--t3); font-size:10px;">点击此区 = 输入路由到 a-2</span></div>
+        </div>
+        <span class="railtxt">a-2 · 点击展开</span>
+      </div>
+    </div>
+
+    <div class="dnd-y">⋮⋮</div>
+    <div id="r6" onclick="this.classList.toggle('min')">
+      <div class="hd">
+        <div class="tabs">
+          <span class="on" onclick="tab6(this,0); event.stopPropagation();">记忆</span><span onclick="tab6(this,1); event.stopPropagation();">决策</span><span onclick="tab6(this,2); event.stopPropagation();">风险</span>
+        </div>
+        <span class="note">🔒 锁定 / 点击收起</span>
+      </div>
+      <div class="body pane" id="r6p">核心认知：项目定位 = Harness 修改工作区；当前 = V9 驾驶舱设计阶段…</div>
+    </div>
+
+    <div id="r8">
+      <span class="target" id="target">→ 总监</span>
+      <div class="box">输入消息…（单输入框，按焦点路由：总监 / a-2 / 分支）</div>
+      <span class="send">发送 ⏎</span>
+    </div>
+  </div>
+</div>
+
+<h2>设计令牌（CSS 变量，实现时一比一对应）</h2>
+<table>
+  <tr><th>令牌</th><th>默认值</th><th>用途</th><th>设置面板可调</th></tr>
+  <tr><td><span class="dot" style="background:#0f0f12; border:1px solid #333;"></span>--bg0 / --bg1 / --bg2 / --bg3</td><td>#0f0f12 / #16161a / #1e1e24 / #26262e</td><td>页面/面板/浮层/轨道</td><td>否（随 Harness 主题）</td></tr>
+  <tr><td><span class="dot" style="background:#4d6bfe;"></span>--ac / --ac-soft</td><td>#4d6bfe / 14% 透明</td><td>主强调：激活Tab、焦点框、发送钮、进度条</td><td>✅ 4 色可选</td></tr>
+  <tr><td><span class="dot" style="background:#38bdf8;"></span>--ac2</td><td>#38bdf8</td><td>次强调：a-2 焦点、链接、技能 hover</td><td>✅</td></tr>
+  <tr><td><span class="dot" style="background:#a78bfa;"></span>--mem</td><td>#a78bfa</td><td>记忆面板 Tab/高亮</td><td>✅ 3 色可选</td></tr>
+  <tr><td><span class="dot" style="background:#34d399;"></span>--ok / <span class="dot" style="background:#fbbf24;"></span>--warn / <span class="dot" style="background:#f87171;"></span>--err</td><td>#34d399 / #fbbf24 / #f87171</td><td>分支状态：已完成 / 待审核·待分派 / 失败</td><td>否（语义色固定）</td></tr>
+  <tr><td>--t1 / --t2 / --t3</td><td>#e6e6ea / #9a9aa4 / #62626c</td><td>主文本 / 次文本 / 提示文本</td><td>否</td></tr>
+  <tr><td>--r-s / --r-m / --r-l</td><td>4 / 6 / 8 px</td><td>chip / 按钮·卡片 / 气泡·弹层</td><td>否</td></tr>
+  <tr><td>间距</td><td>4 的倍数：4/8/12/16</td><td>全局间距网格（紧凑密度 ×0.9）</td><td>密度档</td></tr>
+  <tr><td>字号</td><td>10 / 11 / 12 / 13 / 15</td><td>辅助 / 正文（面板） / 正文 / 分区标题 / 页标题</td><td>否</td></tr>
+</table>
+
+<script>
+function setAc(el, c, soft){
+  el.parentElement.querySelectorAll('i').forEach(i=>i.classList.remove('on')); el.classList.add('on');
+  document.documentElement.style.setProperty('--ac', c);
+  document.documentElement.style.setProperty('--ac-soft', soft);
+}
+function setMem(el, c){
+  el.parentElement.querySelectorAll('i').forEach(i=>i.classList.remove('on')); el.classList.add('on');
+  document.documentElement.style.setProperty('--mem', c);
+}
+function density(k){ document.getElementById('plugin').style.fontSize = (11*k)+'px'; }
+function resetTheme(){
+  document.documentElement.style.cssText='';
+  document.querySelectorAll('.sw i').forEach(i=>i.classList.remove('on'));
+  document.querySelectorAll('.sw')[0].children[0].classList.add('on');
+  document.querySelectorAll('.sw')[1].children[0].classList.add('on');
+}
+function seg(i){
+  document.getElementById('segA').className=i?'':'on';
+  document.getElementById('segB').className=i?'on':'';
+  document.getElementById('agents').style.display=i?'none':'flex';
+  document.getElementById('skills').style.display=i?'flex':'none';
+}
+function setFocus(t){
+  document.getElementById('r5').classList.toggle('focused', t==='director');
+  document.getElementById('r7').classList.toggle('focused', t==='a2');
+  document.getElementById('target').textContent = t==='director' ? '→ 总监' : '→ a-2';
+}
+function tab4(el,i){
+  el.parentElement.querySelectorAll('span').forEach(s=>s.classList.remove('on')); el.classList.add('on');
+  document.getElementById('r4p').innerHTML = i===0 ? '▾ 00-统筹入口（12）<br>&nbsp;&nbsp;<span class="f" onclick="openDoc(\'00-总统筹入口文档.md\')">00-总统筹入口文档.md</span><br>▾ 20-任务文档（18）<br>&nbsp;&nbsp;<span class="f" onclick="openDoc(\'18-UI设计方案.md\')">18-UI设计方案.md</span>'
+    : i===1 ? '☐ T2 项目文档读取解析（P0）<br>☐ T3a/T3b 布局骨架+总览卡片（P0）<br>☑ T1 记忆体系IndexedDB<br>☑ T5/T6/T7 记忆面板/智能体/分支'
+    : '⭐ workspace/.../lib/client.js<br>⭐ scripts/apply.ps1<br>⭐ docs/00-统筹入口/';
+}
+function openDoc(name){
+  var r7=document.getElementById('r7'); r7.classList.remove('rail');
+  var tabs=r7.querySelectorAll('.tabs span'); tabs.forEach(s=>s.classList.remove('on')); tabs[1].classList.add('on');
+  document.getElementById('r7p').innerHTML='📄 '+name+'<br><br>文档内容预览…<br><span style="color:var(--t3); font-size:10px;">可编辑 · 保存写回（T9）</span>';
+}
+function tab7(el,i){
+  el.parentElement.querySelectorAll('span').forEach(s=>s.classList.remove('on')); el.classList.add('on');
+  document.getElementById('r7p').innerHTML = i===0 ? 'a-2 对话消息流…' : i===1 ? '📄 文档查看/编辑…' : '📊 项目详情：定位/目标/核心需求/决策历史/约束';
+}
+function tab6(el,i){
+  el.parentElement.querySelectorAll('span').forEach(s=>s.classList.remove('on')); el.classList.add('on');
+  document.getElementById('r6p').innerHTML = i===0 ? '核心认知：项目定位 = Harness 修改工作区；当前 = V9 驾驶舱设计阶段…'
+    : i===1 ? 'ADR-004 小窗分屏 ｜ ADR-006 渐进式改造 ｜ D1 a-2右栏（已确认）'
+    : '<span style="color:var(--warn);">⚠ 高：编译产物修改风险（防护：快照+restore）</span><br><span style="color:var(--warn);">⚠ 中：技能清单需静态打包（D2 已冻结）</span>';
+}
+document.addEventListener('click', function(e){
+  var st=document.getElementById('settings');
+  if(st.classList.contains('open') && !st.contains(e.target)) st.classList.remove('open');
+});
+</script>
+</body>
+</html>

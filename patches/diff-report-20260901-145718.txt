@@ -1,0 +1,29 @@
+﻿=== DSH Client Mod 差异报告 ===
+生成时间: 2026-09-01 14:57:18
+
+--- 包: dsh-client-ui-layout ---
+  (无变化)
+
+--- 包: dsh-client-ui-conversation ---
+  修改的文件 (1):
+    - lib\client.js
+
+--- 包: dsh-client-ui-trajectory ---
+  (无变化)
+
+--- 包: dsh-client-ui-sidebar ---
+  (无变化)
+
+--- 包: dsh-client-ui-slots ---
+  (无变化)
+
+--- 包: dsh-client-runtime ---
+  (无变化)
+
+--- 包: dsh-client-web-react ---
+  (无变化)
+
+--- 包: dsh-client-web ---
+  (无变化)
+
+=== 汇总: 1 个文件被修改 ===
