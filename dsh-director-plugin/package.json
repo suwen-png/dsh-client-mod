@@ -1,0 +1,24 @@
+{
+  "name": "@deepseek-ai/dsh-director-plugin",
+  "description": "总监驾驶舱插件包（P0 骨架）—— 从 dsh-client-ui-conversation 内联实现迁移的独立 client 插件（T-PLUG-004）",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "immediately": false
+    }
+  },
+  "scripts": {
+    "build": "node build/build.mjs"
+  }
+}

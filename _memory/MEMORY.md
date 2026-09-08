@@ -281,3 +281,99 @@
 - [ ] 输出项目级 skills/execution-unified-standards 摘要版（避免每次加载整份）
 - [ ] V10 V3 测试报告（46/46）固化到测试总清单
 - [ ] 审查是否需要将 patches/ 7 个 diff-report 合并归档
+
+---
+
+## 十、V10.1 UI交互优化（2026-09-07）
+
+### 10.1 修改背景
+用户反馈5个UI交互问题：①X按钮太近 ②透明度高 ③未铺满全屏 ④折叠宽度变化 ⑤D区缺hover交互。同时询问插件化可行性。
+
+### 10.2 已执行修改（8项）
+1. dModal遮罩透明度：`rgba(0,0,0,0.4)` → `rgba(0,0,0,0.75)`
+2. dModal弹窗尺寸：`520px/80vh` → `92vw/92vh`（maxWidth:1000）
+3. dModal X按钮：增加padding+hover效果，fontSize 16→20
+4. D区新增state：`dPanelPinned`（固定状态）、`dPanelHovered`（悬停状态），均localStorage持久化
+5. D区折叠条：增加onMouseEnter(400ms延迟)/onMouseLeave事件 + 📍固定按钮
+6. D区导航列：增加hover事件 + 背景色随固定状态变化 + 底部新增固定/收起双按钮
+7. D区展开条件：`dPanelCollapsed` → `(!dPanelCollapsed || dPanelHovered || dPanelPinned)`
+8. 对话tab总监面板折叠态：26px窄条 → 保持`layout.directorPanelWidth`宽度，内容收起为居中▶+竖排文字
+
+### 10.3 关键决策
+- **问题4方案调整**：用户反馈原方案（折叠时保持宽度+只收内容）"不符合"，调整为折叠时保持宽度但内容完全收起（只显示居中展开按钮），宽度在折叠/展开间完全不变
+- **D区hover延迟**：400ms（比底部文档面板300ms稍长，避免误触）
+- **插件化结论**：当前无法纯插件化（核心布局修改超出插槽扩展能力），保持改编译产物+apply.ps1部署模式
+
+### 10.4 验证状态
+- ✅ node --check 语法通过
+- ✅ MD5一致 + 缓存清除 + Harness启动成功
+- ⏳ 待用户人工验证6项修复点
+
+### 10.5 踩坑沉淀
+1. **编译产物Edit工具匹配含`\u25B6`等转义字面量的行失败**：文件里是字面6字符，Edit工具会解析成实际字符。解决方案：用Node.js脚本+IndexOf/Substring定位替换，避免字符串匹配问题
+2. **PowerShell处理含中文+双引号+三目运算符的字符串替换易出错**：编码问题导致中文乱码，`?`和`:`被解析为运算符。解决方案：改用Node.js脚本做替换
+3. **缩进必须精确匹配**：client.js中不同区域缩进不同（4tab/5tab/6tab），替换前必须用Bash确认实际缩进
+
+---
+
+---
+
+## 十一、插件化整改决策与审美审核（2026-09-07）
+
+### 11.1 用户决策登记
+- **需求摘要确认**：用户确认目标画像 6 条（V10.1 六项验证清单仍待人工验证）
+- **插件化指令（ADR-008）**：「我的初衷是把这个功能当做插件一样进行开发…需要按照插件开发的标准模型进行整改」→ 修正 24号文 §三.6「短期保持改编译产物」的默认结论，升级为正式整改路线：总监功能目标形态 = 独立插件包 dsh-director-plugin + 宿主最小锚点，client.js 补丁目标下降 ≥70%，P0 先勘察 dsh-client-web「插件物化」通道（26号文）
+- **审美审核指令**：当前页面审美/交互调用审美 skill 审核 → 27号文（识图×5，P0×4/P1×7/P2×5）
+
+### 11.2 教训沉淀
+1. **初衷漂移要靠用户点名**：24号文已给出「不可纯插件化」评估并被默认接受，但用户初衷本来就是插件化——方案评估代替不了目标校准，重大形态决策必须回问初衷。
+2. **「类插件部署」≠「插件化」**：整目录复制+apply 只是部署便利，功能实体不独立就不是插件；差分时要把「部署形态」与「架构形态」分开评估。
+3. **识图审核能抓到走查漏掉的事**：悬浮条模型名截断、主内容区 x≈1017 未铺满、右栏泄漏原始 JSON——这三个问题此前多轮人工验证清单都没有覆盖。
+
+### 11.3 产出
+- 26号文：docs/20-任务文档/26-插件化标准整改方案-总监功能插件标准模型.md（P0-P3，待确认）
+- 27号文：docs/20-任务文档/27-总监控制台审美与交互审核报告.md
+- 台账：03 清单 T-PLUG-001~009 + T-AESTH-001~002；05 大索引 20-23~20-27；06 工作快照轮转
+
+### 11.4 P0 执行记录（2026-09-07 15:00，13号审核通过）
+- **通道结论（重大）**：Harness 原生 client 插件通道确认——包声明 dsh.client → host 增量扫描 → /plugins/<id>/client.js → __DSH_BOOT__ 注入 → cordis Loader 逐行 create；platform 冻结模块表原生解决双 React 实例。证据 8 条见 50-信息中心勘察记录。
+- **Cordis 溯源**：开源插件内核（Koishi 四年）+ 官方 cordis-tutorial 教程，插件开发不须自研知识。
+- **骨架**：dsh-director-plugin/ 6 文件（dsh.client 声明同构官方实例）；基线 +13,553/−9,855 行，70% 目标 ≤4,066 增行（行数口径）。
+- **教训**：①评审路由时 design-review 上游是 stub，须按 craft+预设库落地而非空转；②PowerShell 5.1 无 &&，长命令一律分号顺序执行；③台账数字会过期——基线类数据必须当场实测（1,423,779 → 1,426,727）。
+- **待办**：spike（T-PLUG-003，14号审核）→ V10.2 快赢 Q1-Q7（15号审核）→ P1 迁移（迁移明细清单先行）。
+### 11.5 spike 失败与战场真相（2026-09-07 15:55，14/15号审核）
+- **spike ×2 失败**：profile 注册（dep link + bundles + junction，甚至 pnpm install 同步锁文件）均致 host 启动卡死（无窗口/webserver 未起）；已回滚恢复（CDP 实证）。第三次尝试前必须先拿 host 启动 stderr。
+- **战场真相**：屏幕总监控制台 = dsh-director 插件（09-01 建，标准模型，TS+esbuild，已被加载）；conversation 内联版未在当前 DOM。P1「迁移」应重议为「收敛」——待用户拍板（T-CONV-001）。
+- **教训**：①手改 pnpm workspace 的 package.json 不经 pnpm install 会破坏启动（A/B 回滚实证）；②DOM 归属先用类名签名判定（.dsh-dir-app）再改码，否则改错文件白忙；③Electron 无窗口卡死时，进程存活 ≠ 启动成功，以 webserver 端口+CDP 目标数为准。
+- **V10.2-1**：38 处样式修复 apply 并运行（换轴 --dsh-ac=#2f6feb 运行时实测；#999 文件级清零）；15号审核 90/100 附条件通过。
+
+### 11.6 方案①拍板与插件侧首批（2026-09-07 16:10，16号审核 94/100）
+- **T-CONV-001 ✅ 方案①**：总监双实现收敛到 dsh-director 插件；29号文退坡明细清单（C-1 覆盖核对/C-2 MOD-B 退坡/C-3 MOD-A 决策）待确认后动 client.js。
+- **T-PLUG-003 关闭**：通道由 dsh-director 活样本端到端实证（含构建热更：改 src → esbuild → rev 变化 → 重启生效），自建骨架注册不再必要——**这比任何 spike 都硬**。
+- **V10.2-2**：插件侧 42 处（换轴 #667eea→#2f6feb/#764ba2→#1e40af + #999 清零 + 字号），esbuild 重建后 CDP 实测 DOM 旧色清零、新色上屏；改 TS 源码零编码坑，工程路线优势实证。
+- **教训**：①插件构建器自带双版本一致性护栏（build.mjs 校验 package.json vs dsh.plugin.json）值得所有插件项目复制；②换轴类修改要区分「运行时默认值」与「用户 localStorage 已存值」——后者按设计不覆盖。
+### 11.7 收敛批 C-1/C-2 完成（2026-09-07 16:20，17号审核 95/100）
+- **C-2 退坡手术**：conversation 的 slots.register director 注册块（40行/1.5KB）移除并打标记；served bundle 实证注册消失；DirectorView 164 引用保留 @deprecated-candidate 待 P2。
+- **认知修正**：顶栏「总监/对话/轨迹」tab 条是 **dsh-director 插件渲染的**（.dsh-dir-tab），不是 Harness 原生 header——25号文该结论作废；因此退坡后用户可见交互零变化。
+- **数据边界**：插件记忆 = localStorage + /api/director/* host 服务；conversation 记忆 = IndexedDB 三 store。不同源、互不影响；退坡不删 store 代码，IDB 数据原地保留。
+- **教训**：①「复制-替换」手术前必须断言块唯一性（n=1），端到端 marker 含恢复路径；②归属判定链：源码 grep → served 内容 → DOM 类名签名，三路对齐才动手。
+### 11.8 C-3 决策与锚点契约（2026-09-07 17:05）
+- **C-3 ✅ 保留 MOD-A 最小锚点**：插件对话 tab 是透明视口架构、未复刻 ChatView 内嵌左栏；MOD-A 面板在会话 ChatView 的叠加呈现存在状态不确定性——移除风险大于收益。《锚点契约》落地 29号文 §五（ChatView 左栏 / directorLayoutStore / IDB 三 store 三类永久锚点）。
+- **P2 范围修正**：只删 MOD-B 死代码，不碰契约锚点；全量回归安排在 P2 后。
+- **教训**：①探针会话根视图 ≠ ChatView，MOD-A 证据要在会话内取；②截图在部分 Electron 页面会超时，DOM 矩形证据优先于截图。
+### 11.9 V10.2-3 完成（2026-09-07 19:45，18号审核 95/100）
+- **插件侧 5 组修改**：Q4 dList mask 渐隐、Q5 四卡解剖统一（首卡去紫渐变 + coreBox 同构）、Q7c 阴影换轴残留清零；rev 8f964bdca660，CDP 双探针实证（mask 上屏/紫归零/#999 归零/PAGEERRORS=0）。
+- **快赢批收敛**：三批合计 85 处（38+42+5），Q3/Q7 全清、Q4/Q5 完成；仅剩 Q2 全量图标（100+ emoji→SVG，需先扩 icons.tsx 清单，独立大批次）。
+- **教训**：①React 内联样式的 DOM 探针要用 style.cssText（kebab-case）而非猜测字符串；②用户中途自行重启会丢 CDP 端口，验证前先查进程再带端口拉起。
+### 11.10 技能切换 execution-standards V2.3.0 + Q2-1（2026-09-08 09:45，19号审核通过）
+- **技能库重大变更**：execution-unified-standards 目录已删除，重构为 execution-standards V2.3.0（整合版：SKILL.md 11.7KB + references 14份 + error-knowledge-base 6类51条）；会话执行逻辑已切换新版（清单驱动 §6.5：先列清单→确认→连续执行；审核改为 §五 5步自审）。
+- **登记表失联**：08号技能作用记录旧条目指向已删目录；WorkBuddy 存在 3 个断链 junction（含 hermes-data-execution-constraints/project-standards 旧名）——待用户授权后同步登记表与 junction。
+- **Q2-1**：icons.tsx +6（alert/refreshCw/zap/settings/palette/rocket lucide 内嵌）+ V10Director chrome 30 处 emoji→Icon；rev ce516814c17c；app 可见 emoji 降至 17（余为数据字段/消息内容）。
+- **教训**：①技能目录改名会让 junction/登记表/路径引用全部失效（§1.2 高频错误第3名再+1）——改名后必须当轮同步三处副本与登记表；②JSX 子串替换要防「label: 包含 l:」式子串碰撞，用全锚点串。
+### 11.11/11.12 N-1/N-2 完成（2026-09-08，20/21号审核通过）
+- **N-1 插件收尾**：Q2-2 hybrid 渲染器落地（chrome 零 emoji，数据 emoji 按内容保留）；M6 模型切换 UI；M7 轨迹筛选/搜索/详情/导出；31号校准报告裁定「实现为准」。
+- **N-2 退坡收官**：DirectorView.js region（1,519 行）整段删除，MOD-B 全部退出宿主；冒烟三段全绿；numstat +11,996/−9,855。**70% 目标裁定**：MOD-A+共享设施=契约锚点主体，保留前提下不可达，MOD-A 退役列为远期产品决策。
+- **dsh-director 已 git 化**（基线 12907c6），旧「无 git」记录作废。
+- **教训**：①编译产物的 function 定位必须防「嵌入式文档字符串假目标」（首次命中 L6539 字符串）；②括号匹配器对解构参数/正则字面量不可靠——**//#region 生成边界才是权威删除范围**；③PS 重定向 stdout 一律 UTF-16 污染，node 间数据传递全部走文件 IO。
+- **ADR-009（隐含确认）**：总监产品能力全量收敛至 dsh-director 插件；conversation 仅保留 MOD-A+共享设施锚点；「MOD-A 退役」与「V11+」为后续产品决策项。
+*本文件最后更新: 2026-09-08（13:25 N-1/N-2 完成，插件化整改主体闭环）*
