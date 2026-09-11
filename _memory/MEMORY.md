@@ -972,3 +972,51 @@ I22 清理测试残留并恢复根节点名。**连跑两次均 66/66 ⇒ 可重
 产物 `lib/client.js` **278,301 B / 32 模块**，React 零打包，**宿主零改动**。
 已下发运行时安装点并重启 Harness 复验通过。
 台账同步：`docs/06` §七 + §二 编号说明 · `README.md` · `docs/03` B9 行 · `docs/06-工作快照`。
+
+### 14.19 ✅ T-PLUG-009 数据兼容与边界安全验证 + schema 白名单加固（2026-09-12）
+
+**背景（架构硬约束，务必记住）**：宿主会话记忆在 IDB `dsh-director-db` **v3** 三 store ——
+`memoryCore`(keyPath `projectId`) / `memoryDecisions`(`decisionId`) / `memoryRisks`(`riskId`)。
+既定边界：「**插件不消费宿主记忆 store，历史数据不得删除**」。
+但宿主与插件**共享同一 DB**，且插件**不能升 v4**（一升，宿主再以 v3 打开**直接失败** ⇒ 宿主记忆全废）
+⇒ **无法为插件新增独立 store** ⇒ 批次 7 的层级节点**复用 `memoryCore`**，
+靠「**id 前缀 + `level` 字段**」的**约定**隔离（`__global__` / `ws_*` / `se_*`）。
+本项任务就是**把这条约定固化成机器可校验的断言**。
+
+**新增**：`scripts/verify-data-safe.mjs`（6 节 **41/41**）· `docs/07-数据兼容与边界安全验证.md`。
+
+**🔴 审计反向发现的真缺陷（已修 + 附反证）**
+`store/hierarchy.js#listAllNodes` 原为 `.filter((n) => n && n.level)` —— **真值判断**。
+⇒ 宿主记忆记录**只要哪天带上任意 `level` 字段**，即混入总监层级树：**不报错、不崩溃、静默**。
+同机反证（改前）：`level:"note"`（伪值）与「有 `level` 但缺 `id`」两种宿主形态记录**各泄露 1 条**，
+树节点数 **13 vs 真实 11**。
+⇒ 收紧为 **`isHierarchyNode`**：`id` 必须非空字符串 **且** `level` 必须**恰为** `global|project|session`
+（白名单由 `LEVEL` 单一真相源派生）。改后两种形态**均被挡住**、节点数回到 **11**。
+产物 **278,301 → 279,841 B**，重新下发运行时（`cmp` 逐字节一致）+ 冷启动复验全绿。
+**刻意不再收紧**：若改成「id 前缀白名单」，将来新增 id 方案会让**合法节点静默消失**（比混入更难查）——
+残余面已显式登记，不隐藏。
+
+**🔴 可复用教训（三条，均已写成断言）**
+1. **断言「不存在」之前，必须先证明判据能命中「存在」**：探针记录刻意不带 `id`，首版却用
+   `String(n.id) === PROBE_KEY` 判「是否泄露」⇒ **恒为 0**、**空洞通过**。改用 IDB 真实主键 `projectId`。
+   → **空洞断言比没有断言更危险**，它给出虚假信心。
+2. **契约要查「定义处」，不查「环境残留」**：首版断言「localStorage 存在 `dsh.director.store.*`」——
+   该 key 只在总监 store **有消息且落过盘**后才存在 ⇒ 冷启动 / 刚重启必然没有 ⇒ **换环境就误报**
+   （清缓存重启后实测踩中）。改为对 `messages.js` / `persist.js` 做**源码静态断言**，与环境无关。
+3. **模板字符串内的注释里出现反引号会截断模板** ⇒ `SyntaxError: missing ) after argument list`。
+   **本会话第二次踩中**；同一文件中还有一处 `\d` 非法转义的老坑。
+
+**🟡 开放项 F-DATA-01（登记不隐藏 · 新任务行 `T-PLUG-010`）**
+冷启动后 `dsh.director.store.director-e0w2f3`(6600 B) 与 IDB `directorStores` 的 1 条记录**消失**（→ 0）；
+同一次 `dsh.workspace.view.v5` / `dsh.sessions.current` / `memoryCore` **11 条节点全部完好**。
+**已排除**：① 非本次改动所致（本批次无任何删除分支）；② 宿主与插件源码**不存在**
+`localStorage.removeItem`(该 key) / `localStorage.clear()` / `deleteDatabase` 任何分支（**全仓 grep 取证**）。
+旁证：重启前后页面端口 `56434` → `55509`。影响面**低**（该 key 是 `messages.js:9` 的**兜底缓存**，IDB 为主）。
+待办：下一次**带总监活动**的冷启动做前后对比，判定「一次性偶发（强杀未走 `beforeunload`）」还是「可复现」。
+
+**另发现**：`scripts/deploy.ps1` **已过期失效** —— 指向旧路径 `D:\hermes-data\dsh-director`
+（与当前 `dsh-director-plugin` 无关），且会误删 `Network` 缓存 ⇒ **插件下发当前只能手工**。
+归入 `T-PLUG-008`（插件部署单元 + 安装 README）。
+
+**验证**：**八层全绿 522 项**（96/63/60/65/66/92/**41**/39）+ **真机逐交互点击 66/66**；
+产物 **279,841 B / 32 模块**，React 零打包，**宿主零改动**。

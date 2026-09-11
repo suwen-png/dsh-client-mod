@@ -39,6 +39,31 @@ export const GLOBAL_NODE_ID = "__global__";
 /** 层级顺序（数字越小越高层） */
 const LEVEL_ORDER = { global: 0, project: 1, session: 2 };
 
+/** 合法层级的**白名单**（由 LEVEL 单一真相源派生，勿另写字面量） */
+const LEVEL_WHITELIST = Object.freeze(Object.keys(LEVEL).map((k) => LEVEL[k]));
+
+/**
+ * 判定一条 IDB 记录是否为「本模块的层级节点」。
+ *
+ * 🔴 为何必须是**白名单**而不是「有 level 就算」：
+ *    `memoryCore` 是**与宿主共享**的 store（见文件头：不能升 v4 ⇒ 无法新增独立 store），
+ *    插件记录与宿主记忆记录**同处一个 keyPath 命名空间**，只能靠字段形态区分。
+ *    若写成 `n.level` 真值判断，则宿主记忆记录**只要哪天带上一个 `level` 字段**，
+ *    就会被当成层级节点静默混入树中 —— 不报错、不崩溃，只是树里多出莫名其妙的节点，
+ *    属「**约定失效即静默**」类缺陷（与 2026-09-12 那批「构建通过但运行时报错」同源）。
+ *    故收紧为：`id` 必须是非空字符串 **且** `level` 必须**恰为**三值之一。
+ *
+ *    对既有记录**零行为差异**（现有 11 条全部通过），已由
+ *    `scripts/verify-data-safe.mjs` 的「隔离性动态反证」实测覆盖。
+ * @param {*} n
+ * @returns {boolean}
+ */
+export function isHierarchyNode(n) {
+	return Boolean(n)
+		&& typeof n.id === "string" && n.id.length > 0
+		&& LEVEL_WHITELIST.indexOf(n.level) >= 0;
+}
+
 /** 生成节点 id（层级前缀 + 时间戳 + 随机，避免碰撞） */
 export function makeNodeId(level) {
 	const p = level === LEVEL.GLOBAL ? "g" : level === LEVEL.PROJECT ? "p" : "s";
@@ -139,10 +164,10 @@ export async function removeNode(id) {
 	return tx("readwrite", (s) => s.delete(id)).then(() => true).catch(() => false);
 }
 
-/** 全量拉取所有节点 */
+/** 全量拉取所有节点（过滤走 schema 白名单 `isHierarchyNode`，见其 JSDoc） */
 export function listAllNodes() {
 	return tx("readonly", (s) => s.getAll())
-		.then((r) => (r || []).filter((n) => n && n.level))
+		.then((r) => (r || []).filter(isHierarchyNode))
 		.catch(() => []);
 }
 
