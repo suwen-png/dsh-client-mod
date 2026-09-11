@@ -16,13 +16,15 @@ export const SRC_MAP = {
 	"util/log-collector.js": { block: "A3", src: "5799 ~ 5834", status: "✅", desc: "专用 Log 收集器（window.__dshV9Log）" },
 	"config/model.js": { block: "C2", src: "6615 ~ 6705", status: "✅", desc: "配置与本地模型（Ollama :11434 / qwen2:7b）" },
 	"store/docs-index-inject.js": { block: "A13+A14", src: "6538 ~ 6544 + 剥离", status: "✅", desc: "文档索引运行时加载（替代 541KB 内联常量）" },
-	"dev/layout-probe.js": { block: "C1", src: "6545 ~ 6614", status: "⬜", desc: "V9-Design 布局探针（AI 可读页面真实布局）" },
+	"dev/layout-probe.js": { block: "C1", src: "6545 ~ 6614", status: "✅", desc: "V9-Design 布局探针（AI 可读页面真实布局）" },
 
-	// ── 批次 2（数据层）⬜ ──────────────────────────────────────
-	"store/messages.js": { block: "A1", src: "5495 ~ 5723", status: "⬜", desc: "总监消息 store（directorStores + prefix）" },
-	"store/branch.js": { block: "A4", src: "5835 ~ 5963", status: "⬜", desc: "分支创建 + 记忆面板交互（__dshCreateBranch）" },
-	"store/memory.js": { block: "A2", src: "5724 ~ 5798", status: "⬜", desc: "V9 记忆体系 CRUD" },
-	"store/docs.js": { block: "A5", src: "5966 ~ 6035", status: "⬜", desc: "docs store（A14 剥离已完成，可开工）" },
+	// ── 批次 2（数据层）✅ 已完成迁移 2026-09-11 ────────────────
+	"store/messages.js": { block: "A1", src: "5495 ~ 5723", status: "✅", desc: "总监消息 store（directorStores + prefix）" },
+	"store/memory.js": { block: "A2", src: "5724 ~ 5798", status: "✅", desc: "V9 记忆体系 CRUD（window.__dshMemory）" },
+	"store/branch.js": { block: "A4", src: "5835 ~ 5963", status: "✅", desc: "分支创建 + 记忆面板交互（4 契约 + dshEscapeHTML 防 XSS）" },
+	"store/docs.js": { block: "A5", src: "5966 ~ 6035", status: "✅", desc: "docs store（DIRECTOR_DOC_TYPES + 种子数据 + 订阅）" },
+	"store/cookie.js": { block: "V10", src: "（宿主内散落）", status: "✅", desc: "Cookie 分块存储（3KB/块 + _meta 校验，降级兜底）" },
+	"store/idb.js": { block: "V9", src: "（宿主内散落）", status: "✅", desc: "IndexedDB 持久化主层（dsh-director-db v3 / 6 store）" },
 
 	// ── 批次 3（持久化，高风险）⬜ ──────────────────────────────
 	"store/file-adapter.js": { block: "A6", src: "6036 ~ 6214", status: "⬜", desc: "🔴 Electron 文件通道三法探测（依赖 T5 spike）" },
@@ -44,4 +46,4 @@ export const SRC_MAP = {
 	"bridge/view-sync.js": { block: "G1+G4", src: "7108~7119 + 9144~9149", status: "⬜", desc: "🔴 宿主注入点（__directorCurrentView 写操作，R7）" },
 };
 
-export const SKELETON_VERSION = "v2-20260911-a14stripped";
+export const SKELETON_VERSION = "v3-20260911-batch2closed";

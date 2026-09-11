@@ -654,3 +654,26 @@ E2 `DirectorView` 删除后，`DirectorFlow`（7085 止）与 `ConversationRoot`
 
 **处理原则**：不需搬组件，改为「宿主调插件 `setView(id)`」（单向调用，符合 E8 约束）；插件未加载时保留原 window 写操作兜底。
 **新增风险**：R7（注入点寄生）· R8（清单行号必须 grep 实测再入表）。
+
+> ⚠️ **2026-09-11 T6 定案修正**：上表「处理原则」经 T6 逐行实测后**修正为「不迁，只保」** —— 宿主 6 个写入锚点**原样保留**，不再考虑改写为 `setView(id)`。理由：写入时机绑定宿主 React 渲染周期（`useEffect`/`useLayoutEffect`），插件无法等价复现；且 G1-d（7118）的 `useLayoutEffect` 无依赖数组、每次渲染都写，用于修复 tab 切换竞态，改写会引入回归。详见 `dsh-director-plugin/docs/02-G区宿主注入点清单.md`。
+
+### 14.10 ✅ T-PLUG-005 批次 2 完成 + T6 闭环（2026-09-11）
+
+**批次 2 数据层 6 模块全部落地**（`dsh-director-plugin/src/store/`）：
+
+| 模块 | 块 | 源行号 | 关键契约 |
+|:--|:--|:--|:--|
+| `messages.js` | A1 | 5495~5723 | `directorStores` Map + prefix `dsh.director.store.` |
+| `memory.js` | A2 | 5724~5798 | `installMemoryApi()` → `window.__dshMemory`（宿主 11787 直接调用） |
+| `branch.js` | A4 | 5835~5963 | 4 契约 + `dshEscapeHTML`（11 处调用，V9.4-P1 防 XSS） |
+| `docs.js` | A5 | 5966~6035 | `DIRECTOR_DOC_TYPES` + 种子数据 + 订阅 |
+| `cookie.js` | V10 | 宿主散落 | 3KB/块 + `_meta` 完整性校验 |
+| `idb.js` | V9 | 宿主散落 | DB `dsh-director-db` v3 / 6 object store |
+
+**验证**：`scripts/verify-batch1.mjs` 扩充至 **66 项 / 66 通过**（退出码 0），新增 6 组检查：批次 2 模块齐备 · 批次 2 全局契约 · XSS 转义（5 字符全命中）· R5 持久化 key 兼容（8 项）· IDB 结构（DB 名 + v3 + 6 store）· **G 区锚点回归防线（10 项）**。全 16 个源文件 `node --check` 通过。
+
+**T6 交付**：`docs/02-G区宿主注入点清单.md` —— 6 写入锚点 + 6 读取点 + 5 `setFocusTarget` 调用点全量 grep 实测登记；含批次 6 改造检查清单 7 项。
+
+**A5 原样保留的历史遗留行为**（勿"顺手优化"）：种子文档 `doc-sample-2` 的 docType 为 `requirement_index`，**不在** `DIRECTOR_DOC_TYPES` 中，故其 `folderId` 指向不存在的文件夹；`createDoc`/`createFolder` 用 `Math.random()` 生成 id 后缀（非确定性 RNG 场景，为兼容既有数据形态保留）。
+
+**批次进度**：1 ✅ · 2 ✅ · 3 ⬜（受阻 T5 spike）· 4 ⬜ · 5 ⬜ · 6 ⬜

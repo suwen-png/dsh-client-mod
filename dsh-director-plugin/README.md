@@ -7,14 +7,16 @@
 
 | 批次 | 内容 | 状态 |
 |:----:|:-----|:-----|
-| 1 | A14 剥离 / A3+D3 日志 / A11 布局 store / A12 主题 store / C2 模型配置 | ✅ **已完成 2026-09-11** |
-| 2 | A1 消息 store / A4 分支创建 / A2 记忆 CRUD / A5 docs store | ⬜ 待开工 |
+| 1 | A14 剥离 / A3+D3 日志 / A11 布局 store / A12 主题 store / C1 布局探针 / C2 模型配置 | ✅ **已完成 2026-09-11** |
+| 2 | A1 消息 store / A2 记忆 CRUD / **A4 分支创建** / **A5 docs store** / V10 Cookie / IndexedDB 主层 | ✅ **已完成 2026-09-11** |
 | 3 | A6 文件通道 / A7~A10 持久化+store | ⬜ 受阻 T5 spike |
 | 4 | D1 directorProcess / D2 审核 | ⬜ |
 | 5 | E1 DirectorFlow（E2 DirectorView ⛔ 已废弃） | ⬜ |
 | 6 | F3+F4 全局 API / F1/F2+G1/G4 宿主注入点改造 / F5 tab 注册 | ⬜ |
 
 **批次 1 关键成果**：宿主 `client.js` **1,479,577 → 564,826 B（-914,751 B / -61.8%）** —— 单行 541KB 的 `DSH_DOCS_INDEX` 内联常量已外置为 `assets/docs-index.json`（含 docs/ 90 篇全文），改由插件运行时加载。
+
+**批次 2 关键成果**：数据层 6 模块落地，4 个宿主直接调用的全局契约（`__dshMemory` / `__dshCreateBranch` / `__dshSwitchMemoryTab` / `__dshShowToast`）全部原样保留；XSS 转义（V9.4-P1）回归防线；R5 持久化 key 兼容性 8 项逐一校验。
 
 ## 目录结构
 
@@ -25,12 +27,15 @@ dsh-director-plugin/
 ├── docs/01-插件迁移明细清单.md ← 施工图 + 修改导航图（★ 改代码前先查这里）
 ├── scripts/
 │   ├── strip-a14.py          ← A14 剥离脚本（含 --dry-run）
-│   └── verify-batch1.mjs     ← 批次 1 验证（25 项，IS_PASS 判定）
+│   ├── restore-a14.py        ← A14 回滚（含 --check）
+│   └── verify-batch1.mjs     ← 迁移验证（批次 1+2，56 项，IS_PASS 判定）
 ├── src/
 │   ├── client-entry.js       ← 浏览器侧入口（installBatch1）
 │   ├── index.js              ← 骨架导航表（block ↔ 文件 ↔ 源行号）
 │   ├── util/   debug.js · log-collector.js
 │   ├── store/  layout.js · theme.js · docs-index-inject.js
+│   │            messages.js · memory.js · branch.js · docs.js   ← 批次 2 数据层
+│   │            cookie.js（V10 分块）· idb.js（IDB 主层）
 │   ├── config/ model.js
 │   └── bridge/ spike-fs-probe.js（T5 R3 验证）
 └── lib/（构建产物）
@@ -47,8 +52,9 @@ dsh-director-plugin/
 ## 验证
 
 ```bash
-node dsh-director-plugin/scripts/verify-batch1.mjs    # 批次 1：25 项，退出码 0 = 通过
+node dsh-director-plugin/scripts/verify-batch1.mjs    # 批次 1+2：56 项，退出码 0 = 通过
 node --check dsh-director-plugin/src/**/*.js          # 语法校验
+python dsh-director-plugin/scripts/restore-a14.py --check   # A14 回滚锚点自检
 ```
 
 ## 安装（spike，T-PLUG-003）

@@ -10,13 +10,21 @@
  *   ✅ A12 主题 store        → store/theme.js            （client.js 6484~6537）
  *   ✅ A3  专用 Log 收集器    → util/log-collector.js      （client.js 5799~5834）
  *   ✅ D3  统一调试日志工具    → util/debug.js             （client.js 6854~6968）
- *   ✅ C2  配置与本地模型      → config/model.js           （client.js 6612~6702）
- *   ✅ A13+A14 文档索引注入壳  → store/docs-index-inject.js（client.js 6538~6541 + 剥离改造）
+ *   ✅ C2  配置与本地模型      → config/model.js           （client.js 6615~6705）
+ *   ✅ C1  V9-Design 布局探针  → dev/layout-probe.js       （client.js 6545~6614）
+ *   ✅ A13+A14 文档索引注入壳  → store/docs-index-inject.js（client.js 6538~6544 + 剥离改造）
  *
- * ── 待迁入（批次 2~6）────────────────────────────────────────
- *   ⬜ A1 消息 store  ⬜ A2 记忆 CRUD  ⬜ A4 分支创建  ⬜ A5 docs store
+ * ── 批次 2 数据层（已迁入）──────────────────────────────────
+ *   ✅ A1  消息 store（内存层） → store/messages.js         （client.js 5495~5723）
+ *   ✅ A2  记忆 CRUD           → store/memory.js           （client.js 5724~5798）
+ *   ✅ A4  分支创建+记忆面板    → store/branch.js           （client.js 5835~5963）
+ *   ✅ A5  总监文档 store       → store/docs.js             （client.js 5966~6035）
+ *   ✅ V10 Cookie 分块存储      → store/cookie.js           （存储降级兜底层）
+ *   ✅ IndexedDB 持久化主层     → store/idb.js              （6 store / v3）
+ *
+ * ── 待迁入（批次 3~6）───────────────────────────────────────
  *   ⬜ A6 文件通道    ⬜ A7~A10 持久化+store
- *   ⬜ C1 布局探针    ⬜ D1 directorProcess  ⬜ D2 审核
+ *   ⬜ D1 directorProcess  ⬜ D2 审核
  *   ⬜ E1 DirectorFlow
  *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造
  *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
@@ -31,12 +39,18 @@ import { installV9Log } from "./util/log-collector.js";
 import { directorLayoutStore } from "./store/layout.js";
 import { dshThemeStore } from "./store/theme.js";
 import { directorConfig } from "./config/model.js";
-import { loadDocsIndex } from "./store/docs-index-inject.js";
+import { loadDocsIndex, getDocsIndexSync } from "./store/docs-index-inject.js";
+import { installLayoutProbe } from "./dev/layout-probe.js";
+// ── 批次 2 数据层 ──
+import { directorStores } from "./store/messages.js";
+import { installMemoryApi } from "./store/memory.js";
+import { installBranchApi } from "./store/branch.js";
+import { directorDocsStore } from "./store/docs.js";
 
-export const PLUGIN_VERSION = "0.1.0-batch1";
+export const PLUGIN_VERSION = "0.2.0-batch2";
 
 /** 批次 1 安装器：装配零依赖基础层。返回已安装的能力清单（供宿主与调试读取） */
-export function installBatch1() {
+export function installBatch1(options = {}) {
 	// 1. 日志基础设施（顺序敏感：debug 先于 log-collector）
 	installDshDebug();
 	installV9Log();
@@ -47,7 +61,19 @@ export function installBatch1() {
 	//    directorConfig      → window.__directorConfig
 
 	// 3. 文档索引（异步，失败静默降级为"索引未注入"，与剥离前行为一致）
-	const docsIndexPromise = loadDocsIndex();
+	const docsIndexPromise = loadDocsIndex(options.docsIndexBaseUrl);
+
+	// 4. 布局探针（dev-only，默认开启；生产可传 { layoutProbe: false } 关闭）
+	let probeInstalled = false;
+	if (options.layoutProbe !== false) {
+		probeInstalled = Boolean(installLayoutProbe(getDocsIndexSync));
+	}
+
+	// 5. 批次 2 数据层：全局契约安装（顺序敏感）
+	//    ⚠️ memory 必须先于 branch —— branch 的 switchMemoryTab 依赖 idb 记忆读取，
+	//       但更关键的是 __dshMemory 契约需先就位（宿主 F4 在 client.js:11787 直接调用）
+	const memoryApi = installMemoryApi();
+	const branchApi = installBranchApi();
 
 	const installed = {
 		debug: typeof window !== "undefined" ? Boolean(window.__dshDebug) : false,
@@ -55,13 +81,22 @@ export function installBatch1() {
 		layoutStore: Boolean(directorLayoutStore),
 		themeStore: Boolean(dshThemeStore),
 		config: Boolean(directorConfig),
+		layoutProbe: probeInstalled,
+		// ── 批次 2 ──
+		messageStore: Boolean(directorStores),
+		memoryApi: memoryApi,
+		branchApi: branchApi,
+		docsStore: Boolean(directorDocsStore),
 		docsIndex: false // 异步，稍后就绪
 	};
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 
-	if (typeof window !== "undefined") window.__dshDirectorBatch1 = installed;
+	if (typeof window !== "undefined") {
+		window.__dshDirectorBatch1 = installed;
+		window.__dshDirectorBatch2 = installed; // 批次 2 别名：便于逐批次排查
+	}
 	return installed;
 }
 
-export { directorLayoutStore, dshThemeStore, directorConfig };
+export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore };
