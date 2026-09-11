@@ -1025,3 +1025,58 @@ I22 清理测试残留并恢复根节点名。**连跑两次均 66/66 ⇒ 可重
 
 **验证**：**八层全绿 523 项**（96/63/60/65/66/92/**41**/39）+ **真机逐交互点击 66/66**；
 产物 **279,841 B / 32 模块**，React 零打包，**宿主零改动**。
+
+### 14.20 ✅ T-PLUG-008 插件部署单元 + T-PLUG-011 `Network` 误删缺陷族（2026-09-12）
+
+**T-PLUG-008（部署单元 + 安装 README）**
+- 新增 `dsh-director-plugin/scripts/plugin-install.mjs`：**三处安装点一把梭**
+  ① `<Harness>/resources/host/node_modules/@deepseek-ai/dsh-director-plugin/`（实体包）
+  ② `~/.dsh/profiles/node_modules/@deepseek-ai/dsh-director-plugin`（junction → ①）
+  ③ `~/.dsh/profiles/web/cordis.patch.yml`（`insert` entry `deepseek-ai.director`）。
+  模式 `verify`（**默认零写入**）/ `--apply`（**幂等** + 写后**逐文件回读校验**）/
+  `--uninstall`（**外科式**只删本插件 entry，**绝不删第三方内容**）/ `--purge`；
+  可重定向 `--harness` / `--profile-root`（供干净目录模拟）。
+  **为何用 Node 而非 PS 脚本**：本机 PS 通道无输出、脚本无法自证；且仓库工具链全是 `node scripts/*.mjs`。
+  **卸载终态必须留显式 `[]`**：YAML「只有注释」解析成 `null`，而 ③ 顶层契约是数组；
+  且 `--apply` 追加前**先剔除独立的 `[]` 行**，否则 `[]` + `- insert:` 是**非法 YAML**（往返测试实测发现）。
+- 新增 `dsh-director-plugin/INSTALL.md`（安装**权威说明**，README §安装 收敛为指针 ⇒ 同一事实只留一份真相源）。
+- 新增 `dsh-director-plugin/scripts/verify-install-clean.mjs`（**52/52**）：临时沙箱「**双机模拟**」
+  跑全生命周期（干净 apply → 幂等 → verify → uninstall → 从已卸载态再 apply → purge →
+  **真实环境零触碰反证** → **三份清单一致性**）。
+- 🔴 **该测试捕获真实缺陷**：`PAYLOAD_FILES` **漏 `package.json`**。本机「一切正常」只因它早先被
+  **手工**拷入 ⇒ **环境残留掩盖缺件**。而 host Loader **靠 `package.json` 发现本包**
+  （`dsh-client-modules` 扫描声明 `dsh.client` 的包）⇒ 干净机「目录存在但插件**永不被装载且不报错**」，
+  且安装器**自身状态判据就是该文件** ⇒ `hostState` 永远停在 missing、verify 永不通过。
+  **反证实测**：临时移除后 **8 项转红**（含 `[A10]` ENOENT），而安装器**自身 `IS_PASS` 仍为 TRUE**
+  ⇒ **安装器对自己造成的缺件是盲的**（三个判据各自退化为 no-op，合起来放行坏结果）。
+  ⇒ **单机幂等测试必然漏检这类缺陷**；已固化为常驻 `[H]` 节**静态交叉核对**三份清单防漂移。
+  附带认知：`package.json` 由 npm **隐式**包含（实测 `npm pack --dry-run` 7 项含它），
+  但**手工安装器必须显式列出**。
+- `scripts/deploy.ps1` **退役**为硬失败垫片（**全 ASCII 正文**，规避 PS 5.1 无 BOM UTF-8 编码陷阱）。
+
+**T-PLUG-011（`Network` 缓存误删缺陷族 · P0 真实数据丢失路径）**
+- 4 处命中：`scripts/deploy.ps1` / `clear-cache.ps1` / `restart-harness.ps1` +
+  「**修改前必读**」`docs/50-信息中心/01` §坑5（文字 + **可执行片段**）。
+- 为何是数据丢失：**`Network` 不是缓存**，是 Chromium 的 **cookie/网络状态存储**（`Network/Cookies`）；
+  而 `src/store/persist.js` 用 cookie 前缀 **`dsh_director_`**（**R5 冻结契约**）⇒ 执行一次即**总监状态丢失**。
+  可清：`Cache`/`Code Cache`/`GPUCache`/`DawnGraphiteCache`/`DawnWebGPUCache`/`blob_storage`；
+  **禁清**：`Network` / `IndexedDB` / `Local Storage`。
+- 处置：三脚本移除并加红线注释（后两者把 `Network` 列入 `$dirsToKeep`）；`deploy.ps1` 整体退役；
+  另更正 `50-信息中心/01`（3 处）、`30-开发链路/dsh-director插件开发环境文档.md`
+  （§三 横幅 + §3.1/3.2/3.3/§5.2/§6/§7.1 共 7 处）、`00-统筹入口/07-项目认知初始化报告-20260911.md`（2 处）。
+- 🔴 **可复用教训**：**破坏性列表必须逐项查证语义，不能按目录名归类** —— `Network` 名字像缓存，实为 cookie 库。
+
+**新登记 `T-PLUG-012`**：`assets/docs-index.json` 已漂移 **6 篇**（索引 90 / 实际 96，0 篇多余）
+⇒ **归入 A14 边界一并处理**（现有生成器 `gen-docs-index.ps1` 是注入宿主 client.js 的旧形态；
+重新生成会改动产物字节 ⇒ 尺寸锚点与九层基线需整体重跑）。
+
+**🔴 运行期发现（运维知识）**：**Harness 运行中改动安装点**（尤其删/重建 profile junction）
+会让插件从 `dsh-client-modules` 的注册表 `table` 中被 `processOne` 摘除（`!qualifies → table.delete`）
+⇒ 表现为 **bundle 路由 404，但插件模块副作用仍在页面里**（半死态：契约可调、路由不通）。
+**判据**：其他插件 `/plugins/*` 返 200、本插件 404，且 manifest 中 `rev` 与当前 `client.js` 的
+sha1 前 12 位**完全一致**（说明表项曾正确建立、之后被摘）。**处置：必须重启**（重启后 39/39 复绿）。
+
+**验证基线**：九层离线 **536 项全绿**（96/63/60/65/66/92/42/**52**）+ 真机契约 **39/39** +
+真机逐交互 **66/66**（重启后复验）。产物 `lib/client.js` **279,841 B / 32 模块**，
+sha1 `a7e4fa8492f614536ef90944e6eb0108a418b616`（仓库 / 安装点 / git HEAD **三处一致**），
+**React 零打包、宿主零改动**（本轮 `src/`·`lib/`·`build/`·`assets/` 改动数 = **0**）。

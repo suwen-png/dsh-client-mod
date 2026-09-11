@@ -103,36 +103,37 @@ export const inject = ['webServer', 'sessions']
 
 ## 三、开发流程
 
+> 🔴 **本章已过时（2026-09-12 · T-PLUG-008 起）** —— 权威说明改见 [`dsh-director-plugin/INSTALL.md`](../../dsh-director-plugin/INSTALL.md)。
+> 差异点：① 源码是 `dsh-director-plugin/src/**/*.js`（**不是** `.ts/.tsx`）；② 构建是 `node dsh-director-plugin/build/build.mjs`（**不是**根目录 `build.mjs`）；
+> ③ 部署是 `node dsh-director-plugin/scripts/plugin-install.mjs --apply`（`deploy.ps1` **已退役**）；④ 缓存清除**不含 `Network`**。
+> 以下原文保留作历史参考。
+
 ### 3.1 标准开发流程
 
 ```
-1. 修改源代码（src/目录下的.ts/.tsx文件）
-2. 编译：node build.mjs
-3. 部署：powershell -File D:\hermes-data\dsh-client-mod\scripts\deploy.ps1
-4. 测试：Harness自动重启，验证功能
-5. 自动化测试：node test-v10-cdp.mjs
+1. 修改源代码（dsh-director-plugin/src/ 下的 .js 文件）
+2. 编译：node dsh-director-plugin/build/build.mjs
+3. 部署：node dsh-director-plugin/scripts/plugin-install.mjs --apply
+4. 测试：重启 Harness（插件集变更只在 boot 生效），验证功能
+5. 自动化测试：node dsh-director-plugin/scripts/cdp-verify.mjs（真机 39 项）+ cdp-click.mjs（逐交互 66 项）
 ```
 
-### 3.2 一键部署脚本
+### 3.2 插件部署单元（取代原一键部署脚本）
 
-**路径**: `D:\hermes-data\dsh-client-mod\scripts\deploy.ps1`
+**路径**: `dsh-director-plugin/scripts/plugin-install.mjs`
 
-**功能**: 编译 → 关闭Harness → 复制文件 → 清除缓存 → 重启Harness
+**功能**: 三处安装点（实体包 / profile junction / 用户补丁层 entry）一把梭；**默认零写入**、**幂等**、写后**逐文件回读校验**
 
-**耗时**: 约13.6秒
-
-> ⚠ **2026-09-11 修正**：原文档引用 `scripts\deploy.py`，该文件已在 V10 整改期删除（见 `docs/40-测试质量/12-scripts探针审核-20260906.md` P3「已删 10 文件（含 deploy.py）」）。现行唯一部署脚本为 `deploy.ps1`，参数与原 py 版一一对应。
+**取代关系**: `scripts/deploy.ps1` 已于 2026-09-12 **退役**为硬失败垫片（原实现指向废弃路径 `D:\hermes-data\dsh-director`，且清缓存列表含 `Network` —— 那是 **cookie 存储**，删它 = 总监状态丢失）。
 
 ```bash
-# 完整部署
-powershell -File D:\hermes-data\dsh-client-mod\scripts\deploy.ps1
-
-# 只编译+复制，不重启
-powershell -File .\scripts\deploy.ps1 -NoRestart
-
-# 不清除缓存
-powershell -File .\scripts\deploy.ps1 -NoCacheClear
+node dsh-director-plugin/scripts/plugin-install.mjs            # 只检查（零写入）
+node dsh-director-plugin/scripts/plugin-install.mjs --apply    # 安装（幂等）
+node dsh-director-plugin/scripts/plugin-install.mjs --uninstall
+node dsh-director-plugin/scripts/verify-install-clean.mjs      # 干净目录验收（52 项）
 ```
+
+> 📖 完整说明（三处安装点为何缺一不可 / 启动陷阱 / 故障排查 / 回滚）：[`dsh-director-plugin/INSTALL.md`](../../dsh-director-plugin/INSTALL.md)
 
 ### 3.3 缓存清除（必须！）
 
@@ -145,7 +146,11 @@ Harness使用Electron的缓存机制，修改代码后必须清除缓存才能�
 - Code Cache
 - GPUCache
 - blob_storage
-- Network
+- DawnGraphiteCache
+- DawnWebGPUCache
+
+> 🔴 **不得清除 `Network`**（2026-09-12 更正）：它是 Chromium 的 **cookie/网络状态存储**，内含 `dsh_director_*` 持久化 cookie（**R5 冻结契约**）⇒ 删它会导致**总监状态丢失**。
+> 同理**不得**清 `IndexedDB` / `Local Storage`。
 
 ---
 
@@ -228,7 +233,7 @@ await page.waitForTimeout(3000)  // 仅用于页面初始加载
 
 | 症状 | 可能原因 | 解决方案 |
 |------|---------|---------|
-| 修改代码后页面无变化 | 缓存未清除 | 运行`deploy.ps1`自动清缓存，或手动清5个缓存目录 |
+| 修改代码后页面无变化 | 缓存未清除 | `node dsh-director-plugin/scripts/plugin-install.mjs --apply` 后重启；或手工清 `Cache`/`Code Cache`/`GPUCache`（🔴 **不含 `Network`**） |
 | 总监tab不显示 | 插件未启用 | 检查package.json的bundles数组 |
 | 控制台报错"组件未定义" | 编译失败 | 运行`node build.mjs`检查编译错误 |
 | 样式不生效 | 内联样式被覆盖 | 检查CSS优先级，使用!important |
@@ -252,7 +257,7 @@ await page.waitForTimeout(3000)  // 仅用于页面初始加载
 | 总监面板后备 | `D:\hermes-data\dsh-director\src\client\components\director\DirectorPanel.tsx` | 5.9KB，三栏布局后备 |
 | 服务端入口 | `D:\hermes-data\dsh-director\src\index.ts` | webServer路由注册 |
 | 编译产物 | `D:\hermes-data\dsh-director\lib\client.js` | 274.8KB，编译后客户端代码 |
-| 一键部署脚本 | `D:\hermes-data\dsh-client-mod\scripts\deploy.ps1` | 13.6秒完成部署 |
+| **插件部署单元** | `D:\hermes-data\dsh-client-mod\dsh-director-plugin\scripts\plugin-install.mjs` | verify（零写入）/ `--apply`（幂等）/ `--uninstall`（外科式） |
 | 自动化测试脚本 | `D:\hermes-data\dsh-director\test-v10-cdp.mjs` | 28项Playwright测试 |
 | 美化设计图 | `D:\hermes-data\dsh-client-mod\docs\50-信息中心\V10总监控制台-美化设计图V2.0.html` | 高保真原型+50+项交互清单 |
 | 整改进展报告 | `D:\hermes-data\dsh-client-mod\docs\20-任务文档\V10整改进展报告-20260906.md` | 进度跟踪 |
@@ -265,8 +270,8 @@ await page.waitForTimeout(3000)  // 仅用于页面初始加载
 
 ### 7.1 开发规范
 
-1. **修改源代码，不修改编译产物** — 永远修改`src/`目录，然后运行`node build.mjs`编译
-2. **使用一键部署脚本** — 不要手动复制文件和清缓存，用`deploy.ps1`
+1. **修改源代码，不修改编译产物** — 永远修改 `dsh-director-plugin/src/`，然后运行 `node dsh-director-plugin/build/build.mjs` 编译
+2. **使用插件部署单元** — 不要手动复制文件，用 `node dsh-director-plugin/scripts/plugin-install.mjs --apply`（`deploy.ps1` 已退役）
 3. **小步提交** — 每完成一个功能点就编译部署测试，避免一次性大量修改
 4. **保留后备方案** — DirectorPanel.tsx作为三栏布局后备，V10出问题时可快速回退
 

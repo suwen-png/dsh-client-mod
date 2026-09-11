@@ -16,7 +16,11 @@
 
 **✅ 已真机装载**（2026-09-11）：插件已被 Harness 实际加载并运行 —— `__DSH_BOOT__` 42 entries 含本包，**27 项全局契约全挂载**，`__dshDocsIndex` **docCount=90**（A14 外置资源回填成功）。详见 `docs/01-插件迁移明细清单.md` §八。
 
-**八层验证（批次 9 全绿 · 合计 523 项）**：源码级 **96/96** ｜ bundle 级 **63/63** ｜ 安装链路级 **60/60** ｜ 三层结构 **65/65** ｜ 自动同步 **66/66** ｜ 总监逻辑 **92/92** ｜ 数据安全 **42/42** ｜ 真机契约 **39/39**。另有 **真机逐交互点击验证 66/66**（`scripts/cdp-click.mjs`，22 小节覆盖全部 30 个可交互元素，每项「点击 → 回读实际状态 → 比对预期」）。产物 `lib/client.js` **279,841 B / 32 模块**，React 零打包。
+**九层验证（合计 536 项，离线全绿）**：源码级 **96/96** ｜ bundle 级 **63/63** ｜ 安装链路级 **60/60** ｜ 三层结构 **65/65** ｜ 自动同步 **66/66** ｜ 总监逻辑 **92/92** ｜ 数据安全 **42/42** ｜ **干净目录部署 52/52** ｜ 真机契约 **39/39**。另有 **真机逐交互点击验证 66/66**（`scripts/cdp-click.mjs`，22 小节覆盖全部 30 个可交互元素，每项「点击 → 回读实际状态 → 比对预期」）。产物 `lib/client.js` **279,841 B / 32 模块**，React 零打包。
+
+**T-PLUG-008 插件部署单元（2026-09-12）**：新增 `scripts/plugin-install.mjs`（verify / `--apply` / `--uninstall` / `--purge`，默认**零写入**、**幂等**、写后**逐文件回读校验**、卸载**外科式**只删本插件 entry）与 `INSTALL.md`（安装权威说明）。**并新增 `scripts/verify-install-clean.mjs`（52/52）**：在临时沙箱里模拟「双机部署」全生命周期（干净 `--apply` → 幂等 → verify → uninstall → 从已卸载态再 apply → `--purge` → 真实环境零触碰反证）。
+> 🔴 该测试**捕获了一个真实缺陷**：`PAYLOAD_FILES` 原先**漏了 `package.json`** —— 本机「一切正常」只因它早先被手工拷入（环境残留掩盖缺件）。而 host Loader **靠 `package.json` 发现本包**，缺件会让干净机器上「目录存在但插件永不被装载且不报错」。**此缺陷在单机幂等测试中必然漏检**（反证实测：移除后该测试 8 项转红，而安装器**自身的 `IS_PASS` 仍为 TRUE** ⇒ 安装器对自己的缺件是盲的）。
+> 另随本轮修掉**同族缺陷 3 处**：`scripts/deploy.ps1`（退役为硬失败垫片）、`clear-cache.ps1`、`restart-harness.ps1` 均在清缓存列表里含 `Network` —— 那是 Chromium 的 **cookie 存储**，内含 `dsh_director_*` 持久化 cookie（R5 冻结契约），删除即**总监状态丢失**。详见 [`docs/07-数据兼容与边界安全验证.md`](./docs/07-数据兼容与边界安全验证.md)。
 
 **批次 9 关键成果（2026-09-12 · `T-PLUG-005-B9`）**：见下「批次 8 关键成果」——文档内沿用简称「批次 8」。
 > 📌 **编号说明**：本批次正式编号为 **`T-PLUG-005-B9`**，与 `T-PLUG-005-B8`（自动同步 + 覆盖度自检，提交 `815d4d7`）**是两个不同批次**；产物名 `verify-batch8.mjs` / `cdp-click.mjs` 为历史既成命名，保留不改。
@@ -59,27 +63,39 @@ dsh-director-plugin/
 ├── assets/docs-index.json    ← A14 外置资源（915,314 B / 90 篇全文）
 ├── build/build.mjs           ← 零依赖打包器（ESM → __ModuleLoader__ bundle）
 ├── cordis.patch.yml          ← host entry insert 补丁（官方契约同形）
+├── INSTALL.md                ← ★ 安装/卸载/验证权威说明（T-PLUG-008）
 ├── docs/01-插件迁移明细清单.md ← 施工图 + 修改导航图（★ 改代码前先查这里）
 ├── docs/02-G区宿主注入点清单.md ← T6 交付（G 区锚点全量登记）
-├── docs/03-批次6接线与退坡方案.md ← T11 交付（F 区重定级 + 精确改动清单 + 风险评估）
+├── docs/03-批次6接线与退坡方案.md ← T11 交付
+├── docs/04~07-*.md           ← 多层级结构选型 / 自动同步 / 总监逻辑 / 数据安全
 ├── scripts/
-│   ├── strip-a14.py          ← A14 剥离脚本（含 --dry-run）
-│   ├── restore-a14.py        ← A14 回滚（含 --check）
-│   ├── verify-batch1.mjs     ← 源码级验证（批次 1+2+3+4+5 锚点，96 项）
+│   ├── strip-a14.py · restore-a14.py   ← A14 剥离 / 回滚（含 --dry-run / --check）
+│   ├── plugin-install.mjs    ← ★ 插件安装单元（verify/apply/uninstall/purge，默认零写入）
+│   ├── verify-batch1.mjs     ← 源码级验证（96 项）
 │   ├── verify-bundle.mjs     ← bundle 端到端（__ModuleLoader__ 桩执行，63 项）
-│   ├── verify-install.mjs    ← ★ 安装链路离线验证（官方 loadProfile/ClientModuleRegistry，60 项）
+│   ├── verify-install.mjs    ← 安装链路离线验证（官方 loadProfile/ClientModuleRegistry，60 项）
+│   ├── verify-batch6/7/8.mjs ← 三层结构 65 / 自动同步 66 / 总监逻辑 92
+│   ├── verify-data-safe.mjs  ← 数据兼容与边界安全（42 项）
+│   ├── verify-install-clean.mjs ← ★ 干净目录部署验收（双机模拟，52 项）
 │   ├── cdp-verify.mjs        ← ★ 真机运行时核查（CDP，39 项）
+│   ├── cdp-click.mjs         ← ★ 真机逐交互点击验证（66 项）
 │   ├── cdp-eval.mjs          ← ★ 渲染进程任意表达式求值（调试）
 │   └── run-r3-spike.mjs      ← ★ T5 文件通道可达性探测
-├── src/
+├── src/                      ← 34 个 ESM 源文件
 │   ├── client-entry.js       ← 浏览器侧入口（installBatch1）
 │   ├── index.js              ← 骨架导航表（block ↔ 文件 ↔ 源行号）
-│   ├── util/   debug.js · log-collector.js
-│   ├── store/  layout.js · theme.js · docs-index-inject.js
-│   │            messages.js · memory.js · branch.js · docs.js   ← 批次 2 数据层
-│   │            cookie.js（V10 分块）· idb.js（IDB 主层）
-│   ├── config/ model.js
-│   └── bridge/ spike-fs-probe.js（T5 R3 验证）
+│   ├── mount.js              ← 挂载（宿主 slot 优先 + 浮层兜底）
+│   ├── util/                 debug.js · log-collector.js · bus.js（变更通知）
+│   ├── store/                layout.js · theme.js · docs-index-inject.js
+│   │                         messages.js · memory.js · branch.js · docs.js
+│   │                         cookie.js（V10 分块）· idb.js（IDB 主层）
+│   │                         create-store.js · use-store.js · persist.js · file-adapter.js
+│   │                         hierarchy.js（三层节点）· duty-config.js（职责继承）
+│   ├── logic/                process.js · review.js（有意不接线）· discover.js · sync.js
+│   │                         summarize.js · duties.js · director-run.js
+│   ├── components/           DirectorFlow.js · DirectorHierarchy.js · DirectorWorkbench.js
+│   ├── config/model.js  ·  dev/layout-probe.js
+│   └── bridge/spike-fs-probe.js（T5 R3 验证）
 ├── lib/index.js              ← host face（cordis 插件，no-op 留痕）
 └── lib/client.js             ← 构建产物（__ModuleLoader__.load 包裹）
 ```
@@ -92,25 +108,27 @@ dsh-director-plugin/
 4. 浏览器端 prefetch → cordis Loader 逐行 create → 全 ACTIVE 后 settled。
 5. bundle 内 require 解析范围 = 平台模块表 + boot graph 注入包；跨插件 value import 是构建错误。
 
-## 验证（四层，逐层加硬）
+## 验证（九层 + 真机逐交互，逐层加硬）
 
 ```bash
-# ① 源码级：批次 1+2 契约与不变量（66 项）
-node dsh-director-plugin/scripts/verify-batch1.mjs
-
-# ② bundle 级：在 __ModuleLoader__ 桩中真实执行 factory
-node dsh-director-plugin/scripts/verify-bundle.mjs
-
-# ③ 安装链路级：用官方 loadProfile / ClientModuleRegistry 真跑（37 项）
-node dsh-director-plugin/scripts/verify-install.mjs
-
-# ④ 真机级：Harness 运行中经 CDP 核查渲染进程（15 项）
-node dsh-director-plugin/scripts/cdp-verify.mjs
+cd dsh-director-plugin
+node scripts/verify-batch1.mjs          # ① 源码级：契约与不变量            96 项
+node scripts/verify-bundle.mjs          # ② bundle 级：__ModuleLoader__ 桩执行 63 项
+node scripts/verify-install.mjs         # ③ 安装链路：官方 loadProfile 真跑    60 项
+node scripts/verify-batch6.mjs          # ④ 三层结构（对话/文件夹/全局）      65 项
+node scripts/verify-batch7.mjs          # ⑤ 自动同步 + 覆盖度自检             66 项
+node scripts/verify-batch8.mjs          # ⑥ 总监逻辑（职责/继承/五步执行）    92 项
+node scripts/verify-data-safe.mjs       # ⑦ 数据兼容与边界安全（隔离反证）    42 项
+node scripts/verify-install-clean.mjs   # ⑧ 干净目录部署（双机模拟）          52 项
+node scripts/cdp-verify.mjs             # ⑨ 真机：CDP 核查渲染进程            39 项
+node scripts/cdp-click.mjs              # ＋ 真机逐交互点击验证               66 项
 
 # 辅助
-node --check dsh-director-plugin/src/**/*.js                 # 语法校验
-python dsh-director-plugin/scripts/restore-a14.py --check    # A14 回滚锚点自检
+node --check src/index.js                                    # 语法校验（逐文件）
+python scripts/restore-a14.py --check                        # A14 回滚锚点自检
 ```
+
+> ⑧ 为**离线全生命周期**测试（临时沙箱，不触碰真实环境）；⑨ 与 ＋ 需 Harness **带调试端口运行中**（见 [`INSTALL.md`](./INSTALL.md) §四）。
 
 ## 构建
 
@@ -121,16 +139,24 @@ node dsh-director-plugin/build/build.mjs     # src/*.js → lib/client.js（零�
 打包器把 ESM 源码按拓扑序展平为 `window.__ModuleLoader__.load({ id, factory })` 单文件 bundle；
 平台模块（react/cordis/ui-slots 等）不打包，由 `require` 提供。
 
-## 安装（**已完成**，2026-09-11）
+## 安装（**一条命令**，2026-09-12 起）
 
-| 步骤 | 动作 |
-|:----:|:-----|
-| 1 | 构建：`node build/build.mjs` |
-| 2 | 复制 `lib/ assets/ cordis.patch.yml package.json README.md` 到 `resources/host/node_modules/@deepseek-ai/dsh-director-plugin/` |
-| 3 | 在 `~/.dsh/profiles/node_modules/@deepseek-ai/` 建 junction 指向步骤 2 的目录（供 profile 侧解析） |
-| 4 | 在 `~/.dsh/profiles/web/cordis.patch.yml` 追加 `insert: [{ id: deepseek-ai.director, name: '@deepseek-ai/dsh-director-plugin' }]` |
-| 5 | 清渲染缓存（`Cache`/`Code Cache`/`GPUCache`，**保留 cookies/IndexedDB**）→ 完整重启 Harness |
-| 6 | 验证：`node scripts/verify-install.mjs` + `node scripts/cdp-verify.mjs` |
+> 📖 **权威说明见 [`INSTALL.md`](./INSTALL.md)** —— 三处安装点原理、命令面、启动、验证、故障排查、回滚。
+> 本处只留最小指引，避免同一事实两处维护。
+
+```bash
+node build/build.mjs                      # ① 源码改动后才需重建
+node scripts/plugin-install.mjs --apply   # ② 安装（幂等；默认 verify 零写入）
+node scripts/plugin-install.mjs           # ③ 自检 → 「✅ 已完整就绪」
+# ④ 重启 Harness（见 INSTALL.md §四，注意 ELECTRON_RUN_AS_NODE 陷阱）
+node scripts/cdp-verify.mjs               # ⑤ 真机核查 → 39/39
+```
+
+**三处安装点（缺一不可）**：① 实体包 `<Harness>/resources/host/node_modules/@deepseek-ai/dsh-director-plugin/` ｜ ② profile junction `~/.dsh/profiles/node_modules/@deepseek-ai/dsh-director-plugin` ｜ ③ 用户补丁层 `~/.dsh/profiles/web/cordis.patch.yml` 的 `insert` entry `deepseek-ai.director`。
+
+**回滚**：`node scripts/plugin-install.mjs --uninstall --purge`（client.js 主补丁不受影响）。
+
+> ⚠️ `scripts/deploy.ps1` 已于 2026-09-12 **退役**（指向废弃旧路径 + 误删 `Network` 缓存）。其能力由 `plugin-install.mjs` 完整取代，且后者默认零写入、幂等、写后回读校验。
 
 ### 🔴 带调试端口启动（复现验证必需）
 

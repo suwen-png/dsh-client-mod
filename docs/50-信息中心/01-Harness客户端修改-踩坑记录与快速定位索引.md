@@ -74,7 +74,8 @@ Start-Sleep -Seconds 3
 
 # 3. 清除缓存（关键！否则加载旧版本）
 $userDataDir = "C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop"
-@("Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "blob_storage", "Network") | ForEach-Object {
+# 🔴 不得清 "Network"：Chromium 的 cookie/网络状态存储，内含 dsh_director_* 持久化 cookie
+@("Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "blob_storage") | ForEach-Object {
     $path = Join-Path $userDataDir $_
     if (Test-Path $path) { Remove-Item $path -Recurse -Force }
 }
@@ -136,7 +137,8 @@ Select-String -Path $dst -Pattern "关键词" -SimpleMatch | Measure-Object
 
 **现象**：四轮修改都没有任何效果，用户看不到调试标签
 **根本原因**：Harness 的 HTTP 缓存（30MB）一直加载旧版本的插件 JS，即使文件已复制到安装目录
-**正确方案**：每次应用修改前必须清除缓存（Cache/Code Cache/GPUCache/blob_storage/Network）
+**正确方案**：每次应用修改前必须清除缓存（Cache/Code Cache/GPUCache/blob_storage/DawnGraphiteCache/DawnWebGPUCache）
+> ⚠️ **2026-09-12 更正**：早期写法含 `Network`，属**缺陷** —— `Network` 是 Chromium 的 cookie/网络状态存储，内含 `dsh_director_*` 持久化 cookie（R5 冻结契约），删它会导致**总监状态丢失**。
 **验证方法**：清除缓存后重启，查看总监tab标题栏是否有调试标签
 
 ### 坑6：修改前端打包文件 index-DyLP6TCW.js
@@ -308,7 +310,7 @@ async sendSession(session, text, imageIds, mode)
 - [ ] 已写开发文档并自审通过
 - [ ] 修改后运行 `node --check` 语法检查
 - [ ] 应用修改时关闭 Harness
-- [ ] 应用修改时清除缓存（Cache/Code Cache/GPUCache/blob_storage/Network）
+- [ ] 应用修改时清除缓存（Cache/Code Cache/GPUCache/blob_storage/DawnGraphiteCache/DawnWebGPUCache；**不含 Network**）
 - [ ] 应用修改后验证 MD5 一致
 - [ ] 重启 Harness 后查看调试标签确认生效
 

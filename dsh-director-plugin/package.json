@@ -19,7 +19,8 @@
     "lib/client.js",
     "assets/**",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "INSTALL.md"
   ],
   "dsh": {
     "bundle": {

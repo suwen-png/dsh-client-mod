@@ -54,18 +54,20 @@ if (-not (Test-Path $cacheDir)) {
 }
 
 # 需要删除的缓存目录
+# 🔴 禁止加入 "Network"：它是 Chromium 的 cookie/网络状态存储，
+#    dsh_director_* 持久化 cookie 就在里面（R5 冻结契约）。删它 = 总监状态丢失。
 $dirsToDelete = @(
     "Cache",
     "Code Cache",
     "GPUCache",
     "blob_storage",
-    "Network",
     "DawnGraphiteCache",
     "DawnWebGPUCache"
 )
 
 # 保留的目录（不删除）
 $dirsToKeep = @(
+    "Network",          # cookie/网络状态 —— 含 dsh_director_* 持久化 cookie（R5 冻结）
     "IndexedDB",        # 总监持久化数据
     "Local Storage",
     "Session Storage",

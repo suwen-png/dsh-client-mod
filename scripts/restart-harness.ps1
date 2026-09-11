@@ -46,7 +46,8 @@ Write-Host "[2/3] 清除客户端缓存..." -ForegroundColor Yellow
 if (-not (Test-Path $cacheDir)) {
     Write-Host "  缓存目录不存在: $cacheDir" -ForegroundColor Gray
 } else {
-    $dirsToDelete = @("Cache", "Code Cache", "GPUCache", "blob_storage", "Network", "DawnGraphiteCache", "DawnWebGPUCache")
+    # 🔴 不得加入 "Network"：Chromium cookie/网络状态存储，内含 dsh_director_* 持久化 cookie（R5 冻结）。
+    $dirsToDelete = @("Cache", "Code Cache", "GPUCache", "blob_storage", "DawnGraphiteCache", "DawnWebGPUCache")
     $deletedCount = 0
     $failedCount = 0
 
