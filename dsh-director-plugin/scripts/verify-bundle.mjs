@@ -201,6 +201,7 @@ const CONTRACTS = [
 	"__dshMemory", "__dshCreateBranch", "__dshSwitchMemoryTab", "__dshShowToast",
 	"__directorPersistState", "__dshDirectorBatch3",
 	"__dshDirectorBatch4", "__dshDirectorProcess", "__dshDirectorReviewReturn",
+	"__dshDirectorBatch5", "__dshDirectorFlow",
 ];
 const w = windowStub;
 for (const k of CONTRACTS) {
@@ -280,6 +281,22 @@ const entryExports = exportsObj?.__entry;
 check("__entry 导出批次 4 函数",
 	typeof entryExports?.directorProcess === "function" && typeof entryExports?.directorReviewReturn === "function",
 	`process=${typeof entryExports?.directorProcess} review=${typeof entryExports?.directorReviewReturn}`);
+
+/* ── 6e. 批次 5 组件层契约 ─────────────────────────────────── */
+
+console.log("\n  ── 批次 5（组件层）契约 ──");
+check("installed.directorFlow", applied?.directorFlow === true, String(applied?.directorFlow));
+check("installed.directorFlowWired === false（批次 6 接线）", applied?.directorFlowWired === false, String(applied?.directorFlowWired));
+check("🔴 迁移期修正标记 directorFlowFixedFilteredMessages", applied?.directorFlowFixedFilteredMessages === true, String(applied?.directorFlowFixedFilteredMessages));
+check("window.__dshDirectorFlow 为函数（组件）", typeof windowStub.__dshDirectorFlow === "function", typeof windowStub.__dshDirectorFlow);
+// 🔴 反证：bundle 产出的组件源码不得含越界引用，且必须含修正后引用
+//    ⚠️ toString() 会**连注释一起返回**，而注释中刻意引用了宿主原代码行（取证链需要）→ 必须先剥离注释
+const stripJsComments = (s) => String(s).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const flowFnSrc = typeof windowStub.__dshDirectorFlow === "function" ? windowStub.__dshDirectorFlow.toString() : "";
+const flowFnCode = stripJsComments(flowFnSrc);
+check("🔴 bundle 反证：组件源码零 filteredMessages 引用（剥离注释后）", !/filteredMessages\s*\./.test(flowFnCode), "零命中");
+check("bundle 组件源码含 state.messages.map", flowFnCode.includes("state.messages.map"), "已改用 state.messages");
+check("__entry 导出批次 5 组件", typeof entryExports?.DirectorFlow === "function", typeof entryExports?.DirectorFlow);
 
 /* ── 汇总 ─────────────────────────────────────────────────── */
 

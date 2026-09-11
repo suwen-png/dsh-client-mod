@@ -33,9 +33,13 @@
  *   ✅ D1 directorProcess      → logic/process.js            （client.js 6706~6818）
  *   ✅ D2 directorReviewReturn → logic/review.js             （client.js 6820~6855，**保留不调用**）
  *
- * ── 待迁入（批次 5~6）───────────────────────────────────────
- *   ⬜ E1 DirectorFlow
- *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造
+ * ── 批次 5 组件层（已迁入）─────────────────────────────────────
+ *   ✅ E1 DirectorFlow         → components/DirectorFlow.js      （client.js 6972~7085）
+ *      🔴 含一处**迁移期修正**：宿主 `filteredMessages` 属跨作用域越界引用（自诞生即坏，
+ *         P2 清理删除 DirectorView 后沦为完全未定义）→ 改用 `state.messages`。论证见该文件头。
+ *
+ * ── 待迁入（批次 6）─────────────────────────────────────────
+ *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造  ⬜ F5 插件侧 tab 注册
  *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
  *
  * ⚠️ 关键约束
@@ -75,8 +79,10 @@ import { safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT
 // ── 批次 4 逻辑层 ──
 import { directorProcess } from "./logic/process.js";
 import { directorReviewReturn } from "./logic/review.js";
+// ── 批次 5 组件层 ──
+import { DirectorFlow } from "./components/DirectorFlow.js";
 
-export const PLUGIN_VERSION = "0.4.0-batch4";
+export const PLUGIN_VERSION = "0.5.0-batch5";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -123,6 +129,12 @@ export function installBatch1(options = {}) {
 	if (typeof window !== "undefined") {
 		window.__dshDirectorProcess = directorProcess;
 		window.__dshDirectorReviewReturn = directorReviewReturn;
+		// ── 批次 5 组件层 ──
+		//    ⚠️ 宿主调用点（client.js:7358 小窗内渲染）属**批次 6** 接线范围，
+		//       本批次仅提供组件实现 + 契约（双份共存期）。
+		//    ⚠️ 本组件含一处**迁移期修正**（`filteredMessages` 越界引用 → `state.messages`），
+		//       论证见 components/DirectorFlow.js 文件头 🔴 段落。**勿回退**。
+		window.__dshDirectorFlow = DirectorFlow;
 	}
 
 	const installed = {
@@ -158,7 +170,12 @@ export function installBatch1(options = {}) {
 		directorProcess: typeof directorProcess === "function",
 		directorReview: typeof directorReviewReturn === "function",
 		directorReviewWired: false, // 有意不接线（宿主决策：保留不调用）
-		directorProcessWired: false // 宿主调用点属批次 6 接线范围
+		directorProcessWired: false, // 宿主调用点属批次 6 接线范围
+		// ── 批次 5 组件层 ──
+		directorFlow: typeof DirectorFlow === "function",
+		directorFlowWired: false, // 宿主调用点属批次 6 接线范围
+		// 🔴 迁移期修正标记：filteredMessages 越界引用已修为 state.messages
+		directorFlowFixedFilteredMessages: true
 	};
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
@@ -169,6 +186,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch2 = installed; // 批次 2 别名
 		window.__dshDirectorBatch3 = installed; // 批次 3 别名
 		window.__dshDirectorBatch4 = installed; // 批次 4 别名
+		window.__dshDirectorBatch5 = installed; // 批次 5 别名
 	}
 	return installed;
 }
@@ -190,5 +208,7 @@ export {
 	importViaFsa,
 	// ── 批次 4 ──
 	directorProcess,
-	directorReviewReturn
+	directorReviewReturn,
+	// ── 批次 5 ──
+	DirectorFlow
 };

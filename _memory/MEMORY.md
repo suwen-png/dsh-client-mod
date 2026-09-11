@@ -812,4 +812,40 @@ D1 并发锁（`status=processing` 时早退，不落盘不转发）· D2 `retur
 **批次进度**：1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ · 5 ⬜（下一批）· 6 ⬜
 
 
+### 14.15 🔴🔴 批次 5 组件层落地 + 发现并修复宿主 `filteredMessages` 越界引用缺陷（2026-09-11）
+
+**模块**：`components/DirectorFlow.js`（E1，9,435 B / 114 行）。产物 **162,285 B / 21 模块**；
+平台外置新增 **`react/jsx-runtime`**（累计 `react`, `react/jsx-runtime` —— React 源码零打包，ADR-001）。
+**四层验证全绿**：源码 **96/96** · bundle **63/63** · 安装链路 **60/60** · 真机 **39/39**。
+
+**关键技术选择**：采用**命名空间导入**（`import * as react from "react"` / `import * as react_jsx_runtime from "react/jsx-runtime"`）
+→ 宿主编译产物代码体（`(0, react.useRef)(...)` / `(0, react_jsx_runtime.jsx)(...)`）可**逐字保留**，迁移对照成本最低。
+宿主为**编译后 `jsx()` 调用形态**（非 JSX 语法），故目标文件为 **`.js`** 而非 `.jsx`，**不经 JSX 编译**，打包器无需新增 JSX 能力。
+
+**🔴🔴 宿主缺陷（S4）：`filteredMessages` 跨函数作用域越界引用**
+- **现象**：宿主 `client.js:7050`（E1 内）引用 `filteredMessages.map(...)`，该标识符在 `DirectorFlow` 作用域**从未定义**。
+- **取证三重**：① 当前宿主 `grep -c "filteredMessages"` = **1**，唯一命中即使用点，**零定义**；
+  ② 快照 `snapshot-20260902-103319`：使用点 7047，定义点 **9161**（`const filteredMessages = (0, react.useMemo)(...)`），
+  位于**兄弟组件 `DirectorView` 作用域内** ⇒ **自诞生即越界**（二者同级，作用域互不可见）；
+  ③ 2026-09-08 P2 清理删除 `DirectorView` 后，**连越界定义也消失** ⇒ 沦为完全未定义。
+- **后果**：组件被渲染且 `state.messages.length > 0` 时**必然** `ReferenceError`。
+- **修正**：改用 `state.messages`（与同文件 7048 行同源）。
+  · 不逐字搬运的理由：会把必然崩溃的缺陷带进插件；
+  · 不复刻分支过滤的理由：其依赖 `DirectorView` 的 `currentBranch`/`switchToBranch` 状态体系，**越界扩张**；
+  · 语义 = 降级为渲染全部消息，最小且正确。
+- **宿主侧未改动** → 属**批次 6 退坡范围**，登记为 **T-PLUG-005-S4**。
+
+**🆕 方法论：真机 `toString()` 反证（可复用）**
+对**含 hooks、无法脱离 React 渲染上下文调用**的组件，验证手段不是「能否调」，而是：
+① 真机取 `window.__dshDirectorFlow.toString()`（本轮实测长度 **5,501**）；
+② **剥离注释**（注释中刻意引用宿主原代码，会污染断言 —— 本轮踩过此坑，脚本初版因此误报）；
+③ 断言函数体零越界引用 + 含修正后引用 + 关键防御性代码（`minHeight:0`）保留。
+→ **证明「已被装载运行的」就是修正版**，强于「源文件正确」。
+
+**其他实测修正**：E1 行号 `6972~7085`（函数起点随 A14 剥离 +3 漂移）；目标文件 `.jsx` → **`.js`**。
+
+**批次进度**：1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 ⬜（末批，依赖已就绪）
+
+
+
 

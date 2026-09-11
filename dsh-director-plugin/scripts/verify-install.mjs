@@ -227,6 +227,9 @@ try {
 		check("factory 执行成功", Boolean(exportsObj));
 		check("factory 仅 require 平台表内模块", requireCalls.every((n) => n in platformStub),
 			`请求: [${requireCalls.join(", ") || "无"}]`);
+		check("factory 请求了 react 系列平台模块（批次 3+5）",
+			requireCalls.includes("react") && requireCalls.includes("react/jsx-runtime"),
+			`[${requireCalls.join(", ")}]`);
 		check("factory 导出 apply", typeof exportsObj?.apply === "function");
 
 		// factory（模块求值）阶段即挂载的契约：store/config 在构造时自挂 window
@@ -305,6 +308,27 @@ try {
 				check("D1 并发锁分支可执行（processing 时早退）", lockOk,
 					lockErr ? "异常: " + lockErr.message : "早退无异常");
 			}
+
+			// ── 批次 5（组件层）──
+			const b5 = ["__dshDirectorBatch5", "__dshDirectorFlow"];
+			const miss5 = b5.filter((k) => win[k] === undefined);
+			check("批次 5 全局契约已挂载", miss5.length === 0,
+				miss5.length ? "缺: " + miss5.join(", ") : `${b5.length} 项`);
+			check("installed.directorFlow",
+				Boolean(inst && inst.directorFlow === true), inst ? String(inst.directorFlow) : "无");
+			check("directorFlowWired === false（批次 6 接线）",
+				Boolean(inst && inst.directorFlowWired === false), inst ? String(inst.directorFlowWired) : "无");
+			check("🔴 迁移期修正标记已置位",
+				Boolean(inst && inst.directorFlowFixedFilteredMessages === true),
+				inst ? String(inst.directorFlowFixedFilteredMessages) : "无");
+			check("window.__dshDirectorFlow 为函数（组件）",
+				typeof win.__dshDirectorFlow === "function", typeof win.__dshDirectorFlow);
+			// 🔴 反证：组件源码不得含越界引用（**不实际调用** —— 组件含 hooks，需 React 渲染上下文）
+			//    ⚠️ toString() 会连注释一起返回，注释中刻意引用了宿主原代码 → 先剥离注释
+			const flowFnSrc = typeof win.__dshDirectorFlow === "function" ? win.__dshDirectorFlow.toString() : "";
+			const flowFnCode = String(flowFnSrc).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+			check("🔴 组件源码零 filteredMessages 引用（剥离注释后）", !/filteredMessages\s*\./.test(flowFnCode), "零命中");
+			check("组件源码含 state.messages.map（修正已落地）", flowFnCode.includes("state.messages.map"), "已改用 state.messages");
 			// 🔴 关键不变量：空 sessionId → 固定 key（V9 修复点）
 			const entryMod = exportsObj.__entry;
 			check("safeDirectorKey(空) === 'director-main'",

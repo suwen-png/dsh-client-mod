@@ -95,8 +95,8 @@ if (pages.length === 0) {
 	check("__DSH_BOOT__ 已注入", Array.isArray(bootIds), Array.isArray(bootIds) ? `${bootIds.length} entries` : String(bootRaw));
 	check(`boot 清单含 ${PLUGIN_PKG}`, Array.isArray(bootIds) && bootIds.includes(PLUGIN_PKG));
 
-	// ② 批次 1~4 全局契约
-	const contracts = ["__dshDebug", "__dshV9Log", "__dshDirectorBatch1", "__directorLayoutStore", "__dshTheme", "__directorConfig", "__directorPersistState", "__dshDirectorBatch4", "__dshDirectorProcess", "__dshDirectorReviewReturn"];
+	// ② 批次 1~5 全局契约
+	const contracts = ["__dshDebug", "__dshV9Log", "__dshDirectorBatch1", "__directorLayoutStore", "__dshTheme", "__directorConfig", "__directorPersistState", "__dshDirectorBatch4", "__dshDirectorProcess", "__dshDirectorReviewReturn", "__dshDirectorBatch5", "__dshDirectorFlow"];
 	for (const k of contracts) {
 		const v = await evaluate(`typeof window.${k}`);
 		check(`契约 window.${k}`, v !== "undefined", String(v));
@@ -128,6 +128,11 @@ if (pages.length === 0) {
 		// 🔴 D2 宿主决策「保留不调用」—— 断言该状态被显式声明，防未来误判为迁移遗漏
 		check("D2 有意不接线（directorReviewWired === false）", Boolean(b && b.directorReviewWired === false),
 			b ? String(b.directorReviewWired) : "");
+		// ── 批次 5（组件层）──
+		check("批次 5 组件层已装载", Boolean(b && b.directorFlow === true),
+			b ? `directorFlow=${b.directorFlow} wired=${b.directorFlowWired}` : "");
+		check("🔴 E1 迁移期修正已置位", Boolean(b && b.directorFlowFixedFilteredMessages === true),
+			b ? String(b.directorFlowFixedFilteredMessages) : "");
 	}
 
 	// ④ 持久化通道真实能力（真机值，非桩）
@@ -169,6 +174,21 @@ if (pages.length === 0) {
 		} catch (e) { return "ERR: " + (e && e.message); }
 	})()`, true);
 	check("D2 真机早退分支可执行（未启用则 return）", revRes === "ok-early-return", String(revRes));
+
+	//    E1 组件：**不实际调用**（组件含 hooks，脱离 React 渲染上下文必抛错，属预期）
+	//    → 改用 Function.prototype.toString() 检查**真机产物的实际函数体**。
+	//    这是最强静态证据：证明**已被装载运行的**就是修正版，而非仅源文件正确。
+	const flowFnSrc = await evaluate('typeof window.__dshDirectorFlow === "function" ? window.__dshDirectorFlow.toString() : ""');
+	check("E1 真机组件函数体可取得", typeof flowFnSrc === "string" && flowFnSrc.length > 100,
+		`长度 ${typeof flowFnSrc === "string" ? flowFnSrc.length : "n/a"}`);
+	// ⚠️ toString() 连注释一起返回，注释中刻意引用了宿主原代码行（取证链需要）→ 先剥离注释
+	const flowFnCode = String(flowFnSrc).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+	check("🔴 E1 真机反证：函数体零 filteredMessages 引用（剥离注释后）",
+		typeof flowFnSrc === "string" && !/filteredMessages\s*\./.test(flowFnCode), "零命中");
+	check("E1 真机函数体含 state.messages.map（修正已生效）",
+		typeof flowFnSrc === "string" && flowFnCode.includes("state.messages.map"), "已改用 state.messages");
+	check("E1 真机函数体保留 V9.2 minHeight:0",
+		typeof flowFnSrc === "string" && flowFnCode.includes("minHeight: 0"), "布局修复保留");
 
 	// ④ docs 索引（A14 外置资源经插件加载）
 	const docCount = await evaluate("window.__dshDocsIndex ? (window.__dshDocsIndex.docCount || Object.keys(window.__dshDocsIndex.docs||{}).length) : -1");

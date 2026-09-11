@@ -11,12 +11,12 @@
 | 2 | A1 消息 store / A2 记忆 CRUD / **A4 分支创建** / **A5 docs store** / V10 Cookie / IndexedDB 主层 | ✅ **已完成 2026-09-11** |
 | 3 | A6 文件通道 / **A7+A8 持久化读写** / **A9 createDirectorStore** / **A10 useDirectorStore** | ✅ **已完成 2026-09-11** |
 | 4 | **D1 directorProcess** / **D2 审核（保留不调用）** | ✅ **已完成 2026-09-11** |
-| 5 | E1 DirectorFlow（E2 DirectorView ⛔ 已废弃） | ⬜ |
-| 6 | F3+F4 全局 API / F1/F2+G1/G4 宿主注入点改造 / F5 tab 注册 | ⬜ |
+| 5 | **E1 DirectorFlow**（E2 DirectorView ⛔ 已废弃） | ✅ **已完成 2026-09-11** |
+| 6 | F3+F4 全局 API / F1/F2+G1/G4 宿主注入点改造 / F5 tab 注册 | ⬜ **依赖已就绪**，末批 |
 
-**✅ 已真机装载**（2026-09-11）：插件已被 Harness 实际加载并运行 —— `__DSH_BOOT__` 42 entries 含本包，**24 项全局契约全挂载**，`__dshDocsIndex` **docCount=90**（A14 外置资源回填成功）。详见 `docs/01-插件迁移明细清单.md` §八。
+**✅ 已真机装载**（2026-09-11）：插件已被 Harness 实际加载并运行 —— `__DSH_BOOT__` 42 entries 含本包，**27 项全局契约全挂载**，`__dshDocsIndex` **docCount=90**（A14 外置资源回填成功）。详见 `docs/01-插件迁移明细清单.md` §八。
 
-**四层验证（批次 4 全绿）**：源码级 **82/82** ｜ bundle 级 **54/54** ｜ 安装链路级 **52/52** ｜ 真机级 **31/31**。产物 `lib/client.js` **150,593 B / 20 模块**。
+**四层验证（批次 5 全绿）**：源码级 **96/96** ｜ bundle 级 **63/63** ｜ 安装链路级 **60/60** ｜ 真机级 **39/39**。产物 `lib/client.js` **162,285 B / 21 模块**。
 
 **批次 1 关键成果**：宿主 `client.js` **1,479,577 → 564,826 B（-914,751 B / -61.8%）** —— 单行 541KB 的 `DSH_DOCS_INDEX` 内联常量已外置为 `assets/docs-index.json`（含 docs/ 90 篇全文），改由插件运行时加载。
 
@@ -25,6 +25,8 @@
 **批次 3 关键成果**：持久化层 5 模块落地，**不端口宿主死代码**（T5 实测 legacy 三法全不可达）—— 改建 **FSA + OPFS + IndexedDB 三通道**；`useDirectorStore` 成为**插件首个平台模块消费者**，触发打包器「平台外置」能力扩展（产物内 `require("react")`，React 源码零打包，规避 ADR-001 双实例崩溃）。
 
 **批次 4 关键成果**：逻辑层 2 模块落地（D1 113 行 / D2 36 行），**逐字保真**保留 V9.4-P1 并发锁、5 步链路与 300ms 转发延迟。**D2 为宿主有意保留的死代码**（三重证据见 `logic/review.js` 文件头）→ 迁移方式为「**只挂契约、不接线**」，并新增机器可读判据 `directorReviewWired === false` + 零调用点反证，使「有意不接线」与「迁移遗漏」可区分。D1/D2 均在**真机 realm 内实际调用成功**。
+
+**批次 5 关键成果**：组件层 E1 `DirectorFlow` 落地（114 行），采用**命名空间导入**（`react` + `react/jsx-runtime`）使宿主代码体可逐字保留，二者均为平台模块 → 构建期外置为 `require(...)`，**React 源码零打包**（ADR-001）。🔴🔴 **同时发现并修复一处宿主缺陷**：`DirectorFlow` 引用的 `filteredMessages` 属**跨函数作用域越界引用**（定义在兄弟组件 `DirectorView` 内部，**自诞生即坏**；2026-09-08 P2 清理删除 `DirectorView` 后沦为完全未定义 ⇒ 必然 `ReferenceError`）→ 插件侧修正为 `state.messages`，并建立**四层防回退反证**（含真机 `toString()` 检查实际函数体）。详见清单 §一点五 E 区专节。
 
 ## 目录结构
 
@@ -38,10 +40,10 @@ dsh-director-plugin/
 ├── scripts/
 │   ├── strip-a14.py          ← A14 剥离脚本（含 --dry-run）
 │   ├── restore-a14.py        ← A14 回滚（含 --check）
-│   ├── verify-batch1.mjs     ← 源码级验证（批次 1+2+3+4 锚点，82 项）
-│   ├── verify-bundle.mjs     ← bundle 端到端（__ModuleLoader__ 桩执行，54 项）
-│   ├── verify-install.mjs    ← ★ 安装链路离线验证（官方 loadProfile/ClientModuleRegistry，52 项）
-│   ├── cdp-verify.mjs        ← ★ 真机运行时核查（CDP，31 项）
+│   ├── verify-batch1.mjs     ← 源码级验证（批次 1+2+3+4+5 锚点，96 项）
+│   ├── verify-bundle.mjs     ← bundle 端到端（__ModuleLoader__ 桩执行，63 项）
+│   ├── verify-install.mjs    ← ★ 安装链路离线验证（官方 loadProfile/ClientModuleRegistry，60 项）
+│   ├── cdp-verify.mjs        ← ★ 真机运行时核查（CDP，39 项）
 │   ├── cdp-eval.mjs          ← ★ 渲染进程任意表达式求值（调试）
 │   └── run-r3-spike.mjs      ← ★ T5 文件通道可达性探测
 ├── src/

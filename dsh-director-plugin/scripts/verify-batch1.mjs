@@ -216,6 +216,35 @@ check("D2 未接入自动装配链（零调用）", callHits === 0, `client-entr
 check("D2 仅挂全局契约", entrySrc.includes("window.__dshDirectorReviewReturn = directorReviewReturn"), "契约已挂");
 check("D1 已挂全局契约", entrySrc.includes("window.__dshDirectorProcess = directorProcess"), "契约已挂");
 
+// ── 11. 批次 5 组件层（E1 DirectorFlow）──
+console.log("\n[11] 批次 5 组件层");
+const flowPath = join(PLUGIN, "src/components/DirectorFlow.js");
+check("E1 DirectorFlow (src/components/DirectorFlow.js)", existsSync(flowPath), existsSync(flowPath) ? statSync(flowPath).size + " B" : "缺失");
+
+const flowSrc = existsSync(flowPath) ? readFileSync(flowPath, "utf8") : "";
+// 剥离注释行后再做代码级断言（注释中会引用宿主原代码，属正常）
+const flowCode = flowSrc.split("\n").filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join("\n");
+
+check("E1 导出 DirectorFlow", /export function DirectorFlow\s*\(/.test(flowCode), "export function");
+check("E1 平台模块命名空间导入", flowCode.includes('import * as react from "react"') && flowCode.includes('import * as react_jsx_runtime from "react/jsx-runtime"'), "react + react/jsx-runtime");
+check("E1 依赖 A9/A10/D3 经 import", flowCode.includes('from "../store/create-store.js"') && flowCode.includes('from "../store/use-store.js"') && flowCode.includes('from "../util/debug.js"'), "create-store + use-store + debug");
+check("E1 V9.2 minHeight:0 修复保留", flowCode.includes("minHeight: 0"), "flex 链高度塌陷修复");
+check("E1 V9.4-P1 atBottom 守卫保留（代码）", flowCode.includes("atBottomRef.current") && flowCode.includes('lastMsg?.role !== "user"'), "用户上翻不抢底");
+check("E1 V9.4-P1 注释保留", flowSrc.includes("V9.4-P1: atBottom 守卫"), "缺陷现场注释完整");
+check("E1 双 rAF 嵌套保留", (flowCode.match(/requestAnimationFrame/g) || []).length >= 3, `实测 ${(flowCode.match(/requestAnimationFrame/g) || []).length} 次`);
+check("E1 滚动监听 passive:true 保留", flowCode.includes('{ passive: true }'), "passive 监听");
+check("E1 dfFindScroller 深度上限 15", flowCode.includes("depth < 15"), "最深 15 层祖先查找");
+
+// 🔴 反证（迁移期修正）：代码区必须零 `filteredMessages` 使用，且已改指 state.messages
+const fmUseHits = (flowCode.match(/filteredMessages\s*\./g) || []).length;
+check("🔴 E1 反证：代码区零 filteredMessages 引用", fmUseHits === 0, `命中 ${fmUseHits} 次（预期 0）`);
+check("🔴 E1 修正已落地：state.messages.map", flowCode.includes("state.messages.map((msg) =>"), "已改用 state.messages");
+check("E1 迁移期修正已标注（防回退）", flowSrc.includes("迁移期修正") && flowSrc.includes("越界引用"), "文件头论证齐全");
+
+// 🔴 宿主侧反证：确认该缺陷在宿主中确实存在（取证链闭环）
+const hostFmAll = (hostSrc.match(/filteredMessages/g) || []).length;
+check("🔴 宿主缺陷取证：filteredMessages 全文件仅 1 处（即使用点，零定义）", hostFmAll === 1, `宿主命中 ${hostFmAll} 次（预期 1，仅使用点）`);
+
 // ── 汇总（程序化求和）──
 const passed = results.filter((r) => r.pass).length;
 const failed = results.length - passed;
