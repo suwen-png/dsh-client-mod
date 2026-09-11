@@ -983,7 +983,7 @@ I22 清理测试残留并恢复根节点名。**连跑两次均 66/66 ⇒ 可重
 靠「**id 前缀 + `level` 字段**」的**约定**隔离（`__global__` / `ws_*` / `se_*`）。
 本项任务就是**把这条约定固化成机器可校验的断言**。
 
-**新增**：`scripts/verify-data-safe.mjs`（6 节 **41/41**）· `docs/07-数据兼容与边界安全验证.md`。
+**新增**：`scripts/verify-data-safe.mjs`（6 节 **42/42**）· `docs/07-数据兼容与边界安全验证.md`。
 
 **🔴 审计反向发现的真缺陷（已修 + 附反证）**
 `store/hierarchy.js#listAllNodes` 原为 `.filter((n) => n && n.level)` —— **真值判断**。
@@ -1006,17 +1006,22 @@ I22 清理测试残留并恢复根节点名。**连跑两次均 66/66 ⇒ 可重
 3. **模板字符串内的注释里出现反引号会截断模板** ⇒ `SyntaxError: missing ) after argument list`。
    **本会话第二次踩中**；同一文件中还有一处 `\d` 非法转义的老坑。
 
-**🟡 开放项 F-DATA-01（登记不隐藏 · 新任务行 `T-PLUG-010`）**
-冷启动后 `dsh.director.store.director-e0w2f3`(6600 B) 与 IDB `directorStores` 的 1 条记录**消失**（→ 0）；
-同一次 `dsh.workspace.view.v5` / `dsh.sessions.current` / `memoryCore` **11 条节点全部完好**。
-**已排除**：① 非本次改动所致（本批次无任何删除分支）；② 宿主与插件源码**不存在**
-`localStorage.removeItem`(该 key) / `localStorage.clear()` / `deleteDatabase` 任何分支（**全仓 grep 取证**）。
-旁证：重启前后页面端口 `56434` → `55509`。影响面**低**（该 key 是 `messages.js:9` 的**兜底缓存**，IDB 为主）。
-待办：下一次**带总监活动**的冷启动做前后对比，判定「一次性偶发（强杀未走 `beforeunload`）」还是「可复现」。
+**🟢 F-DATA-01 已结案（`T-PLUG-010`）：观测口径缺陷（**假阳性**），非数据丢失**
+初判「冷启动后 `dsh.director.store.director-e0w2f3`(6600 B) 与 IDB `directorStores` 1 条消失」，
+经 **3 次冷启动只读实验**推翻：`dsh.workspace.view.v5` **恒为 1118 B**、`memoryCore` **11 节点完好**、
+`dsh.sessions.current` 存在 ⇒ **宿主核心数据零损伤**；宿主与插件**不存在** `removeItem`(该 key) /
+`localStorage.clear()` / `deleteDatabase` 任何分支（全仓 grep 取证）。
+**根因两条叠加，均在探测侧**：① `dsh.workspace.view.*` **不是** dsh-client-ui-conversation 写的
+（该宿主 bundle 中 `dsh.workspace.view` **0 处命中**），由**另一个 bundle 开机后异步写入**
+⇒ **早探测必然读空**，在「重启前后对比」中被误读为丢数据；② `dsh.director.store.*` 只在**总监活动**时
+由 `create-store.js#notify → saveDirectorStore` 写入 ⇒ 冷启动无活动**本就该无**。
+**已修**：`verify-data-safe.mjs` 新增 **[0] 就绪等待**（取基线前轮询等 `dsh.workspace.view.*`，超时 60 s）。
+🔴 **可复用教训（重要）**：做「重启前后对比」类数据验证，**必须先判定被观测对象是「同步写入」还是「异步/按需写入」**——
+后者必须**等待就绪**，并区分「未写入」与「被删除」，否则周期性产出**假阳性**，消耗真阳性该有的注意力。
 
 **另发现**：`scripts/deploy.ps1` **已过期失效** —— 指向旧路径 `D:\hermes-data\dsh-director`
 （与当前 `dsh-director-plugin` 无关），且会误删 `Network` 缓存 ⇒ **插件下发当前只能手工**。
 归入 `T-PLUG-008`（插件部署单元 + 安装 README）。
 
-**验证**：**八层全绿 522 项**（96/63/60/65/66/92/**41**/39）+ **真机逐交互点击 66/66**；
+**验证**：**八层全绿 523 项**（96/63/60/65/66/92/**41**/39）+ **真机逐交互点击 66/66**；
 产物 **279,841 B / 32 模块**，React 零打包，**宿主零改动**。

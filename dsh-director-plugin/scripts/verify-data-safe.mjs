@@ -165,6 +165,35 @@ await evalExpr(`
 `);
 
 /* ══════════════════════════════════════════════════════════════════
+ * [0] 等待宿主核心数据落盘 —— 🔴 否则会把「还没写」误判成「数据没了」
+ * ══════════════════════════════════════════════════════════════════
+ * 🔴 为何必须先等（2026-09-12 实测踩中的假阳性陷阱）：
+ *    `dsh.workspace.view.*` **不是** dsh-client-ui-conversation 写的
+ *    （在该宿主 bundle 里 grep `dsh.workspace.view` → **0 处命中**），
+ *    而是由**另一个 bundle** 在**开机后异步**写入。冷启动后立刻探测会读到「不存在」，
+ *    进而在「重启前后对比」中被误读成**数据丢失** —— 实际只是**还没写**。
+ *    同一次踩坑还叠加了另一条：`dsh.director.store.*` 只在**总监活动**时由
+ *    `create-store.js#notify → saveDirectorStore` 写入，冷启动且无总监活动时**本来就该没有**。
+ *    ⇒ 本脚本在取基线前先等宿主数据就绪，并把二者区分开（见第 6 节的「观察」行）。
+ */
+async function waitForHostData(timeoutMs = 60000, stepMs = 1000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const ready = await evalExpr(`
+			const keys = Object.keys(window.__dsDataSafe.lsSnapshot());
+			return keys.some((k) => k.indexOf('dsh.workspace.view') === 0) ? true : false;
+		`);
+		if (ready === true) return true;
+		await new Promise((r) => setTimeout(r, stepMs));
+	}
+	return false;
+}
+const hostReady = await waitForHostData();
+console.log("[0] 宿主核心数据就绪等待");
+ok("🔴 已等到 `dsh.workspace.view.*` 出现（宿主**异步**写入，早探测会误判为数据丢失）",
+	hostReady === true, hostReady ? "已就绪" : "等待 60s 超时");
+
+/* ══════════════════════════════════════════════════════════════════
  * [1] IDB 结构契约（只读）—— 未新增 store、未升版本
  * ══════════════════════════════════════════════════════════════════ */
 console.log("[1] IDB 结构契约（未新增 store / 未升版本）");
@@ -432,14 +461,18 @@ ok("🔴 cookie 前缀 `dsh_director_` 未改名（R5 冻结）",
 ok("🔴 `safeDirectorKey` 空会话回落到固定串 `director-main`（R5 冻结，禁随机）",
 	/"director-main"/.test(persistSrc), "源码含字面量 director-main");
 
-/* ── 环境观察（只报告，不判分）：`dsh.director.*` 残留 ── */
+/* ── 环境观察（只报告，不判分）：`dsh.director.*` 残留 ──
+ * 🔴 该 key 只在**总监活动**时由 `create-store.js#notify → saveDirectorStore` 写入
+ *    ⇒ 冷启动且无总监活动时**本该为 0**。所以此处的 0 **不是**数据丢失的证据，
+ *    只有「本次运行内前后对比」才具备判别力（第 5 节已做）。
+ *    （原 F-DATA-01「重启后该 key 消失」即由此条 + 探测过早共同造成的**假阳性**，已结案。） */
 const ambient = allLs.filter((k) => k.indexOf("dsh.director.") === 0);
 const dirStoresCount = F.counts.directorStores;
+const viewBytes = F.viewKey ? F.ls[F.viewKey] : -1;
 console.log(`    观察: dsh.director.* 残留 ${ambient.length} 个 [${ambient.join(", ") || "无"}] ·` +
-	` IDB directorStores=${dirStoresCount}` +
-	(ambient.length === 0 && dirStoresCount === 0
-		? "  ← 本次为**冷启动后**状态：宿主与插件源码均无删除该 key 的分支（见 open-findings 登记），属「尚无总监落盘活动」"
-		: ""));
+	` IDB directorStores=${dirStoresCount} · ${F.viewKey}=${viewBytes}B`);
+console.log("          ↑ 冷启动无总监活动时该值本就应为 0/「无」；**宿主核心数据以" +
+	" `dsh.workspace.view.*` 字节数为锚**（本次 " + viewBytes + " B）");
 
 const lsBefore = await evalExpr(`return JSON.stringify(window.__dsDataSafe.lsSnapshot())`);
 const LS_BEFORE = JSON.parse(lsBefore);
