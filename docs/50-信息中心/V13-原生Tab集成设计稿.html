@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V13 原生 Tab 集成设计稿 — dsh-director</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#16171a; --bg2:#1c1d21; --bg3:#232428; --bg4:#2a2c31;
+    --border:#31343a; --border2:#3d4148;
+    --fg:#e8eaed; --fg2:#9aa0a6; --fg3:#6b7076;
+    --accent:#2f6feb; --accent2:#4b8ef7;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149;
+    --purple:#8957e5; --teal:#39c5cf;
+  }
+  body{background:#0f1012;color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px 20px 60px;line-height:1.55}
+  .wrap{max-width:1240px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg2);font-size:13px;margin-left:10px}
+  .sub{font-size:12.5px;color:var(--fg2);margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)}
+  .sub b{color:var(--accent2);font-weight:600}
+  .view{background:var(--bg);border:1px solid var(--border);border-radius:12px;margin-bottom:22px;overflow:hidden}
+  .view > header{padding:12px 18px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  .view > header .no{background:var(--accent);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;letter-spacing:.5px}
+  .view > header h2{font-size:14px;font-weight:600}
+  .view > header .tag{margin-left:auto;font-size:11px;color:var(--fg3)}
+  .view .body{padding:18px}
+  .note{font-size:12px;color:var(--fg2);background:var(--bg2);border-left:3px solid var(--accent);padding:9px 13px;border-radius:0 6px 6px 0;margin-bottom:14px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note b{color:var(--fg)}
+
+  /* ===== 骨架屏 ===== */
+  .skeleton{background:var(--bg3);border:1px solid var(--border2);border-radius:10px;overflow:hidden}
+  .sk-topbar{height:26px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 10px;gap:6px}
+  .dotbtn{width:9px;height:9px;border-radius:50%;background:var(--border2)}
+  .sk-row{display:flex}
+  .sk-side{width:170px;background:var(--bg2);border-right:1px solid var(--border);padding:10px 0;flex-shrink:0}
+  .sk-side .item{font-size:11px;color:var(--fg2);padding:5px 12px;display:flex;gap:6px;align-items:center}
+  .sk-side .item.on{color:var(--fg);background:var(--bg4)}
+  .sk-main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+  /* ===== tab 环 ===== */
+  .tabsbar{height:38px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:6px;background:var(--bg)}
+  .tab{font-size:12px;padding:4px 3px;color:var(--fg2);border-bottom:2px solid transparent;cursor:default;position:relative}
+  .tab.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+  .tab.new{color:var(--accent2);font-weight:700}
+  .tab.new::after{content:"新增";position:absolute;top:-9px;right:-16px;font-size:8px;background:var(--accent);color:#fff;padding:0 4px;border-radius:6px;font-weight:600;letter-spacing:.3px}
+  .tabs-hint{margin-left:14px;font-size:10.5px;color:var(--fg3)}
+
+  /* 总监页 R 区 */
+  .R{border:1px dashed var(--border2);border-radius:7px;padding:8px 10px;position:relative;margin-bottom:7px}
+  .R > .lbl{position:absolute;top:-8px;left:9px;font-size:9.5px;background:var(--bg);padding:0 5px;color:var(--accent2);font-weight:700;letter-spacing:.4px}
+  .R > .lbl .d{color:var(--fg3);font-weight:400;margin-left:4px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .chip{font-size:10.5px;background:var(--bg4);border:1px solid var(--border2);border-radius:5px;padding:2px 8px;color:var(--fg2)}
+  .chip.k{color:var(--fg);background:#2d3038}
+  .grid2{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px}
+  .metric{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 9px}
+  .metric .v{font-size:15px;font-weight:700;color:var(--fg)}
+  .metric .k{font-size:10px;color:var(--fg3)}
+  .bar{height:5px;background:var(--bg4);border-radius:3px;overflow:hidden;margin-top:5px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:65%}
+  .three{display:grid;grid-template-columns:200px 1fr 190px;gap:7px}
+  .msgs{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px}
+  .m{margin-bottom:7px;display:flex;gap:6px}
+  .m .who{flex-shrink:0;font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;height:16px;line-height:14px}
+  .m.d .who{background:#2b3a55;color:#8ab4f8}
+  .m.u .who{background:#3a3320;color:#e3b341}
+  .m .txt{color:var(--fg2);font-size:10.5px}
+  .m .txt b{color:var(--fg)}
+  .inputbar{margin-top:7px;display:flex;gap:6px}
+  .inputbar .fld{flex:1;height:26px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;font-size:10.5px;color:var(--fg3);padding:0 9px;display:flex;align-items:center}
+  .btn{font-size:10.5px;background:var(--accent);color:#fff;border-radius:6px;padding:5px 11px;font-weight:600;white-space:nowrap}
+  .btn.gh{background:transparent;border:1px solid var(--border2);color:var(--fg2);font-weight:400}
+
+  /* 导图 */
+  .mind{position:relative;height:250px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .mind svg{position:absolute;inset:0;width:100%;height:100%}
+  .mn{position:absolute;background:var(--bg3);border:1.5px solid var(--border2);border-radius:8px;padding:6px 9px;width:132px;font-size:10.5px;z-index:2}
+  .mn .h{font-weight:700;font-size:11px;color:var(--fg);display:flex;align-items:center;gap:5px}
+  .mn .t{font-size:9.5px;color:var(--fg3);margin-top:3px}
+  .mn.root{border-color:var(--accent);background:#1e2a3f;width:140px}
+  .mn.sel{border-color:var(--purple);box-shadow:0 0 0 3px rgba(137,87,229,.18)}
+  .st{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .st.idle{background:#6b7076}.st.busy{background:var(--warn)}.st.err{background:var(--err)}
+  .mind-tools{display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+  .legend{margin-left:auto;display:flex;gap:11px;font-size:10.5px;color:var(--fg2);align-items:center}
+  .legend span{display:flex;align-items:center;gap:4px}
+
+  /* 联动图 */
+  .flow{display:flex;align-items:center;gap:12px;justify-content:center;padding:14px 0;flex-wrap:wrap}
+  .fbox{background:var(--bg2);border:1px solid var(--border2);border-radius:9px;padding:11px 15px;text-align:center;min-width:168px}
+  .fbox .ti{font-size:12px;font-weight:700;color:var(--fg);margin-bottom:3px}
+  .fbox .de{font-size:10px;color:var(--fg3)}
+  .fbox.acc{border-color:var(--accent);background:#1d2739}
+  .fmid{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--fg2);font-size:10.5px}
+  .arw{color:var(--accent2);font-size:17px;line-height:1}
+  .store{background:#1b2b1b;border:1px dashed var(--ok);border-radius:8px;padding:8px 14px;font-size:11px;color:#8fd48f;text-align:center;margin:0 auto;width:fit-content}
+
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th,td{border:1px solid var(--border);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--bg2);color:var(--fg);font-weight:600;font-size:11px}
+  td{color:var(--fg2)}
+  td b{color:var(--fg)}
+  .bad{color:var(--err);font-weight:700}
+  .good{color:var(--ok);font-weight:700}
+  .mid{color:var(--warn);font-weight:700}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--bg4);padding:1px 5px;border-radius:4px;color:#a5d6ff}
+  .foot{text-align:center;font-size:11px;color:var(--fg3);margin-top:26px;padding-top:16px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V13 原生 Tab 集成设计稿 <small>dsh-director · 页面交互重设计</small></h1>
+<div class="sub">
+  目标：把「总监」从<b>插件自绘浮层</b>改回<b>Harness 原生 tab 环</b>的一个 tab（注册 <code>conversation.view</code>）。
+  <b>本稿不是重画</b>——<code>03号文 §1.3</code>、<code>18号文</code>、<code>V12 设计稿</code> 本来就定义的是 tab；本次是让实现回到设计稿。
+  ｜ 配套文档：<code>dsh-director-plugin/docs/09-页面交互重设计·原生Tab集成方案.md</code>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">现状</span><h2>为什么「看起来像完全重画」—— 真机实测对照</h2><span class="tag">视口 1442×816 · CDP 实测</span></header>
+  <div class="body">
+    <div class="note warn">
+      <b>差异不在配色或间距，而在「形态层级」</b>：需求是<b>内容区顶部的 tab</b>（y=48，与「对话」同高 27px）；
+      现状是<b>屏幕中部的独立浮层</b>（y=190，882×562）＋ 右下角浮动按钮。
+    </div>
+    <table>
+      <tr><th style="width:110px">维度</th><th>需求（设计稿 V12 / 18号文）</th><th>现状（插件实测）</th><th style="width:56px">判定</th></tr>
+      <tr><td>位置</td><td>内容区顶部 tab 栏 · <code>y=48</code></td><td>屏幕中部浮层 · <code>y=190</code></td><td class="bad">✗</td></tr>
+      <tr><td>尺寸</td><td>与「对话」同高 · <code>27px</code></td><td>独立面板 · <code>882 × 562</code></td><td class="bad">✗</td></tr>
+      <tr><td>归属</td><td>原生 tab 环一员（<code>renderSlot</code> 托管）</td><td>自建 DOM 挂在 <code>document.body</code></td><td class="bad">✗</td></tr>
+      <tr><td>视觉</td><td>原生同构（暗色 · 无自绘外壳）</td><td>自绘深色卡片 + 圆角 + 阴影 + 右下角按钮</td><td class="bad">✗</td></tr>
+      <tr><td>导航成本</td><td>一 tab 直达</td><td>先点右下角按钮 → 再点浮层内页签（<b>2 步</b>）</td><td class="bad">✗</td></tr>
+      <tr><td>数据联动</td><td>与「对话」tab 同源双向</td><td>仅层级树 + 工作台</td><td class="mid">△</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 1</span><h2>一级结构：原生 tab 环 —「总监」回到第一位</h2><span class="tag">本次唯一的形态改动点</span></header>
+  <div class="body">
+    <div class="note ok">
+      tab 环<b>完全由 slot 驱动</b>（宿主源码 <code>client.js:9172</code>：<code>renderSlot("conversation.view", props, { only: active.id })</code>）
+      ⇒ 插件只需注册一个 entry 即被接管，<b>宿主零改动</b>。注册参数：<code>{ id:"director", order:-1, label:()=>"总监" }</code>。
+    </div>
+    <div class="skeleton">
+      <div class="sk-topbar"><span class="dotbtn"></span><span class="dotbtn"></span><span class="dotbtn"></span></div>
+      <div class="sk-row">
+        <div class="sk-side">
+          <div class="item on">▾ 📁 项目 A</div>
+          <div class="item">💬 会话 1</div>
+          <div class="item">💬 会话 2</div>
+          <div class="item">▸ 📁 项目 B</div>
+        </div>
+        <div class="sk-main">
+          <div class="tabsbar">
+            <span class="tab on new">总监</span>
+            <span class="tab">对话</span>
+            <span class="tab">轨迹</span>
+            <span class="tabs-hint">← RWZidW_tabs（y=48 · 1142×27）</span>
+          </div>
+          <div class="R" style="margin:10px;border-style:solid">
+            <span class="lbl">总监页内容<span class="d">见 视图 2</span></span>
+            <div style="font-size:11px;color:var(--fg3);padding:4px 0">当前激活：总监（<code>order:-1</code> ⇒ 排在「对话」之前）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 2</span><h2>总监页分区 R1–R8（取自 18号文「总监 tab 完整界面」）</h2><span class="tag">概述 · 总揽 · 归纳 · 调度</span></header>
+  <div class="body">
+    <div class="note">R2 承担「<b>集中展示项目概述与整体情况</b>」；R3 承担「<b>依据模型与上下文自动安排技能、智能体</b>」；R5 承担「<b>整理归纳想法</b>」与双向联动。</div>
+
+    <div class="skeleton">
+      <div class="sk-main" style="padding:10px">
+        <div class="R"><span class="lbl">R1<span class="d">顶部固定栏 · 40px</span></span>
+          <div class="chips"><span class="chip k">📁 dsh-client-mod</span><span class="chip">阶段 · T-PLUG-013</span><span class="chip">总监驾驶舱</span><span class="chip" style="margin-left:auto">⚙ 设置</span></div>
+        </div>
+
+        <div class="R"><span class="lbl">R2<span class="d">项目总览卡片 ★ 概述与总揽</span></span>
+          <div class="chips" style="margin-bottom:7px"><span class="chip k">定位 · Harness 客户端插件化</span><span class="chip k">目标 · 总监原生 tab 化</span><span class="chip">当前阶段 · 设计待审</span></div>
+          <div class="grid2">
+            <div class="metric"><div class="v">65%</div><div class="k">待办完成率</div><div class="bar"><i></i></div></div>
+            <div class="metric"><div class="v" style="color:var(--warn)">3</div><div class="k">未闭合风险</div></div>
+            <div class="metric"><div class="v">12</div><div class="k">待办项</div></div>
+            <div class="metric"><div class="v" style="color:var(--ok)">536</div><div class="k">验证项全绿</div></div>
+          </div>
+        </div>
+
+        <div class="R"><span class="lbl">R3<span class="d">智能体 / 技能行 ★ 自动安排资源</span></span>
+          <div class="chips"><span class="chip k">智能体</span><span class="chip">技能</span>
+            <span class="chip">🧑💻 代码</span><span class="chip">📄 文档</span><span class="chip">🔍 调研</span><span class="chip">🧪 测试</span><span class="chip">🎯 审核</span>
+            <span class="chip" style="margin-left:8px">🔎 搜索</span><span class="chip">✍️ 写作</span><span class="chip">⚙️ 重构</span>
+            <span class="chip" style="margin-left:auto">调用方式 · 总监决定 / 手选</span>
+          </div>
+        </div>
+
+        <div class="three">
+          <div class="R" style="margin:0"><span class="lbl">R4<span class="d">项目导航</span></span>
+            <div class="chips" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span class="chip k">📄 文档树</span>
+              <span class="chip">🗺️ 路线图 / 待办</span>
+              <span class="chip">⭐ 关键文件</span>
+              <span style="font-size:10px;color:var(--fg3);margin-top:3px">clamp 60px ~ 40%</span>
+            </div>
+          </div>
+
+          <div class="R" style="margin:0"><span class="lbl">R5<span class="d">总监对话区 ★ 归纳想法 + 双向联动</span></span>
+            <div class="msgs">
+              <div class="m u"><span class="who">你</span><span class="txt">把总监做回原生 tab，先前那套浮层不要了</span></div>
+              <div class="m d"><span class="who">总监</span><span class="txt"><b>已归纳需求</b> → 生成方案：<br>① 注册 <code>conversation.view</code>（order:-1）<br>② 复用 R1–R8 分区（18号文）<br>③ 分支 + 导图模式保留</span></div>
+              <div class="m d"><span class="who">总监</span><span class="txt">建议资源：<span class="chip" style="font-size:9.5px">🧑💻 代码</span> <span class="chip" style="font-size:9.5px">✍️ 写作</span> ｜ <b>[✅确认方案]</b> <b>[调整]</b></span></div>
+            </div>
+            <div class="inputbar"><span class="fld">输入…</span><span class="btn">发送 ➤</span></div>
+          </div>
+
+          <div class="R" style="margin:0"><span class="lbl">R7<span class="d">a-2 小窗</span></span>
+            <div class="chips" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span class="chip k">💬 对话</span><span class="chip">📄 文档</span><span class="chip">📋 详情</span>
+              <span style="font-size:10px;color:var(--fg3);margin-top:3px">240~420px · 可折叠</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="R"><span class="lbl">R6<span class="d">总监记忆面板 · clamp 60~400px</span></span>
+          <div class="chips"><span class="chip k">记忆</span><span class="chip">决策</span><span class="chip">风险</span><span class="chip" style="margin-left:auto">hover 展开 / 移开收回 / 🔒 锁定</span></div>
+        </div>
+
+        <div class="R" style="margin-bottom:0"><span class="lbl">R8<span class="d">全局输入框 + 焦点路由</span></span>
+          <div class="inputbar"><span class="chip">→ 总监 ▾</span><span class="fld">输入内容，按焦点路由提交</span><span class="btn">发送</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 3</span><h2>对话页：分支 + 思维导图模式（需求 #5 #6）</h2><span class="tag">V10对话分支思维导图-设计图V1</span></header>
+  <div class="body">
+    <div class="note">对话区工具栏提供「<b>💬 对话流 / 🧠 思维导图</b>」视图切换，以及分支切换与新建。一个对话 = 一棵树。</div>
+    <div class="mind-tools">
+      <span class="chip k">⑂ 分支：主线 ▾</span><span class="chip">＋ 新建分支</span>
+      <span style="width:10px"></span>
+      <span class="chip">💬 对话流</span><span class="chip k">🧠 思维导图</span>
+      <span class="chip">🔍 适应屏幕</span><span class="chip">＋</span><span class="chip">－</span>
+      <div class="legend">
+        <span><i class="st idle"></i>空闲</span><span><i class="st busy"></i>忙碌</span><span><i class="st err"></i>错误</span>
+      </div>
+    </div>
+    <div class="mind">
+      <svg viewBox="0 0 900 250" preserveAspectRatio="none">
+        <path d="M150,125 C185,125 185,45 218,45"   stroke="#2f6feb" stroke-width="2" fill="none" opacity=".55"/>
+        <path d="M150,125 C185,125 185,125 218,125" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".55"/>
+        <path d="M150,125 C185,125 185,205 218,205" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".55"/>
+        <path d="M350,45 C385,45 385,20 415,20"    stroke="#8957e5" stroke-width="1.5" fill="none" opacity=".45" stroke-dasharray="4 3"/>
+        <path d="M350,45 C385,45 385,72 415,72"    stroke="#8957e5" stroke-width="1.5" fill="none" opacity=".45" stroke-dasharray="4 3"/>
+      </svg>
+      <div class="mn root" style="left:16px;top:98px">
+        <div class="h">🎯 主对话</div><div class="t">总监 · 进行中 · 12 条</div>
+      </div>
+      <div class="mn" style="left:218px;top:18px">
+        <div class="h"><i class="st busy"></i>🧑💻 代码工程师</div><div class="t">qwen2:7b · 8 条</div>
+      </div>
+      <div class="mn" style="left:218px;top:98px">
+        <div class="h"><i class="st idle"></i>📄 文档专家</div><div class="t">3 条</div>
+      </div>
+      <div class="mn" style="left:218px;top:178px">
+        <div class="h"><i class="st err"></i>🔍 调研分析师</div><div class="t">2 条</div>
+      </div>
+      <div class="mn sel" style="left:415px;top:-6px">
+        <div class="h"><i class="st idle"></i>🧪 测试分支</div><div class="t">派生自代码</div>
+      </div>
+      <div class="mn" style="left:415px;top:46px">
+        <div class="h"><i class="st idle"></i>🔎 审查分支</div><div class="t">派生自代码</div>
+      </div>
+      <div style="position:absolute;right:12px;bottom:10px;font-size:10px;color:var(--fg3)">节点悬浮：➕分叉 · 📂打开 · 🔀合并 · 🗑️删除（删时子分支上提挂父节点，不丢失）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 4</span><h2>双向联动：两个 tab 同一数据源（需求 #2）</h2><span class="tag">18号文 E.9 跨区联动闭环</span></header>
+  <div class="body">
+    <div class="flow">
+      <div class="fbox acc"><div class="ti">总监 tab</div><div class="de">R5 对话区 · 归纳 / 调度</div></div>
+      <div class="fmid"><span class="arw">⇄</span><span>同源读写</span></div>
+      <div class="store">session store（同一会话 · 零搬运）</div>
+      <div class="fmid"><span class="arw">⇄</span><span>同源读写</span></div>
+      <div class="fbox acc"><div class="ti">对话 tab</div><div class="de">原生消息流 · 分支 / 导图</div></div>
+    </div>
+    <div class="note">
+      <b>「互相传送消息」按「同源视图」实现</b>：两个 tab 看的是<b>同一个会话</b>，消息天然共享 —— 在任一侧发送，另一侧立即出现。
+      这比 IPC 式转发更稳、不会丢消息。<br>
+      <span style="color:var(--warn)">⚠ 若你要的是「总监是独立会话、消息需显式投递过去」，请在评审时指出（见文档 §7.2）。</span>
+    </div>
+    <table>
+      <tr><th style="width:44px">#</th><th>联动</th><th>触发 → 结果</th><th style="width:88px">状态</th></tr>
+      <tr><td>L8</td><td><b>对话 → 总监</b></td><td>对话 tab 发消息 → 总监页 R5 即时出现并归纳，同步刷新 R2/R3</td><td class="good">★ 核心</td></tr>
+      <tr><td>L9</td><td><b>总监 → 对话</b></td><td>总监页发消息 → 原对话 tab 出现该消息</td><td class="good">★ 核心</td></tr>
+      <tr><td>L1</td><td>分派任务</td><td>R5「分派到分支」→ 分支会话收到任务（autoForward）</td><td class="good">复用</td></tr>
+      <tr><td>L4</td><td>创建分支</td><td>R3 点智能体/技能 → 新建分支 + R5 状态卡</td><td class="good">复用</td></tr>
+      <tr><td>L7</td><td>决策沉淀</td><td>R5「标记决策」→ memoryDecisions → R6 决策 Tab</td><td class="good">复用</td></tr>
+      <tr><td>L5</td><td>打开文档</td><td>R4 点文件 → R7 切文档模式展示</td><td class="mid">新建</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">裁定</span><h2>已有设计图文档的处理方式</h2><span class="tag">本次不重画，只归位</span></header>
+  <div class="body">
+    <table>
+      <tr><th style="width:230px">已有文档</th><th>定位</th><th style="width:150px">处理方式</th></tr>
+      <tr><td><code>20-任务文档/03-总监对话模式开发文档.md</code></td><td>需求源头：§1.3 明确写「总监 <b>tab</b>」</td><td class="good">✅ 沿用（需求锚点）</td></tr>
+      <tr><td><code>20-任务文档/18-总监驾驶舱UI设计方案</code></td><td>总监 tab 完整界面规格（R1–R8 + E.9）</td><td class="good">✅ 沿用（升为设计基线）</td></tr>
+      <tr><td><code>50-信息中心/V12多分支流水线协作系统设计稿.html</code></td><td>高保真稿 · tab 栏实绘「总监｜对话｜轨迹」</td><td class="good">✅ 沿用（视觉基准）</td></tr>
+      <tr><td><code>50-信息中心/V10对话分支思维导图-设计图V1.html</code></td><td>分支 / 导图交互定义</td><td class="good">✅ 沿用</td></tr>
+      <tr><td><code>10-架构设计/思维导图驱动的多分支对话管理系统</code></td><td>分支数据模型权威</td><td class="good">✅ 沿用</td></tr>
+      <tr><td><code>V11 / V10布局 / V10美化 / V9框架·视觉稿</code></td><td>历史版本稿</td><td>📦 降级为历史参考（不删）</td></tr>
+      <tr><td><code>20-任务文档/31-设计图与实现差异校准报告.md</code></td><td>曾裁定「以实现为准，不回改设计图」</td><td class="mid">⚠ 分层适用 · 部分作废</td></tr>
+      <tr><td><code>dsh-director-plugin/docs/04-多层级总监结构设计与方案选型.md</code></td><td>方案 A/B/C 选型（A 落选）</td><td class="mid">🔴 需修订（评分前提被证伪）</td></tr>
+    </table>
+
+    <div class="note warn" style="margin-top:14px">
+      <b>两处需要修订的地方（本次设计对已有文档的唯一实质裁定）：</b><br>
+      <b>① 31号文</b>的「以实现为准」只对 <b>V10.1 快赢批的细节层</b>（颜色/尺寸/图标/hover 等 9 项）成立；
+      对 <b>信息架构层</b>（tab 形态 / R1–R8 区域划分）应<b>反转为以设计稿为准</b>——因为该层实现从未对齐过。<br>
+      <b>② docs/04 的方案 A</b> 被打 35 分落选，理由是「插件侧能否拿到 slots 实例<b>未经实测</b>（高风险）」。
+      该前提今日已被证实为误判：插件 <code>apply(ctx)</code> 本就收到 ctx（只是被 <code>void ctx;</code> 丢弃），
+      官方契约明确 <code>inject:['slots']</code> + <code>ctx.slots.register</code>；而当初探测的 <code>window.__DSH_SLOTS__</code> <b>从来不存在</b>。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">证据</span><h2>技术可行性证据链</h2><span class="tag">四源交叉 · 非推断</span></header>
+  <div class="body">
+    <table>
+      <tr><th style="width:44px">#</th><th>结论</th><th>出处</th></tr>
+      <tr><td>1</td><td>tab 环是<b>纯 slot 驱动</b>，注册 entry 即被接管，宿主零改动</td><td><code>dsh-client-ui-conversation/lib/client.js:9172</code> — <code>renderSlot("conversation.view", props, { only: active.id })</code></td></tr>
+      <tr><td>2</td><td><code>conversation.view</code> 被官方文档称为 <b>tab ring</b></td><td><code>…/lib/invariant.js:13</code> — “the 'conversation.view' <b>tab ring</b>”</td></tr>
+      <tr><td>3</td><td>插件 <b>已收到 ctx</b>，当前被丢弃</td><td>产物尾部 — <code>var apply = function apply(ctx) { void ctx; … }</code></td></tr>
+      <tr><td>4</td><td>官方契约：需 <code>inject:['slots']</code> 并用 <code>ctx.slots.register</code></td><td><code>dsh-client-modules/lib/index.js:2146</code> 官方示例 + 未声明依赖时的报错模板</td></tr>
+      <tr><td>5</td><td><b>同族先例</b>：「轨迹」tab 正是这么注册的</td><td><code>dsh-client-ui-trajectory/lib/client.js:7340</code> — <code>ctx.slots.inject("conversation.view", …)</code></td></tr>
+      <tr><td>6</td><td>会话隔离天然满足「每个对话一个总监」</td><td>entry 的 <code>inject: (sessionId) => …</code> 即按会话实例化</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="foot">
+  V13 · dsh-director 页面交互重设计 ｜ 2026-09-12 ｜ 设计稿（不含实现）<br>
+  配套：<code>dsh-director-plugin/docs/09-页面交互重设计·原生Tab集成方案.md</code>
+</div>
+
+</div>
+</body>
+</html>
