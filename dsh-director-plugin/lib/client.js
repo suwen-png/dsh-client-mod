@@ -3152,6 +3152,938 @@ window.__ModuleLoader__.load({
 			exports.DirectorFlow = DirectorFlow;
 		};
 
+		// ── store/hierarchy.js ──
+		__defs["store/hierarchy.js"] = function (exports) {
+			/**
+			 * store/hierarchy.js — 多层级总监结构（对话级 / 文件夹级 / 全局级）
+			 *
+			 * 需求来源（严格按文档，勿自行改动）：
+			 *   - 03-总监对话模式开发文档.md §1.3 三层总监体系（:42-52）
+			 *       全局总管 → 项目总监（文件夹级）→ 会话总监（当前会话）
+			 *   - 同上 §3.2 继承制：默认（全局）→ 项目级 → 会话级，子级可覆盖、可向上提交（:150-167）
+			 *   - 17-总监统治架构与项目驾驶舱方案-v9.md §2.1 三层记忆结构 MemoryNode（:365-428）
+			 *   - 同上 §2.3 隔离 / 共享 / 继承（:443-447）
+			 *
+			 * 存储决策（🔴 关键约束：不得新增 IDB store、不得升 DB 版本）
+			 *   宿主与插件共享 DB `dsh-director-db` v3（R5 兼容约束）。插件若升 v4，
+			 *   宿主再以 v3 打开会失败 ⇒ 版本冲突。故**全部层级节点统一存 `memoryCore`**
+			 *   （keyPath `projectId`，这里以 nodeId 作为 projectId），与 17号文
+			 *   MemoryNode「level: global|project|subproject + parentId + children[]」定义一致。
+			 *
+			 * 全局契约：`window.__dshHierarchy`（供宿主/调试/验证脚本调用）
+			 */
+			
+			const { openIDB, IDB_MEMORY_CORE_STORE } = __m("store/idb.js");
+			
+			/** 层级枚举（对齐 17号文 §2.1 `level`） */
+			const LEVEL = {
+				GLOBAL: "global",
+				PROJECT: "project",
+				SESSION: "session"
+			};
+			
+			/** 层级中文名（UI 用） */
+			const LEVEL_LABEL = {
+				global: "全局总管",
+				project: "项目总监",
+				session: "会话总监"
+			};
+			
+			/** 全局根节点固定 id（唯一，单例） */
+			const GLOBAL_NODE_ID = "__global__";
+			
+			/** 层级顺序（数字越小越高层） */
+			const LEVEL_ORDER = { global: 0, project: 1, session: 2 };
+			
+			/** 生成节点 id（层级前缀 + 时间戳 + 随机，避免碰撞） */
+			function makeNodeId(level) {
+				const p = level === LEVEL.GLOBAL ? "g" : level === LEVEL.PROJECT ? "p" : "s";
+				return p + "_" + Date.now().toString(36) + "_" + Math.floor(Math.random() * 1e6).toString(36);
+			}
+			
+			/**
+			 * 创建层级节点（17号文 §2.1 MemoryNode 形态）
+			 * @param {object} p
+			 * @param {string} p.name 节点名
+			 * @param {"global"|"project"|"session"} p.level
+			 * @param {string|null} p.parentId 父节点 id（全局级为 null）
+			 */
+			function makeNode({ name, level, parentId = null, meta = {} }) {
+				const now = Date.now();
+				return {
+					id: level === LEVEL.GLOBAL ? GLOBAL_NODE_ID : makeNodeId(level),
+					name: name || "未命名",
+					level,
+					parentId: level === LEVEL.GLOBAL ? null : parentId,
+					children: [],
+					meta: {
+						positioning: "",
+						goal: "",
+						currentPhase: "",
+						...meta,
+						createdAt: now,
+						updatedAt: now
+					},
+					docs: [],
+					conversations: [],
+					decisions: [],
+					todos: [],
+					risks: [],
+					/** 分层总结产物（由 logic/summarize.js 写入） */
+					summary: null,
+					/** 总结梯度：G0 规则 / G1 本地模型 / G2 上层汇总 */
+					summaryGrade: null,
+					summaryAt: 0,
+					/** 配置继承（03号文 §3.2）：null = 继承父级；非 null = 本级覆盖 */
+					configOverride: null
+				};
+			}
+			
+			/* ── IDB 读写（统一走 memoryCore） ───────────────────────────── */
+			
+			function tx(mode, fn) {
+				return openIDB().then((db) => new Promise((resolve, reject) => {
+					try {
+						const t = db.transaction(IDB_MEMORY_CORE_STORE, mode);
+						const req = fn(t.objectStore(IDB_MEMORY_CORE_STORE));
+						t.oncomplete = () => resolve(req ? req.result : undefined);
+						t.onerror = () => reject(t.error);
+					} catch (e) { reject(e); }
+				}));
+			}
+			
+			/** 读取单个节点 */
+			function getNode(id) {
+				return tx("readonly", (s) => s.get(id)).then((r) => r || null).catch(() => null);
+			}
+			
+			/**
+			 * 写入单个节点（自动维护 updatedAt）
+			 *
+			 * 🔴 关键：`memoryCore` 的 keyPath 是 **`projectId`**（见 store/idb.js），
+			 *    而层级节点的主键字段是 `id`。若不注入 `projectId`，`put()` 的 key 为
+			 *    `undefined` → IndexedDB 抛 DataError，**写入静默失败**（catch 吞掉）。
+			 *    实测症状：createChild 返回节点但 loadTree 查不到、kids 为空。
+			 *    故此处**必须**把 `projectId` 设为 `node.id`（即以 nodeId 作为 projectId）。
+			 */
+			function saveNode(node) {
+				if (!node || !node.id) return Promise.resolve(false);
+				const next = { ...node, projectId: node.id, meta: { ...(node.meta || {}), updatedAt: Date.now() } };
+				return tx("readwrite", (s) => s.put(next)).then(() => true).catch((e) => {
+					if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("hierarchy", "saveNode failed: " + (e && e.message));
+					return false;
+				});
+			}
+			
+			/** 删除节点（同时把其从父级 children 摘除） */
+			async function removeNode(id) {
+				const node = await getNode(id);
+				if (!node) return false;
+				if (node.parentId) {
+					const parent = await getNode(node.parentId);
+					if (parent) {
+						parent.children = (parent.children || []).filter((c) => c !== id);
+						await saveNode(parent);
+					}
+				}
+				// 子级升到祖父，避免孤儿
+				for (const cid of node.children || []) {
+					const child = await getNode(cid);
+					if (child) { child.parentId = node.parentId; await saveNode(child); }
+				}
+				return tx("readwrite", (s) => s.delete(id)).then(() => true).catch(() => false);
+			}
+			
+			/** 全量拉取所有节点 */
+			function listAllNodes() {
+				return tx("readonly", (s) => s.getAll())
+					.then((r) => (r || []).filter((n) => n && n.level))
+					.catch(() => []);
+			}
+			
+			/**
+			 * 构建层级树（返回根节点数组，节点带 `childNodes`）
+			 * 注意：全局级为单例根；游离节点的 parentId 若不存在则挂到全局根下（自愈）。
+			 */
+			async function loadTree() {
+				const all = await listAllNodes();
+				const byId = new Map();
+				for (const n of all) byId.set(n.id, { ...n, childNodes: [] });
+			
+				let root = byId.get(GLOBAL_NODE_ID);
+				if (!root) {
+					root = { ...makeNode({ name: "全局总管", level: LEVEL.GLOBAL }), childNodes: [] };
+					byId.set(GLOBAL_NODE_ID, root);
+					await saveNode(root);
+				}
+			
+				for (const n of byId.values()) {
+					if (n.id === GLOBAL_NODE_ID) continue;
+					const parent = n.parentId ? byId.get(n.parentId) : null;
+					(parent || root).childNodes.push(n);
+				}
+				const sortRec = (node) => {
+					node.childNodes.sort((a, b) => (a.meta?.createdAt || 0) - (b.meta?.createdAt || 0));
+					node.childNodes.forEach(sortRec);
+				};
+				sortRec(root);
+				return root;
+			}
+			
+			/** 确保全局根存在 */
+			async function ensureGlobal() {
+				const root = await getNode(GLOBAL_NODE_ID);
+				if (root) return root;
+				const node = makeNode({ name: "全局总管", level: LEVEL.GLOBAL });
+				await saveNode(node);
+				return node;
+			}
+			
+			/**
+			 * 创建子节点并挂到父级（自动维护父级 children）
+			 * @returns {Promise<object>} 新建节点
+			 */
+			async function createChild(parentId, { name, level, meta }) {
+				const parent = await getNode(parentId);
+				const node = makeNode({ name, level, parentId, meta });
+				await saveNode(node);
+				if (parent) {
+					parent.children = [...(parent.children || []), node.id];
+					await saveNode(parent);
+				}
+				return node;
+			}
+			
+			/** 登记/挂载一个会话到文件夹级节点（03号文 §1.3「会话总监」） */
+			async function attachSession(folderId, { sessionId, title, messageCount = 0, lastMessage = "" }) {
+				const folder = await getNode(folderId);
+				const node = makeNode({
+					name: title || sessionId,
+					level: LEVEL.SESSION,
+					parentId: folder ? folderId : GLOBAL_NODE_ID
+				});
+				node.conversations = [{
+					conversationId: sessionId,
+					title: title || sessionId,
+					lastMessage,
+					lastTime: Date.now(),
+					messageCount
+				}];
+				await saveNode(node);
+				const parent = folder || (await getNode(GLOBAL_NODE_ID));
+				if (parent) {
+					parent.children = [...(parent.children || []), node.id];
+					await saveNode(parent);
+				}
+				return node;
+			}
+			
+			/**
+			 * 配置继承解析（03号文 §3.2 + 17号文 §2.3「继承但可覆盖」）
+			 * 从根向下依次覆盖，返回最终生效配置 + 每一项的来源层级。
+			 * @param {string} nodeId
+			 * @param {object} defaultConfig 全局默认配置
+			 */
+			async function resolveConfig(nodeId, defaultConfig) {
+				const chain = [];
+				let cur = await getNode(nodeId);
+				while (cur) {
+					chain.unshift(cur);
+					cur = cur.parentId ? await getNode(cur.parentId) : null;
+				}
+				let merged = { ...(defaultConfig || {}) };
+				const origin = {};
+				for (const n of chain) {
+					if (n.configOverride && typeof n.configOverride === "object") {
+						for (const k of Object.keys(n.configOverride)) {
+							merged[k] = n.configOverride[k];
+							origin[k] = n.level;
+						}
+					}
+				}
+				return { config: merged, origin, chain: chain.map((n) => ({ id: n.id, name: n.name, level: n.level })) };
+			}
+			
+			/** 面包屑（根 → 当前） */
+			async function getBreadcrumb(nodeId) {
+				const out = [];
+				let cur = await getNode(nodeId);
+				let guard = 0;
+				while (cur && guard++ < 20) {
+					out.unshift({ id: cur.id, name: cur.name, level: cur.level });
+					cur = cur.parentId ? await getNode(cur.parentId) : null;
+				}
+				return out;
+			}
+			
+			/** 按层级计数（含自身） */
+			function countByLevel(root) {
+				const acc = { global: 0, project: 0, session: 0, total: 0 };
+				const walk = (n) => {
+					acc[n.level] = (acc[n.level] || 0) + 1;
+					acc.total++;
+					(n.childNodes || []).forEach(walk);
+				};
+				if (root) walk(root);
+				return acc;
+			}
+			
+			/** 层级比较：a 是否高于 b */
+			function isHigher(a, b) {
+				return (LEVEL_ORDER[a] ?? 99) < (LEVEL_ORDER[b] ?? 99);
+			}
+			
+			/** 安装全局契约 */
+			function installHierarchyApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshHierarchy = {
+					LEVEL, LEVEL_LABEL, GLOBAL_NODE_ID,
+					makeNode, makeNodeId, getNode, saveNode, removeNode,
+					listAllNodes, loadTree, ensureGlobal, createChild, attachSession,
+					resolveConfig, getBreadcrumb, countByLevel, isHigher
+				};
+				return window.__dshHierarchy;
+			}
+			
+			exports.LEVEL = LEVEL;
+			exports.LEVEL_LABEL = LEVEL_LABEL;
+			exports.GLOBAL_NODE_ID = GLOBAL_NODE_ID;
+			exports.makeNodeId = makeNodeId;
+			exports.makeNode = makeNode;
+			exports.getNode = getNode;
+			exports.saveNode = saveNode;
+			exports.removeNode = removeNode;
+			exports.listAllNodes = listAllNodes;
+			exports.loadTree = loadTree;
+			exports.ensureGlobal = ensureGlobal;
+			exports.createChild = createChild;
+			exports.attachSession = attachSession;
+			exports.resolveConfig = resolveConfig;
+			exports.getBreadcrumb = getBreadcrumb;
+			exports.countByLevel = countByLevel;
+			exports.isHigher = isHigher;
+			exports.installHierarchyApi = installHierarchyApi;
+		};
+
+		// ── logic/summarize.js ──
+		__defs["logic/summarize.js"] = function (exports) {
+			/**
+			 * logic/summarize.js — 分层总结 + 分梯度调用
+			 *
+			 * 需求来源（严格按文档，勿自行改动）：
+			 *   - 17-总监统治架构与项目驾驶舱方案-v9.md §1A.13 项目核心认知自动提取（:336-359）
+			 *       提取流程 1-6 步 →「**汇总为项目核心认知**，存储到记忆体系」
+			 *   - 同上 §2.1 `conversations[]`（该记忆层下所有对话）→ 分层总结的数据基础
+			 *   - 03-总监对话模式开发文档.md §4.3 降级策略（:236-242）
+			 *       Ollama 未启动 → 提示并跳过；超时 → 可重试/跳过；格式异常 → 原样展示
+			 *   - 03-总监对话模式开发文档.md §1.3 三层体系 → 总结须**逐层向上汇总**
+			 *
+			 * ── 分梯度调用（三个梯度，自上而下递进，失败自动回落）────────────
+			 *   G0 规则抽取 ：零模型。按 §1A.13「核心认知内容」7 项做结构化抽取
+			 *                 （定位/目标/当前阶段/核心需求/决策历史/风险偏差/约束条件）
+			 *   G1 本地模型 ：Ollama qwen2:7b（config/model.js callLocalModel），
+			 *                 把 G0 结构化文本 + 子级摘要 → 自然语言总结
+			 *   G2 上层汇总 ：父级对其下**所有子级 summary** 再汇总（递归向上），
+			 *                 实现 §1A.13「分层 → 汇总为上层核心认知」
+			 *   降级链：G2 →（Ollama 不可用/超时/格式异常）→ G0，并在结果中标注 `degraded`
+			 *
+			 * 全局契约：`window.__dshSummarize`
+			 */
+			
+			const { callLocalModel, directorConfig } = __m("config/model.js");
+			const { getNode, saveNode, LEVEL, LEVEL_LABEL } = __m("store/hierarchy.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			/** 梯度定义 */
+			const GRADE = { RULE: "G0", LOCAL: "G1", ROLLUP: "G2" };
+			
+			/** 各梯度的模型超时（ms），03号文 §4.3 规定 >30s 需提示，此处与 callLocalModel 一致取 60s 上限 */
+			const GRADE_TIMEOUT_MS = 60000;
+			
+			/**
+			 * G0 —— 规则抽取：不调用任何模型，产出结构化文本。
+			 * 字段对齐 17号文 §1A.13「核心认知内容」7 项。
+			 */
+			function extractByRule(node, childSummaries = []) {
+				const m = node?.meta || {};
+				const conv = node?.conversations || [];
+				const lines = [];
+			
+				lines.push("【层级】" + (LEVEL_LABEL[node?.level] || node?.level || "未知"));
+				lines.push("【名称】" + (node?.name || "未命名"));
+				if (m.positioning) lines.push("【定位】" + m.positioning);
+				if (m.goal) lines.push("【目标】" + m.goal);
+				if (m.currentPhase) lines.push("【当前阶段】" + m.currentPhase);
+			
+				if (node?.level === LEVEL.SESSION || conv.length) {
+					const c = conv[0] || {};
+					lines.push("【对话】" + (c.title || "-"));
+					lines.push("【消息数】" + (c.messageCount ?? 0));
+					if (c.lastMessage) lines.push("【最后消息】" + String(c.lastMessage).slice(0, 200));
+				}
+			
+				lines.push("【决策】" + (node?.decisions || []).length + " 条");
+				lines.push("【待办】" + (node?.todos || []).length + " 条");
+				lines.push("【风险】" + (node?.risks || []).length + " 条");
+				lines.push("【文档】" + (node?.docs || []).length + " 篇");
+			
+				// 结构化明细（截断，控 token）
+				const fmt = (arr, key, n = 5) => (arr || []).slice(0, n)
+					.map((x) => "  · " + String(x[key] || x.title || x.decisionId || x.todoId || x.riskId || "").slice(0, 120))
+					.join("\n");
+				if ((node?.decisions || []).length) lines.push("【决策明细】\n" + fmt(node.decisions, "title"));
+				if ((node?.todos || []).length) lines.push("【待办明细】\n" + fmt(node.todos, "title"));
+				if ((node?.risks || []).length) lines.push("【风险明细】\n" + fmt(node.risks, "title"));
+			
+				if (childSummaries.length) {
+					lines.push("【子级摘要】共 " + childSummaries.length + " 项");
+					lines.push(childSummaries.map((s, i) => "  " + (i + 1) + ". " + String(s.text || "").slice(0, 300)).join("\n"));
+				}
+				return lines.join("\n");
+			}
+			
+			/** G1 —— 本地模型总结。失败返回 null（由调用方回落 G0） */
+			async function summarizeByModel(factsText, level) {
+				const prompt = [
+					"你是项目总监的总结助手。请基于以下结构化事实，生成一份简洁的核心认知摘要。",
+					"要求：① 中文；② 不超过 300 字；③ 分「定位/进展/风险/下一步」四小段；④ 只依据事实，不臆造。",
+					"",
+					"层级：" + (LEVEL_LABEL[level] || level),
+					"",
+					factsText
+				].join("\n");
+				try {
+					const out = await callLocalModel(prompt, directorConfig);
+					if (typeof out === "string" && out.trim()) return out.trim();
+					if (out && typeof out.text === "string" && out.text.trim()) return out.text.trim();
+					return null;
+				} catch (e) {
+					dshLog("summarize", "G1 本地模型调用异常，回落 G0: " + (e && e.message));
+					return null;
+				}
+			}
+			
+			/**
+			 * 对单个节点生成总结（自动选梯度 + 降级）
+			 *
+			 * @param {object} node 目标节点
+			 * @param {object[]} [childNodes] 其子级节点（用于 G2 汇总）；缺省则不汇总子级
+			 * @param {object} [opts] { forceGrade?: "G0"|"G1" }
+			 * @returns {Promise<{text:string, grade:string, degraded:boolean, reason?:string, at:number}>}
+			 */
+			async function summarizeNode(node, childNodes = [], opts = {}) {
+				if (!node) return { text: "", grade: GRADE.RULE, degraded: false, reason: "无节点", at: Date.now() };
+			
+				// 收集子级已有摘要（G2 的输入）
+				const childSummaries = (childNodes || [])
+					.filter((c) => c && c.summary)
+					.map((c) => ({ id: c.id, name: c.name, text: c.summary }));
+			
+				const factsText = extractByRule(node, childSummaries);
+				const isParent = childSummaries.length > 0;
+				let grade = opts.forceGrade || (isParent ? GRADE.ROLLUP : GRADE.LOCAL);
+			
+				let text = null;
+				let degraded = false;
+				let reason;
+			
+				if (grade !== GRADE.RULE) {
+					text = await summarizeByModel(factsText, node.level);
+					if (!text) { degraded = true; reason = "本地模型不可用或输出异常（03号文 §4.3 降级）"; }
+				}
+			
+				if (!text) {
+					// 回落 G0：规则抽取结果直接作为总结（拼接子级摘要）
+					grade = GRADE.RULE;
+					const head = "（规则抽取 · 未调用模型）\n";
+					text = head + factsText;
+				}
+			
+				const result = { text, grade, degraded, at: Date.now() };
+				if (reason) result.reason = reason;
+				return result;
+			}
+			
+			/**
+			 * 分层总结：自底向上汇总整棵树。
+			 * 先叶子（会话级）→ 再文件夹级（汇总其子级）→ 最后全局级。
+			 * 每一级把结果写回节点（summary / summaryGrade / summaryAt）并落盘。
+			 *
+			 * @param {object} root loadTree() 返回的根（含 childNodes）
+			 * @param {object} [opts] { forceGrade }
+			 * @returns {Promise<{count:number, grades:Record<string,number>, degraded:number}>}
+			 */
+			async function summarizeTree(root, opts = {}) {
+				const stats = { count: 0, grades: { G0: 0, G1: 0, G2: 0 }, degraded: 0 };
+				if (!root) return stats;
+			
+				// 后序遍历：先子后父，保证父级能拿到子级最新 summary
+				const walk = async (node) => {
+					for (const c of node.childNodes || []) await walk(c);
+					const res = await summarizeNode(node, node.childNodes || [], opts);
+					node.summary = res.text;
+					node.summaryGrade = res.grade;
+					node.summaryAt = res.at;
+					const { childNodes, ...flat } = node;
+					await saveNode(flat);
+					stats.count++;
+					stats.grades[res.grade] = (stats.grades[res.grade] || 0) + 1;
+					if (res.degraded) stats.degraded++;
+				};
+				await walk(root);
+				return stats;
+			}
+			
+			/**
+			 * 向上提交（03号文 §3.2「会话中修改可提交到项目/全局」）
+			 * 把某节点的当前总结向上冒泡：父级重新汇总一次。
+			 */
+			async function propagateUp(nodeId, opts = {}) {
+				const node = await getNode(nodeId);
+				if (!node || !node.parentId) return null;
+				const parent = await getNode(node.parentId);
+				if (!parent) return null;
+				// 拉齐父级所有子级的最新 summary
+				const kids = [];
+				for (const cid of parent.children || []) {
+					const c = await getNode(cid);
+					if (c) kids.push(c);
+				}
+				const res = await summarizeNode(parent, kids, opts);
+				parent.summary = res.text;
+				parent.summaryGrade = res.grade;
+				parent.summaryAt = res.at;
+				await saveNode(parent);
+				return { node: parent, result: res };
+			}
+			
+			/** 安装全局契约 */
+			function installSummarizeApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshSummarize = {
+					GRADE, GRADE_TIMEOUT_MS,
+					extractByRule, summarizeNode, summarizeTree, propagateUp
+				};
+				return window.__dshSummarize;
+			}
+			
+			exports.GRADE = GRADE;
+			exports.extractByRule = extractByRule;
+			exports.summarizeNode = summarizeNode;
+			exports.summarizeTree = summarizeTree;
+			exports.propagateUp = propagateUp;
+			exports.installSummarizeApi = installSummarizeApi;
+		};
+
+		// ── components/DirectorHierarchy.js ──
+		__defs["components/DirectorHierarchy.js"] = function (exports) {
+			/**
+			 * components/DirectorHierarchy.js — 多层级总监面板（方案 C：层级树 + 主内容区）
+			 *
+			 * 需求来源：`docs/04-多层级总监结构设计与方案选型.md` §三（结构说明）
+			 *   左栏：三级树（全局 → 文件夹 → 会话）
+			 *   右栏：当前节点 meta + 总结 + 子级摘要 + 操作区
+			 *
+			 * 依赖层级数据：store/hierarchy.js（03号文 §1.3 / 17号文 §2.1）
+			 * 依赖总结逻辑：logic/summarize.js（17号文 §1A.13 / 03号文 §4.3 降级）
+			 *
+			 * ⚠️ 构建约束（同 DirectorFlow）：
+			 *   - `react` / `react/jsx-runtime` 为**平台冻结模块**，构建期外置为 `require(...)`
+			 *     （ADR-001：严禁把 React 打进产物，否则双实例崩溃）
+			 *   - 宿主为编译后 `jsx()` 调用形态，本文件用 **`.js` 而非 `.jsx`**，不经 JSX 编译
+			 */
+			
+			const react = require("react");
+			const react_jsx_runtime = require("react/jsx-runtime");
+			const { LEVEL, LEVEL_LABEL, GLOBAL_NODE_ID, loadTree, getNode, saveNode, removeNode, createChild, attachSession, getBreadcrumb } = __m("store/hierarchy.js");
+			const { summarizeNode, summarizeTree, propagateUp, GRADE } = __m("logic/summarize.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			/* ── 样式（内联，与宿主编译产物同形态；尽量使用 Harness 主题变量并给 fallback）── */
+			const S = {
+				root: { display: "flex", height: "100%", minHeight: 0, background: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e6e6e6)", fontSize: 13, fontFamily: "inherit" },
+				side: { width: 240, flex: "0 0 240px", borderRight: "1px solid var(--dsw-alias-border-l2, #2a2c30)", overflowY: "auto", minHeight: 0, padding: "8px 0" },
+				main: { flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", padding: 16 },
+				row: (active) => ({
+					display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", cursor: "pointer",
+					background: active ? "var(--dsw-alias-interactive-bg-hover, #23252a)" : "transparent",
+					borderLeft: active ? "2px solid #4c8dff" : "2px solid transparent",
+					whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+				}),
+				badge: { marginLeft: "auto", fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b8f96)", background: "var(--dsw-alias-bg-sunken, #1e2024)", borderRadius: 8, padding: "0 6px" },
+				btn: { padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #33363b)", background: "var(--dsw-alias-bg-base, #202227)", color: "var(--dsw-alias-label-primary, #e6e6e6)", cursor: "pointer" },
+				btnPrimary: { padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff", cursor: "pointer" },
+				input: { width: "100%", padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #33363b)", background: "var(--dsw-alias-bg-sunken, #1b1d21)", color: "var(--dsw-alias-label-primary, #e6e6e6)", boxSizing: "border-box" },
+				card: { border: "1px solid var(--dsw-alias-border-l2, #2a2c30)", borderRadius: 8, padding: 12, marginBottom: 12, background: "var(--dsw-alias-bg-sunken, #1a1c20)" },
+				label: { fontSize: 12, color: "var(--dsw-alias-label-secondary, #a0a4aa)", marginBottom: 4 },
+				pre: { whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0, fontSize: 12, lineHeight: "18px", fontFamily: "var(--ds-font-family-code, ui-monospace, Menlo, Consolas, monospace)" },
+				h: { fontSize: 14, fontWeight: 600, margin: "0 0 10px" },
+				muted: { color: "var(--dsw-alias-label-tertiary, #8b8f96)", fontSize: 12 }
+			};
+			
+			const ICON = { global: "🌐", project: "📁", session: "💬" };
+			
+			/* ── 递归树节点 ── */
+			function TreeItem({ node, depth, selectedId, onSelect }) {
+				const kids = node.childNodes || [];
+				return (0, react_jsx_runtime.jsxs)("div", { children: [
+					(0, react_jsx_runtime.jsxs)("div", {
+						style: S.row(selectedId === node.id),
+						onClick: () => onSelect(node.id),
+						title: node.name,
+						children: [
+							(0, react_jsx_runtime.jsx)("span", { style: { paddingLeft: depth * 12 }, children: (ICON[node.level] || "•") + " " + node.name }),
+							kids.length ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: String(kids.length) }) : null
+						]
+					}),
+					kids.map((c) => (0, react_jsx_runtime.jsx)(TreeItem, { node: c, depth: depth + 1, selectedId: selectedId, onSelect: onSelect }, c.id))
+				] });
+			}
+			
+			/** 在树中按 id 查找节点 */
+			function findNode(root, id) {
+				if (!root) return null;
+				if (root.id === id) return root;
+				for (const c of root.childNodes || []) {
+					const hit = findNode(c, id);
+					if (hit) return hit;
+				}
+				return null;
+			}
+			
+			/**
+			 * 多层级总监面板根组件
+			 * @param {object} props
+			 * @param {() => void} [props.onClose] 关闭回调（浮层形态用）
+			 */
+			function DirectorHierarchy(props = {}) {
+				const [tree, setTree] = react.useState(null);
+				const [selectedId, setSelectedId] = react.useState(GLOBAL_NODE_ID);
+				const [crumb, setCrumb] = react.useState([]);
+				const [busy, setBusy] = react.useState(false);
+				const [msg, setMsg] = react.useState("");
+				// 新建表单
+				const [newName, setNewName] = react.useState("");
+				const [newLevel, setNewLevel] = react.useState(LEVEL.PROJECT);
+				const [sessTitle, setSessTitle] = react.useState("");
+				const [sessId, setSessId] = react.useState("");
+				// meta 编辑
+				const [meta, setMeta] = react.useState({ positioning: "", goal: "", currentPhase: "" });
+			
+				const refresh = react.useCallback(async () => {
+					const t = await loadTree();
+					setTree(t);
+					return t;
+				}, []);
+			
+				react.useEffect(() => { refresh(); }, [refresh]);
+			
+				const selected = react.useMemo(() => findNode(tree, selectedId), [tree, selectedId]);
+			
+				react.useEffect(() => {
+					getBreadcrumb(selectedId).then(setCrumb);
+					const n = findNode(tree, selectedId);
+					setMeta({
+						positioning: n?.meta?.positioning || "",
+						goal: n?.meta?.goal || "",
+						currentPhase: n?.meta?.currentPhase || ""
+					});
+				}, [selectedId, tree]);
+			
+				const guard = (fn) => async (...a) => {
+					if (busy) return;
+					setBusy(true);
+					try { await fn(...a); } finally { setBusy(false); }
+				};
+			
+				const doCreate = guard(async () => {
+					const name = newName.trim();
+					if (!name) { setMsg("请输入名称"); return; }
+					// 全局级下只能建项目级；项目级下建会话或子项目
+					const parentId = selectedId || GLOBAL_NODE_ID;
+					const node = await createChild(parentId, { name, level: newLevel });
+					setNewName("");
+					await refresh();
+					setSelectedId(node.id);
+					setMsg("已创建：" + name);
+				});
+			
+				const doAttach = guard(async () => {
+					const sid = sessId.trim();
+					if (!sid) { setMsg("请输入会话 ID"); return; }
+					const node = await attachSession(selectedId, { sessionId: sid, title: sessTitle.trim() || sid });
+					setSessId(""); setSessTitle("");
+					await refresh();
+					setSelectedId(node.id);
+					setMsg("已挂载会话：" + sid);
+				});
+			
+				const doSummarizeOne = guard(async () => {
+					const node = await getNode(selectedId);
+					if (!node) return;
+					const res = await summarizeNode(node, selected?.childNodes || []);
+					const { childNodes, ...flat } = { ...node, summary: res.text, summaryGrade: res.grade, summaryAt: res.at };
+					await saveNode(flat);
+					await refresh();
+					setMsg("已生成总结（梯度 " + res.grade + "）" + (res.degraded ? " · " + (res.reason || "已降级") : ""));
+				});
+			
+				const doSummarizeTree = guard(async () => {
+					const stats = await summarizeTree(await refresh(), {});
+					setMsg("整树总结完成：" + stats.count + " 个节点，G0=" + stats.grades.G0 + " / G1=" + stats.grades.G1 + " / G2=" + stats.grades.G2 + "，降级 " + stats.degraded + " 个");
+				});
+			
+				const doPropagate = guard(async () => {
+					const r = await propagateUp(selectedId);
+					if (!r) { setMsg("该节点无父级，无需向上提交"); return; }
+					await refresh();
+					setMsg("已向上提交到「" + r.node.name + "」（梯度 " + r.result.grade + "）");
+				});
+			
+				const doSaveMeta = guard(async () => {
+					const node = await getNode(selectedId);
+					if (!node) return;
+					node.meta = { ...(node.meta || {}), ...meta };
+					await saveNode(node);
+					await refresh();
+					setMsg("已保存基础信息");
+				});
+			
+				const doRemove = guard(async () => {
+					if (selectedId === GLOBAL_NODE_ID) { setMsg("全局根节点不可删除"); return; }
+					await removeNode(selectedId);
+					await refresh();
+					setSelectedId(GLOBAL_NODE_ID);
+					setMsg("已删除节点");
+				});
+			
+				return (0, react_jsx_runtime.jsxs)("div", { style: S.root, children: [
+					/* ── 左：层级树 ── */
+					(0, react_jsx_runtime.jsxs)("div", { style: S.side, children: [
+						(0, react_jsx_runtime.jsx)("div", { style: { padding: "4px 12px 8px", ...S.muted }, children: "总监层级" }),
+						tree
+							? (0, react_jsx_runtime.jsx)(TreeItem, { node: tree, depth: 0, selectedId: selectedId, onSelect: setSelectedId })
+							: (0, react_jsx_runtime.jsx)("div", { style: { padding: 12, ...S.muted }, children: "加载中…" })
+					] }),
+			
+					/* ── 右：内容区 ── */
+					(0, react_jsx_runtime.jsxs)("div", { style: S.main, children: [
+						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }, children: [
+							(0, react_jsx_runtime.jsx)("h3", { style: S.h, children: crumb.map((c) => c.name).join(" / ") || "全局总管" }),
+							selected ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: LEVEL_LABEL[selected.level] || selected.level }) : null,
+							selected?.summaryGrade ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: "梯度 " + selected.summaryGrade }) : null,
+							props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, onClick: props.onClose, children: "收起" }) : null
+						] }),
+			
+						/* 基础信息（meta） */
+						(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "定位 / 目标 / 当前阶段（17号文 §1A.13 核心认知）" }),
+							["positioning", "goal", "currentPhase"].map((k) => (0, react_jsx_runtime.jsx)("input", {
+								key: k,
+								style: { ...S.input, marginBottom: 6 },
+								placeholder: { positioning: "定位", goal: "目标", currentPhase: "当前阶段" }[k],
+								value: meta[k],
+								onChange: (e) => setMeta((m) => ({ ...m, [k]: e.target.value }))
+							}, k)),
+							(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doSaveMeta, disabled: busy, children: "保存基础信息" })
+						] }),
+			
+						/* 总结区 */
+						(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
+							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", marginBottom: 8 }, children: [
+								(0, react_jsx_runtime.jsx)("span", { style: S.label, children: "分层总结" }),
+								(0, react_jsx_runtime.jsxs)("span", { style: { marginLeft: "auto", display: "flex", gap: 6 }, children: [
+									(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSummarizeOne, disabled: busy, children: "生成本级总结" }),
+									(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doPropagate, disabled: busy, children: "向上提交" }),
+									(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doSummarizeTree, disabled: busy, children: "整树分层总结" })
+								] })
+							] }),
+							selected?.summary
+								? (0, react_jsx_runtime.jsx)("pre", { style: S.pre, children: selected.summary })
+								: (0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "暂无总结。点击「生成本级总结」或「整树分层总结」。" })
+						] }),
+			
+						/* 子级摘要 */
+						selected?.childNodes?.length ? (0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "子级摘要（共 " + selected.childNodes.length + " 项）" }),
+							selected.childNodes.map((c) => (0, react_jsx_runtime.jsxs)("div", { key: c.id, style: { marginBottom: 8 }, children: [
+								(0, react_jsx_runtime.jsxs)("div", { style: { fontSize: 12, fontWeight: 500 }, children: [
+									ICON[c.level] + " " + c.name,
+									c.summaryGrade ? "（" + c.summaryGrade + "）" : ""
+								] }),
+								(0, react_jsx_runtime.jsx)("div", { style: { ...S.muted, whiteSpace: "pre-wrap" }, children: c.summary ? String(c.summary).slice(0, 200) : "（未总结）" })
+							] }))
+						] }) : null,
+			
+						/* 新建节点 */
+						(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "在当前节点下新建" }),
+							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6, marginBottom: 6 }, children: [
+								(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "名称", value: newName, onChange: (e) => setNewName(e.target.value) }),
+								(0, react_jsx_runtime.jsxs)("select", { style: S.btn, value: newLevel, onChange: (e) => setNewLevel(e.target.value), children: [
+									(0, react_jsx_runtime.jsx)("option", { value: LEVEL.PROJECT, children: "项目（文件夹级）" }),
+									(0, react_jsx_runtime.jsx)("option", { value: LEVEL.SESSION, children: "会话（对话级）" })
+								] }),
+								(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doCreate, disabled: busy, children: "新建" })
+							] }),
+							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6 }, children: [
+								(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "会话 ID", value: sessId, onChange: (e) => setSessId(e.target.value) }),
+								(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "会话标题（可选）", value: sessTitle, onChange: (e) => setSessTitle(e.target.value) }),
+								(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doAttach, disabled: busy, children: "挂载会话" })
+							] })
+						] }),
+			
+						/* 提示 + 删除 */
+						msg ? (0, react_jsx_runtime.jsx)("div", { style: { ...S.muted, marginBottom: 8 }, children: msg }) : null,
+						selectedId !== GLOBAL_NODE_ID
+							? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, borderColor: "#7a2b2b", color: "#ff8a8a" }, onClick: doRemove, disabled: busy, children: "删除当前节点" })
+							: null
+					] })
+				] });
+			}
+			
+			__defaults["components/DirectorHierarchy.js"] = DirectorHierarchy;
+			
+			exports.DirectorHierarchy = DirectorHierarchy;
+		};
+
+		// ── mount.js ──
+		__defs["mount.js"] = function (exports) {
+			/**
+			 * mount.js — 多层级总监面板的挂载层（方案 C：slot 优先 / DOM 兜底）
+			 *
+			 * 设计依据：`docs/04-多层级总监结构设计与方案选型.md` §二 选定方案 C
+			 *   - **slot 优先**：若宿主暴露了 slots 服务（window.__DSH_SLOTS__），则注册到
+			 *     `conversation.view`（03号文 §2.1「[总监][对话][轨迹] 三 tab 同属 conversation.view」），
+			 *     与原生 UI 完全一致。
+			 *   - **DOM 兜底**（默认路径）：自行 createRoot 渲染浮层面板。
+			 *     🔴 为什么兜底是默认：宿主 `conversation.view` 的 slots 实例由 app-shell 通过
+			 *     `ctx.slots.install` 注入，**插件侧能否拿到同一实例未经实测**；而本插件当前
+			 *     正是因「宿主已退坡 + 插件未注册入口」导致功能不可达（见 memory 2026-09-11 ⑫）。
+			 *     兜底通道**零宿主依赖、必定可见**，故作为默认与保底。
+			 *
+			 * ⚠️ 构建约束：`react-dom/client` 同为平台冻结模块（ADR-001），构建期外置为 `require(...)`。
+			 */
+			
+			const react = require("react");
+			const react_jsx_runtime = require("react/jsx-runtime");
+			const react_dom_client = require("react-dom/client");
+			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			const OVERLAY_HOST_ID = "dsh-director-hierarchy-overlay";
+			const LAUNCHER_ID = "dsh-director-hierarchy-launcher";
+			
+			/** 面板尺寸（浮层形态） */
+			const PANEL = { width: 880, height: 560, right: 24, bottom: 64 };
+			
+			function makeLauncher(onToggle) {
+				const btn = document.createElement("button");
+				btn.id = LAUNCHER_ID;
+				btn.textContent = "总监层级";
+				Object.assign(btn.style, {
+					position: "fixed", right: "24px", bottom: "24px", zIndex: 2147483000,
+					padding: "8px 14px", fontSize: "13px", borderRadius: "999px",
+					border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff",
+					cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.35)"
+				});
+				btn.addEventListener("click", onToggle);
+				document.body.appendChild(btn);
+				return btn;
+			}
+			
+			/**
+			 * 挂载多层级总监面板（浮层兜底通道）
+			 * @param {object} [opts]
+			 * @param {boolean} [opts.withLauncher=true] 是否创建右下角入口按钮
+			 * @param {boolean} [opts.open=false] 初始是否展开
+			 * @returns {{overlay: HTMLElement, launcher: HTMLElement|null, root: object, unmount: () => void, show: () => void, hide: () => void}|null}
+			 */
+			function mountHierarchyOverlay(opts = {}) {
+				if (typeof window === "undefined" || typeof document === "undefined") return null;
+				if (document.getElementById(OVERLAY_HOST_ID)) return null; // 幂等
+			
+				const overlay = document.createElement("div");
+				overlay.id = OVERLAY_HOST_ID;
+				Object.assign(overlay.style, {
+					position: "fixed", zIndex: 2147483001,
+					right: PANEL.right + "px", bottom: PANEL.bottom + "px",
+					width: PANEL.width + "px", height: PANEL.height + "px",
+					border: "1px solid #2a2c30", borderRadius: "12px", overflow: "hidden",
+					background: "#16171a", boxShadow: "0 12px 40px rgba(0,0,0,.5)",
+					display: opts.open ? "block" : "none"
+				});
+				document.body.appendChild(overlay);
+			
+				const root = react_dom_client.createRoot(overlay);
+				const render = (open) => root.render(
+					(0, react_jsx_runtime.jsx)(DirectorHierarchy, { onClose: () => { hide(); } })
+				);
+				const show = () => { overlay.style.display = "block"; render(true); };
+				const hide = () => { overlay.style.display = "none"; };
+				render(opts.open);
+			
+				const launcher = opts.withLauncher === false ? null : makeLauncher(() => {
+					if (overlay.style.display === "none") show(); else hide();
+				});
+			
+				dshLog("hierarchy", "浮层面板已挂载（DOM 兜底通道）");
+				return {
+					overlay, launcher, root,
+					show, hide,
+					unmount: () => {
+						try { root.unmount(); } catch { /* 已卸载 */ }
+						overlay.remove();
+						if (launcher) launcher.remove();
+					}
+				};
+			}
+			
+			/**
+			 * 尝试注册到宿主 slot（可选增强，失败静默）
+			 * 仅当宿主在 window 上暴露 slots 服务时生效；否则返回 false。
+			 * @returns {boolean} 是否注册成功
+			 */
+			function tryRegisterHostSlot() {
+				try {
+					const slots = typeof window !== "undefined" ? window.__DSH_SLOTS__ : null;
+					if (!slots || typeof slots.register !== "function") return false;
+					slots.register({
+						name: "conversation.view",
+						id: "director",
+						order: -1,
+						title: "总监"
+					}, DirectorHierarchy);
+					dshLog("hierarchy", "已注册到宿主 conversation.view slot（id=director）");
+					return true;
+				} catch (e) {
+					dshLog("hierarchy", "宿主 slot 注册失败，改用浮层兜底: " + (e && e.message));
+					return false;
+				}
+			}
+			
+			/**
+			 * 统一入口：先尝试宿主 slot，无论成功与否都确保浮层兜底可用。
+			 * @param {object} [opts] 同 mountHierarchyOverlay
+			 */
+			function mountHierarchy(opts = {}) {
+				const slotOk = tryRegisterHostSlot();
+				const overlay = mountHierarchyOverlay(opts);
+				if (typeof window !== "undefined") {
+					window.__dshHierarchyMount = { slotRegistered: slotOk, overlay: Boolean(overlay), ...(overlay || {}) };
+				}
+				return { slotRegistered: slotOk, overlay };
+			}
+			
+			__defaults["mount.js"] = mountHierarchy;
+			
+			exports.OVERLAY_HOST_ID = OVERLAY_HOST_ID;
+			exports.LAUNCHER_ID = LAUNCHER_ID;
+			exports.mountHierarchyOverlay = mountHierarchyOverlay;
+			exports.tryRegisterHostSlot = tryRegisterHostSlot;
+			exports.mountHierarchy = mountHierarchy;
+		};
+
 		// ── client-entry.js ──
 		__defs["client-entry.js"] = function (exports) {
 			/**
@@ -3227,8 +4159,13 @@ window.__ModuleLoader__.load({
 			const { directorReviewReturn } = __m("logic/review.js");
 			// ── 批次 5 组件层 ──
 			const { DirectorFlow } = __m("components/DirectorFlow.js");
+			// ── 批次 6 多层级总监结构（对话级 / 文件夹级 / 全局级）──
+			const { installHierarchyApi, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID } = __m("store/hierarchy.js");
+			const { installSummarizeApi, summarizeTree } = __m("logic/summarize.js");
+			const { mountHierarchy } = __m("mount.js");
+			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
 			
-			const PLUGIN_VERSION = "0.5.0-batch5";
+			const PLUGIN_VERSION = "0.6.0-batch6";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
@@ -3281,6 +4218,42 @@ window.__ModuleLoader__.load({
 					//    ⚠️ 本组件含一处**迁移期修正**（`filteredMessages` 越界引用 → `state.messages`），
 					//       论证见 components/DirectorFlow.js 文件头 🔴 段落。**勿回退**。
 					window.__dshDirectorFlow = DirectorFlow;
+			
+					// ── 批次 6 多层级总监结构 ──
+					//    需求：03号文 §1.3 三层总监体系（全局总管 / 项目总监（文件夹级）/ 会话总监）
+					//          + 17号文 §2.1 三层记忆结构 MemoryNode + §1A.13 分层汇总 + §2.3 继承
+					//    全局契约（供宿主/调试/验证脚本调用，不可改名）：
+					//      window.__dshHierarchy  层级 CRUD（installHierarchyApi）
+					//      window.__dshSummarize  分层总结 + 分梯度调用（installSummarizeApi）
+					//      window.__dshHierarchyTree / __dshHierarchyStats  树快照与统计
+					window.__dshHierarchy = installHierarchyApi();
+					window.__dshSummarize = installSummarizeApi();
+				}
+			
+				// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
+				//    ⚠️ ensureGlobal 必须先于 loadTree —— 保证全局根节点存在（tree 构建依赖它）
+				//    ⚠️ 挂载默认开启（传 { mountHierarchy: false } 可关）；DOM 未就绪时延迟到 DOMContentLoaded
+				//    ⚠️ 挂载走「宿主 slot 优先 + 浮层兜底」双通道，兜底零宿主依赖 → 必定可见
+				const hierarchyReady = ensureGlobal().then(() => loadTree()).then((t) => {
+					if (typeof window !== "undefined") window.__dshHierarchyTree = t;
+					return t;
+				}).catch(() => null); // 层级树异步失败不影响其他能力
+			
+				let hierarchyMount = null;
+				if (options.mountHierarchy !== false) {
+					const doMount = () => {
+						try {
+							hierarchyMount = mountHierarchy({ open: options.openHierarchy === true });
+							if (typeof window !== "undefined" && window.__dshHierarchyMount) {
+								window.__dshHierarchyMount.mounted = true;
+							}
+						} catch (e) { /* 挂载失败静默，不阻断插件 */ }
+					};
+					if (typeof document !== "undefined" && document.readyState === "loading") {
+						document.addEventListener("DOMContentLoaded", doMount);
+					} else {
+						doMount();
+					}
 				}
 			
 				const installed = {
@@ -3321,8 +4294,18 @@ window.__ModuleLoader__.load({
 					directorFlow: typeof DirectorFlow === "function",
 					directorFlowWired: false, // 宿主调用点属批次 6 接线范围
 					// 🔴 迁移期修正标记：filteredMessages 越界引用已修为 state.messages
-					directorFlowFixedFilteredMessages: true
+					directorFlowFixedFilteredMessages: true,
+					// ── 批次 6 多层级总监结构 ──
+					hierarchyApi: typeof window !== "undefined" ? Boolean(window.__dshHierarchy) : false,
+					summarizeApi: typeof window !== "undefined" ? Boolean(window.__dshSummarize) : false,
+					// 语义：hierarchyMounted = 「浮层入口是否已挂载」（默认通道，必定可用）
+					//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」
+					hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.overlay),
+					hierarchySlotRegistered: Boolean(hierarchyMount && hierarchyMount.slotRegistered),
+					hierarchyTreeReady: false // 异步，稍后就绪
 				};
+			
+				hierarchyReady.then((t) => { installed.hierarchyTreeReady = Boolean(t); });
 			
 				docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 				preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
@@ -3333,11 +4316,12 @@ window.__ModuleLoader__.load({
 					window.__dshDirectorBatch3 = installed; // 批次 3 别名
 					window.__dshDirectorBatch4 = installed; // 批次 4 别名
 					window.__dshDirectorBatch5 = installed; // 批次 5 别名
+					window.__dshDirectorBatch6 = installed; // 批次 6 别名
 				}
 				return installed;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow };
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy };
 			
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
@@ -3363,6 +4347,17 @@ window.__ModuleLoader__.load({
 			exports.// ── 批次 5 ──
 	DirectorFlow = // ── 批次 5 ──
 	DirectorFlow;
+			exports.// ── 批次 6 多层级总监结构 ──
+	installHierarchyApi = // ── 批次 6 多层级总监结构 ──
+	installHierarchyApi;
+			exports.installSummarizeApi = installSummarizeApi;
+			exports.mountHierarchy = mountHierarchy;
+			exports.summarizeTree = summarizeTree;
+			exports.loadTree = loadTree;
+			exports.ensureGlobal = ensureGlobal;
+			exports.LEVEL = LEVEL;
+			exports.GLOBAL_NODE_ID = GLOBAL_NODE_ID;
+			exports.DirectorHierarchy = DirectorHierarchy;
 		};
 
 		// ── Harness client 插件契约导出 ──

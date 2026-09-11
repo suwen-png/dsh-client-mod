@@ -844,7 +844,42 @@ D1 并发锁（`status=processing` 时早退，不落盘不转发）· D2 `retur
 
 **其他实测修正**：E1 行号 `6972~7085`（函数起点随 A14 剥离 +3 漂移）；目标文件 `.jsx` → **`.js`**。
 
-**批次进度**：1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 ⬜（末批，依赖已就绪）
+**批次进度**：1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 🔴 **方案就绪待授权**
+
+
+### 14.16 🔴 批次 6 方案编制完成 —— F 区按实测重定级 + 关键约束澄清（2026-09-11）
+
+**交付**：`dsh-director-plugin/docs/03-批次6接线与退坡方案.md`。
+
+**F 区实测重定级（R8 铁律）**
+| 块 | 实测行号 | 处置 |
+|:--|:--|:--|
+| F1 InputBar 键盘分流 | 3568~3634 | ✅ **零改动**（仅读 window 契约 + 调 `__direct*Submit`，与实现解耦） |
+| F2 InputBar 按钮分流 | 3794~3812 | ✅ **零改动**（同 F1） |
+| F3 `__directorSubmit` | 11763~11776 | 🟡 **需改 1 行** |
+| F4 `__directChatSubmit` | 11777~11817 | ✅ **零改动**（记忆持久化已走 `__dshMemory` 契约） |
+| F5 tab 注册 | 11966~11967 | ⛔ **已由 MOD-B 退坡**（2026-09-07，**仅剩注释、代码已移除**）—— 原清单标「未开始」属**过期信息** |
+| G1 / G4 | 7111~7118 / 9149~9151 | ✅ **零改动**（T6 定案「不迁，只保」） |
+
+**🔴 关键约束：F3/F4「不能迁移」只能「改为调用插件」**
+F3 依赖 `concreteConversation(ctx)`、F4 依赖 `scopedConversation(sessions, sessionId)` —— 二者均为**宿主组件闭包内的私有 API**，
+插件包**无法 import**（跨包 value import = 构建错误，E8）。故正确形态是：
+**宿主（持有 ctx/sessions）→ 调用插件契约** `window.__dshDirectorProcess`（批次 4 已挂）。单向调用，符合 E8。
+
+**真机实证（本轮）**：`window.__dshDirectorProcess`（插件，function）与 `window.__directorSubmit`（宿主，function）**并存**，
+但宿主 F3 调用的仍是其**词法作用域内的内联** `directorProcess` ⇒ **插件 D1 目前是死代码**。这正是批次 6 要接的线。
+
+**最小闭环 = 改宿主 `client.js:11766` 一处**（插件优先 + 未加载回落），带存在性检查，零行为变更。
+
+**🔴 授权门槛**：宿主文件 `workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js` **被 `.gitignore:11` 排除，git 无法回滚**，
+兜底仅 `snapshots/snapshot-20260908-131412-before-apply/`（且为 **A14 剥离前**状态）。
+→ 依铁律「**git 忽略目录的不可逆操作须先确认**」，**已暂停等待授权**（属 §3.2 情形②不可逆操作）。
+
+**S5 遗留架构问题：双份实例（已登记）**
+宿主内联与插件各持**独立** `directorStores` Map / `directorStoreFactory`（内存态不共享）；
+但**持久化 key 共享**（`dsh.director.store.*`）⇒ 同页可能临时不同态、**刷新后一致、不丢数据**。
+判定为**可接受的过渡态**；彻底消除需**宿主内联硬退坡**（≈1,400+ 行，高风险，建议列为独立任务，执行前先补快照）。
+
 
 
 

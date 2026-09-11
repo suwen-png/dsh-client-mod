@@ -12,11 +12,26 @@
 | 3 | A6 文件通道 / **A7+A8 持久化读写** / **A9 createDirectorStore** / **A10 useDirectorStore** | ✅ **已完成 2026-09-11** |
 | 4 | **D1 directorProcess** / **D2 审核（保留不调用）** | ✅ **已完成 2026-09-11** |
 | 5 | **E1 DirectorFlow**（E2 DirectorView ⛔ 已废弃） | ✅ **已完成 2026-09-11** |
-| 6 | F3+F4 全局 API / F1/F2+G1/G4 宿主注入点改造 / F5 tab 注册 | ⬜ **依赖已就绪**，末批 |
+| 6 | F3 接线（改 1 行）/ F1+F2+F4+G1+G4 零改动 / F5 ⛔ 已由 MOD-B 退坡 | 🔴 **方案就绪，待授权**（须改宿主 `workspace/` `client.js`，`.gitignore` 排除） |
 
 **✅ 已真机装载**（2026-09-11）：插件已被 Harness 实际加载并运行 —— `__DSH_BOOT__` 42 entries 含本包，**27 项全局契约全挂载**，`__dshDocsIndex` **docCount=90**（A14 外置资源回填成功）。详见 `docs/01-插件迁移明细清单.md` §八。
 
 **四层验证（批次 5 全绿）**：源码级 **96/96** ｜ bundle 级 **63/63** ｜ 安装链路级 **60/60** ｜ 真机级 **39/39**。产物 `lib/client.js` **162,285 B / 21 模块**。
+
+## 批次 7：多层级总监结构（对话级 / 文件夹级 / 全局级）
+
+需求依据 **03号文 §1.3 三层总监体系 + §3.2 继承制 + §4.3 降级**，**17号文 §2.1 MemoryNode / §2.3 继承 / §1A.13 分层汇总**。
+三方案五维评分选型 → **方案 C（层级树 + 主内容区，42/50）**，详见 [`docs/04-多层级总监结构设计与方案选型.md`](./docs/04-多层级总监结构设计与方案选型.md)。
+
+| 模块 | 职责 |
+|:--|:--|
+| `src/store/hierarchy.js` | 三层节点 CRUD（global/project/session）+ 继承解析 + 面包屑。统一复用 `memoryCore`（**不新增 IDB store、不升 DB 版本**——宿主与插件共享 `dsh-director-db` v3） |
+| `src/logic/summarize.js` | 分层总结 + 分梯度调用：**G0 规则抽取 → G1 本地模型 → G2 上层汇总**；Ollama 不可用按 §4.3 回落 G0 |
+| `src/components/DirectorHierarchy.js` | 左「三级层级树」+ 右「meta/总结/子级摘要/操作」双栏 |
+| `src/mount.js` | 挂载：**宿主 slot 优先 + 浮层兜底**（兜底零宿主依赖，必定可见） |
+
+**真机实测**：三层 6 节点建成落盘（global1/project2/session3）；`summarizeTree` 处理 6 节点，Ollama 未启 → 全降级 G0；右下角「总监层级」入口**已可见**（闭环此前「插件没了」的根因：宿主 2026-09-07 退坡删除总监视图注册，而插件侧从未注册入口）。
+**验证**：`node scripts/verify-batch6.mjs` → **65/65 通过**。产物 **207,590 B / 25 模块**（平台外置含 `react-dom/client`，React 仍零打包）。
 
 **批次 1 关键成果**：宿主 `client.js` **1,479,577 → 564,826 B（-914,751 B / -61.8%）** —— 单行 541KB 的 `DSH_DOCS_INDEX` 内联常量已外置为 `assets/docs-index.json`（含 docs/ 90 篇全文），改由插件运行时加载。
 
@@ -37,6 +52,7 @@ dsh-director-plugin/
 ├── cordis.patch.yml          ← host entry insert 补丁（官方契约同形）
 ├── docs/01-插件迁移明细清单.md ← 施工图 + 修改导航图（★ 改代码前先查这里）
 ├── docs/02-G区宿主注入点清单.md ← T6 交付（G 区锚点全量登记）
+├── docs/03-批次6接线与退坡方案.md ← T11 交付（F 区重定级 + 精确改动清单 + 风险评估）
 ├── scripts/
 │   ├── strip-a14.py          ← A14 剥离脚本（含 --dry-run）
 │   ├── restore-a14.py        ← A14 回滚（含 --check）

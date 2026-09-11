@@ -81,8 +81,13 @@ import { directorProcess } from "./logic/process.js";
 import { directorReviewReturn } from "./logic/review.js";
 // ── 批次 5 组件层 ──
 import { DirectorFlow } from "./components/DirectorFlow.js";
+// ── 批次 6 多层级总监结构（对话级 / 文件夹级 / 全局级）──
+import { installHierarchyApi, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID } from "./store/hierarchy.js";
+import { installSummarizeApi, summarizeTree } from "./logic/summarize.js";
+import { mountHierarchy } from "./mount.js";
+import { DirectorHierarchy } from "./components/DirectorHierarchy.js";
 
-export const PLUGIN_VERSION = "0.5.0-batch5";
+export const PLUGIN_VERSION = "0.6.0-batch6";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -135,6 +140,42 @@ export function installBatch1(options = {}) {
 		//    ⚠️ 本组件含一处**迁移期修正**（`filteredMessages` 越界引用 → `state.messages`），
 		//       论证见 components/DirectorFlow.js 文件头 🔴 段落。**勿回退**。
 		window.__dshDirectorFlow = DirectorFlow;
+
+		// ── 批次 6 多层级总监结构 ──
+		//    需求：03号文 §1.3 三层总监体系（全局总管 / 项目总监（文件夹级）/ 会话总监）
+		//          + 17号文 §2.1 三层记忆结构 MemoryNode + §1A.13 分层汇总 + §2.3 继承
+		//    全局契约（供宿主/调试/验证脚本调用，不可改名）：
+		//      window.__dshHierarchy  层级 CRUD（installHierarchyApi）
+		//      window.__dshSummarize  分层总结 + 分梯度调用（installSummarizeApi）
+		//      window.__dshHierarchyTree / __dshHierarchyStats  树快照与统计
+		window.__dshHierarchy = installHierarchyApi();
+		window.__dshSummarize = installSummarizeApi();
+	}
+
+	// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
+	//    ⚠️ ensureGlobal 必须先于 loadTree —— 保证全局根节点存在（tree 构建依赖它）
+	//    ⚠️ 挂载默认开启（传 { mountHierarchy: false } 可关）；DOM 未就绪时延迟到 DOMContentLoaded
+	//    ⚠️ 挂载走「宿主 slot 优先 + 浮层兜底」双通道，兜底零宿主依赖 → 必定可见
+	const hierarchyReady = ensureGlobal().then(() => loadTree()).then((t) => {
+		if (typeof window !== "undefined") window.__dshHierarchyTree = t;
+		return t;
+	}).catch(() => null); // 层级树异步失败不影响其他能力
+
+	let hierarchyMount = null;
+	if (options.mountHierarchy !== false) {
+		const doMount = () => {
+			try {
+				hierarchyMount = mountHierarchy({ open: options.openHierarchy === true });
+				if (typeof window !== "undefined" && window.__dshHierarchyMount) {
+					window.__dshHierarchyMount.mounted = true;
+				}
+			} catch (e) { /* 挂载失败静默，不阻断插件 */ }
+		};
+		if (typeof document !== "undefined" && document.readyState === "loading") {
+			document.addEventListener("DOMContentLoaded", doMount);
+		} else {
+			doMount();
+		}
 	}
 
 	const installed = {
@@ -175,8 +216,18 @@ export function installBatch1(options = {}) {
 		directorFlow: typeof DirectorFlow === "function",
 		directorFlowWired: false, // 宿主调用点属批次 6 接线范围
 		// 🔴 迁移期修正标记：filteredMessages 越界引用已修为 state.messages
-		directorFlowFixedFilteredMessages: true
+		directorFlowFixedFilteredMessages: true,
+		// ── 批次 6 多层级总监结构 ──
+		hierarchyApi: typeof window !== "undefined" ? Boolean(window.__dshHierarchy) : false,
+		summarizeApi: typeof window !== "undefined" ? Boolean(window.__dshSummarize) : false,
+		// 语义：hierarchyMounted = 「浮层入口是否已挂载」（默认通道，必定可用）
+		//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」
+		hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.overlay),
+		hierarchySlotRegistered: Boolean(hierarchyMount && hierarchyMount.slotRegistered),
+		hierarchyTreeReady: false // 异步，稍后就绪
 	};
+
+	hierarchyReady.then((t) => { installed.hierarchyTreeReady = Boolean(t); });
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 	preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
@@ -187,6 +238,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch3 = installed; // 批次 3 别名
 		window.__dshDirectorBatch4 = installed; // 批次 4 别名
 		window.__dshDirectorBatch5 = installed; // 批次 5 别名
+		window.__dshDirectorBatch6 = installed; // 批次 6 别名
 	}
 	return installed;
 }
@@ -210,5 +262,9 @@ export {
 	directorProcess,
 	directorReviewReturn,
 	// ── 批次 5 ──
-	DirectorFlow
+	DirectorFlow,
+	// ── 批次 6 多层级总监结构 ──
+	installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal,
+	LEVEL, GLOBAL_NODE_ID,
+	DirectorHierarchy
 };
