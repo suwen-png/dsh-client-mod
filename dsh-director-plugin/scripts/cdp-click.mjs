@@ -110,34 +110,47 @@ window.__q = (sel) => document.querySelector(sel);
 window.__qa = (sel) => Array.from(document.querySelectorAll(sel));
 window.__byText = (sel, txt) => window.__qa(sel).find(e => (e.textContent||'').includes(txt));
 window.__visible = (el) => { if(!el) return false; const r = el.getBoundingClientRect(); return r.width>0 && r.height>0; };
-window.__panel = () => document.getElementById('dsh-director-hierarchy-overlay');
+window.__panel = () => document.querySelector('#dsh-director-dialog [data-panel="levels"]');
+window.__dlg = () => document.getElementById('dsh-director-dialog');
+window.__openLevels = async () => {
+	const launcher = () => document.getElementById('dsh-director-hierarchy-launcher');
+	for (let i = 0; i < 5; i++) {
+		if (!window.__dlg()) { const l = launcher(); if (l) l.click(); await new Promise(r => setTimeout(r, 520)); continue; }
+		if (!window.__panel()) { const seg = document.querySelector('[data-testid="d-seg-levels"]'); if (seg) seg.click(); await new Promise(r => setTimeout(r, 420)); continue; }
+		return true;
+	}
+	return Boolean(window.__panel());
+};
+window.__closeDlg = async () => {
+	const btn = document.querySelector('[data-testid="d-close"]');
+	if (btn) btn.click();
+	else { const l = document.getElementById('dsh-director-hierarchy-launcher'); if (l && window.__dlg()) l.click(); }
+	await new Promise(r => setTimeout(r, 520));
+	return !window.__dlg();
+};
 'helpers ready'
 `);
 
-console.log("\n══════ 真机逐交互点击验证（批次 8）══════\n");
+console.log("\n══════ 真机逐交互点击验证（批次 8 回归 · 批次 9 弹窗通道）══════\n");
 
-/* ── I1 入口按钮 ── */
-console.log("[I1] 入口按钮「总监层级」");
+/* ── I1 入口按钮（批次 9：入口改开弹窗，`#dsh-director-dialog`；层级内容在「层级」段内）── */
+console.log("[I1] 入口按钮「总监」→ 弹窗打开");
 const i1 = await evalExpr(`(() => {
 	const btn = document.getElementById('dsh-director-hierarchy-launcher');
 	if (!btn) return { found:false };
-	const before = window.__panel() ? window.__panel().style.display : null;
-	btn.click();
-	return { found:true, before, text: btn.textContent, after: window.__panel() ? window.__panel().style.display : null };
+	return { found:true, text: btn.textContent, dlgBefore: Boolean(window.__dlg()) };
 })()`);
 ok("入口按钮存在", i1.found, "文案「" + (i1.text || "") + "」");
-await sleep(1200);
-// 🔴 幂等开启：launcher 是**切换**语义，若上轮结束时面板仍开着，单次点击反而会关闭。
-//    故「未打开则再点一次」，使本脚本可从任意初始状态重复运行。
-const i1open = await evalExpr(`(async () => {
-	for (let i = 0; i < 3; i++) {
-		if (window.__panel().style.display === 'block') return 'block';
-		document.getElementById('dsh-director-hierarchy-launcher').click();
-		await new Promise(r => setTimeout(r, 600));
-	}
-	return window.__panel().style.display;
-})()`);
-ok("点击后面板打开", i1open === "block", "display=" + i1open);
+await sleep(700);
+const i1open = await evalExpr(`(async () => (await window.__openLevels()) ? 'open' : 'closed')()`);
+ok("点击后弹窗打开且「层级」段就位", i1open === "open", "state=" + i1open);
+const i1spot = await evalExpr(`(() => ({
+	hole: Boolean(document.querySelector('[data-testid="d-hole"]')),
+	dialog: Boolean(window.__dlg()),
+	split: document.documentElement.innerHTML.indexOf('dsh-director-split-style') >= 0
+}))()`);
+ok("弹窗为 spotlight 非模态覆盖层（洞内原生区保持可交互）", i1spot.hole && i1spot.dialog, JSON.stringify(i1spot));
+ok("分屏通道已生效（原生对话区被右挤，零节点移动）", i1spot.split === true, "split-style=" + i1spot.split);
 
 /* ── I2/I3 页签 ── */
 console.log("\n[I2] 页签 [概览]");
@@ -150,7 +163,7 @@ await sleep(700);
 const i2b = await evalExpr(`(() => {
 	const p = window.__panel(); if(!p) return {ok:false};
 	const txt = p.innerText||'';
-	return { ok:true, hasCov:/总监已全覆盖|存在未覆盖/.test(txt), hasSync:/同步真实会话/.test(txt), hasDirectorPanel: Boolean(window.__q('[data-panel="director"]')) };
+	return { ok:true, hasCov:/总监已全覆盖|存在未覆盖/.test(txt), hasSync:/同步真实会话/.test(txt), hasDirectorPanel: Boolean(p.querySelector('[data-panel="director"]')) };
 })()`);
 ok("概览内容可见（覆盖度 + 同步按钮）", i2b.hasCov && i2b.hasSync);
 ok("概览态下总监面板未渲染", i2b.hasDirectorPanel === false);
@@ -167,14 +180,14 @@ const i3b = await evalExpr(`(() => {
 	const txt = p.innerText||'';
 	return {
 		ok:true,
-		panel: Boolean(window.__q('[data-panel="director"]')),
+		panel: Boolean(p.querySelector('[data-panel="director"]')),
 		hasDuties:/执行逻辑/.test(txt),
 		hasFlow:/总监对话流/.test(txt),
 		hasSave:/保存本层/.test(txt),
 		hasSubmit:/向上提交/.test(txt),
 		hasRestore:/恢复继承/.test(txt),
-		checks: window.__qa('[data-duty]').length,
-		hasInput: Boolean(window.__q('[data-testid="director-input"]'))
+		checks: p.querySelectorAll('[data-duty]').length,
+		hasInput: Boolean(p.querySelector('[data-testid="director-input"]'))
 	};
 })()`);
 ok("总监工作台已渲染", i3b.panel && i3b.hasDuties && i3b.hasFlow);
@@ -210,6 +223,7 @@ ok("prompt 编辑按钮点击后出现 textarea", i5.found && i5.hasTextarea, "�
 
 /* ── I6 保存本层（回读落库） ── */
 console.log("\n[I6] 保存本层 → 回读落库");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i6 = await evalExpr(`(async () => {
 	// 🔴 回读「当前选中节点」：以 UI 的真实选中态为准（data-selected="true"），
 	//    不再假设「默认选中的是根节点」——那是实现细节，不是可见行为。
@@ -236,6 +250,7 @@ ok("🔴 回读：来源标记变为本层（own）", i6.ownAfter === "configure
 
 /* ── I7 向上提交 ── */
 console.log("\n[I7] 向上提交 → 回读父节点");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i7 = await evalExpr(`(async () => {
 	// 先选一个会话级节点（有父级），再向上提交
 	const t = await window.__dshHierarchy.loadTree();
@@ -297,6 +312,7 @@ if (i7.found) {
 
 /* ── I9 总监对话流发送 ── */
 console.log("\n[I9] 总监对话流：发送消息");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i9a = await evalExpr(`(async () => {
 	const box = window.__q('[data-testid="director-messages"]');
 	if (!box) return { found:false, reason:'消息区未渲染（总监页签是否激活？）' };
@@ -341,6 +357,7 @@ ok("五步过程已展示", i9b.hasSteps);
 
 /* ── I10 自动转发 ── */
 console.log("\n[I10] 自动转发开关");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i10 = await evalExpr(`(async () => {
 	const cb = window.__q('[data-testid="director-autoforward"]');
 	if(!cb) return {found:false};
@@ -374,16 +391,19 @@ ok("🔴 自动转发回调被实际触发", i10b.forwardDone === true && typeof
 /* ── I11 树节点选择 ── */
 console.log("\n[I11] 树节点选择");
 const i11 = await evalExpr(`(async () => {
-	// 树在左栏，始终可见；用 data-node-id 精确定位所有行
-	const rows = window.__qa('[data-node-id]');
+	// 树在左栏，始终可见；用 [data-node-id][data-selected] 精确定位**树行**
+	// （🆕 批次 9：弹窗面板自身也带节点绑定属性，故必须同时要求 data-selected，
+	//   否则首个命中会是面板而非行 —— 真机实测踩中过）
+	const rows = window.__qa('[data-node-id][data-selected]');
 	if (!rows.length) return {found:false};
-	const cur = window.__q('[data-selected="true"]');
+	const cur = rows.find(r => r.getAttribute('data-selected') === 'true');
 	const curId = cur ? cur.getAttribute('data-node-id') : null;
 	// 挑一个**与当前不同**的行，才能证明「点击 → 选中态迁移」
 	const target = rows.find(r => r.getAttribute('data-node-id') !== curId) || rows[0];
 	const targetId = target.getAttribute('data-node-id');
 	const targetName = (target.textContent||'').trim().slice(0,20);
-	const beforeCrumb = (window.__panel().innerText||'').split('\\n')[0];
+	const bcr = window.__panel();
+	const beforeCrumb = ((bcr ? (bcr.innerText||'') : '')).split('\\n')[0];
 	target.click();
 	await new Promise(r=>setTimeout(r,800));
 	const sel = window.__q('[data-selected="true"]');
@@ -399,6 +419,7 @@ ok("🔴 回读：选中态迁移到被点击的行", i11.selectedAfter === i11.
 
 /* ── I12 同步真实会话 ── */
 console.log("\n[I12] 同步真实会话");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 await evalExpr(`(() => { const t = window.__q('[data-testid="h-tab-overview"]'); if(t) t.click(); return 'ok'; })()`);
 await sleep(800);
 const i12 = await evalExpr(`(async () => {
@@ -437,6 +458,7 @@ window.__enabled = (sel) => { const e = window.__q(sel); return Boolean(e) && !e
 
 /* ── I13 基础信息编辑 + 保存 ── */
 console.log("\n[I13] 基础信息（meta）编辑 → 保存基础信息 → 回读落库");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i13 = await evalExpr(`(async () => {
 	await new Promise(r=>setTimeout(r,300));
 	const nameEl = window.__q('[data-testid="h-meta-name"]');
@@ -467,6 +489,7 @@ ok("🔴 回读：定位/目标/当前阶段已落库",
 
 /* ── I14 生成本级总结 ── */
 console.log("\n[I14] 生成本级总结 → 回读 summary");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i14 = await evalExpr(`(async () => {
 	const btn = window.__q('[data-testid="h-sum-one"]'); if(!btn) return {found:false};
 	const sel = window.__q('[data-selected="true"]'); const id = sel.getAttribute('data-node-id');
@@ -491,6 +514,7 @@ ok("🔴 回读：summaryGrade 已标记（G0/G1/G2）", ["G0","G1","G2"].includ
 
 /* ── I15 向上提交（总结继承） ── */
 console.log("\n[I15] 向上提交（总结）→ 回读父节点 summary");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i15 = await evalExpr(`(async () => {
 	const btn = window.__q('[data-testid="h-prop-up"]'); if(!btn) return {found:false};
 	const sel = window.__q('[data-selected="true"]'); const id = sel.getAttribute('data-node-id');
@@ -515,6 +539,7 @@ if (i15.isRoot) {
 
 /* ── I16 整树分层总结 ── */
 console.log("\n[I16] 整树分层总结 → 回读多节点 summary");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i16 = await evalExpr(`(async () => {
 	const btn = window.__q('[data-testid="h-sum-tree"]'); if(!btn) return {found:false};
 	btn.click();
@@ -543,6 +568,7 @@ ok("🔴 回读：梯度标记存在（§4.3 降级生效）", i16.grades.length
 
 /* ── I17 新建节点 ── */
 console.log("\n[I17] 新建节点（在当前节点下）");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 await waitIdle();
 const i17 = await evalExpr(`(async () => {
 	const nameEl = window.__q('[data-testid="h-new-name"]');
@@ -568,6 +594,7 @@ ok("🔴 回读：新节点已出现在树中且层级正确", i17.created && i1
 
 /* ── I18 挂载会话 ── */
 console.log("\n[I18] 挂载会话（会话 ID + 标题）");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 await waitIdle();
 const i18 = await evalExpr(`(async () => {
 	// 先选中刚建的项目节点（挂载目标是「当前选中节点」）
@@ -609,6 +636,7 @@ ok("🔴 回读：会话节点挂在目标文件夹下", i18.hitParent === i18.f
 
 /* ── I19 删除当前节点 ── */
 console.log("\n[I19] 删除当前节点 → 回读消失 + 子级升祖父（不留孤儿）");
+await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 await waitIdle();
 const i19 = await evalExpr(`(async () => {
 	// 🔴 删除的是【当前选中】节点 —— 必须先把它选上，否则删的是别的节点
@@ -639,25 +667,32 @@ ok("🔴 回读：节点已从库中删除", i19.deleted === true);
 ok("🔴 回读：原子节点升到祖父（无孤儿）", i19.childParentAfter === i19.expectedParent,
 	"子节点父级 " + i19.childParentAfter + " = 期望 " + i19.expectedParent);
 
-/* ── I20 收起 ── */
-console.log("\n[I20] 收起 → 面板关闭");
+/* ── I20 收起 ──
+ * 批次 9 变更：层级组件在弹窗内以 `compact` 形态渲染（不传 onClose）⇒ 不再渲染 `h-close`。
+ * 「收起」语义上移到**弹窗层**：用 `d-close`（关闭弹窗 + clearSplit 完全复原原生布局）。
+ * 断言意图不变：点「收起」后层级 UI 消失且原生布局复原。 */
+console.log("\n[I20] 收起 → 弹窗关闭 + 原生布局复原");
 const i20 = await evalExpr(`(async () => {
-	const btn = window.__q('[data-testid="h-close"]');
-	if (!btn) return {found:false};
-	btn.click();
-	await new Promise(r=>setTimeout(r,600));
-	return { found:true, display: window.__panel().style.display };
+	const hasHClose = Boolean(window.__q('[data-testid="h-close"]'));
+	const before = Boolean(window.__panel());
+	const closed = await window.__closeDlg();
+	const splitLeft = Boolean(document.getElementById('dsh-director-split-style'));
+	const rootMarked = Boolean(document.querySelector('[data-dsh-split-root]'));
+	return { before, closed, hasHClose, splitLeft, rootMarked };
 })()`);
-ok("收起按钮可点击", i20.found);
-ok("🔴 回读：面板已关闭", i20.display === "none", "display=" + i20.display);
+ok("收起前层级内容可见", i20.before === true);
+ok("🔴 回读：弹窗已关闭", i20.closed === true, "closed=" + i20.closed);
+ok("🔴 分屏样式已移除（clearSplit 完全可逆）", i20.splitLeft === false, "split-style=" + i20.splitLeft);
+ok("🔴 原生应用根零残留标记（data-* 全清）", i20.rootMarked === false, "rootMarked=" + i20.rootMarked);
 
 /* ── I21 全量交互元素覆盖审计 ── */
 console.log("\n[I21] 全量交互元素覆盖审计（防止再漏）");
-const i21 = await evalExpr(`(() => {
+const i21 = await evalExpr(`(async () => {
 	const launcher = document.getElementById('dsh-director-hierarchy-launcher');
+	// 审计需要层级段可见；用幂等开启而非切换
+	await window.__openLevels();
 	const p = window.__panel();
-	// 审计需要面板可见；用幂等开启而非切换
-	for (let i = 0; i < 3 && p.style.display !== 'block'; i++) { if (launcher) launcher.click(); }
+	if (!p) return { total:0, uncovered:['层级段未就绪'], launcher:Boolean(launcher), missingTestId:0 };
 	const els = Array.from(p.querySelectorAll('button,input,textarea,select'));
 	// 本脚本已实际点击过的 testid（上表与之一一对应）
 	const covered = ['h-tab-overview','h-tab-director','h-close','h-sync','h-meta-name',

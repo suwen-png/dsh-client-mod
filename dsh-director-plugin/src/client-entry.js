@@ -38,9 +38,25 @@
  *      🔴 含一处**迁移期修正**：宿主 `filteredMessages` 属跨作用域越界引用（自诞生即坏，
  *         P2 清理删除 DirectorView 后沦为完全未定义）→ 改用 `state.messages`。论证见该文件头。
  *
- * ── 待迁入（批次 6）─────────────────────────────────────────
- *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造  ⬜ F5 插件侧 tab 注册
+ * ── 批次 6–8（多层级总监 / 自动同步 / 职责完善）───────────────────
+ *   ✅ hierarchy / summarize / discover / sync / duties / director-run
  *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
+ *
+ * ── 批次 9 弹窗式总监架构（T-PLUG-015 · docs/10 §四 + docs/11 §六）──
+ *   ✅ 要求 1 数据元独立 → store/plugin-db.js      `dsh-director-plugin-db` v1 / 6 store
+ *      🔴 与宿主 `dsh-director-db` v3 **物理隔离**：IDB 版本协商只发生在同名库内，
+ *         故新库不参与宿主协商 ⇒ 「物理隔离」与「R5 键冻结」可同时成立。见 docs/10 §3.4
+ *   ✅ 要求 5 布局分屏   → bridge/split.js         只注入 `<style>` + data-* 标记，
+ *      **零节点移动**、逐值可逆（真机实测：移除后 viewArea x 580→280 / w 854→1154）
+ *   ✅ 要求 5 双向联动   → bridge/chat-bridge.js   React 受控输入安全写入（原生 setter +
+ *      input 事件）；`sendToChat` 两级降级（sent → filled），每步写后回读校验
+ *   ✅ 要求 7/9 层级入口 → bridge/nav-hook.js      捕获阶段 pointerdown + 三级名称匹配
+ *   ✅ 要求 8 智能路由   → logic/routing.js        五步路由 + `confirmRoute` 留痕（不静默分发）
+ *   ✅ 要求 3 六维审核   → logic/routing.js        `review6` 六维齐备（17号文 §1A.9，不减项）
+ *   ✅ 要求 6 弹窗三态   → components/DirectorDialog.js + store/layout.js 新字段
+ *
+ * ── 待迁入（存量）───────────────────────────────────────────
+ *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造（B6，需授权）
  *
  * ⚠️ 关键约束
  *   - 平台模块（react / cordis / web-react 等）**必须 external**，严禁打进产物（ADR-001）；
@@ -93,8 +109,15 @@ import { installSyncApi, syncFromSource, auditCoverage } from "./logic/sync.js";
 import { installDutyApi, resolveDuties, submitUp } from "./store/duty-config.js";
 import { installDirectorRunApi } from "./logic/director-run.js";
 import { DirectorWorkbench } from "./components/DirectorWorkbench.js";
+// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+import { installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME } from "./store/plugin-db.js";
+import { installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION } from "./logic/routing.js";
+import { installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive } from "./bridge/split.js";
+import { installChatBridgeApi, sendToChat, readConversation } from "./bridge/chat-bridge.js";
+import { installNavHook, installNavHookApi } from "./bridge/nav-hook.js";
+import { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } from "./components/DirectorDialog.js";
 
-export const PLUGIN_VERSION = "0.8.0-batch8";
+export const PLUGIN_VERSION = "0.9.0-batch9";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -167,6 +190,21 @@ export function installBatch1(options = {}) {
 		//    window.__dshDirectorRun  §1.2 五步标准执行逻辑（整理/分支/模型/上下文/审核）
 		window.__dshDuties = installDutyApi();
 		window.__dshDirectorRun = installDirectorRunApi();
+
+		// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+		//    要求 1 数据元独立  window.__dshPluginDb   → dsh-director-plugin-db@v1（6 store）
+		//    要求 8 智能路由    window.__dshRouter     → route / confirmRoute（五步，不静默分发）
+		//    要求 3 六维审核    window.__dshReview6    → REVIEW_DIMS + review6 + reviewAndSave
+		//    要求 5 布局分屏    window.__dshSplitApi   → applySplit / clearSplit（幂等可逆）
+		//    要求 5 双向联动    window.__dshChatBridge → sendToChat / readConversation
+		//    要求 7/9 层级入口  window.__dshNavApi     → installNavHook（点侧栏 → 打开该层级总监）
+		window.__dshPluginDb = installPluginDbApi();
+		window.__dshRouter = installRoutingApi();
+		window.__dshSplitApi = installSplitApi();
+		window.__dshChatBridge = installChatBridgeApi();
+		window.__dshNavApi = installNavHookApi();
+		window.__dshReview6 = { REVIEW_DIMS, review6 };
+		window.__dshDirectorDialog = DirectorDialog;
 	}
 
 	// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -249,10 +287,12 @@ export function installBatch1(options = {}) {
 		// ── 批次 6 多层级总监结构 ──
 		hierarchyApi: typeof window !== "undefined" ? Boolean(window.__dshHierarchy) : false,
 		summarizeApi: typeof window !== "undefined" ? Boolean(window.__dshSummarize) : false,
-		// 语义：hierarchyMounted = 「浮层入口是否已挂载」（默认通道，必定可用）
-		//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」
-		hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.overlay),
-		hierarchySlotRegistered: Boolean(hierarchyMount && hierarchyMount.slotRegistered),
+		// 语义：hierarchyMounted = 「弹窗主通道是否已挂载」（`#dsh-director-dialog-host` 是否就位，
+		//        零宿主依赖 ⇒ 必定可用）；
+		//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」——
+		//        需 `ctx.slots`，真机 `window.__DSH_SLOTS__` 不存在 ⇒ 恒 false（docs/10 §四 4.1）。
+		hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.host),
+		hierarchySlotRegistered: false,
 		hierarchyTreeReady: false, // 异步，稍后就绪
 		// ── 批次 7 自动同步 ──
 		discoverApi: typeof window !== "undefined" ? Boolean(window.__dshDiscover) : false,
@@ -263,7 +303,29 @@ export function installBatch1(options = {}) {
 		// ── 批次 8 总监逻辑完善 ──
 		dutyApi: typeof window !== "undefined" ? Boolean(window.__dshDuties) : false,
 		directorRunApi: typeof window !== "undefined" ? Boolean(window.__dshDirectorRun) : false,
-		workbench: typeof DirectorWorkbench === "function"
+		workbench: typeof DirectorWorkbench === "function",
+		// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+		//    要求 1：独立数据元（物理隔离库，与宿主 `dsh-director-db` v3 不同名）
+		pluginDb: typeof window !== "undefined" ? Boolean(window.__dshPluginDb) : false,
+		pluginDbName: PLUGIN_DB_NAME,
+		//    要求 8 + 3：智能路由（五步，STEP4 必须确认）与六维审核
+		routerApi: typeof window !== "undefined" ? Boolean(window.__dshRouter) : false,
+		review6Api: typeof window !== "undefined" ? Boolean(window.__dshReview6) : false,
+		reviewDimCount: REVIEW_DIMS.length, // 必须 = 6（17号文 §1A.9，不得减项）
+		//    要求 5：布局分屏通道 + 与原生对话的双向联动通道
+		splitApi: typeof window !== "undefined" ? Boolean(window.__dshSplitApi) : false,
+		chatBridgeApi: typeof window !== "undefined" ? Boolean(window.__dshChatBridge) : false,
+		//    要求 7/9：点侧栏文件夹/项目 → 打开该层级总监
+		navApi: typeof window !== "undefined" ? Boolean(window.__dshNavApi) : false,
+		//    要求 6/10/11：弹窗本体 + 可调用智能体/技能清单
+		dialogComponent: typeof DirectorDialog === "function",
+		dialogId: DIALOG_ID,
+		agents: AGENTS.map((a) => a.key),
+		skills: SKILLS.map((s) => s.key),
+		// 分屏当前是否生效（弹窗打开且未最小化时为 true）
+		splitActive: isSplitActive(),
+		// 独立库落盘统计（异步，稍后就绪）
+		pluginDbStats: null
 	};
 
 	hierarchyReady.then((t) => {
@@ -274,6 +336,8 @@ export function installBatch1(options = {}) {
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 	preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
+	// 独立库统计（异步；仅用于真机取证与弹窗 R6「数据元独立」展示，失败静默）
+	pluginDbStats().then((s) => { installed.pluginDbStats = s; }).catch(() => { });
 
 	if (typeof window !== "undefined") {
 		window.__dshDirectorBatch1 = installed;
@@ -284,6 +348,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch6 = installed; // 批次 6 别名
 		window.__dshDirectorBatch7 = installed; // 批次 7 别名
 		window.__dshDirectorBatch8 = installed; // 批次 8 别名
+		window.__dshDirectorBatch9 = installed; // 批次 9 别名（弹窗式总监架构）
 	}
 	return installed;
 }
@@ -315,5 +380,12 @@ export {
 	// ── 批次 7 自动同步 ──
 	installDiscoverApi, installSyncApi, syncFromSource, auditCoverage,
 	// ── 批次 8 总监逻辑完善 ──
-	installDutyApi, resolveDuties, submitUp, DirectorWorkbench
+	installDutyApi, resolveDuties, submitUp, DirectorWorkbench,
+	// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+	installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元
+	installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3
+	installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏
+	installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动
+	installNavHook, installNavHookApi,                      // 要求 7/9 层级入口
+	DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns // 要求 6/10/11 弹窗本体
 };

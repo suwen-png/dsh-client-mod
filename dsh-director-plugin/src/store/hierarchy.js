@@ -8,16 +8,33 @@
  *   - 17-总监统治架构与项目驾驶舱方案-v9.md §2.1 三层记忆结构 MemoryNode（:365-428）
  *   - 同上 §2.3 隔离 / 共享 / 继承（:443-447）
  *
- * 存储决策（🔴 关键约束：不得新增 IDB store、不得升 DB 版本）
- *   宿主与插件共享 DB `dsh-director-db` v3（R5 兼容约束）。插件若升 v4，
- *   宿主再以 v3 打开会失败 ⇒ 版本冲突。故**全部层级节点统一存 `memoryCore`**
- *   （keyPath `projectId`，这里以 nodeId 作为 projectId），与 17号文
- *   MemoryNode「level: global|project|subproject + parentId + children[]」定义一致。
+ * 存储决策（🔴 已按 docs/10 §3.4 订正 —— 独立库论证）
+ *
+ *   **T-PLUG-009 的旧结论（过度约束）**：宿主与插件共享 DB `dsh-director-db` v3，
+ *   插件若升 v4，宿主再以 v3 打开会失败 ⇒ 故"全部层级节点只能存 `memoryCore`"。
+ *
+ *   **订正**：IndexedDB 的**版本协商只发生在同一个数据库名内**。
+ *   `dsh-director-plugin-db` v1 是**另一个库**，完全不参与宿主的版本协商 ⇒ 对宿主零影响。
+ *   ⇒ 「物理隔离（要求 1）」与「R5 冻结 key」**可以同时成立**，无需取舍。
+ *
+ *   现行策略（docs/10 §3.5 四阶段迁移）：
+ *     ① 写入：**主写** `dsh-director-plugin-db/directorNodes`，
+ *        **镜像** `memoryCore`（阶段 2 的兼容镜像，保证既有面板/脚本/存量不破）
+ *     ② 读取：**先新库**；新库无该节点 → 回落旧 `memoryCore`（只读）
+ *     ③ 迁移：`listAllNodes` 发现新库为空而旧库有条目时，**自动搬迁**（幂等，按 nodeId upsert）
+ *     ④ 旧记录**不删**（尊重《锚点契约》"历史数据保留"）
  *
  * 全局契约：`window.__dshHierarchy`（供宿主/调试/验证脚本调用）
  */
 
 import { openIDB, IDB_MEMORY_CORE_STORE } from "./idb.js";
+import {
+	saveDirectorNode as pdbSaveNode,
+	getDirectorNode as pdbGetNode,
+	listDirectorNodes as pdbListNodes,
+	deleteDirectorNode as pdbDeleteNode,
+	PLUGIN_DB_NAME
+} from "./plugin-db.js";
 
 /** 层级枚举（对齐 17号文 §2.1 `level`） */
 export const LEVEL = {
@@ -109,7 +126,12 @@ export function makeNode({ id, name, level, parentId = null, meta = {} }) {
 	};
 }
 
-/* ── IDB 读写（统一走 memoryCore） ───────────────────────────── */
+/* ── IDB 读写 ────────────────────────────────────────────────
+ * 主存：`dsh-director-plugin-db/directorNodes`（插件自有，物理隔离 —— 要求 1）
+ * 镜像：旧 `dsh-director-db/memoryCore`（兼容镜像，阶段 2；旧记录不删 —— 阶段 4 前）
+ * 兼容镜像开关（阶段 2→4）：置 false 即停止写旧库，届时旧库仅剩历史数据。
+ * ------------------------------------------------------------------------- */
+export const MIRROR_LEGACY_MEMORY_CORE = true;
 
 function tx(mode, fn) {
 	return openIDB().then((db) => new Promise((resolve, reject) => {
@@ -122,30 +144,53 @@ function tx(mode, fn) {
 	}));
 }
 
-/** 读取单个节点 */
-export function getNode(id) {
+/* ── 旧库（memoryCore）读写：仅用于回落与镜像 ── */
+function legacyGet(id) {
 	return tx("readonly", (s) => s.get(id)).then((r) => r || null).catch(() => null);
+}
+function legacyPut(node) {
+	const next = { ...node, projectId: node.id, meta: { ...(node.meta || {}), updatedAt: Date.now() } };
+	return tx("readwrite", (s) => s.put(next)).then(() => true).catch(() => false);
+}
+function legacyDel(id) {
+	return tx("readwrite", (s) => s.delete(id)).then(() => true).catch(() => false);
+}
+function legacyList() {
+	return tx("readonly", (s) => s.getAll())
+		.then((r) => (r || []).filter(isHierarchyNode))
+		.catch(() => []);
 }
 
 /**
- * 写入单个节点（自动维护 updatedAt）
- *
- * 🔴 关键：`memoryCore` 的 keyPath 是 **`projectId`**（见 store/idb.js），
- *    而层级节点的主键字段是 `id`。若不注入 `projectId`，`put()` 的 key 为
- *    `undefined` → IndexedDB 抛 DataError，**写入静默失败**（catch 吞掉）。
- *    实测症状：createChild 返回节点但 loadTree 查不到、kids 为空。
- *    故此处**必须**把 `projectId` 设为 `node.id`（即以 nodeId 作为 projectId）。
+ * 读取单个节点（双读：先插件自有库，再回落旧 memoryCore）
+ * 回落到的记录**不会自动写回**（读路径保持只读语义），搬迁由 `listAllNodes` 统一负责。
  */
-export function saveNode(node) {
-	if (!node || !node.id) return Promise.resolve(false);
-	const next = { ...node, projectId: node.id, meta: { ...(node.meta || {}), updatedAt: Date.now() } };
-	return tx("readwrite", (s) => s.put(next)).then(() => true).catch((e) => {
-		if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("hierarchy", "saveNode failed: " + (e && e.message));
-		return false;
-	});
+export async function getNode(id) {
+	const hit = await pdbGetNode(id);
+	if (hit) return hit;
+	return legacyGet(id);
 }
 
-/** 删除节点（同时把其从父级 children 摘除） */
+/**
+ * 写入单个节点（**主写新库 + 镜像旧库**）
+ *
+ * 🔴 旧库 `memoryCore` 的 keyPath 是 **`projectId`**，而节点主键字段是 `id`。
+ *    若不注入 `projectId`，`put()` 的 key 为 `undefined` → IndexedDB 抛 DataError，
+ *    **写入静默失败**（catch 吞掉）。实测症状：createChild 返回节点但 loadTree 查不到、
+ *    kids 为空。故镜像写入**必须**把 `projectId` 设为 `node.id`。
+ *    （插件自有库的 keyPath 是 `nodeId`，由 `plugin-db.js` 内部映射，见其 JSDoc。）
+ */
+export async function saveNode(node) {
+	if (!node || !node.id) return Promise.resolve(false);
+	const okPrimary = await pdbSaveNode(node);
+	if (MIRROR_LEGACY_MEMORY_CORE) await legacyPut(node);
+	if (!okPrimary && typeof window !== "undefined" && window.__dshDebug) {
+		window.__dshDebug.warn("hierarchy", "saveNode: 插件自有库写入失败，已回退镜像库（" + PLUGIN_DB_NAME + " 不可用？）");
+	}
+	return okPrimary || MIRROR_LEGACY_MEMORY_CORE;
+}
+
+/** 删除节点（同时把其从父级 children 摘除；新旧两库同删） */
 export async function removeNode(id) {
 	const node = await getNode(id);
 	if (!node) return false;
@@ -161,14 +206,29 @@ export async function removeNode(id) {
 		const child = await getNode(cid);
 		if (child) { child.parentId = node.parentId; await saveNode(child); }
 	}
-	return tx("readwrite", (s) => s.delete(id)).then(() => true).catch(() => false);
+	await pdbDeleteNode(id);
+	return legacyDel(id);
 }
 
-/** 全量拉取所有节点（过滤走 schema 白名单 `isHierarchyNode`，见其 JSDoc） */
-export function listAllNodes() {
-	return tx("readonly", (s) => s.getAll())
-		.then((r) => (r || []).filter(isHierarchyNode))
-		.catch(() => []);
+/**
+ * 全量拉取所有节点
+ * ① 读插件自有库（**主真相源**）
+ * ② 若为空而旧库有条目 ⇒ **自动搬迁**（阶段 3：把旧 memoryCore 的层级节点拷贝入新库，幂等）
+ * ③ 过滤走 schema 白名单 `isHierarchyNode`（见其 JSDoc）
+ */
+export async function listAllNodes() {
+	const primary = (await pdbListNodes()).filter(isHierarchyNode);
+	if (primary.length) return primary;
+
+	// 阶段 3：自动搬迁（幂等 —— 按 nodeId upsert，重复执行不会重复新建）
+	const legacy = await legacyList();
+	if (!legacy.length) return [];
+	for (const n of legacy) {
+		try { await pdbSaveNode(n); } catch (e) { /* 单条失败不阻断整体搬迁 */ }
+	}
+	const after = (await pdbListNodes()).filter(isHierarchyNode);
+	// 搬迁未生效（自有库不可用）时，直接返回旧库结果，保证功能不因迁移而中断
+	return after.length ? after : legacy;
 }
 
 /**
@@ -314,7 +374,9 @@ export function installHierarchyApi() {
 		LEVEL, LEVEL_LABEL, GLOBAL_NODE_ID,
 		makeNode, makeNodeId, getNode, saveNode, removeNode,
 		listAllNodes, loadTree, ensureGlobal, createChild, attachSession,
-		resolveConfig, getBreadcrumb, countByLevel, isHigher
+		resolveConfig, getBreadcrumb, countByLevel, isHigher,
+		// 数据元归属（要求 1 的可核验锚点）
+		PLUGIN_DB_NAME, MIRROR_LEGACY_MEMORY_CORE
 	};
 	return window.__dshHierarchy;
 }

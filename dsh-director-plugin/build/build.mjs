@@ -84,6 +84,11 @@ function resolveModule(abs, spec) {
 	return p;
 }
 
+/** 去掉注释（export 块内可能夹注释，按 `,` 切分前必须先剥离，否则注释会被当成导出名） */
+function stripComments(s) {
+	return s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
 /** 收集具名导出（供 exports 回填） */
 function collectExportNames(code) {
 	const names = new Set();
@@ -92,7 +97,7 @@ function collectExportNames(code) {
 		names.add(m[1]);
 	}
 	for (const m of code.matchAll(/^export\s*\{([^}]*)\}/gm)) {
-		for (const part of m[1].split(",")) {
+		for (const part of stripComments(m[1]).split(",")) {
 			const t = part.trim();
 			if (!t) continue;
 			const [orig, alias] = t.split(/\s+as\s+/).map((x) => x.trim());
@@ -203,11 +208,41 @@ function transform(abs, code) {
 			continue;
 		}
 		// export { ... };  →  留注释占位（回填期统一处理）
+		//
+		// 🔴 聚合终止判据必须是「花括号配平」，**不能**用 `/\}\s*;?\s*$/`：
+		//    后者在 `export { X as Y } from "…";`（花括号后还有 `from "…"`）时判不出结束，
+		//    会一路吞到下一个以 `}` 结尾的行 —— 2026-09-12 实测把 20 行代码并成一条注释，
+		//    产物 `SyntaxError: Unexpected token ']'`。见 docs/11 §八 反模式 E-BLD-001。
 		if (/^export\s*\{/.test(t)) {
 			let stmt = t;
 			let j = i;
-			while (!/\}\s*;?\s*$/.test(stmt) && j + 1 < lines.length) { j++; stmt += " " + lines[j].trim(); }
+			const balanced = (s) => {
+				const clean = stripComments(s);
+				let d = 0;
+				for (const ch of clean) { if (ch === "{") d++; else if (ch === "}") d--; }
+				return d === 0 && clean.includes("}");
+			};
+			while (!balanced(stmt) && j + 1 < lines.length) { j++; stmt += " " + lines[j].trim(); }
 			i = j;
+			// 转发导出 `export { a as b } from "./x.js"` → 必须真正建立本地绑定，
+			// 否则该导出**静默消失**（B-D1）。此处展开为 __m(dep) + 逐名取值。
+			let fw = stmt.match(/^export\s*\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']\s*;?$/);
+			if (fw) {
+				const absDep = resolveModule(abs, fw[2]);
+				deps.push({ spec: fw[2], abs: absDep });
+				const depId = JSON.stringify(moduleId(absDep));
+				out.push(`\t\t\t__m(${depId});`);
+				for (const part of stripComments(fw[1]).split(",")) {
+					const p = part.trim();
+					if (!p) continue;
+					const [orig, alias] = p.split(/\s+as\s+/).map((x) => x.trim());
+					out.push(`\t\t\tvar ${alias || orig} = __m(${depId}).${orig};`);
+				}
+				continue;
+			}
+			if (/\bfrom\b/.test(stmt)) {
+				throw new Error(`[build] ${id}: 无法改写的转发导出 → ${stmt.slice(0, 120)}`);
+			}
 			out.push(`\t\t\t// ${stmt}`);
 			continue;
 		}

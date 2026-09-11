@@ -182,7 +182,34 @@ try {
 	// 提供浏览器全局
 	win.URL = win.URL || URL;
 	win.location = win.location || { href: "http://localhost/", origin: "http://localhost" };
-	win.document = win.document || { createElement: () => ({}), head: { appendChild: () => {} }, querySelector: () => null };
+	/* 提供浏览器全局。
+	 * 🔴 桩必须覆盖 bundle 求值期真正会用到的 API：批次 9 的 `installSplitApi()`
+	 *    → `isSplitActive()` → `document.getElementById`，`mountHierarchy()` →
+	 *    `getElementById` + `createElement().appendChild` + `document.body`。
+	 *    缺任一 API 会使「bundle 执行」这条断言以 `xxx is not a function` 假失败
+	 *    （与插件实现无关，属桩的覆盖面不足）。 */
+	win.document = win.document || (() => {
+		const mkEl = () => ({
+			style: {}, children: [], attrs: {},
+			setAttribute: () => { }, getAttribute: () => null, removeAttribute: () => { },
+			appendChild: () => { }, remove: () => { },
+			addEventListener: () => { }, removeEventListener: () => { },
+			querySelector: () => null, querySelectorAll: () => []
+		});
+		const head = { appendChild: () => { }, children: [], querySelector: () => null, querySelectorAll: () => [] };
+		const body = { appendChild: () => { }, children: [], querySelector: () => null, querySelectorAll: () => [] };
+		return {
+			head, body, documentElement: mkEl(), readyState: "complete",
+			createElement: mkEl,
+			createTextNode: () => ({}),
+			getElementById: () => null,
+			querySelector: () => null,
+			querySelectorAll: () => [],
+			addEventListener: () => { }, removeEventListener: () => { }
+		};
+	})();
+	win.getComputedStyle = win.getComputedStyle || (() => ({ overflowX: "visible" }));
+	win.matchMedia = win.matchMedia || (() => ({ matches: false, addEventListener: () => { }, removeEventListener: () => { } }));
 	win.CustomEvent = win.CustomEvent || class CustomEvent { constructor(t, i) { this.type = t; this.detail = i?.detail; } };
 	// 事件桩：批次 3 的 installBeforeUnloadSave() 会注册 window "beforeunload"
 	// （宿主 client.js:6409 同款行为），离线环境须补该浏览器全局。

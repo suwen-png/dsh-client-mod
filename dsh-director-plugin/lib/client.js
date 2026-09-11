@@ -251,44 +251,121 @@ window.__ModuleLoader__.load({
 		// ── store/layout.js ──
 		__defs["store/layout.js"] = function (exports) {
 			/**
-			 * store/layout.js — A11 布局 store
+			 * store/layout.js — A11 布局 store（弹窗三态扩展版）
 			 *
 			 * 迁移源：workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js
 			 *   行范围：6439 ~ 6483（45 行）
 			 *   区块标记：`// ========== 总监对话模式 - 布局store（小窗宽度/折叠/焦点） ==========`
 			 *
-			 * 职责：小窗宽度 / 折叠状态 / 焦点目标 / 上下伸缩面板高度的集中状态层。
+			 * 职责：小窗宽度 / 折叠状态 / 焦点目标 / 上下伸缩面板高度 / **弹窗三态** 的集中状态层。
 			 *
 			 * ⚠️ 兼容约束（R5）：持久化 key `dsh.director.layout` **必须原样保留**，
 			 *    改名将导致用户存量布局数据全部丢失。
 			 *
-			 * 全局契约（宿主 G1/G4 依赖）：
+			 * ── 本轮扩展（T-PLUG-015 弹窗形态，docs/10 §四 4.3）──────────────
+			 *   新增字段（**只增不改**，存量数据无这些键 ⇒ 读取端必须做默认值兜底）：
+			 *     `dialogOpen`      弹窗是否打开
+			 *     `dialogCollapsed` 整窗最小化（收成右下角 chip）—— 05 号文只设计了左右两栏折叠，
+			 *                       整窗最小化是**本轮新增**的第三态（docs/10 §4.3 标注 🆕）
+			 *     `activeNodeId`    当前展示的层级节点（全局 / 项目·文件夹 / 会话）
+			 *     `leftTab`         左面板分段：director（总监）/ levels（层级）/ agents（智能体）
+			 *   **既有字段语义不变**：`directorPanelCollapsed`（左栏）/ `chatPanelCollapsed`（右栏）/
+			 *     `directorPanelWidth` / `chatPanelWidth` / `focusTarget`。
+			 *
+			 *   边界与吸附（docs/11 §二 I8）：宽度 `clamp(180, 55%×视口)`；拖到 <180 自动吸附折叠；
+			 *   双击中缝复位 300/300。
+			 *
+			 * 全局契约（宿主 G1/G4 依赖，**不可改名**）：
 			 *   - `window.__directorLayoutStore` — 宿主 ChatView（client.js:7111）与 view-sync（client.js:9146）调用
 			 *   - `window.__directorFocusTarget` — setFocusTarget 同步写入（client.js:6469）
 			 */
 			
 			const DIRECTOR_LAYOUT_KEY = "dsh.director.layout";
 			
+			/** 左/右栏宽度的边界（docs/10 §4.1） */
+			const PANEL_MIN_WIDTH = 180;
+			/** 单栏最大占比（相对视口宽） */
+			const PANEL_MAX_RATIO = 0.55;
+			/** 默认栏宽 */
+			const PANEL_DEFAULT_WIDTH = 300;
+			/** 折叠后的竖条宽度 */
+			const PANEL_RAIL_WIDTH = 40;
+			
+			/** 左面板分段（单一真相源，勿另写字面量） */
+			const LEFT_TAB = Object.freeze({ DIRECTOR: "director", LEVELS: "levels", AGENTS: "agents" });
+			
+			/** 视口宽度（SSR / 测试环境兜底 1440） */
+			function viewportWidth() {
+				try {
+					if (typeof window !== "undefined" && window.innerWidth) return window.innerWidth;
+				} catch (e) { /* 忽略 */ }
+				return 1440;
+			}
+			
+			/** 单栏宽度上限（按视口比例，且不低于下限，避免极小视口下 clamp 反向） */
+			function maxPanelWidth() {
+				return Math.max(PANEL_MIN_WIDTH, Math.round(viewportWidth() * PANEL_MAX_RATIO));
+			}
+			
+			/**
+			 * 宽度钳制 + 吸附判定（docs/11 §二 I8）
+			 * @param {number} w 期望宽度
+			 * @returns {{width:number, collapse:boolean}} collapse=true 表示"拖到过窄 ⇒ 应吸附为折叠"
+			 */
+			function clampPanelWidth(w) {
+				const n = Number(w);
+				if (!Number.isFinite(n) || n <= 0) return { width: PANEL_DEFAULT_WIDTH, collapse: false };
+				if (n < PANEL_MIN_WIDTH) return { width: PANEL_MIN_WIDTH, collapse: true };
+				return { width: Math.min(Math.round(n), maxPanelWidth()), collapse: false };
+			}
+			
+			const DEFAULTS = Object.freeze({
+				// ── 05 号文既有字段（语义不变）──
+				directorPanelWidth: PANEL_DEFAULT_WIDTH,
+				chatPanelWidth: PANEL_DEFAULT_WIDTH,
+				directorPanelCollapsed: false,
+				chatPanelCollapsed: false,
+				focusTarget: "director",
+				// V7: 上下伸缩界面
+				bottomPanelHeight: 180,
+				bottomPanelCollapsed: true,
+				topPanelCollapsed: false,
+				// ── 本轮新增（弹窗三态）──
+				dialogOpen: false,
+				dialogCollapsed: false,
+				activeNodeId: null,
+				leftTab: LEFT_TAB.DIRECTOR
+			});
+			
 			function createDirectorLayoutStore() {
-				let state = {
-					directorPanelWidth: 300,
-					chatPanelWidth: 300,
-					directorPanelCollapsed: false,
-					chatPanelCollapsed: false,
-					focusTarget: "director",
-					// V7: 上下伸缩界面
-					bottomPanelHeight: 180,
-					bottomPanelCollapsed: true,
-					topPanelCollapsed: false
-				};
+				let state = { ...DEFAULTS };
 				try {
 					const raw = typeof localStorage !== "undefined" ? localStorage.getItem(DIRECTOR_LAYOUT_KEY) : null;
-					if (raw) state = { ...state, ...JSON.parse(raw) };
-				} catch (e) {}
+					if (raw) {
+						// 🔴 只合并"已知字段"，忽略未知残留；缺字段由 DEFAULTS 兜底
+						const parsed = JSON.parse(raw);
+						if (parsed && typeof parsed === "object") {
+							for (const k of Object.keys(DEFAULTS)) {
+								if (parsed[k] !== undefined) state[k] = parsed[k];
+							}
+						}
+					}
+				} catch (e) { /* 解析失败 → 用默认值 */ }
 				const listeners = new Set();
 				function notify() {
-					try { if (typeof localStorage !== "undefined") localStorage.setItem(DIRECTOR_LAYOUT_KEY, JSON.stringify(state)); } catch (e) {}
-					for (const fn of listeners) fn(state);
+					try { if (typeof localStorage !== "undefined") localStorage.setItem(DIRECTOR_LAYOUT_KEY, JSON.stringify(state)); } catch (e) { /* 隐私模式 */ }
+					for (const fn of listeners) { try { fn(state); } catch (e) { /* 单个订阅者异常不影响其他 */ } }
+				}
+				/** 拖拽调宽：返回是否触发了吸附折叠（供 UI 反馈） */
+				function applyWidth(key, w) {
+					const { width, collapse } = clampPanelWidth(w);
+					state = { ...state, [key]: width };
+					if (collapse) {
+						const ck = key === "directorPanelWidth" ? "directorPanelCollapsed" : "chatPanelCollapsed";
+						state = { ...state, [ck]: true };
+					}
+					notify();
+					return collapse;
 				}
 				return {
 					getState: () => state,
@@ -302,7 +379,39 @@ window.__ModuleLoader__.load({
 					setBottomPanelHeight: (h) => { state = { ...state, bottomPanelHeight: Math.max(60, Math.min(h, 400)) }; notify(); },
 					toggleBottomPanel: () => { state = { ...state, bottomPanelCollapsed: !state.bottomPanelCollapsed }; notify(); },
 					setBottomPanelCollapsed: (v) => { state = { ...state, bottomPanelCollapsed: v }; notify(); },
-					toggleTopPanel: () => { state = { ...state, topPanelCollapsed: !state.topPanelCollapsed }; notify(); }
+					toggleTopPanel: () => { state = { ...state, topPanelCollapsed: !state.topPanelCollapsed }; notify(); },
+			
+					/* ── 本轮新增：弹窗三态 ─────────────────────────────── */
+			
+					/** 打开/关闭弹窗（关闭时同时解除整窗最小化，避免"关了但还是 chip"的困惑） */
+					setDialogOpen: (v) => {
+						state = { ...state, dialogOpen: Boolean(v), dialogCollapsed: v ? state.dialogCollapsed : false };
+						notify();
+					},
+					toggleDialog: () => {
+						state = { ...state, dialogOpen: !state.dialogOpen, dialogCollapsed: false };
+						notify();
+					},
+					/** 整窗最小化 / 还原 */
+					setDialogCollapsed: (v) => { state = { ...state, dialogCollapsed: Boolean(v), dialogOpen: true }; notify(); },
+					toggleDialogCollapsed: () => { state = { ...state, dialogCollapsed: !state.dialogCollapsed, dialogOpen: true }; notify(); },
+					/** 切换当前层级节点（要求 7 / 9） */
+					setActiveNode: (nodeId) => { state = { ...state, activeNodeId: nodeId || null }; notify(); },
+					/** 切换左面板分段 */
+					setLeftTab: (t) => {
+						state = { ...state, leftTab: Object.values(LEFT_TAB).indexOf(t) >= 0 ? t : LEFT_TAB.DIRECTOR };
+						notify();
+					},
+					/** 拖拽调宽（带吸附：过窄自动折叠）。返回是否触发吸附 */
+					dragDirectorWidth: (w) => applyWidth("directorPanelWidth", w),
+					dragChatWidth: (w) => applyWidth("chatPanelWidth", w),
+					/** 双击中缝复位 */
+					resetPanelWidths: () => {
+						state = { ...state, directorPanelWidth: PANEL_DEFAULT_WIDTH, chatPanelWidth: PANEL_DEFAULT_WIDTH, directorPanelCollapsed: false, chatPanelCollapsed: false };
+						notify();
+					},
+					/** 全部复位（调试/测试用） */
+					resetLayout: () => { state = { ...DEFAULTS }; notify(); }
 				};
 			}
 			
@@ -311,6 +420,13 @@ window.__ModuleLoader__.load({
 			if (typeof window !== "undefined") window.__directorLayoutStore = directorLayoutStore;
 			
 			exports.DIRECTOR_LAYOUT_KEY = DIRECTOR_LAYOUT_KEY;
+			exports.PANEL_MIN_WIDTH = PANEL_MIN_WIDTH;
+			exports.PANEL_MAX_RATIO = PANEL_MAX_RATIO;
+			exports.PANEL_DEFAULT_WIDTH = PANEL_DEFAULT_WIDTH;
+			exports.PANEL_RAIL_WIDTH = PANEL_RAIL_WIDTH;
+			exports.LEFT_TAB = LEFT_TAB;
+			exports.maxPanelWidth = maxPanelWidth;
+			exports.clampPanelWidth = clampPanelWidth;
 			exports.createDirectorLayoutStore = createDirectorLayoutStore;
 			exports.directorLayoutStore = directorLayoutStore;
 		};
@@ -3152,6 +3268,328 @@ window.__ModuleLoader__.load({
 			exports.DirectorFlow = DirectorFlow;
 		};
 
+		// ── store/plugin-db.js ──
+		__defs["store/plugin-db.js"] = function (exports) {
+			/**
+			 * store/plugin-db.js — 插件**自有**数据元层（独立数据库）
+			 *
+			 * ── 为什么必须有这一层（业务不变量：要求 1）──────────────────────
+			 *   17 号文 §2.2 原设计：总监记忆用**独立库 `dsh-memory-db`**（6 个 store）；
+			 *   17 号文 §2.3「每个项目/子项目的文档、对话、决策、待办、风险**相互隔离**」；
+			 *   17 号文 §1A.7「沟通上下文 vs 执行上下文分离」（上下文不污染）。
+			 *
+			 *   但实际落地时退化成了「插件复用宿主 `dsh-director-db` 的 `memoryCore`，
+			 *   靠 `id` 前缀 + `level` 字段**约定隔离**」（T-PLUG-009 方案）——
+			 *   即：**设计要求隔离，落地变成共享**。
+			 *   `docs/10-总监与对话架构总纲.md` §3.4 已论证：该退化**不必要**。
+			 *
+			 * ── 🔴 关键技术论证（解除 T-PLUG-009 的过度约束）─────────────────
+			 *   T-PLUG-009 的约束原文是「**不得给宿主的 `dsh-director-db` 升 v4**」
+			 *   —— 宿主以 v3 打开，版本不匹配会**直接失败**。
+			 *   但 IndexedDB 的**版本协商只发生在同一个数据库名内**。
+			 *   ⇒ **新建一个属于插件自己的数据库（不同 DB 名）完全不参与宿主的版本协商**，
+			 *     对宿主**零影响**。
+			 *   ⇒ 于是「物理隔离（要求 1）」与「R5 冻结 key（兼容约束）」**可以同时成立**，
+			 *     无需任何取舍。
+			 *
+			 * ── R5 冻结项（本层**必须**原样保留，不得改名）───────────────────
+			 *   `dsh.director.store.*` / `dsh.director.layout` / `director-main` /
+			 *   `dsh.director.config` / DB `dsh-director-db` v3 及其 3 store /
+			 *   cookie 前缀 `dsh_director_`   ← **全部不动**。本层是**新增**，不是替换。
+			 *
+			 * ── 迁移策略（docs/10 §3.5 四阶段）──────────────────────────────
+			 *   阶段 1  新建本库（首次打开自动建库；`onupgradeneeded` 只在本库触发）
+			 *   阶段 2  读取期**双读**：优先本库；本库无该节点时回落旧 `memoryCore`（**只读**）
+			 *   阶段 3  迁移期把旧 `memoryCore` 中的层级节点（schema 白名单）**拷贝**入本库
+			 *   阶段 4  迁移完成并验证后停止回落；旧记录**不删**（尊重《锚点契约》"历史数据保留"）
+			 *
+			 *   本文件实现**阶段 1–3**；阶段 4 由 `hierarchy.js` 的回落开关控制。
+			 *
+			 * ── 唯一允许的交叉点 ────────────────────────────────────────────
+			 *   外键形态：`nodeId` ↔ 宿主的 `workspaceId` / `sessionId`（**只读引用**）。
+			 *   **禁止**：联合查询、跨库事务、把宿主记录读进本库后落盘。
+			 *   理由：交叉点收窄到"一个只读外键"，即**结构性地保证**要求 1 的不变量。
+			 *
+			 * 错误处理约定：与 `store/idb.js` 一致 —— 所有 API catch 后返回安全缺省
+			 *   （false / null / []），**不向上抛**（持久化失败不应打断 UI）。
+			 *   ⚠️ 故调用方不能以返回值判断"是否真的写入"，需按 execution-standards §3.4
+			 *      「写操作后必须回读校验」另行读回比对。
+			 */
+			
+			const hasWindow = typeof window !== "undefined";
+			
+			/** 插件自有数据库（**与宿主库无关**，不参与其版本协商） */
+			const PLUGIN_DB_NAME = "dsh-director-plugin-db";
+			const PLUGIN_DB_VERSION = 1;
+			
+			/** 6 个 store（对齐 17 号文 §2.2 原始设计的 6 类记忆） */
+			const PDB = Object.freeze({
+				NODES: "directorNodes",
+				CONVERSATIONS: "directorConversations",
+				PLANS: "directorPlans",
+				REVIEWS: "directorReviews",
+				DECISIONS: "directorDecisions",
+				TODOS: "directorTodos"
+			});
+			
+			/**
+			 * store schema（keyPath 与索引的**单一真相源**）
+			 * `indexes` 形如 `{ 索引名: 字段路径 }`
+			 */
+			const PDB_SCHEMA = Object.freeze({
+				[PDB.NODES]: { keyPath: "nodeId", indexes: { level: "level", parentId: "parentId" } },
+				[PDB.CONVERSATIONS]: { keyPath: "messageId", indexes: { nodeId: "nodeId", createdAt: "createdAt" } },
+				[PDB.PLANS]: { keyPath: "planId", indexes: { nodeId: "nodeId" } },
+				[PDB.REVIEWS]: { keyPath: "reviewId", indexes: { nodeId: "nodeId", targetId: "targetId" } },
+				[PDB.DECISIONS]: { keyPath: "decisionId", indexes: { nodeId: "nodeId" } },
+				[PDB.TODOS]: { keyPath: "todoId", indexes: { nodeId: "nodeId" } }
+			});
+			
+			/** 全部 store 名（校验用） */
+			const PDB_ALL_STORES = Object.freeze(Object.keys(PDB_SCHEMA));
+			
+			let dbPromise = null;
+			
+			/** 是否已就绪（同步可读的状态位，供 UI 展示"数据元已隔离"） */
+			let pluginDbState = { attempted: false, ok: false, error: null, name: PLUGIN_DB_NAME, version: PLUGIN_DB_VERSION };
+			
+			/**
+			 * 打开插件自有数据库（单例）
+			 * 🔴 `indexedDB.open(name, 1)` 只影响**本库**；宿主以 v3 打开 `dsh-director-db`
+			 *    时与本调用**互不可见**。
+			 * @returns {Promise<IDBDatabase>}
+			 */
+			function openPluginDB() {
+				if (dbPromise) return dbPromise;
+				if (typeof indexedDB === "undefined") {
+					pluginDbState = { attempted: true, ok: false, error: "indexedDB unavailable", name: PLUGIN_DB_NAME, version: PLUGIN_DB_VERSION };
+					dbPromise = Promise.reject(new Error("indexedDB unavailable"));
+					return dbPromise;
+				}
+				pluginDbState = { attempted: true, ok: false, error: null, name: PLUGIN_DB_NAME, version: PLUGIN_DB_VERSION };
+				dbPromise = new Promise((resolve, reject) => {
+					try {
+						const req = indexedDB.open(PLUGIN_DB_NAME, PLUGIN_DB_VERSION);
+						req.onupgradeneeded = () => {
+							const db = req.result;
+							for (const name of PDB_ALL_STORES) {
+								const spec = PDB_SCHEMA[name];
+								const os = db.objectStoreNames.contains(name)
+									? req.transaction.objectStore(name)
+									: db.createObjectStore(name, { keyPath: spec.keyPath });
+								for (const idx of Object.keys(spec.indexes || {})) {
+									if (!os.indexNames.contains(idx)) {
+										os.createIndex(idx, spec.indexes[idx], { unique: false });
+									}
+								}
+							}
+						};
+						req.onsuccess = () => {
+							pluginDbState.ok = true;
+							resolve(req.result);
+						};
+						req.onerror = () => {
+							pluginDbState.error = (req.error && req.error.message) || "open failed";
+							reject(req.error || new Error("plugin-db open failed"));
+						};
+						req.onblocked = () => {
+							pluginDbState.error = "blocked";
+							reject(new Error("plugin-db open blocked"));
+						};
+					} catch (e) {
+						pluginDbState.error = String(e && e.message);
+						reject(e);
+					}
+				});
+				// 失败后允许重试（避免一次性失败被永久缓存）
+				dbPromise.catch(() => { dbPromise = null; });
+				return dbPromise;
+			}
+			
+			/** 事务包装：统一 catch → 安全缺省 */
+			function ptx(store, mode, fn) {
+				return openPluginDB().then((db) => new Promise((resolve, reject) => {
+					try {
+						const t = db.transaction(store, mode);
+						const os = t.objectStore(store);
+						const req = fn(os);
+						t.oncomplete = () => resolve(req ? req.result : undefined);
+						t.onerror = () => reject(t.error || new Error("tx error"));
+						t.onabort = () => reject(t.error || new Error("tx abort"));
+					} catch (e) { reject(e); }
+				}));
+			}
+			
+			/* ── 通用 CRUD（安全缺省）─────────────────────────────────────── */
+			
+			function pPut(store, record) {
+				return ptx(store, "readwrite", (os) => os.put(record)).then(() => true).catch(() => false);
+			}
+			function pGet(store, key) {
+				return ptx(store, "readonly", (os) => os.get(key)).then((r) => (r === undefined ? null : r)).catch(() => null);
+			}
+			function pGetAll(store) {
+				return ptx(store, "readonly", (os) => os.getAll()).then((r) => r || []).catch(() => []);
+			}
+			function pGetAllByIndex(store, indexName, key) {
+				return ptx(store, "readonly", (os) => os.index(indexName).getAll(key)).then((r) => r || []).catch(() => []);
+			}
+			function pDelete(store, key) {
+				return ptx(store, "readwrite", (os) => os.delete(key)).then(() => true).catch(() => false);
+			}
+			function pCount(store) {
+				return ptx(store, "readonly", (os) => os.count()).then((r) => (typeof r === "number" ? r : 0)).catch(() => 0);
+			}
+			function pClear(store) {
+				return ptx(store, "readwrite", (os) => os.clear()).then(() => true).catch(() => false);
+			}
+			
+			/* ── 域辅助：ID 生成 ─────────────────────────────────────────── */
+			
+			/** 生成稳定可读的领域 id（无随机依赖，便于断言） */
+			function makeId(prefix, seed) {
+				const t = Date.now().toString(36);
+				const r = Math.floor(Math.random() * 1e6).toString(36);
+				return `${prefix}_${seed ? String(seed).slice(-8) + "_" : ""}${t}${r}`;
+			}
+			
+			/* ── 域辅助：层级节点 ────────────────────────────────────────── */
+			
+			/**
+			 * 写入层级节点
+			 * 🔴 注意本库 `directorNodes` 的 keyPath 是 **`nodeId`**（不是宿主 `memoryCore` 的 `projectId`）
+			 *    ⇒ 调用方传的节点对象用 `id` 字段表示节点 id，这里显式映射，避免"缺主键 ⇒ 静默失败"。
+			 */
+			function saveDirectorNode(node) {
+				if (!node || !node.id) return Promise.resolve(false);
+				return pPut(PDB.NODES, { ...node, nodeId: node.id });
+			}
+			function getDirectorNode(nodeId) {
+				return pGet(PDB.NODES, nodeId);
+			}
+			function listDirectorNodes() {
+				return pGetAll(PDB.NODES);
+			}
+			function deleteDirectorNode(nodeId) {
+				return pDelete(PDB.NODES, nodeId);
+			}
+			
+			/* ── 域辅助：总监对话（要求 2「总监自己也是一路对话」）────────── */
+			
+			function appendDirectorMessage(nodeId, msg) {
+				const rec = {
+					messageId: msg.messageId || makeId("dm", nodeId),
+					nodeId,
+					role: msg.role || "director",
+					kind: msg.kind || "note",
+					text: String(msg.text == null ? "" : msg.text),
+					at: msg.at || Date.now(),
+					meta: msg.meta || {}
+				};
+				return pPut(PDB.CONVERSATIONS, rec).then((ok) => (ok ? rec : null));
+			}
+			function listDirectorMessages(nodeId) {
+				return pGetAllByIndex(PDB.CONVERSATIONS, "nodeId", nodeId)
+					.then((rows) => rows.sort((a, b) => (a.at || 0) - (b.at || 0)));
+			}
+			
+			/* ── 域辅助：审核 / 决策 / 方案 / 待办 ────────────────────────── */
+			
+			function saveReview(rec) {
+				const row = { ...rec, reviewId: rec.reviewId || makeId("rv", rec.nodeId) };
+				return pPut(PDB.REVIEWS, row).then((ok) => (ok ? row : null));
+			}
+			function listReviews(nodeId) {
+				return pGetAllByIndex(PDB.REVIEWS, "nodeId", nodeId);
+			}
+			function saveDecision(rec) {
+				const row = { ...rec, decisionId: rec.decisionId || makeId("dc", rec.nodeId) };
+				return pPut(PDB.DECISIONS, row).then((ok) => (ok ? row : null));
+			}
+			function listDecisions(nodeId) {
+				return pGetAllByIndex(PDB.DECISIONS, "nodeId", nodeId);
+			}
+			function savePlan(rec) {
+				const row = { ...rec, planId: rec.planId || makeId("pl", rec.nodeId) };
+				return pPut(PDB.PLANS, row).then((ok) => (ok ? row : null));
+			}
+			function listPlans(nodeId) {
+				return pGetAllByIndex(PDB.PLANS, "nodeId", nodeId);
+			}
+			function saveTodo(rec) {
+				const row = { ...rec, todoId: rec.todoId || makeId("td", rec.nodeId) };
+				return pPut(PDB.TODOS, row).then((ok) => (ok ? row : null));
+			}
+			function listTodos(nodeId) {
+				return pGetAllByIndex(PDB.TODOS, "nodeId", nodeId);
+			}
+			
+			/* ── 统计（供 UI 与服务面板展示"数据元独立性"）──────────────── */
+			
+			function pluginDbStats() {
+				return Promise.all([
+					pCount(PDB.NODES), pCount(PDB.CONVERSATIONS), pCount(PDB.PLANS),
+					pCount(PDB.REVIEWS), pCount(PDB.DECISIONS), pCount(PDB.TODOS)
+				]).then(([nodes, conversations, plans, reviews, decisions, todos]) => ({
+					name: PLUGIN_DB_NAME, version: PLUGIN_DB_VERSION, ok: pluginDbState.ok,
+					nodes, conversations, plans, reviews, decisions, todos
+				}));
+			}
+			
+			/** 清空本库（仅调试/测试用；**绝不动宿主库**） */
+			function resetPluginDb() {
+				return Promise.all(PDB_ALL_STORES.map((s) => pClear(s))).then(() => true);
+			}
+			
+			/** 安装全局契约（调试与验证脚本用，不可改名） */
+			function installPluginDbApi() {
+				if (!hasWindow) return null;
+				window.__dshPluginDb = {
+					PLUGIN_DB_NAME, PLUGIN_DB_VERSION, PDB, PDB_SCHEMA, PDB_ALL_STORES,
+					openPluginDB, pluginDbStats, pluginDbState,
+					pPut, pGet, pGetAll, pGetAllByIndex, pDelete, pCount, pClear,
+					saveDirectorNode, getDirectorNode, listDirectorNodes, deleteDirectorNode,
+					appendDirectorMessage, listDirectorMessages,
+					saveReview, listReviews, saveDecision, listDecisions, savePlan, listPlans,
+					saveTodo, listTodos, resetPluginDb
+				};
+				return window.__dshPluginDb;
+			}
+			
+			exports.PLUGIN_DB_NAME = PLUGIN_DB_NAME;
+			exports.PLUGIN_DB_VERSION = PLUGIN_DB_VERSION;
+			exports.PDB = PDB;
+			exports.PDB_SCHEMA = PDB_SCHEMA;
+			exports.PDB_ALL_STORES = PDB_ALL_STORES;
+			exports.pluginDbState = pluginDbState;
+			exports.openPluginDB = openPluginDB;
+			exports.pPut = pPut;
+			exports.pGet = pGet;
+			exports.pGetAll = pGetAll;
+			exports.pGetAllByIndex = pGetAllByIndex;
+			exports.pDelete = pDelete;
+			exports.pCount = pCount;
+			exports.pClear = pClear;
+			exports.makeId = makeId;
+			exports.saveDirectorNode = saveDirectorNode;
+			exports.getDirectorNode = getDirectorNode;
+			exports.listDirectorNodes = listDirectorNodes;
+			exports.deleteDirectorNode = deleteDirectorNode;
+			exports.appendDirectorMessage = appendDirectorMessage;
+			exports.listDirectorMessages = listDirectorMessages;
+			exports.saveReview = saveReview;
+			exports.listReviews = listReviews;
+			exports.saveDecision = saveDecision;
+			exports.listDecisions = listDecisions;
+			exports.savePlan = savePlan;
+			exports.listPlans = listPlans;
+			exports.saveTodo = saveTodo;
+			exports.listTodos = listTodos;
+			exports.pluginDbStats = pluginDbStats;
+			exports.resetPluginDb = resetPluginDb;
+			exports.installPluginDbApi = installPluginDbApi;
+		};
+
 		// ── store/hierarchy.js ──
 		__defs["store/hierarchy.js"] = function (exports) {
 			/**
@@ -3164,16 +3602,27 @@ window.__ModuleLoader__.load({
 			 *   - 17-总监统治架构与项目驾驶舱方案-v9.md §2.1 三层记忆结构 MemoryNode（:365-428）
 			 *   - 同上 §2.3 隔离 / 共享 / 继承（:443-447）
 			 *
-			 * 存储决策（🔴 关键约束：不得新增 IDB store、不得升 DB 版本）
-			 *   宿主与插件共享 DB `dsh-director-db` v3（R5 兼容约束）。插件若升 v4，
-			 *   宿主再以 v3 打开会失败 ⇒ 版本冲突。故**全部层级节点统一存 `memoryCore`**
-			 *   （keyPath `projectId`，这里以 nodeId 作为 projectId），与 17号文
-			 *   MemoryNode「level: global|project|subproject + parentId + children[]」定义一致。
+			 * 存储决策（🔴 已按 docs/10 §3.4 订正 —— 独立库论证）
+			 *
+			 *   **T-PLUG-009 的旧结论（过度约束）**：宿主与插件共享 DB `dsh-director-db` v3，
+			 *   插件若升 v4，宿主再以 v3 打开会失败 ⇒ 故"全部层级节点只能存 `memoryCore`"。
+			 *
+			 *   **订正**：IndexedDB 的**版本协商只发生在同一个数据库名内**。
+			 *   `dsh-director-plugin-db` v1 是**另一个库**，完全不参与宿主的版本协商 ⇒ 对宿主零影响。
+			 *   ⇒ 「物理隔离（要求 1）」与「R5 冻结 key」**可以同时成立**，无需取舍。
+			 *
+			 *   现行策略（docs/10 §3.5 四阶段迁移）：
+			 *     ① 写入：**主写** `dsh-director-plugin-db/directorNodes`，
+			 *        **镜像** `memoryCore`（阶段 2 的兼容镜像，保证既有面板/脚本/存量不破）
+			 *     ② 读取：**先新库**；新库无该节点 → 回落旧 `memoryCore`（只读）
+			 *     ③ 迁移：`listAllNodes` 发现新库为空而旧库有条目时，**自动搬迁**（幂等，按 nodeId upsert）
+			 *     ④ 旧记录**不删**（尊重《锚点契约》"历史数据保留"）
 			 *
 			 * 全局契约：`window.__dshHierarchy`（供宿主/调试/验证脚本调用）
 			 */
 			
 			const { openIDB, IDB_MEMORY_CORE_STORE } = __m("store/idb.js");
+			const { saveDirectorNode: pdbSaveNode, getDirectorNode: pdbGetNode, listDirectorNodes: pdbListNodes, deleteDirectorNode: pdbDeleteNode, PLUGIN_DB_NAME } = __m("store/plugin-db.js");
 			
 			/** 层级枚举（对齐 17号文 §2.1 `level`） */
 			const LEVEL = {
@@ -3265,7 +3714,12 @@ window.__ModuleLoader__.load({
 				};
 			}
 			
-			/* ── IDB 读写（统一走 memoryCore） ───────────────────────────── */
+			/* ── IDB 读写 ────────────────────────────────────────────────
+			 * 主存：`dsh-director-plugin-db/directorNodes`（插件自有，物理隔离 —— 要求 1）
+			 * 镜像：旧 `dsh-director-db/memoryCore`（兼容镜像，阶段 2；旧记录不删 —— 阶段 4 前）
+			 * 兼容镜像开关（阶段 2→4）：置 false 即停止写旧库，届时旧库仅剩历史数据。
+			 * ------------------------------------------------------------------------- */
+			const MIRROR_LEGACY_MEMORY_CORE = true;
 			
 			function tx(mode, fn) {
 				return openIDB().then((db) => new Promise((resolve, reject) => {
@@ -3278,30 +3732,53 @@ window.__ModuleLoader__.load({
 				}));
 			}
 			
-			/** 读取单个节点 */
-			function getNode(id) {
+			/* ── 旧库（memoryCore）读写：仅用于回落与镜像 ── */
+			function legacyGet(id) {
 				return tx("readonly", (s) => s.get(id)).then((r) => r || null).catch(() => null);
+			}
+			function legacyPut(node) {
+				const next = { ...node, projectId: node.id, meta: { ...(node.meta || {}), updatedAt: Date.now() } };
+				return tx("readwrite", (s) => s.put(next)).then(() => true).catch(() => false);
+			}
+			function legacyDel(id) {
+				return tx("readwrite", (s) => s.delete(id)).then(() => true).catch(() => false);
+			}
+			function legacyList() {
+				return tx("readonly", (s) => s.getAll())
+					.then((r) => (r || []).filter(isHierarchyNode))
+					.catch(() => []);
 			}
 			
 			/**
-			 * 写入单个节点（自动维护 updatedAt）
-			 *
-			 * 🔴 关键：`memoryCore` 的 keyPath 是 **`projectId`**（见 store/idb.js），
-			 *    而层级节点的主键字段是 `id`。若不注入 `projectId`，`put()` 的 key 为
-			 *    `undefined` → IndexedDB 抛 DataError，**写入静默失败**（catch 吞掉）。
-			 *    实测症状：createChild 返回节点但 loadTree 查不到、kids 为空。
-			 *    故此处**必须**把 `projectId` 设为 `node.id`（即以 nodeId 作为 projectId）。
+			 * 读取单个节点（双读：先插件自有库，再回落旧 memoryCore）
+			 * 回落到的记录**不会自动写回**（读路径保持只读语义），搬迁由 `listAllNodes` 统一负责。
 			 */
-			function saveNode(node) {
-				if (!node || !node.id) return Promise.resolve(false);
-				const next = { ...node, projectId: node.id, meta: { ...(node.meta || {}), updatedAt: Date.now() } };
-				return tx("readwrite", (s) => s.put(next)).then(() => true).catch((e) => {
-					if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("hierarchy", "saveNode failed: " + (e && e.message));
-					return false;
-				});
+			async function getNode(id) {
+				const hit = await pdbGetNode(id);
+				if (hit) return hit;
+				return legacyGet(id);
 			}
 			
-			/** 删除节点（同时把其从父级 children 摘除） */
+			/**
+			 * 写入单个节点（**主写新库 + 镜像旧库**）
+			 *
+			 * 🔴 旧库 `memoryCore` 的 keyPath 是 **`projectId`**，而节点主键字段是 `id`。
+			 *    若不注入 `projectId`，`put()` 的 key 为 `undefined` → IndexedDB 抛 DataError，
+			 *    **写入静默失败**（catch 吞掉）。实测症状：createChild 返回节点但 loadTree 查不到、
+			 *    kids 为空。故镜像写入**必须**把 `projectId` 设为 `node.id`。
+			 *    （插件自有库的 keyPath 是 `nodeId`，由 `plugin-db.js` 内部映射，见其 JSDoc。）
+			 */
+			async function saveNode(node) {
+				if (!node || !node.id) return Promise.resolve(false);
+				const okPrimary = await pdbSaveNode(node);
+				if (MIRROR_LEGACY_MEMORY_CORE) await legacyPut(node);
+				if (!okPrimary && typeof window !== "undefined" && window.__dshDebug) {
+					window.__dshDebug.warn("hierarchy", "saveNode: 插件自有库写入失败，已回退镜像库（" + PLUGIN_DB_NAME + " 不可用？）");
+				}
+				return okPrimary || MIRROR_LEGACY_MEMORY_CORE;
+			}
+			
+			/** 删除节点（同时把其从父级 children 摘除；新旧两库同删） */
 			async function removeNode(id) {
 				const node = await getNode(id);
 				if (!node) return false;
@@ -3317,14 +3794,29 @@ window.__ModuleLoader__.load({
 					const child = await getNode(cid);
 					if (child) { child.parentId = node.parentId; await saveNode(child); }
 				}
-				return tx("readwrite", (s) => s.delete(id)).then(() => true).catch(() => false);
+				await pdbDeleteNode(id);
+				return legacyDel(id);
 			}
 			
-			/** 全量拉取所有节点（过滤走 schema 白名单 `isHierarchyNode`，见其 JSDoc） */
-			function listAllNodes() {
-				return tx("readonly", (s) => s.getAll())
-					.then((r) => (r || []).filter(isHierarchyNode))
-					.catch(() => []);
+			/**
+			 * 全量拉取所有节点
+			 * ① 读插件自有库（**主真相源**）
+			 * ② 若为空而旧库有条目 ⇒ **自动搬迁**（阶段 3：把旧 memoryCore 的层级节点拷贝入新库，幂等）
+			 * ③ 过滤走 schema 白名单 `isHierarchyNode`（见其 JSDoc）
+			 */
+			async function listAllNodes() {
+				const primary = (await pdbListNodes()).filter(isHierarchyNode);
+				if (primary.length) return primary;
+			
+				// 阶段 3：自动搬迁（幂等 —— 按 nodeId upsert，重复执行不会重复新建）
+				const legacy = await legacyList();
+				if (!legacy.length) return [];
+				for (const n of legacy) {
+					try { await pdbSaveNode(n); } catch (e) { /* 单条失败不阻断整体搬迁 */ }
+				}
+				const after = (await pdbListNodes()).filter(isHierarchyNode);
+				// 搬迁未生效（自有库不可用）时，直接返回旧库结果，保证功能不因迁移而中断
+				return after.length ? after : legacy;
 			}
 			
 			/**
@@ -3470,7 +3962,9 @@ window.__ModuleLoader__.load({
 					LEVEL, LEVEL_LABEL, GLOBAL_NODE_ID,
 					makeNode, makeNodeId, getNode, saveNode, removeNode,
 					listAllNodes, loadTree, ensureGlobal, createChild, attachSession,
-					resolveConfig, getBreadcrumb, countByLevel, isHigher
+					resolveConfig, getBreadcrumb, countByLevel, isHigher,
+					// 数据元归属（要求 1 的可核验锚点）
+					PLUGIN_DB_NAME, MIRROR_LEGACY_MEMORY_CORE
 				};
 				return window.__dshHierarchy;
 			}
@@ -3481,6 +3975,7 @@ window.__ModuleLoader__.load({
 			exports.isHierarchyNode = isHierarchyNode;
 			exports.makeNodeId = makeNodeId;
 			exports.makeNode = makeNode;
+			exports.MIRROR_LEGACY_MEMORY_CORE = MIRROR_LEGACY_MEMORY_CORE;
 			exports.getNode = getNode;
 			exports.saveNode = saveNode;
 			exports.removeNode = removeNode;
@@ -3757,425 +4252,955 @@ window.__ModuleLoader__.load({
 			exports.installSummarizeApi = installSummarizeApi;
 		};
 
-		// ── logic/discover.js ──
-		__defs["logic/discover.js"] = function (exports) {
+		// ── bridge/split.js ──
+		__defs["bridge/split.js"] = function (exports) {
 			/**
-			 * logic/discover.js — 真实会话 / 文件夹（workspace）数据源发现层
+			 * bridge/split.js — 「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）
 			 *
-			 * 需求来源：「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层全局总管负责」
-			 *   要让**每一个**对话/文件夹都有总监，节点就不能靠手工创建 ——
-			 *   必须从宿主真实数据源**自动发现**会话与文件夹，再逐一定向生成总监节点。
+			 * ── 要解决的问题 ────────────────────────────────────────────────
+			 *   要求 5 要「右侧对话数据**完全与对话 tab 保持一致**」，要求 4 要「对话保持原有逻辑不变」。
+			 *   若把原生对话区**遮住**再画一个副本，两条要求立刻冲突（副本必然"只是长得像"）。
 			 *
-			 * ── 数据源（实测，2026-09-12 真机 Harness 渲染进程）────────────────
-			 *   ① `localStorage["dsh.workspace.view.v5"]`
-			 *        {"groupBy":"workspace",
-			 *         "sessionOrderByAccount":{ "<workspaceId>": ["session-xxx", ...], "": [...] },
-			 *         "sessionUpdatedAtByAccount":{ "<workspaceId>": {"session-xxx": ts, ...} }}
-			 *        ⇒ **workspace = 文件夹级**（groupBy 明确为 workspace），
-			 *          **session   = 对话级**，且自带更新时间。
-			 *   ② `localStorage["dsh.sessions.current"]` → {"sessionId":"session-xxx"} 当前会话
-			 *   ③ 兜底：IDB `directorFolders`（keyPath folderId）/ `directorStores`（会话 store）
+			 * ── 通道选型（docs/11 §三：方案 C，57 分居首）──────────────────
+			 *   **布局分屏**：不移动任何节点，只在弹窗开启期间注入一段 `<style>`，
+			 *   把原生应用根节点**向右挤**，腾出的左侧空间由插件的总监面板占用。
+			 *   ⇒ 右栏**就是**原生对话区本身（同一节点、同一渲染器、同一 store）
+			 *     ⇒ "完全一致"从"需要保证的性质"退化为**同义反复**；
+			 *     ⇒ 消息交互（查看调用详情 / 分叉 / 打开文件 / 选择复制）**原样可用**，零转发代码。
 			 *
-			 * ⚠️ ① 的 key 带版本号（v5），宿主升级后会变。故用**前缀模糊匹配**
-			 *    `dsh.workspace.view`，而非写死 v5 —— 否则宿主一升级就全量失联。
+			 *   | 状态 | `.RWZidW_viewArea`（真机实测） |
+			 *   |:--|:--|
+			 *   | 基线 | `x=280, w=1154` |
+			 *   | 注入 `padding-left:300px` | `x=580, w=854` |
+			 *   | 移除注入 | `x=280, w=1154`（**逐值复原**） |
 			 *
-			 * 🔴 稳定 id 约定（幂等的根基）
-			 *    节点 id 必须由**数据源主键**派生，不能用随机 id：
-			 *      workspace → `ws_<workspaceId>`（未分组为 `ws__ungrouped__`）
-			 *      session   → `se_<sessionId>`
-			 *    否则每次同步都会新建一套节点（重复膨胀），且无法判定「已覆盖」。
+			 * ── 🔴 三条硬边界（防止"悄悄改宿主"，docs/11 §三 3.3）───────────
+			 *   允许：注入 `<style id="dsh-director-split-style">`；给**已存在**的原生节点加 `data-*` 属性。
+			 *   禁止：增删改**任何**节点；改原生事件监听；改原生数据/store；改原生节点的 `style` 属性。
+			 *   判据：弹出前后对宿主做 全量 DOM diff，差异必须**只有** `<style>` 标签与 `data-*` 属性。
+			 *
+			 * ── 🔴 可复用教训（本轮实测踩中，docs/11 §三 3.2）────────────────
+			 *   注入 `!important` 样式的探针**必须在同一表达式内移除**。
+			 *   本轮的一次异步探针（`requestAnimationFrame` 等待后移除）因 CDP 会话超时被后台化，
+			 *   **样式残留在页面里**，于是"基线"就已经是偏移态（第二次探测 `x=580` 才暴露）。
+			 *   故本模块：**同步注入 + 同步移除**，并且 `applySplit` 内部用 `try/finally` 兜底。
 			 */
 			
-			const { idbListFolders } = __m("store/idb.js");
+			const { dshLog } = __m("util/debug.js");
 			
-			/** 稳定 id 前缀 */
-			const ID_PREFIX = { workspace: "ws_", session: "se_" };
-			/** 未分组 workspace 的占位 id（数据源中 key 为空串） */
-			const UNGROUPED_ID = "__ungrouped__";
+			const SPLIT_STYLE_ID = "dsh-director-split-style";
+			/** 被打上「应用根」标记的属性（样式选择器完全依赖它，不依赖宿主的 hash 类名） */
+			const ROOT_ATTR = "data-dsh-split-root";
+			/** 折叠态标记（值：`none` | `left` | `right` | `both`），供样式分支 */
+			const STATE_ATTR = "data-dsh-split-collapsed";
 			
-			/** 通用短码（标题缺失时的兜底显示名） */
-			function shortId(id, keep = 8) {
-				const s = String(id || "");
-				return s.length <= keep ? s : s.slice(0, keep);
-			}
+			const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 			
 			/**
-			 * 会话显示名（标题缺失时的兜底）
-			 * 🔴 必须先剥离 `session-` 前缀再截断 —— 会话 id 形如
-			 *    `session-4e8e9e49-0a8c-...`，直接取前 8 位得到的是常量前缀 `session-`，
-			 *    导致**所有会话同名**（实测 8 个会话全部显示为「会话 session-」，无法区分）。
+			 * 插件自有 UI 的根节点 id 清单（**严禁**被当成宿主节点）。
+			 *
+			 * 🔴 为什么必须硬编码而不是 import：
+			 *   `split.js` 被 `DirectorDialog.js` 与 `mount.js` 引用，反向 import 会成环。
+			 *   漂移风险由离线断言兜住 —— `verify-dialog.mjs` C 段校验本清单与
+			 *   `DirectorDialog.DIALOG_ID` / `mount.DIALOG_HOST_ID|LAUNCHER_ID|OVERLAY_HOST_ID` 逐一相等。
 			 */
-			function sessionLabel(sessionId, keep = 8) {
-				return "会话 " + shortId(String(sessionId || "").replace(/^session-/, ""), keep);
+			const PLUGIN_UI_IDS = Object.freeze([
+				"dsh-director-dialog",       // DirectorDialog.DIALOG_ID
+				"dsh-director-dialog-host",  // mount.DIALOG_HOST_ID
+				"dsh-director-hierarchy-launcher", // mount.LAUNCHER_ID
+				"dsh-director-hierarchy-overlay"   // mount.OVERLAY_HOST_ID
+			]);
+			const PLUGIN_UI_SELECTOR = PLUGIN_UI_IDS.map((i) => "#" + i).join(",") + ",[data-dsh-plugin-ui]";
+			
+			/**
+			 * 对话编辑器 placeholder（定位锚点首选）。
+			 * 🔴 与 `chat-bridge.COMPOSER_PLACEHOLDER` **必须相等**；`chat-bridge` 已 import 本模块，
+			 *    反向 import 会成环 ⇒ 本地声明，等值关系由离线断言（verify-dialog C 段）锁定。
+			 */
+			const CHAT_COMPOSER_PLACEHOLDER = "给智能体发消息";
+			
+			/** 是否落在插件自有 UI 内（含自身） */
+			function isPluginNode(el) {
+				if (!el || !el.closest) return false;
+				try { return Boolean(el.closest(PLUGIN_UI_SELECTOR)); } catch (e) { return false; }
 			}
 			
-			function safeLS() {
+			/** 是否滚动容器（`overflow-x` 为 auto/scroll/hidden 时不可挂 padding —— 见下方硬约束） */
+			function isScrollContainer(el) {
+				if (!hasDom() || !window.getComputedStyle) return false;
 				try {
-					return typeof localStorage !== "undefined" ? localStorage : null;
-				} catch (e) {
-					return null; // 隐私模式 / 禁用存储
-				}
+					const ox = String(window.getComputedStyle(el).overflowX || "").toLowerCase();
+					return ox === "auto" || ox === "scroll" || ox === "hidden";
+				} catch (e) { return false; }
+			}
+			
+			function isVisible(el) {
+				if (!el || !el.getBoundingClientRect) return false;
+				const r = el.getBoundingClientRect();
+				return r.width > 0 && r.height > 0;
 			}
 			
 			/**
-			 * 前缀模糊匹配 localStorage key（应对宿主版本升级，如 v5 → v6）
-			 * @returns {string|null} 命中的 key
-			 */
-			function findWorkspaceViewKey() {
-				const ls = safeLS();
-				if (!ls) return null;
-				let best = null;
-				for (let i = 0; i < ls.length; i++) {
-					const k = ls.key(i);
-					if (k && k.indexOf("dsh.workspace.view") === 0) best = k; // 取最后一个（版本号最大）
-				}
-				return best;
-			}
-			
-			/** 读取并解析 workspace 视图（宿主真实分组数据） */
-			function readWorkspaceView() {
-				const ls = safeLS();
-				if (!ls) return null;
-				const key = findWorkspaceViewKey();
-				if (!key) return null;
-				let raw = null;
-				try { raw = ls.getItem(key); } catch (e) { return null; }
-				if (!raw) return null;
-				let obj = null;
-				try { obj = JSON.parse(raw); } catch (e) { return null; }
-				if (!obj || typeof obj !== "object") return null;
-				return { key, data: obj };
-			}
-			
-			/** 当前会话 id */
-			function readCurrentSessionId() {
-				const ls = safeLS();
-				if (!ls) return null;
-				try {
-					const raw = ls.getItem("dsh.sessions.current");
-					if (!raw) return null;
-					const o = JSON.parse(raw);
-					return (o && o.sessionId) || null;
-				} catch (e) { return null; }
-			}
-			
-			/** workspace 节点 id（稳定） */
-			function workspaceNodeId(workspaceId) {
-				return ID_PREFIX.workspace + (workspaceId || UNGROUPED_ID);
-			}
-			
-			/** session 节点 id（稳定） */
-			function sessionNodeId(sessionId) {
-				return ID_PREFIX.session + sessionId;
-			}
-			
-			/**
-			 * 发现真实层级：workspaces（文件夹级） + sessions（对话级）
+			 * 定位「原生对话应用根」——**不使用宿主 hash 类名**（`RWZidW_*` 会随宿主构建变化）。
 			 *
-			 * @returns {Promise<{source:string, workspaces:Array, sessions:Array, currentSessionId:string|null}>}
-			 *   workspaces: [{ id, nodeId, sessionIds: string[] }]
-			 *   sessions  : [{ id, nodeId, workspaceId, updatedAt }]
-			 *   source    : "localStorage" | "idb-folders" | "none"
+			 * 判据（语义定位，三步）：
+			 *   ① 锚点优先级：**对话编辑器**（`textarea[placeholder="给智能体发消息"]`）
+			 *      → **tab 环**（`<button>` 且 `y < 90`、宽 < 60、文本 ≤ 3 字）
+			 *      → 任一可见 `<textarea>`
+			 *   ② 自锚点**向上**找第一个（最深）满足「应用根」判据的祖先
+			 *   ③ 返回它；找不到返回 `null`（调用方须优雅降级，不得硬塞标记）
+			 *
+			 * ── 🔴 两条真机踩坑（本轮实测，docs/11 §八 E-SPLIT-001/002）──────────
+			 *   E-SPLIT-001  **未排除插件自身** ⇒ ① 步扫全页 `<button>` 时，插件标题栏按钮
+			 *     （`⇤` `⇥` `–` `▢` `✕`，y=8 / w=24 / 文本 1 字）先于宿主 tab 环命中，
+			 *     于是 `findChatRoot()` 返回**插件自己的面板** `.d-panel`，
+			 *     分屏把 `padding-left` 加到自己头上 —— 右栏「完全一致」全程是假的。
+			 *   E-SPLIT-002  **兜底锚点用 `input[type=text]`** ⇒ 命中侧栏**搜索框**
+			 *     （`.PKekiq_search`），向上爬到 `.aFw_Oq_root`（280×816）——
+			 *     尺寸恰好也满足「应用根」判据 ⇒ 把**侧栏**当成对话根。
+			 *     修正：兜底只用 `<textarea>`（对话编辑器是 textarea，侧栏搜索是 input）。
+			 *     另加宽度下限 `> 40% 视口宽`（侧栏 280/1442=19% ⇒ 被拒）。
+			 *
+			 * ── 🔴 硬约束：不选滚动容器（真机逐层实测 `scripts/_probe-pad.mjs`）──────
+			 *   | 候选 | padding 后 `.composerSeat` | 横向溢出 |
+			 *   |:--|:--|:--|
+			 *   | `RWZidW_scrollBody` | x 280→580, w 1154→854 | ❌ `overflowX=true` |
+			 *   | `RWZidW_root` | x 280→580, w 1154→854 | ✅ 无 |
+			 *   | `OrjXgq_centerSurface` | 同上 | ✅ 无 |
+			 *   | `OrjXgq_centerCol` | 同上 | ✅ 无 |
+			 *   四者视觉结果一致，但滚动容器挂 padding 会让**可滚区域内**多出 300px
+			 *   ⇒ 出现横向滚动条。故跳过 `overflow-x ∈ {auto,scroll,hidden}` 的祖先。
+			 *   取「最深的合法祖先」而非「最外层」：更外层可能是同时含**侧栏**的容器
+			 *   （本轮 `.OrjXgq_frame` 1442 宽，靠 `width < 0.98vw` 拒绝）。
+			 *
+			 * @returns {HTMLElement|null}
 			 */
-			async function discover() {
-				const view = readWorkspaceView();
-				if (view && view.data.sessionOrderByAccount) {
-					const order = view.data.sessionOrderByAccount || {};
-					const times = view.data.sessionUpdatedAtByAccount || {};
-					const workspaces = [];
-					const sessions = [];
-					for (const wsId of Object.keys(order)) {
-						const ids = Array.isArray(order[wsId]) ? order[wsId] : [];
-						const tmap = times[wsId] || {};
-						workspaces.push({
-							id: wsId || UNGROUPED_ID,
-							rawId: wsId,
-							nodeId: workspaceNodeId(wsId),
-							name: wsId ? ("工作区 " + shortId(wsId)) : "未分组",
-							sessionIds: ids.slice()
-						});
-						for (const sid of ids) {
-							sessions.push({
-								id: sid,
-								nodeId: sessionNodeId(sid),
-								workspaceId: wsId || UNGROUPED_ID,
-								updatedAt: tmap[sid] || 0
-							});
+			function findChatRoot() {
+				if (!hasDom()) return null;
+				const vh = window.innerHeight || 800;
+				const vw = window.innerWidth || 1440;
+				const isAppLike = (el) => {
+					if (!el || el === document.body || el === document.documentElement) return false;
+					if (isPluginNode(el)) return false;                                  // ① 绝不选插件自身
+					const r = el.getBoundingClientRect();
+					if (!(r.height >= vh * 0.9 && r.width > vw * 0.4 && r.width < vw * 0.98)) return false;
+					if (isScrollContainer(el)) return false;                              // ② 绝不选滚动容器
+					return true;
+				};
+			
+				// ① 锚点（插件自身一律排除；兜底只用 textarea）
+				let anchor = null;
+				for (const t of document.querySelectorAll("textarea")) {
+					if (isPluginNode(t)) continue;
+					if (t.placeholder === CHAT_COMPOSER_PLACEHOLDER && isVisible(t)) { anchor = t; break; }
+				}
+				if (!anchor) {
+					for (const btn of document.querySelectorAll("button")) {
+						if (isPluginNode(btn)) continue;
+						const r = btn.getBoundingClientRect();
+						if (r.y >= 0 && r.y < 90 && r.width > 0 && r.width < 60) {
+							const t = (btn.textContent || "").trim();
+							if (t.length > 0 && t.length <= 3) { anchor = btn; break; }
 						}
 					}
-					return {
-						source: "localStorage",
-						workspaceViewKey: view.key,
-						workspaces, sessions,
-						currentSessionId: readCurrentSessionId()
-					};
 				}
-			
-				// ── 兜底：IDB directorFolders（文件夹级）+ directorStores（会话级）──
-				const folders = await idbListFolders();
-				if (folders && folders.length) {
-					const workspaces = folders.map((f) => ({
-						id: f.folderId,
-						rawId: f.folderId,
-						nodeId: workspaceNodeId(f.folderId),
-						name: f.name || f.title || ("文件夹 " + shortId(f.folderId)),
-						sessionIds: []
-					}));
-					return {
-						source: "idb-folders",
-						workspaces,
-						sessions: [],
-						currentSessionId: readCurrentSessionId()
-					};
+				if (!anchor) {
+					for (const t of document.querySelectorAll("textarea")) {
+						if (isPluginNode(t)) continue;
+						if (isVisible(t)) { anchor = t; break; }
+					}
 				}
+				if (!anchor) return null;
 			
-				return { source: "none", workspaces: [], sessions: [], currentSessionId: readCurrentSessionId() };
+				// ② 取最深的合法祖先
+				let el = anchor.parentElement;
+				while (el && el !== document.body) {
+					if (isAppLike(el)) return el;
+					el = el.parentElement;
+				}
+				return null;
 			}
 			
-			/** 安装全局契约 */
-			function installDiscoverApi() {
-				if (typeof window === "undefined") return null;
-				window.__dshDiscover = {
-					ID_PREFIX, UNGROUPED_ID,
-					shortId, sessionLabel, findWorkspaceViewKey, readWorkspaceView, readCurrentSessionId,
-					workspaceNodeId, sessionNodeId, discover
+			/** 应用根的位置尺寸（弹窗据此对齐；返回 null 表示未找到） */
+			function getSplitRootRect() {
+				const root = findChatRoot();
+				if (!root) return null;
+				const r = root.getBoundingClientRect();
+				return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left), top: Math.round(r.top) };
+			}
+			
+			/**
+			 * 构造样式文本（**纯函数**，便于离线断言）
+			 *
+			 * 只做一件事：把原生应用根向右挤 `paddingLeft` px。
+			 * 折叠态（`collapsed`）不加额外规则 —— 排布完全由父组件算出的 `paddingLeft` 决定
+			 * （右栏折叠 = paddingLeft 推到 `宽-40`，原生内容自然成为右侧 40px 竖条）。
+			 * 保持"样式文本是 paddingLeft 的单值函数"这一性质，离线断言才好写。
+			 *
+			 * @param {number} paddingLeft
+			 * @returns {string}
+			 */
+			function buildSplitCss(paddingLeft) {
+				const pad = Math.max(0, Math.round(Number(paddingLeft) || 0));
+				return [
+					`[${ROOT_ATTR}]{`,
+					`padding-left:${pad}px !important;`,
+					`box-sizing:border-box !important;`,
+					`transition:padding-left .14s ease;`,
+					`}`
+				].join("");
+			}
+			
+			/** 当前分屏状态（同步可读；`window.__dshSplit` 亦暴露） */
+			let state = {
+				active: false,
+				rootMarked: false,
+				paddingLeft: 0,
+				collapsed: null,
+				updatedAt: 0
+			};
+			
+			function getSplitState() {
+				return { ...state };
+			}
+			
+			/**
+			 * 应用分屏（幂等）
+			 * @param {object} opts
+			 * @param {number} opts.paddingLeft 原生内容左侧留白（= 左栏占宽）
+			 * @param {"none"|"left"|"right"|"both"|null} [opts.collapsed] 折叠态，仅用于样式分支
+			 * @returns {{ok:boolean, reason?:string, root?:HTMLElement}}
+			 */
+			function applySplit(opts = {}) {
+				if (!hasDom()) return { ok: false, reason: "no-dom" };
+				try {
+					const root = findChatRoot();
+					if (!root) return { ok: false, reason: "chat-root-not-found" };
+					// 🔴 兜底护栏：宁可不分屏，也绝不把自己的面板当成宿主（E-SPLIT-001）
+					if (isPluginNode(root)) return { ok: false, reason: "plugin-node" };
+					const pad = Math.max(0, Math.round(Number(opts.paddingLeft) || 0));
+					const collapsed = opts.collapsed || null;
+			
+					// ① 标记应用根（属性可逆，且不改 style 属性）
+					root.setAttribute(ROOT_ATTR, "1");
+					if (collapsed) root.setAttribute(STATE_ATTR, collapsed);
+					else root.removeAttribute(STATE_ATTR);
+			
+					// ② 标记内容区（供后续装饰/折叠使用；只打属性，不动节点）
+					const contentRoot = root.querySelector("header") ? root : null;
+					if (contentRoot) contentRoot.setAttribute("data-dsh-split-host", "1");
+			
+					// ③ 注入/更新样式（单一样式节点，幂等）
+					let style = document.getElementById(SPLIT_STYLE_ID);
+					if (!style) {
+						style = document.createElement("style");
+						style.id = SPLIT_STYLE_ID;
+						document.head.appendChild(style);
+					}
+					style.textContent = buildSplitCss(pad);
+					state = { active: true, rootMarked: true, paddingLeft: pad, collapsed, updatedAt: Date.now() };
+					if (typeof window !== "undefined") window.__dshSplit = getSplitState();
+					return { ok: true, root, paddingLeft: pad };
+				} catch (e) {
+					// 🔴 finally 兜底：任何异常都不能让样式残留在页面里
+					clearSplit();
+					return { ok: false, reason: "error:" + (e && e.message) };
+				}
+			}
+			
+			/**
+			 * 撤销分屏（**完全可逆**）
+			 * 移除样式节点 + 移除全部 `data-*` 标记；不触碰任何原生节点、不触碰原生 style 属性。
+			 * @returns {{ok:boolean, removedStyle:boolean, clearedAttrs:number}}
+			 */
+			function clearSplit() {
+				if (!hasDom()) return { ok: false, removedStyle: false, clearedAttrs: 0 };
+				let clearedAttrs = 0;
+				let removedStyle = false;
+				try {
+					const style = document.getElementById(SPLIT_STYLE_ID);
+					if (style) { style.remove(); removedStyle = true; }
+					for (const attr of [ROOT_ATTR, STATE_ATTR, "data-dsh-split-host", "data-dsh-split-content"]) {
+						let guard = 0;
+						while (guard++ < 200) {
+							const el = document.querySelector("[" + attr + "]");
+							if (!el) break;
+							el.removeAttribute(attr);
+							clearedAttrs++;
+						}
+					}
+				} catch (e) {
+					// 移除失败也不能抛：调用方多为 UI 卸载路径
+					dshLog("split", "clearSplit error: " + (e && e.message));
+				}
+				state = { active: false, rootMarked: false, paddingLeft: 0, collapsed: null, updatedAt: Date.now() };
+				if (typeof window !== "undefined") window.__dshSplit = getSplitState();
+				return { ok: true, removedStyle, clearedAttrs };
+			}
+			
+			/** 分屏是否生效 */
+			function isSplitActive() {
+				return hasDom() && Boolean(document.getElementById(SPLIT_STYLE_ID));
+			}
+			
+			/** 安装全局契约（调试与验证脚本用） */
+			function installSplitApi() {
+				if (!hasDom()) return null;
+				window.__dshSplitApi = {
+					SPLIT_STYLE_ID, ROOT_ATTR, STATE_ATTR, PLUGIN_UI_IDS, CHAT_COMPOSER_PLACEHOLDER,
+					findChatRoot, isPluginNode, getSplitRootRect, buildSplitCss,
+					applySplit, clearSplit, isSplitActive, getSplitState
 				};
-				return window.__dshDiscover;
+				window.__dshSplit = getSplitState();
+				return window.__dshSplitApi;
 			}
 			
-			exports.ID_PREFIX = ID_PREFIX;
-			exports.UNGROUPED_ID = UNGROUPED_ID;
-			exports.shortId = shortId;
-			exports.sessionLabel = sessionLabel;
-			exports.findWorkspaceViewKey = findWorkspaceViewKey;
-			exports.readWorkspaceView = readWorkspaceView;
-			exports.readCurrentSessionId = readCurrentSessionId;
-			exports.workspaceNodeId = workspaceNodeId;
-			exports.sessionNodeId = sessionNodeId;
-			exports.discover = discover;
-			exports.installDiscoverApi = installDiscoverApi;
+			exports.SPLIT_STYLE_ID = SPLIT_STYLE_ID;
+			exports.ROOT_ATTR = ROOT_ATTR;
+			exports.STATE_ATTR = STATE_ATTR;
+			exports.PLUGIN_UI_IDS = PLUGIN_UI_IDS;
+			exports.CHAT_COMPOSER_PLACEHOLDER = CHAT_COMPOSER_PLACEHOLDER;
+			exports.isPluginNode = isPluginNode;
+			exports.findChatRoot = findChatRoot;
+			exports.getSplitRootRect = getSplitRootRect;
+			exports.buildSplitCss = buildSplitCss;
+			exports.getSplitState = getSplitState;
+			exports.applySplit = applySplit;
+			exports.clearSplit = clearSplit;
+			exports.isSplitActive = isSplitActive;
+			exports.installSplitApi = installSplitApi;
 		};
 
-		// ── logic/sync.js ──
-		__defs["logic/sync.js"] = function (exports) {
+		// ── bridge/chat-bridge.js ──
+		__defs["bridge/chat-bridge.js"] = function (exports) {
 			/**
-			 * logic/sync.js — 自动同步：让**每一个**对话 / 文件夹都拥有总监
+			 * bridge/chat-bridge.js — 「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）
 			 *
-			 * 需求（用户原话）：「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层有总监负责」
+			 * ── 定位 ────────────────────────────────────────────────────────
+			 *   分屏通道（`bridge/split.js`）已经让**右栏＝原生对话区本身**：
+			 *   消息渲染、滚动、选择复制、消息内交互**天然可用**，本模块**不需要**做任何"显示"工作。
+			 *   本模块只补两件分屏给不了的事：
+			 *     ① **左 → 右**：把总监侧的输入送进原生 composer 并提交（要求 5「互相传送消息」）
+			 *     ② **右 → 左**：观察原生产出变化 → 通知总监侧触发审核（要求 3）
 			 *
-			 * 设计要点
-			 *   1. **稳定 id 幂等**：节点 id 由数据源主键派生（`ws_`/`se_` 前缀，见 discover.js），
-			 *      故重复同步**只会更新、不会重复新建**。这是「每一个都有」能被验证的前提。
-			 *   2. **全局总管单例**：`__global__`，永远存在，所有文件夹级挂其下。
-			 *   3. **文件夹级 = workspace**（宿主 `groupBy:"workspace"`），**对话级 = session**。
-			 *   4. **不覆盖用户改名**：同步写入时打 `meta.autoName = true`；用户改名后该标记被清除，
-			 *      此后同步不再覆盖 `name`。
-			 *   5. **孤儿软标记**：数据源中已消失（被删除）的会话不删除节点（避免误删用户沉淀的
-			 *      总结/决策），只标 `meta.orphaned = true`，UI 可筛选。
+			 * ── 🔴 定位原生的方式：**语义属性**，不用 hash 类名 ──────────────
+			 *   实测（2026-09-12 真机）：
+			 *     composer 编辑器  `textarea[placeholder="给智能体发消息"]`（类名 `FVE3va_input` 会随构建变）
+			 *     发送按钮         `button[aria-label="发送消息"]`（空内容时 `disabled=true`）
+			 *   ⇒ 一律用 `placeholder` / `aria-label` 这类**语义属性**做锚点；
+			 *     类名（`FVE3va_*` / `RWZidW_*`）只作兜底，不入判据。
 			 *
-			 * 全局契约：`window.__dshSync`
+			 * ── 🔴 React 受控输入的正确写法 ─────────────────────────────────
+			 *   直接 `ta.value = x` 不会触发 React 的 onChange（React 劫持了 value setter）。
+			 *   必须走**原生 setter** + 派发 `input` 事件：
+			 *     `Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(ta, x)`
+			 *     `ta.dispatchEvent(new Event("input", { bubbles: true }))`
+			 *   否则发送按钮的 `disabled` 不会解除，点击是原生 no-op（→ 表现为"点了没反应"）。
 			 */
 			
-			const { LEVEL, GLOBAL_NODE_ID, makeNode, getNode, saveNode, ensureGlobal, listAllNodes } = __m("store/hierarchy.js");
-			const { discover, workspaceNodeId, sessionNodeId, shortId, sessionLabel } = __m("logic/discover.js");
-			const { idbLoad } = __m("store/idb.js");
+			const { getSplitRootRect, findChatRoot } = __m("bridge/split.js");
 			const { dshLog } = __m("util/debug.js");
-			const { emitHierarchyChange } = __m("util/bus.js");
 			
-			/**
-			 * 从真实数据源同步层级结构（幂等）
-			 * @param {object} [opts]
-			 * @param {boolean} [opts.includeOrphanScan=true] 是否扫描并软标记已消失的会话
-			 * @returns {Promise<{source:string, created:number, updated:number, orphaned:number,
-			 *                    folders:number, sessions:number, total:number, coverage:object}>}
-			 */
-			async function syncFromSource(opts = {}) {
-				const disc = await discover();
-				const stats = {
-					source: disc.source, created: 0, updated: 0, orphaned: 0,
-					folders: 0, sessions: 0, total: 0
-				};
+			const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 			
-				// ── 1. 全局总管（单例，必须有）──
-				const root = await ensureGlobal();
+			/** 发送按钮的语义锚点（实测值，勿改成类名） */
+			const SEND_ARIA = "发送消息";
+			/** composer 编辑器占位文案（实测值；命中不到时退回"任意可见 textarea"） */
+			const COMPOSER_PLACEHOLDER = "给智能体发消息";
 			
-				if (!disc.workspaces.length && !disc.sessions.length) {
-					dshLog("sync", "数据源为空（source=" + disc.source + "），仅确保全局总管存在");
-					stats.total = 1;
-					stats.coverage = await auditCoverage();
-					emitHierarchyChange();
-					return stats;
+			function isVisible(el) {
+				if (!el || !el.getBoundingClientRect) return false;
+				const r = el.getBoundingClientRect();
+				return r.width > 0 && r.height > 0;
+			}
+			
+			/** 找到 composer 编辑器 */
+			function findComposer() {
+				if (!hasDom()) return null;
+				const byPh = document.querySelector('textarea[placeholder="' + COMPOSER_PLACEHOLDER + '"]');
+				if (byPh && isVisible(byPh)) return byPh;
+				for (const ta of document.querySelectorAll("textarea")) if (isVisible(ta)) return ta;
+				for (const ed of document.querySelectorAll('[contenteditable="true"]')) if (isVisible(ed)) return ed;
+				return null;
+			}
+			
+			/** 找到发送按钮（按 aria-label；找不到则退回 composer 卡片内的主按钮） */
+			function findSendButton() {
+				if (!hasDom()) return null;
+				const byAria = document.querySelector('button[aria-label="' + SEND_ARIA + '"]');
+				if (byAria) return byAria;
+				const ta = findComposer();
+				let el = ta ? ta.parentElement : null;
+				for (let i = 0; i < 5 && el; i++) {
+					const btns = [...el.querySelectorAll("button")].filter((b) => /send|发送/i.test((b.getAttribute("aria-label") || "") + (b.getAttribute("title") || "") + (b.textContent || "")));
+					if (btns.length) return btns[btns.length - 1];
+					el = el.parentElement;
 				}
-			
-				// ── 2. 文件夹级（workspace）→ 项目总监 ──
-				const rootChildren = new Set(root.children || []);
-				const folderNodeIds = [];
-				disc.workspaces.forEach((ws, idx) => {
-					const id = ws.nodeId || workspaceNodeId(ws.id);
-					folderNodeIds.push(id);
-					rootChildren.add(id);
-					ws.__nodeId = id;
-					ws.__order = idx;
-				});
-			
-				for (const ws of disc.workspaces) {
-					const id = ws.__nodeId;
-					let node = await getNode(id);
-					if (!node) {
-						node = makeNode({
-							id, name: ws.name, level: LEVEL.PROJECT, parentId: GLOBAL_NODE_ID,
-							meta: { sourceId: ws.rawId ?? ws.id, source: "workspace", autoName: true, order: ws.__order }
-						});
-						stats.created++;
-					} else {
-						if (node.meta && node.meta.autoName !== false && node.name !== ws.name) node.name = ws.name;
-						node.parentId = GLOBAL_NODE_ID;
-						node.meta = { ...(node.meta || {}), sourceId: ws.rawId ?? ws.id, source: "workspace", order: ws.__order };
-						stats.updated++;
-					}
-					await saveNode(node);
-					stats.folders++;
-				}
-			
-				// ── 3. 对话级（session）→ 会话总监 ──
-				const folderChildMap = new Map(); // folderNodeId -> [sessionNodeId]
-				const aliveSessionIds = new Set();
-				for (const s of disc.sessions) {
-					const parentId = workspaceNodeId(s.workspaceId);
-					if (!folderChildMap.has(parentId)) folderChildMap.set(parentId, []);
-					folderChildMap.get(parentId).push(s.nodeId || sessionNodeId(s.id));
-					aliveSessionIds.add(s.id);
-				}
-			
-				let sIdx = 0;
-				for (const s of disc.sessions) {
-					const id = s.nodeId || sessionNodeId(s.id);
-					const parentId = workspaceNodeId(s.workspaceId);
-					// 父级不存在（如数据源只有会话没有 workspace）→ 归到全局根，绝不丢弃
-					const parentOk = folderNodeIds.indexOf(parentId) >= 0;
-					const realParent = parentOk ? parentId : GLOBAL_NODE_ID;
-					if (!parentOk) rootChildren.add(id);
-			
-					// 会话消息统计（宿主 directorStores 有则取，无则为 0；失败静默）
-					let messageCount = 0;
-					let lastMessage = "";
-					try {
-						const store = await idbLoad(s.id);
-						if (store && Array.isArray(store.messages)) {
-							messageCount = store.messages.length;
-							const last = store.messages[store.messages.length - 1];
-							if (last) lastMessage = String(last.content || last.text || "").slice(0, 200);
-						}
-					} catch (e) { /* 无该会话的本地 store，属正常 */ }
-			
-					let node = await getNode(id);
-					if (!node) {
-						node = makeNode({
-							id,
-							name: sessionLabel(s.id),
-							level: LEVEL.SESSION,
-							parentId: realParent,
-							meta: { sourceId: s.id, source: "session", autoName: true, order: sIdx }
-						});
-						stats.created++;
-					} else {
-						if (node.meta && node.meta.autoName !== false) node.name = sessionLabel(s.id);
-						node.parentId = realParent;
-						node.meta = { ...(node.meta || {}), sourceId: s.id, source: "session", order: sIdx };
-						stats.updated++;
-					}
-					node.conversations = [{
-						conversationId: s.id,
-						title: node.name,
-						lastMessage,
-						lastTime: s.updatedAt || 0,
-						messageCount
-					}];
-					node.meta.orphaned = false;
-					await saveNode(node);
-					stats.sessions++;
-					sIdx++;
-				}
-			
-				// ── 4. 维护父子关系（幂等：用 Set 去重，不会重复 push）──
-				root.children = Array.from(rootChildren);
-				await saveNode(root);
-				for (const [fid, kids] of folderChildMap.entries()) {
-					const f = await getNode(fid);
-					if (!f) continue;
-					f.children = Array.from(new Set([...(f.children || []), ...kids]));
-					await saveNode(f);
-				}
-			
-				// ── 5. 孤儿软标记（数据源中已消失的自动同步会话）──
-				if (opts.includeOrphanScan !== false) {
-					const all = await listAllNodes();
-					for (const n of all) {
-						if (n.level !== LEVEL.SESSION) continue;
-						const sid = n.meta && n.meta.sourceId;
-						if (!sid) continue;                 // 手工创建的节点不参与
-						if (aliveSessionIds.has(sid)) continue;
-						if (n.meta && n.meta.orphaned) continue;
-						n.meta = { ...n.meta, orphaned: true };
-						await saveNode(n);
-						stats.orphaned++;
-					}
-				}
-			
-				stats.total = stats.folders + stats.sessions + 1;
-				stats.coverage = await auditCoverage();
-				// 🔴 必须广播：面板首帧早于同步完成，若不通知则一直显示陈旧快照（实测 0/8）
-				emitHierarchyChange();
-				dshLog("sync", "同步完成: 新建 " + stats.created + " / 更新 " + stats.updated
-					+ " / 孤儿 " + stats.orphaned + " / 覆盖度 " + JSON.stringify(stats.coverage.rate));
-				return stats;
+				return null;
 			}
 			
 			/**
-			 * 覆盖度自检 —— 直接回答「是否每一个对话 / 文件夹都有总监」
+			 * 把文本写入 composer（React 受控输入安全）
+			 * @returns {{ok:boolean, reason?:string, editor?:HTMLElement}}
+			 */
+			function setComposerText(text) {
+				const ed = findComposer();
+				if (!ed) return { ok: false, reason: "composer-not-found" };
+				try {
+					const v = String(text == null ? "" : text);
+					if (ed.tagName === "TEXTAREA") {
+						const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+						if (desc && desc.set) desc.set.call(ed, v); else ed.value = v;
+					} else if (ed.tagName === "INPUT") {
+						const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+						if (desc && desc.set) desc.set.call(ed, v); else ed.value = v;
+					} else {
+						ed.textContent = v;
+					}
+					ed.dispatchEvent(new Event("input", { bubbles: true }));
+					ed.dispatchEvent(new Event("change", { bubbles: true }));
+					return { ok: true, editor: ed };
+				} catch (e) {
+					return { ok: false, reason: "set-error:" + (e && e.message) };
+				}
+			}
+			
+			/**
+			 * 读取 composer 当前值（**写后回读校验**用，见 execution-standards §3.4）
+			 * @returns {string|null}
+			 */
+			function readComposerText() {
+				const ed = findComposer();
+				if (!ed) return null;
+				return ed.tagName === "TEXTAREA" || ed.tagName === "INPUT" ? String(ed.value || "") : String(ed.textContent || "");
+			}
+			
+			/**
+			 * 提交 composer
+			 * @returns {{ok:boolean, reason?:string, via?:string}}
+			 */
+			function submitComposer() {
+				const btn = findSendButton();
+				if (!btn) return { ok: false, reason: "send-button-not-found" };
+				if (btn.disabled) return { ok: false, reason: "send-button-disabled", via: "disabled" };
+				try {
+					btn.click();
+					return { ok: true, via: "click" };
+				} catch (e) {
+					return { ok: false, reason: "click-error:" + (e && e.message) };
+				}
+			}
+			
+			/**
+			 * 左 → 右 主入口：把总监侧输入送到对话域
 			 *
-			 * @returns {Promise<{sessions:object, folders:object, global:object, rate:string, ok:boolean}>}
+			 * 两级降级（保证"必定有反馈"，不会静默失败）：
+			 *   ① `autoSend=true` 且发送按钮可用 → 真正发送，`mode="sent"`
+			 *   ② 否则 → 文本已填入 composer，`mode="filled"`，由用户确认后手动发送
+			 *
+			 * @param {string} text
+			 * @param {{autoSend?:boolean, verify?:boolean}} [opts]
+			 * @returns {Promise<{ok:boolean, mode:"sent"|"filled"|"failed", reason?:string, verified?:boolean}>}
 			 */
-			async function auditCoverage() {
-				const disc = await discover();
-				const all = await listAllNodes();
-				const byId = new Map(all.map((n) => [n.id, n]));
+			async function sendToChat(text, opts = {}) {
+				const autoSend = opts.autoSend !== false;
+				const filled = setComposerText(text);
+				if (!filled.ok) return { ok: false, mode: "failed", reason: filled.reason };
 			
-				const sessionTotal = disc.sessions.length;
-				const sessionCovered = disc.sessions.filter((s) => byId.has(s.nodeId || sessionNodeId(s.id))).length;
-				const sessionMissing = disc.sessions
-					.filter((s) => !byId.has(s.nodeId || sessionNodeId(s.id)))
-					.map((s) => s.id);
+				// 🔴 写后回读校验：确认文本真的进了受控组件
+				const back = readComposerText();
+				if (back !== String(text)) {
+					return { ok: false, mode: "failed", reason: "readback-mismatch", verified: false };
+				}
 			
-				const folderTotal = disc.workspaces.length;
-				const folderCovered = disc.workspaces.filter((w) => byId.has(w.nodeId || workspaceNodeId(w.id))).length;
-				const folderMissing = disc.workspaces
-					.filter((w) => !byId.has(w.nodeId || workspaceNodeId(w.id)))
-					.map((w) => w.id);
+				if (!autoSend) return { ok: true, mode: "filled", verified: true };
 			
-				const globalOk = byId.has(GLOBAL_NODE_ID);
-				const pct = (a, b) => (b === 0 ? "n/a" : Math.round((a / b) * 100) + "%");
+				const sub = submitComposer();
+				if (!sub.ok) return { ok: true, mode: "filled", reason: sub.reason, verified: true };
 			
+				// 提交后编辑器应被清空（原生行为）—— 作为"确实发出"的弱证据
+				await new Promise((r) => setTimeout(r, 120));
+				const after = readComposerText();
+				return { ok: true, mode: "sent", verified: after !== null ? after === "" : null };
+			}
+			
+			/* ── 右 → 左：产出观察 ─────────────────────────────────────────── */
+			
+			/** 找到"消息列表"容器（沿 viewArea 的单子节点链下钻） */
+			function findMessageList() {
+				const rect = getSplitRootRect();
+				if (!rect) return null;
+				const root = findChatRoot();
+				if (!root) return null;
+				// 消息列表 = 应用根内"高度占主体、且不含 composer 编辑器"的最深单子链末端
+				let cur = root;
+				let guard = 0;
+				while (cur && guard++ < 12) {
+					const kids = [...cur.children].filter((e) => isVisible(e));
+					if (kids.length !== 1) break;
+					if (kids[0].querySelector("textarea,[contenteditable=true]")) break;
+					cur = kids[0];
+				}
+				return cur === root ? null : cur;
+			}
+			
+			/**
+			 * 读取当前对话的可见产出概况
+			 * @returns {{count:number, lastText:string, listFound:boolean}}
+			 */
+			function readConversation() {
+				const list = findMessageList();
+				if (!list) return { count: 0, lastText: "", listFound: false };
+				const items = [...list.children].filter(isVisible);
+				const last = items[items.length - 1];
 				return {
-					source: disc.source,
-					sessions: { total: sessionTotal, covered: sessionCovered, missing: sessionMissing, rate: pct(sessionCovered, sessionTotal) },
-					folders: { total: folderTotal, covered: folderCovered, missing: folderMissing, rate: pct(folderCovered, folderTotal) },
-					global: { total: 1, covered: globalOk ? 1 : 0, rate: globalOk ? "100%" : "0%" },
-					rate: "会话 " + pct(sessionCovered, sessionTotal) + " / 文件夹 " + pct(folderCovered, folderTotal) + " / 全局 " + (globalOk ? "100%" : "0%"),
-					ok: globalOk && sessionCovered === sessionTotal && folderCovered === folderTotal
+					count: items.length,
+					lastText: last ? String(last.textContent || "").trim().slice(0, 400) : "",
+					listFound: true
 				};
 			}
 			
-			/** 安装全局契约 */
-			function installSyncApi() {
-				if (typeof window === "undefined") return null;
-				window.__dshSync = { syncFromSource, auditCoverage };
-				return window.__dshSync;
+			/**
+			 * 观察对话产出变化（右 → 左）
+			 * @param {(info:{count:number,lastText:string,delta:number})=>void} cb
+			 * @returns {() => void} 取消订阅
+			 */
+			function observeConversation(cb) {
+				if (!hasDom() || typeof MutationObserver === "undefined") return () => {};
+				let last = readConversation();
+				let timer = null;
+				const fire = () => {
+					const cur = readConversation();
+					const delta = cur.count - last.count;
+					const changed = delta !== 0 || cur.lastText !== last.lastText;
+					last = cur;
+					if (changed) { try { cb({ ...cur, delta }); } catch (e) { /* 订阅者异常不影响观察 */ } }
+				};
+				const mo = new MutationObserver(() => {
+					if (timer) clearTimeout(timer);
+					timer = setTimeout(fire, 220); // 防抖：流式输出期间高频变更
+				});
+				const target = findMessageList() || document.body;
+				mo.observe(target, { childList: true, subtree: true, characterData: true });
+				return () => { try { mo.disconnect(); } catch (e) { /* 已断开 */ } if (timer) clearTimeout(timer); };
 			}
 			
-			exports.syncFromSource = syncFromSource;
-			exports.auditCoverage = auditCoverage;
-			exports.installSyncApi = installSyncApi;
+			/** 安装全局契约（调试与验证脚本用） */
+			function installChatBridgeApi() {
+				if (!hasDom()) return null;
+				const api = {
+					SEND_ARIA, COMPOSER_PLACEHOLDER,
+					findComposer, findSendButton, findMessageList,
+					setComposerText, readComposerText, submitComposer, sendToChat,
+					readConversation, observeConversation
+				};
+				window.__dshChatBridge = api;
+				dshLog("bridge", "chat-bridge 已安装（composer 锚点：" + COMPOSER_PLACEHOLDER + " / " + SEND_ARIA + "）");
+				return api;
+			}
+			
+			exports.SEND_ARIA = SEND_ARIA;
+			exports.COMPOSER_PLACEHOLDER = COMPOSER_PLACEHOLDER;
+			exports.findComposer = findComposer;
+			exports.findSendButton = findSendButton;
+			exports.setComposerText = setComposerText;
+			exports.readComposerText = readComposerText;
+			exports.submitComposer = submitComposer;
+			exports.sendToChat = sendToChat;
+			exports.findMessageList = findMessageList;
+			exports.readConversation = readConversation;
+			exports.observeConversation = observeConversation;
+			exports.installChatBridgeApi = installChatBridgeApi;
+		};
+
+		// ── logic/routing.js ──
+		__defs["logic/routing.js"] = function (exports) {
+			/**
+			 * logic/routing.js — 智能路由（要求 8）＋ 六维审核（要求 3）
+			 *
+			 * 需求来源（严格按文档，勿自行改动）：
+			 *   - 17 号文 §三 智能路由设计（5 步）：**意图理解 → 项目匹配 → 任务拆分 → 路由决策 → 执行落实**
+			 *     §6.3 扩展：V12 半自动（建议+用户确认）→ V13 全自动
+			 *   - 17 号文 §1A.9 六维度审核检查清单（**不得减项**）：
+			 *     ① 需求满足度 ② 方案符合度 ③ 质量达标度 ④ 风险控制 ⑤ 完整性 ⑥ 一致性
+			 *   - 17 号文 §1A.10 分支分派与汇总；§1A.2 协作流程（不通过则带审核意见打回）
+			 *
+			 * 硬约束（docs/10 要求 8）：
+			 *   ① 总监页面**只有一个**；② 用户输入 → 总监**整理 + 确认** → 判定归属对话；
+			 *   ③ 三条去向：**转给该对话的总监** / **直接调用对应对话** / **新建对话**；
+			 *   ④ 路由结果**必须可确认、可回看**（不得静默分发）。
+			 *
+			 * 设计取舍：本模块**全部为纯函数 + 规则打分**（不调模型）——
+			 *   目的是让"路由决策"这一关键路径**确定可复现**，离线可断言。
+			 *   需要模型增强时由上层注入（`opts.rank`），本模块不依赖网络。
+			 */
+			
+			const { saveDecision, saveReview, listDecisions } = __m("store/plugin-db.js");
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、STEP 1 意图理解
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 意图类型（17 号文 §三 STEP1 原列：需求 / 问题 / 指令 / 讨论 / 反馈） */
+			const INTENT = Object.freeze({
+				REQUIREMENT: "需求",
+				QUESTION: "问题",
+				COMMAND: "指令",
+				DISCUSSION: "讨论",
+				FEEDBACK: "反馈"
+			});
+			
+			const INTENT_RULES = [
+				{ kind: INTENT.QUESTION, re: /[?？]|怎么|如何|为什么|是什么|能不能|是否/, weight: 2 },
+				{ kind: INTENT.FEEDBACK, re: /不对|有问题|错了|不好|差|不满意|应该是|其实要|并不是/, weight: 3 },
+				{ kind: INTENT.COMMAND, re: /^(请|帮我|给我|把|执行|运行|跑|部署|提交|删除|改|修|加)/, weight: 3 },
+				{ kind: INTENT.REQUIREMENT, re: /要|需要|必须|希望|要求|新增|实现|支持/, weight: 2 },
+				{ kind: INTENT.DISCUSSION, re: /讨论|看看|评估|比较|方案|建议|想法/, weight: 2 }
+			];
+			
+			/**
+			 * 中文分词（CJK / 拉丁边界插空格）+ 过滤停用词
+			 * 与 `logic/director-run.js#tokenize` 同源口径（CJK 单字 + bigram 兜底）。
+			 */
+			const STOP = new Set(["的", "了", "是", "在", "和", "与", "及", "把", "被", "给", "对", "为", "就", "都", "也", "很", "我", "你", "他", "它", "这", "那", "个", "们", "一下", "一个", "the", "a", "an", "to", "of", "and", "is", "in", "for", "on"]);
+			
+			function tokenize(text) {
+				const s = String(text == null ? "" : text)
+					.replace(/([\u4e00-\u9fa5])/g, " $1 ")
+					.replace(/([A-Za-z0-9_@./-]+)/g, " $1 ")
+					.toLowerCase();
+				const raw = s.split(/\s+/).filter(Boolean);
+				const out = [];
+				for (const w of raw) {
+					if (w.length === 1 && /[\u4e00-\u9fa5]/.test(w)) { if (!STOP.has(w)) out.push(w); continue; }
+					if (STOP.has(w) || w.length < 2) continue;
+					out.push(w);
+				}
+				// bigram 兜底：中文按字切后语义弱，补相邻二元组提升匹配率
+				const cjkRun = [];
+				for (const w of out) {
+					if (w.length === 1 && /[\u4e00-\u9fa5]/.test(w)) { cjkRun.push(w); continue; }
+					if (cjkRun.length) { pushBigrams(cjkRun, out); cjkRun.length = 0; }
+				}
+				if (cjkRun.length) pushBigrams(cjkRun, out);
+				return Array.from(new Set(out));
+			}
+			function pushBigrams(run, out) {
+				for (let i = 0; i + 1 < run.length; i++) out.push(run[i] + run[i + 1]);
+			}
+			
+			/**
+			 * STEP 1：意图理解（规则打分，返回全部命中的类型及其权重）
+			 * @returns {{kind:string, confidence:number, signals:string[]}}
+			 */
+			function classifyIntent(text) {
+				const t = String(text || "");
+				const hits = [];
+				for (const r of INTENT_RULES) {
+					if (r.re.test(t)) hits.push({ kind: r.kind, weight: r.weight });
+				}
+				if (!hits.length) return { kind: INTENT.REQUIREMENT, confidence: 0.35, signals: ["无显式特征词 → 默认按需求处理"] };
+				hits.sort((a, b) => b.weight - a.weight);
+				const top = hits[0];
+				const total = hits.reduce((s, h) => s + h.weight, 0);
+				return {
+					kind: top.kind,
+					confidence: Math.min(0.95, 0.4 + 0.2 * hits.length + (top.weight - 2) * 0.1),
+					signals: hits.map((h) => h.kind + "(权重 " + h.weight + ")")
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、STEP 2 项目匹配
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 给候选节点打相关性分（关键词 + 名称命中 + 层级先验 + 近期活跃）
+			 * @param {string} text
+			 * @param {Array<{id:string,name:string,level:string,updatedAt?:number,conversations?:Array}>} nodes
+			 * @returns {Array<{nodeId:string,name:string,level:string,score:number,reason:string}>}
+			 */
+			function scoreNodes(text, nodes) {
+				const toks = tokenize(text);
+				const now = Date.now();
+				const out = [];
+				for (const n of nodes || []) {
+					if (!n || !n.id) continue;
+					const name = String(n.name || "");
+					const nameLower = name.toLowerCase();
+					let score = 0;
+					const reasons = [];
+					// ① 名称命中（强信号）
+					const nameHits = toks.filter((t) => t.length >= 2 && nameLower.indexOf(t) >= 0);
+					if (nameHits.length) { score += 3 * nameHits.length; reasons.push("名称命中 " + nameHits.slice(0, 3).join("/")); }
+					// ② 会话记录命中（中信号）
+					const convs = Array.isArray(n.conversations) ? n.conversations : [];
+					for (const c of convs) {
+						const ct = String((c && (c.title || c.lastMessage)) || "").toLowerCase();
+						const hits = toks.filter((t) => t.length >= 2 && ct.indexOf(t) >= 0);
+						if (hits.length) { score += 1.2 * hits.length; reasons.push("会话命中 " + hits.slice(0, 2).join("/")); break; }
+					}
+					// ③ 近期活跃（弱信号）
+					const ts = Number(n.updatedAt || (n.meta && n.meta.updatedAt) || 0);
+					if (ts > 0 && now - ts < 86400000 * 3) { score += 0.8; reasons.push("近 3 日活跃"); }
+					// ④ 层级先验：会话级优先被"直调"，项目级优先被"转派"
+					if (n.level === "session") score += 0.3;
+					if (n.level === "project") score += 0.2;
+					if (score > 0) out.push({ nodeId: n.id, name: n.name, level: n.level, score: Math.round(score * 100) / 100, reason: reasons.join("；") || "弱相关" });
+				}
+				out.sort((a, b) => b.score - a.score);
+				return out;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、STEP 3 任务拆分
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 多意图检测：按连接词 / 分号 / 换行切分子任务 */
+			function splitTasks(text) {
+				const s = String(text || "").trim();
+				if (!s) return [];
+				const parts = s.split(/[；;\n]|(?:，?\s*(?:然后|接着|之后|另外|同时|再)\s*)/g)
+					.map((x) => x.trim())
+					.filter((x) => x.length >= 2);
+				const list = parts.length ? parts : [s];
+				return list.map((p, i) => ({
+					index: i + 1,
+					text: p,
+					intent: classifyIntent(p).kind
+				}));
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、STEP 4 路由决策（**待用户确认，不静默分发**）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 去向（要求 8 三条） */
+			const DESTINATION = Object.freeze({
+				TRANSFER: "transfer",   // 转给该对话的总监
+				DIRECT: "direct",       // 直接调用对应对话
+				CREATE: "create"        // 新建对话
+			});
+			const DESTINATION_LABEL = Object.freeze({
+				transfer: "转给该对话的总监",
+				direct: "直接调用对应对话",
+				create: "新建对话"
+			});
+			
+			/**
+			 * 由候选分决定"建议去向"
+			 * 规则（可解释，非黑箱）：
+			 *   - 有高分会话候选（≥3）→ 直调（产出型任务直接投给执行对话）
+			 *   - 有中分项目候选  → 转派（交给该层级总监继续治理）
+			 *   - 无候选          → 新建
+			 */
+			function suggestDestination(candidates) {
+				const top = (candidates || [])[0];
+				if (!top) return { destination: DESTINATION.CREATE, confidence: 0.5, reason: "无匹配节点 → 由总监新建对话并初始化其总监" };
+				if (top.level === "session" && top.score >= 3) return { destination: DESTINATION.DIRECT, confidence: Math.min(0.95, 0.5 + top.score / 20), reason: "命中会话「" + top.name + "」（" + top.reason + "）→ 直接调用该对话" };
+				if (top.level === "project") return { destination: DESTINATION.TRANSFER, confidence: Math.min(0.9, 0.45 + top.score / 20), reason: "命中项目/文件夹「" + top.name + "」→ 转派给该层级总监" };
+				return { destination: DESTINATION.DIRECT, confidence: 0.6, reason: "命中「" + top.name + "」→ 直接调用对应对话" };
+			}
+			
+			/**
+			 * 完整路由（五步）
+			 * @param {string} text 用户输入
+			 * @param {object} ctx
+			 * @param {Array} ctx.nodes 候选节点（层级树拍平）
+			 * @param {string} [ctx.currentNodeId] 当前层级节点
+			 * @returns {{steps:Array, intent:object, candidates:Array, decision:object, subtasks:Array}}
+			 */
+			function route(text, ctx = {}) {
+				const nodes = (ctx.nodes || []).filter((n) => n && n.id);
+				// STEP 1
+				const intent = classifyIntent(text);
+				// STEP 2（当前层级节点加权，体现"就近路由"）
+				const candidates = scoreNodes(text, nodes).map((c) => ({
+					...c,
+					score: c.nodeId === ctx.currentNodeId ? Math.round((c.score + 1) * 100) / 100 : c.score,
+					reason: c.nodeId === ctx.currentNodeId ? (c.reason + "；当前层级" ) : c.reason
+				})).sort((a, b) => b.score - a.score);
+				// STEP 3
+				const subtasks = splitTasks(text);
+				// STEP 4
+				const decision = suggestDestination(candidates);
+				// 步骤轨迹（供 UI 逐步展示）
+				const steps = [
+					{ n: 1, key: "intent", title: "意图理解", detail: intent.kind + "（置信 " + intent.confidence.toFixed(2) + "）", done: true },
+					{ n: 2, key: "match", title: "项目匹配", detail: candidates.length ? candidates.length + " 个候选，最高 " + candidates[0].score : "无候选", done: true },
+					{ n: 3, key: "split", title: "任务拆分", detail: subtasks.length + " 个子任务", done: true },
+					{ n: 4, key: "decide", title: "路由决策", detail: DESTINATION_LABEL[decision.destination] + "（待确认）", done: false, pending: true },
+					{ n: 5, key: "apply", title: "执行落实", detail: "确认后落库并转派/直调", done: false }
+				];
+				return { intent, candidates, subtasks, decision, steps };
+			}
+			
+			/**
+			 * STEP 5：执行落实（**确认后才调用**）
+			 * 同时把决策**留痕**到 `directorDecisions`（要求 3 纠偏留痕 / 要求 8 可回看）。
+			 * @param {string} nodeId 所属层级节点
+			 * @param {object} routeResult route() 的返回值
+			 * @param {string} action 用户最终选定的去向（默认取建议值）
+			 */
+			async function confirmRoute(nodeId, routeResult, action) {
+				const dest = action || routeResult.decision.destination;
+				const cand = (routeResult.candidates || [])[0] || null;
+				const rec = await saveDecision({
+					nodeId,
+					kind: "route",
+					text: "路由决策：" + DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : ""),
+					destination: dest,
+					targetNodeId: cand ? cand.nodeId : null,
+					intent: routeResult.intent.kind,
+					subtasks: (routeResult.subtasks || []).map((s) => s.text),
+					confidence: routeResult.decision.confidence,
+					reason: routeResult.decision.reason,
+					confirmed: true,
+					at: Date.now()
+				});
+				return { ok: Boolean(rec), decision: rec };
+			}
+			
+			/**
+			 * 回看历史路由决策（要求 8「可回看」，不得静默分发）
+			 *
+			 * 🔴 勿改回 `export { listDecisions as listRouteHistory } from "…"` 的**转发导出行**：
+			 *    自研 bundler（build/build.mjs）对 `export … from` 形态处理不完善（2026-09-12 实测
+			 *    会把该行连同后续代码并入一条注释 → 产物 `SyntaxError`）。此处用**显式本地包装**
+			 *    （import 原函数 + 本地具名导出），语义等价且对打包器透明。
+			 */
+			function listRouteHistory(nodeId) {
+				return listDecisions(nodeId);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、六维审核（要求 3，17 号文 §1A.9 —— **不得减项**）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 六维定义（单一真相源） */
+			const REVIEW_DIMS = Object.freeze([
+				{ key: "requirement", label: "需求满足度", hint: "核心需求 100% 覆盖 / 可选项标注 / 约束遵守" },
+				{ key: "conformance", label: "方案符合度", hint: "约束遵守 / 范围一致 / 变更可追溯" },
+				{ key: "quality", label: "质量达标度", hint: "符合智能体标准 / 功能可验证 / 性能可接受" },
+				{ key: "risk", label: "风险控制", hint: "无新增 Bug / 无安全风险 / 遗留问题记录" },
+				{ key: "completeness", label: "完整性", hint: "无遗漏 / 文档完整 / 边界覆盖" },
+				{ key: "consistency", label: "一致性", hint: "方向一致 / 规范一致 / 决策一致" }
+			]);
+			
+			/**
+			 * 六维审核（规则版，确定性输出）
+			 * @param {object} input
+			 * @param {string} input.goal 本次目标（用于"需求满足度"）
+			 * @param {string} input.output 产出描述 / 文本
+			 * @param {Array<string>} [input.evidence] 证据条目（文件路径、测试结果等）
+			 * @param {Array<string>} [input.risks] 已知风险
+			 * @returns {{dims:Array, pass:boolean, failed:Array, score:number}}
+			 */
+			function review6(input = {}) {
+				const goal = String(input.goal || "");
+				const output = String(input.output || "");
+				const evidence = Array.isArray(input.evidence) ? input.evidence : [];
+				const risks = Array.isArray(input.risks) ? input.risks : [];
+				const oLen = output.trim().length;
+			
+				/**
+				 * 小工具：把"是否达标 + 说明"打包成一维
+				 *
+				 * 🔴 `status` 三态语义（17 号文 §1A.9 要求 ✅/⚠/❌ 可区分，不得退化为二元）：
+				 *   - `ok === true`  → `"ok"`（✅）
+				 *   - `ok === false` → `warnOnly ? "warn"`（⚠ 可后补 / 需人工确认）`: "bad"`（❌ 硬缺口，阻断通过）
+				 *   2026-09-12 修正：原实现在未达标分支**恒定返回 `"bad"`** → 传入的 `"warn"` 失效，
+				 *   六维退化为「全 ❌」（⚠ 仅在一致性一维出现，形同虚设）。修正后六维真正三态可辨。
+				 */
+				const dim = (key, ok, note, warnOnly) => {
+					const d = REVIEW_DIMS.find((x) => x.key === key);
+					return { key, label: d.label, hint: d.hint, status: ok ? "ok" : (warnOnly ? "warn" : "bad"), note };
+				};
+			
+				const goalToks = tokenize(goal);
+				const outLower = output.toLowerCase();
+				const covered = goalToks.filter((t) => t.length >= 2 && outLower.indexOf(t) >= 0).length;
+				const coverRate = goalToks.length ? covered / goalToks.length : (oLen > 0 ? 1 : 0);
+				// 一致性证据（单次判定，供维度与说明共用，避免重复正则）
+				const hasConsistency = evidence.some((e) => /一致|未变|冻结|三处|逐字节|cmp/.test(String(e)));
+			
+				const dims = [
+					dim("requirement", oLen > 0 && coverRate >= 0.5,
+						oLen === 0 ? "产出为空 → 无法满足任何需求" : "目标词覆盖 " + Math.round(coverRate * 100) + "%（" + covered + "/" + goalToks.length + "）",
+						true),                                     // 覆盖不足 → ⚠（可后补）
+					dim("conformance", evidence.length > 0,
+						evidence.length ? "有 " + evidence.length + " 条可核验证据" : "无证据条目 → 变更不可追溯",
+						false),                                    // 无证据 → ❌（硬缺口，阻断通过）
+					dim("quality", oLen >= 20 && evidence.length > 0,
+						"产出 " + oLen + " 字 / 证据 " + evidence.length + " 条",
+						true),                                     // 产出过短 → ⚠
+					dim("risk", risks.length === 0,
+						risks.length ? "已记录 " + risks.length + " 条风险（需确认可控）" : "无遗留风险",
+						true),                                     // 有风险 → ⚠（需确认可控）
+					dim("completeness", oLen >= 20,
+						oLen >= 20 ? "产出具备实质内容" : "产出过短，边界可能未覆盖",
+						true),                                     // 过短 → ⚠
+					dim("consistency", hasConsistency,
+						hasConsistency ? "存在一致性证据" : "缺一致性证据（如『三处哈希一致』/『key 未改名』）",
+						false)                                     // 缺一致性证据 → ❌（硬缺口）
+				];
+				const failed = dims.filter((d) => d.status === "bad");
+				const warns = dims.filter((d) => d.status === "warn");
+				const score = Math.round((dims.filter((d) => d.status === "ok").length / dims.length) * 100);
+				return {
+					dims, failed, warns,
+					pass: failed.length === 0,
+					score,
+					summary: "六维：" + dims.map((d) => d.label + (d.status === "ok" ? "✅" : d.status === "warn" ? "⚠" : "❌")).join(" / ")
+						+ " ⇒ " + (failed.length === 0 ? "通过" : "打回（" + failed.map((d) => d.label).join("、") + "）")
+				};
+			}
+			
+			/** 六维审核并留痕（要求 3：审核记录 + 纠偏可追溯） */
+			async function reviewAndSave(nodeId, input) {
+				const result = review6(input);
+				const rec = await saveReview({
+					nodeId,
+					kind: "six-dim",
+					dims: result.dims,
+					pass: result.pass,
+					score: result.score,
+					summary: result.summary,
+					target: input.target || null,
+					at: Date.now()
+				});
+				return { ...result, saved: Boolean(rec), reviewId: rec ? rec.reviewId : null };
+			}
+			
+			/** 安装全局契约（调试与验证脚本用） */
+			function installRoutingApi() {
+				if (typeof window === "undefined") return null;
+				const api = {
+					INTENT, DESTINATION, DESTINATION_LABEL, REVIEW_DIMS,
+					tokenize, classifyIntent, scoreNodes, splitTasks, suggestDestination,
+					route, confirmRoute, review6, reviewAndSave,
+					listRouteHistory
+				};
+				window.__dshRouter = api;
+				window.__dshReview6 = { REVIEW_DIMS, review6, reviewAndSave };
+				return api;
+			}
+			
+			exports.INTENT = INTENT;
+			exports.tokenize = tokenize;
+			exports.classifyIntent = classifyIntent;
+			exports.scoreNodes = scoreNodes;
+			exports.splitTasks = splitTasks;
+			exports.DESTINATION = DESTINATION;
+			exports.DESTINATION_LABEL = DESTINATION_LABEL;
+			exports.suggestDestination = suggestDestination;
+			exports.route = route;
+			exports.confirmRoute = confirmRoute;
+			exports.listRouteHistory = listRouteHistory;
+			exports.REVIEW_DIMS = REVIEW_DIMS;
+			exports.review6 = review6;
+			exports.reviewAndSave = reviewAndSave;
+			exports.installRoutingApi = installRoutingApi;
 		};
 
 		// ── logic/duties.js ──
@@ -5038,6 +6063,427 @@ window.__ModuleLoader__.load({
 			exports.DirectorWorkbench = DirectorWorkbench;
 		};
 
+		// ── logic/discover.js ──
+		__defs["logic/discover.js"] = function (exports) {
+			/**
+			 * logic/discover.js — 真实会话 / 文件夹（workspace）数据源发现层
+			 *
+			 * 需求来源：「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层全局总管负责」
+			 *   要让**每一个**对话/文件夹都有总监，节点就不能靠手工创建 ——
+			 *   必须从宿主真实数据源**自动发现**会话与文件夹，再逐一定向生成总监节点。
+			 *
+			 * ── 数据源（实测，2026-09-12 真机 Harness 渲染进程）────────────────
+			 *   ① `localStorage["dsh.workspace.view.v5"]`
+			 *        {"groupBy":"workspace",
+			 *         "sessionOrderByAccount":{ "<workspaceId>": ["session-xxx", ...], "": [...] },
+			 *         "sessionUpdatedAtByAccount":{ "<workspaceId>": {"session-xxx": ts, ...} }}
+			 *        ⇒ **workspace = 文件夹级**（groupBy 明确为 workspace），
+			 *          **session   = 对话级**，且自带更新时间。
+			 *   ② `localStorage["dsh.sessions.current"]` → {"sessionId":"session-xxx"} 当前会话
+			 *   ③ 兜底：IDB `directorFolders`（keyPath folderId）/ `directorStores`（会话 store）
+			 *
+			 * ⚠️ ① 的 key 带版本号（v5），宿主升级后会变。故用**前缀模糊匹配**
+			 *    `dsh.workspace.view`，而非写死 v5 —— 否则宿主一升级就全量失联。
+			 *
+			 * 🔴 稳定 id 约定（幂等的根基）
+			 *    节点 id 必须由**数据源主键**派生，不能用随机 id：
+			 *      workspace → `ws_<workspaceId>`（未分组为 `ws__ungrouped__`）
+			 *      session   → `se_<sessionId>`
+			 *    否则每次同步都会新建一套节点（重复膨胀），且无法判定「已覆盖」。
+			 */
+			
+			const { idbListFolders } = __m("store/idb.js");
+			
+			/** 稳定 id 前缀 */
+			const ID_PREFIX = { workspace: "ws_", session: "se_" };
+			/** 未分组 workspace 的占位 id（数据源中 key 为空串） */
+			const UNGROUPED_ID = "__ungrouped__";
+			
+			/** 通用短码（标题缺失时的兜底显示名） */
+			function shortId(id, keep = 8) {
+				const s = String(id || "");
+				return s.length <= keep ? s : s.slice(0, keep);
+			}
+			
+			/**
+			 * 会话显示名（标题缺失时的兜底）
+			 * 🔴 必须先剥离 `session-` 前缀再截断 —— 会话 id 形如
+			 *    `session-4e8e9e49-0a8c-...`，直接取前 8 位得到的是常量前缀 `session-`，
+			 *    导致**所有会话同名**（实测 8 个会话全部显示为「会话 session-」，无法区分）。
+			 */
+			function sessionLabel(sessionId, keep = 8) {
+				return "会话 " + shortId(String(sessionId || "").replace(/^session-/, ""), keep);
+			}
+			
+			function safeLS() {
+				try {
+					return typeof localStorage !== "undefined" ? localStorage : null;
+				} catch (e) {
+					return null; // 隐私模式 / 禁用存储
+				}
+			}
+			
+			/**
+			 * 前缀模糊匹配 localStorage key（应对宿主版本升级，如 v5 → v6）
+			 * @returns {string|null} 命中的 key
+			 */
+			function findWorkspaceViewKey() {
+				const ls = safeLS();
+				if (!ls) return null;
+				let best = null;
+				for (let i = 0; i < ls.length; i++) {
+					const k = ls.key(i);
+					if (k && k.indexOf("dsh.workspace.view") === 0) best = k; // 取最后一个（版本号最大）
+				}
+				return best;
+			}
+			
+			/** 读取并解析 workspace 视图（宿主真实分组数据） */
+			function readWorkspaceView() {
+				const ls = safeLS();
+				if (!ls) return null;
+				const key = findWorkspaceViewKey();
+				if (!key) return null;
+				let raw = null;
+				try { raw = ls.getItem(key); } catch (e) { return null; }
+				if (!raw) return null;
+				let obj = null;
+				try { obj = JSON.parse(raw); } catch (e) { return null; }
+				if (!obj || typeof obj !== "object") return null;
+				return { key, data: obj };
+			}
+			
+			/** 当前会话 id */
+			function readCurrentSessionId() {
+				const ls = safeLS();
+				if (!ls) return null;
+				try {
+					const raw = ls.getItem("dsh.sessions.current");
+					if (!raw) return null;
+					const o = JSON.parse(raw);
+					return (o && o.sessionId) || null;
+				} catch (e) { return null; }
+			}
+			
+			/** workspace 节点 id（稳定） */
+			function workspaceNodeId(workspaceId) {
+				return ID_PREFIX.workspace + (workspaceId || UNGROUPED_ID);
+			}
+			
+			/** session 节点 id（稳定） */
+			function sessionNodeId(sessionId) {
+				return ID_PREFIX.session + sessionId;
+			}
+			
+			/**
+			 * 发现真实层级：workspaces（文件夹级） + sessions（对话级）
+			 *
+			 * @returns {Promise<{source:string, workspaces:Array, sessions:Array, currentSessionId:string|null}>}
+			 *   workspaces: [{ id, nodeId, sessionIds: string[] }]
+			 *   sessions  : [{ id, nodeId, workspaceId, updatedAt }]
+			 *   source    : "localStorage" | "idb-folders" | "none"
+			 */
+			async function discover() {
+				const view = readWorkspaceView();
+				if (view && view.data.sessionOrderByAccount) {
+					const order = view.data.sessionOrderByAccount || {};
+					const times = view.data.sessionUpdatedAtByAccount || {};
+					const workspaces = [];
+					const sessions = [];
+					for (const wsId of Object.keys(order)) {
+						const ids = Array.isArray(order[wsId]) ? order[wsId] : [];
+						const tmap = times[wsId] || {};
+						workspaces.push({
+							id: wsId || UNGROUPED_ID,
+							rawId: wsId,
+							nodeId: workspaceNodeId(wsId),
+							name: wsId ? ("工作区 " + shortId(wsId)) : "未分组",
+							sessionIds: ids.slice()
+						});
+						for (const sid of ids) {
+							sessions.push({
+								id: sid,
+								nodeId: sessionNodeId(sid),
+								workspaceId: wsId || UNGROUPED_ID,
+								updatedAt: tmap[sid] || 0
+							});
+						}
+					}
+					return {
+						source: "localStorage",
+						workspaceViewKey: view.key,
+						workspaces, sessions,
+						currentSessionId: readCurrentSessionId()
+					};
+				}
+			
+				// ── 兜底：IDB directorFolders（文件夹级）+ directorStores（会话级）──
+				const folders = await idbListFolders();
+				if (folders && folders.length) {
+					const workspaces = folders.map((f) => ({
+						id: f.folderId,
+						rawId: f.folderId,
+						nodeId: workspaceNodeId(f.folderId),
+						name: f.name || f.title || ("文件夹 " + shortId(f.folderId)),
+						sessionIds: []
+					}));
+					return {
+						source: "idb-folders",
+						workspaces,
+						sessions: [],
+						currentSessionId: readCurrentSessionId()
+					};
+				}
+			
+				return { source: "none", workspaces: [], sessions: [], currentSessionId: readCurrentSessionId() };
+			}
+			
+			/** 安装全局契约 */
+			function installDiscoverApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshDiscover = {
+					ID_PREFIX, UNGROUPED_ID,
+					shortId, sessionLabel, findWorkspaceViewKey, readWorkspaceView, readCurrentSessionId,
+					workspaceNodeId, sessionNodeId, discover
+				};
+				return window.__dshDiscover;
+			}
+			
+			exports.ID_PREFIX = ID_PREFIX;
+			exports.UNGROUPED_ID = UNGROUPED_ID;
+			exports.shortId = shortId;
+			exports.sessionLabel = sessionLabel;
+			exports.findWorkspaceViewKey = findWorkspaceViewKey;
+			exports.readWorkspaceView = readWorkspaceView;
+			exports.readCurrentSessionId = readCurrentSessionId;
+			exports.workspaceNodeId = workspaceNodeId;
+			exports.sessionNodeId = sessionNodeId;
+			exports.discover = discover;
+			exports.installDiscoverApi = installDiscoverApi;
+		};
+
+		// ── logic/sync.js ──
+		__defs["logic/sync.js"] = function (exports) {
+			/**
+			 * logic/sync.js — 自动同步：让**每一个**对话 / 文件夹都拥有总监
+			 *
+			 * 需求（用户原话）：「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层有总监负责」
+			 *
+			 * 设计要点
+			 *   1. **稳定 id 幂等**：节点 id 由数据源主键派生（`ws_`/`se_` 前缀，见 discover.js），
+			 *      故重复同步**只会更新、不会重复新建**。这是「每一个都有」能被验证的前提。
+			 *   2. **全局总管单例**：`__global__`，永远存在，所有文件夹级挂其下。
+			 *   3. **文件夹级 = workspace**（宿主 `groupBy:"workspace"`），**对话级 = session**。
+			 *   4. **不覆盖用户改名**：同步写入时打 `meta.autoName = true`；用户改名后该标记被清除，
+			 *      此后同步不再覆盖 `name`。
+			 *   5. **孤儿软标记**：数据源中已消失（被删除）的会话不删除节点（避免误删用户沉淀的
+			 *      总结/决策），只标 `meta.orphaned = true`，UI 可筛选。
+			 *
+			 * 全局契约：`window.__dshSync`
+			 */
+			
+			const { LEVEL, GLOBAL_NODE_ID, makeNode, getNode, saveNode, ensureGlobal, listAllNodes } = __m("store/hierarchy.js");
+			const { discover, workspaceNodeId, sessionNodeId, shortId, sessionLabel } = __m("logic/discover.js");
+			const { idbLoad } = __m("store/idb.js");
+			const { dshLog } = __m("util/debug.js");
+			const { emitHierarchyChange } = __m("util/bus.js");
+			
+			/**
+			 * 从真实数据源同步层级结构（幂等）
+			 * @param {object} [opts]
+			 * @param {boolean} [opts.includeOrphanScan=true] 是否扫描并软标记已消失的会话
+			 * @returns {Promise<{source:string, created:number, updated:number, orphaned:number,
+			 *                    folders:number, sessions:number, total:number, coverage:object}>}
+			 */
+			async function syncFromSource(opts = {}) {
+				const disc = await discover();
+				const stats = {
+					source: disc.source, created: 0, updated: 0, orphaned: 0,
+					folders: 0, sessions: 0, total: 0
+				};
+			
+				// ── 1. 全局总管（单例，必须有）──
+				const root = await ensureGlobal();
+			
+				if (!disc.workspaces.length && !disc.sessions.length) {
+					dshLog("sync", "数据源为空（source=" + disc.source + "），仅确保全局总管存在");
+					stats.total = 1;
+					stats.coverage = await auditCoverage();
+					emitHierarchyChange();
+					return stats;
+				}
+			
+				// ── 2. 文件夹级（workspace）→ 项目总监 ──
+				const rootChildren = new Set(root.children || []);
+				const folderNodeIds = [];
+				disc.workspaces.forEach((ws, idx) => {
+					const id = ws.nodeId || workspaceNodeId(ws.id);
+					folderNodeIds.push(id);
+					rootChildren.add(id);
+					ws.__nodeId = id;
+					ws.__order = idx;
+				});
+			
+				for (const ws of disc.workspaces) {
+					const id = ws.__nodeId;
+					let node = await getNode(id);
+					if (!node) {
+						node = makeNode({
+							id, name: ws.name, level: LEVEL.PROJECT, parentId: GLOBAL_NODE_ID,
+							meta: { sourceId: ws.rawId ?? ws.id, source: "workspace", autoName: true, order: ws.__order }
+						});
+						stats.created++;
+					} else {
+						if (node.meta && node.meta.autoName !== false && node.name !== ws.name) node.name = ws.name;
+						node.parentId = GLOBAL_NODE_ID;
+						node.meta = { ...(node.meta || {}), sourceId: ws.rawId ?? ws.id, source: "workspace", order: ws.__order };
+						stats.updated++;
+					}
+					await saveNode(node);
+					stats.folders++;
+				}
+			
+				// ── 3. 对话级（session）→ 会话总监 ──
+				const folderChildMap = new Map(); // folderNodeId -> [sessionNodeId]
+				const aliveSessionIds = new Set();
+				for (const s of disc.sessions) {
+					const parentId = workspaceNodeId(s.workspaceId);
+					if (!folderChildMap.has(parentId)) folderChildMap.set(parentId, []);
+					folderChildMap.get(parentId).push(s.nodeId || sessionNodeId(s.id));
+					aliveSessionIds.add(s.id);
+				}
+			
+				let sIdx = 0;
+				for (const s of disc.sessions) {
+					const id = s.nodeId || sessionNodeId(s.id);
+					const parentId = workspaceNodeId(s.workspaceId);
+					// 父级不存在（如数据源只有会话没有 workspace）→ 归到全局根，绝不丢弃
+					const parentOk = folderNodeIds.indexOf(parentId) >= 0;
+					const realParent = parentOk ? parentId : GLOBAL_NODE_ID;
+					if (!parentOk) rootChildren.add(id);
+			
+					// 会话消息统计（宿主 directorStores 有则取，无则为 0；失败静默）
+					let messageCount = 0;
+					let lastMessage = "";
+					try {
+						const store = await idbLoad(s.id);
+						if (store && Array.isArray(store.messages)) {
+							messageCount = store.messages.length;
+							const last = store.messages[store.messages.length - 1];
+							if (last) lastMessage = String(last.content || last.text || "").slice(0, 200);
+						}
+					} catch (e) { /* 无该会话的本地 store，属正常 */ }
+			
+					let node = await getNode(id);
+					if (!node) {
+						node = makeNode({
+							id,
+							name: sessionLabel(s.id),
+							level: LEVEL.SESSION,
+							parentId: realParent,
+							meta: { sourceId: s.id, source: "session", autoName: true, order: sIdx }
+						});
+						stats.created++;
+					} else {
+						if (node.meta && node.meta.autoName !== false) node.name = sessionLabel(s.id);
+						node.parentId = realParent;
+						node.meta = { ...(node.meta || {}), sourceId: s.id, source: "session", order: sIdx };
+						stats.updated++;
+					}
+					node.conversations = [{
+						conversationId: s.id,
+						title: node.name,
+						lastMessage,
+						lastTime: s.updatedAt || 0,
+						messageCount
+					}];
+					node.meta.orphaned = false;
+					await saveNode(node);
+					stats.sessions++;
+					sIdx++;
+				}
+			
+				// ── 4. 维护父子关系（幂等：用 Set 去重，不会重复 push）──
+				root.children = Array.from(rootChildren);
+				await saveNode(root);
+				for (const [fid, kids] of folderChildMap.entries()) {
+					const f = await getNode(fid);
+					if (!f) continue;
+					f.children = Array.from(new Set([...(f.children || []), ...kids]));
+					await saveNode(f);
+				}
+			
+				// ── 5. 孤儿软标记（数据源中已消失的自动同步会话）──
+				if (opts.includeOrphanScan !== false) {
+					const all = await listAllNodes();
+					for (const n of all) {
+						if (n.level !== LEVEL.SESSION) continue;
+						const sid = n.meta && n.meta.sourceId;
+						if (!sid) continue;                 // 手工创建的节点不参与
+						if (aliveSessionIds.has(sid)) continue;
+						if (n.meta && n.meta.orphaned) continue;
+						n.meta = { ...n.meta, orphaned: true };
+						await saveNode(n);
+						stats.orphaned++;
+					}
+				}
+			
+				stats.total = stats.folders + stats.sessions + 1;
+				stats.coverage = await auditCoverage();
+				// 🔴 必须广播：面板首帧早于同步完成，若不通知则一直显示陈旧快照（实测 0/8）
+				emitHierarchyChange();
+				dshLog("sync", "同步完成: 新建 " + stats.created + " / 更新 " + stats.updated
+					+ " / 孤儿 " + stats.orphaned + " / 覆盖度 " + JSON.stringify(stats.coverage.rate));
+				return stats;
+			}
+			
+			/**
+			 * 覆盖度自检 —— 直接回答「是否每一个对话 / 文件夹都有总监」
+			 *
+			 * @returns {Promise<{sessions:object, folders:object, global:object, rate:string, ok:boolean}>}
+			 */
+			async function auditCoverage() {
+				const disc = await discover();
+				const all = await listAllNodes();
+				const byId = new Map(all.map((n) => [n.id, n]));
+			
+				const sessionTotal = disc.sessions.length;
+				const sessionCovered = disc.sessions.filter((s) => byId.has(s.nodeId || sessionNodeId(s.id))).length;
+				const sessionMissing = disc.sessions
+					.filter((s) => !byId.has(s.nodeId || sessionNodeId(s.id)))
+					.map((s) => s.id);
+			
+				const folderTotal = disc.workspaces.length;
+				const folderCovered = disc.workspaces.filter((w) => byId.has(w.nodeId || workspaceNodeId(w.id))).length;
+				const folderMissing = disc.workspaces
+					.filter((w) => !byId.has(w.nodeId || workspaceNodeId(w.id)))
+					.map((w) => w.id);
+			
+				const globalOk = byId.has(GLOBAL_NODE_ID);
+				const pct = (a, b) => (b === 0 ? "n/a" : Math.round((a / b) * 100) + "%");
+			
+				return {
+					source: disc.source,
+					sessions: { total: sessionTotal, covered: sessionCovered, missing: sessionMissing, rate: pct(sessionCovered, sessionTotal) },
+					folders: { total: folderTotal, covered: folderCovered, missing: folderMissing, rate: pct(folderCovered, folderTotal) },
+					global: { total: 1, covered: globalOk ? 1 : 0, rate: globalOk ? "100%" : "0%" },
+					rate: "会话 " + pct(sessionCovered, sessionTotal) + " / 文件夹 " + pct(folderCovered, folderTotal) + " / 全局 " + (globalOk ? "100%" : "0%"),
+					ok: globalOk && sessionCovered === sessionTotal && folderCovered === folderTotal
+				};
+			}
+			
+			/** 安装全局契约 */
+			function installSyncApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshSync = { syncFromSource, auditCoverage };
+				return window.__dshSync;
+			}
+			
+			exports.syncFromSource = syncFromSource;
+			exports.auditCoverage = auditCoverage;
+			exports.installSyncApi = installSyncApi;
+		};
+
 		// ── components/DirectorHierarchy.js ──
 		__defs["components/DirectorHierarchy.js"] = function (exports) {
 			/**
@@ -5125,9 +6571,13 @@ window.__ModuleLoader__.load({
 			/**
 			 * 多层级总监面板根组件
 			 * @param {object} props
-			 * @param {() => void} [props.onClose] 关闭回调（浮层形态用）
+			 * @param {() => void} [props.onClose] 关闭回调
+			 * @param {boolean} [props.compact] 紧凑形态（弹窗左栏内嵌用）——
+			 *   侧栏 240px 固定列改为**顶部可折叠块**（240px 在 300px 左栏里放不下主内容），
+			 *   其余逻辑、页签、`h-*` 定位标识**完全不变**（既有真机逐交互脚本可原样复用）。
 			 */
 			function DirectorHierarchy(props = {}) {
+				const compact = props.compact === true;
 				const [tree, setTree] = react.useState(null);
 				const [selectedId, setSelectedId] = react.useState(GLOBAL_NODE_ID);
 				const [crumb, setCrumb] = react.useState([]);
@@ -5256,17 +6706,25 @@ window.__ModuleLoader__.load({
 					setMsg("已删除节点");
 				});
 			
-				return (0, react_jsx_runtime.jsxs)("div", { style: S.root, children: [
-					/* ── 左：层级树 ── */
-					(0, react_jsx_runtime.jsxs)("div", { style: S.side, children: [
-						(0, react_jsx_runtime.jsx)("div", { style: { padding: "4px 12px 8px", ...S.muted }, children: "总监层级" }),
-						tree
-							? (0, react_jsx_runtime.jsx)(TreeItem, { node: tree, depth: 0, selectedId: selectedId, onSelect: setSelectedId })
-							: (0, react_jsx_runtime.jsx)("div", { style: { padding: 12, ...S.muted }, children: "加载中…" })
-					] }),
+				return (0, react_jsx_runtime.jsxs)("div", { style: compact ? { ...S.root, flexDirection: "column" } : S.root, children: [
+					/* ── 左：层级树（compact 时改为顶部可折叠块）── */
+					(0, react_jsx_runtime.jsxs)("div", {
+						style: compact
+							? { flex: "0 0 auto", maxHeight: 168, overflowY: "auto", borderBottom: "1px solid var(--dsw-alias-border-l2, #2a2c30)", padding: "6px 0" }
+							: S.side,
+						children: [
+							(0, react_jsx_runtime.jsxs)("div", { style: { padding: "4px 12px 8px", ...S.muted, display: "flex", alignItems: "center", gap: 6 }, children: [
+								"总监层级",
+								compact ? (0, react_jsx_runtime.jsx)("span", { style: { ...S.badge, marginLeft: "auto" }, "data-testid": "h-compact-hint", children: "紧凑" }) : null
+							] }),
+							tree
+								? (0, react_jsx_runtime.jsx)(TreeItem, { node: tree, depth: 0, selectedId: selectedId, onSelect: setSelectedId })
+								: (0, react_jsx_runtime.jsx)("div", { style: { padding: 12, ...S.muted }, children: "加载中…" })
+						]
+					}),
 			
 					/* ── 右：内容区 ── */
-					(0, react_jsx_runtime.jsxs)("div", { style: S.main, children: [
+					(0, react_jsx_runtime.jsxs)("div", { style: compact ? { ...S.main, padding: 8 } : S.main, children: [
 						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }, children: [
 							(0, react_jsx_runtime.jsx)("h3", { style: S.h, children: crumb.map((c) => c.name).join(" / ") || "全局总管" }),
 							selected ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: LEVEL_LABEL[selected.level] || selected.level }) : null,
@@ -5397,20 +6855,877 @@ window.__ModuleLoader__.load({
 			exports.DirectorHierarchy = DirectorHierarchy;
 		};
 
+		// ── components/DirectorDialog.js ──
+		__defs["components/DirectorDialog.js"] = function (exports) {
+			/**
+			 * components/DirectorDialog.js — 总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
+			 *
+			 * ── 形态（docs/10 §4.1 + docs/11 §二 I1/I2）────────────────────
+			 *   **非模态覆盖层**：不锁原生交互（右区必须可点，因为右区就是原生对话区）。
+			 *   层次用 **spotlight 遮罩**表达：一个恰好覆盖原生应用根的空矩形，用
+			 *   `box-shadow: 0 0 0 9999px rgba(...)` 在它"之外"整体压暗 ⇒ 原生区保持全亮可交互，
+			 *   其余部分被压暗 ⇒ 视觉层次清晰，且**不需要**任何点击拦截。
+			 *
+			 *   左＝总监面板（插件）｜右＝原生对话区（被 `bridge/split.js` 向右挤，**同一节点**）
+			 *   ⇒ 要求 5 的"完全一致"是**同义反复**，不是"同步努力"。
+			 *
+			 * ── 三态（要求 6 + docs/11 §二 I6）──────────────────────────────
+			 *   `⇤` 左栏折叠（`directorPanelCollapsed`）
+			 *   `⇥` 右栏折叠（`chatPanelCollapsed`）
+			 *   `–` 整窗最小化（`dialogCollapsed`，🆕 本轮新增字段）→ 收成右下角 chip
+			 *   `✕` 关闭（`dialogOpen=false`，同时 `clearSplit()` 完全复原原生布局）
+			 *   chip 点击还原；`Alt+1/2/3` 键盘等价；`Esc` 关闭
+			 *
+			 * ── 焦点路由（要求 11 · R8 / docs/11 §二 I7）────────────────────
+			 *   `document` 捕获阶段 `pointerdown`：命中左面板矩形 → `director`；
+			 *   命中原生应用根矩形 → `chat`。**不 preventDefault** ⇒ 原生交互不受影响。
+			 *   底部输入框按 `focusTarget` 决定去向，并有**目标徽章**防止误发。
+			 *
+			 * ⚠️ 构建约束：`react` / `react/jsx-runtime` 为**平台冻结模块**（ADR-001），
+			 *    构建期外置为 `require(...)`；本文件用 `.js` 而非 `.jsx`（宿主为编译后 `jsx()` 形态）。
+			 */
+			
+			const react = require("react");
+			const react_jsx_runtime = require("react/jsx-runtime");
+			const { directorLayoutStore, LEFT_TAB, PANEL_RAIL_WIDTH, PANEL_MIN_WIDTH } = __m("store/layout.js");
+			const { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel } = __m("store/hierarchy.js");
+			const { onHierarchyChange } = __m("util/bus.js");
+			const { applySplit, clearSplit, getSplitRootRect } = __m("bridge/split.js");
+			const { sendToChat, observeConversation, readConversation, installChatBridgeApi } = __m("bridge/chat-bridge.js");
+			const { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL } = __m("logic/routing.js");
+			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, PLUGIN_DB_NAME } = __m("store/plugin-db.js");
+			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
+			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			const DIALOG_ID = "dsh-director-dialog";
+			const CHIP_ID = "dsh-director-chip";
+			
+			/* ── 5 类标准智能体（17 号文 §1A.8，含执行标准 + 检查清单）── */
+			const AGENTS = Object.freeze([
+				{ key: "code", label: "代码", mode: "auto", desc: "实现 / 重构 / 修复，产出可运行代码", checks: ["可编译", "有测试", "零硬编码密钥"] },
+				{ key: "doc", label: "文档", mode: "auto", desc: "需求 / 设计 / 交付文档编写", checks: ["结构完整", "含出处", "有反证"] },
+				{ key: "research", label: "调研", mode: "manual", desc: "外部资料检索与交叉比对", checks: ["来源可追溯", "交叉验证", "结论明确"] },
+				{ key: "test", label: "测试", mode: "auto", desc: "用例编写与执行", checks: ["可重复", "覆盖边界", "结果可核验"] },
+				{ key: "review", label: "审核", mode: "manual", desc: "六维审核与纠偏", checks: ["六维齐备", "含证据", "打回可追溯"] }
+			]);
+			
+			/** 可调用技能（R3 第二段；`mode` 表示默认调用方式） */
+			const SKILLS = Object.freeze([
+				{ key: "execution-standards", label: "执行标准规范", mode: "auto", desc: "L1–L4 链路 / 检查点 / 终止条件" },
+				{ key: "codebase-inspection", label: "代码库勘察", mode: "manual", desc: "行数 / 语言 / 结构盘点" },
+				{ key: "mermaid-diagram", label: "图表生成", mode: "manual", desc: "流程图 / 时序图 / 架构图" },
+				{ key: "browser-skill", label: "浏览器操作", mode: "manual", desc: "自动化导航与抓取" }
+			]);
+			
+			/* ── 调用记录（R3「调用情况」的数据源；内存态，会话级）── */
+			/** 面板「调用情况」一屏最多渲染条数（超出部分由 `data-run-total` 反映真实总数） */
+			const RUNS_SHOWN = 8;
+			/** 内存中最多保留条数 */
+			const RUNS_KEEP = 30;
+			const agentRuns = [];
+			function recordAgentRun(key, status, note) {
+				agentRuns.unshift({ key, status: status || "ok", note: note || "", at: Date.now() });
+				if (agentRuns.length > RUNS_KEEP) agentRuns.length = RUNS_KEEP;
+			}
+			/**
+			 * 列出调用记录（最新在前）。
+			 * 🔴 无参调用返回**全量**（供 `data-run-total` 反映真实条数）；
+			 *    渲染截断由面板自己做（`RUNS_SHOWN`）——「列表 API 静默截断」曾使
+			 *    「5 智能体 + 4 技能 = 9 条」时最旧一条被挤出，验证脚本据此误判为缺记录。
+			 * @param {number} [limit]
+			 */
+			function listAgentRuns(limit) {
+				return typeof limit === "number" && limit >= 0 ? agentRuns.slice(0, limit) : agentRuns.slice();
+			}
+			
+			const RAIL = PANEL_RAIL_WIDTH;
+			
+			/* ── 样式（尽量使用 Harness 主题变量并给 fallback）── */
+			const S = {
+				layer: { position: "fixed", inset: 0, zIndex: 2147483000, pointerEvents: "none" },
+				hole: { position: "absolute", pointerEvents: "none", borderRadius: 8 },
+				panel: {
+					position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column",
+					background: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
+					border: "1px solid rgba(137,87,229,.42)", borderRadius: 10, overflow: "hidden",
+					boxShadow: "0 24px 70px rgba(0,0,0,.62)", fontFamily: "inherit", fontSize: 12.5
+				},
+				head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1c1e22)" },
+				headTitle: { fontWeight: 620, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
+				lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "#b794f6", whiteSpace: "nowrap" },
+				btns: { marginLeft: "auto", display: "flex", gap: 3 },
+				btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
+				seg: { display: "flex", border: "1px solid var(--dsw-alias-border-l2, #3d4148)", borderRadius: 6, overflow: "hidden", margin: "6px 8px 0", flex: "0 0 auto" },
+				segItem: (on) => ({ flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer", border: "none", color: on ? "#c9a9ff" : "var(--dsw-alias-label-tertiary, #8b9199)", background: on ? "rgba(137,87,229,.20)" : "var(--dsw-alias-bg-sunken, #212429)", fontWeight: on ? 600 : 400 }),
+				body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 },
+				blk: { border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 7, background: "var(--dsw-alias-bg-sunken, #1c1e22)", padding: "8px 9px" },
+				blkT: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", letterSpacing: ".4px", marginBottom: 7, display: "flex", alignItems: "center", gap: 6 },
+				kv: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 },
+				kvc: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 5, padding: "5px 7px" },
+				kvV: { fontSize: 14, fontWeight: 650 },
+				kvK: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", marginTop: 1 },
+				chips: { display: "flex", flexWrap: "wrap", gap: 5 },
+				chip: (mode, on) => ({
+					fontSize: 11, padding: "3px 8px", borderRadius: 5, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+					border: "1px solid " + (mode === "auto" ? "rgba(137,87,229,.42)" : "rgba(210,153,34,.42)"),
+					background: on ? "rgba(137,87,229,.16)" : "var(--dsw-alias-bg-base, #212429)",
+					color: mode === "auto" ? "#b794f6" : "#e0b341", fontWeight: on ? 600 : 400
+				}),
+				dot: (c) => ({ width: 5, height: 5, borderRadius: "50%", background: c || "#39c5cf", display: "inline-block" }),
+				input: { flex: 1, minWidth: 0, height: 28, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #141619)", color: "var(--dsw-alias-label-primary, #e8eaed)", padding: "0 9px", fontSize: 11.5, boxSizing: "border-box" },
+				btnPrimary: { height: 28, padding: "0 11px", borderRadius: 6, border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" },
+				btnGhost: { height: 24, padding: "0 9px", borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap" },
+				rail: (side) => ({
+					position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column", alignItems: "center",
+					justifyContent: "flex-start", gap: 8, paddingTop: 10, cursor: "pointer",
+					background: "var(--dsw-alias-bg-sunken, #1b1e23)", border: "1px solid var(--dsw-alias-border-l2, #31343a)",
+					color: side === "left" ? "#b794f6" : "#79a8ff", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
+				}),
+				muted: { fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.6 },
+				msg: { display: "flex", gap: 6, marginBottom: 6 },
+				av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 9.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
+				bub: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
+			};
+			
+			/* ── 小工具 ── */
+			const h = react.createElement;
+			function useStore(store) {
+				const [s, set] = react.useState(store.getState());
+				react.useEffect(() => store.subscribe(set), [store]);
+				return s;
+			}
+			
+			/** 六维状态色 */
+			const DIM_COLOR = { ok: "#3fb950", warn: "#d29922", bad: "#f85149" };
+			const DIM_MARK = { ok: "✅", warn: "⚠", bad: "❌" };
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 子组件：路由确认卡（要求 8 STEP4「必须可确认」）
+			 * ══════════════════════════════════════════════════════════════════ */
+			function RouteCard({ result, onConfirm, onCancel, busy }) {
+				if (!result) return null;
+				const d = result.decision;
+				return h("div", { style: { ...S.blk, borderColor: "rgba(137,87,229,.5)" }, "data-testid": "d-route-card" }, [
+					h("div", { key: "t", style: S.blkT }, ["路由决策（STEP 4）— 待你确认，不静默分发"]),
+					h("div", { key: "s", style: { ...S.muted, marginBottom: 6 } }, [
+						h("div", { key: "1" }, "意图：" + result.intent.kind + "（置信 " + result.intent.confidence.toFixed(2) + "）"),
+						h("div", { key: "2" }, "候选：" + (result.candidates.length ? result.candidates.slice(0, 3).map((c) => c.name + "(" + c.score + ")").join(" / ") : "无")),
+						h("div", { key: "3" }, "子任务：" + result.subtasks.length + " 个"),
+						h("div", { key: "4", style: { color: "#b794f6" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
+						h("div", { key: "5" }, "理由：" + d.reason)
+					]),
+					h("div", { key: "b", style: { display: "flex", gap: 5, flexWrap: "wrap" } }, [
+						h("button", { key: "tr", style: S.btnGhost, "data-testid": "d-route-transfer", disabled: busy, onClick: () => onConfirm(DESTINATION.TRANSFER) }, "转给该对话的总监"),
+						h("button", { key: "di", style: { ...S.btnGhost, borderColor: "#2f6bdd", color: "#79a8ff" }, "data-testid": "d-route-direct", disabled: busy, onClick: () => onConfirm(DESTINATION.DIRECT) }, "直接调用对应对话"),
+						h("button", { key: "cr", style: S.btnGhost, "data-testid": "d-route-new", disabled: busy, onClick: () => onConfirm(DESTINATION.CREATE) }, "新建对话"),
+						h("button", { key: "cx", style: S.btnGhost, "data-testid": "d-route-cancel", disabled: busy, onClick: onCancel }, "取消")
+					])
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 子组件：六维审核卡（要求 3）
+			 * ══════════════════════════════════════════════════════════════════ */
+			function ReviewCard({ result, onRun, busy }) {
+				return h("div", { style: S.blk, "data-testid": "d-review" }, [
+					h("div", { key: "t", style: S.blkT }, [
+						"R6 六维审核（17号文 §1A.9，不得减项）",
+						h("button", { key: "r", style: { ...S.btnGhost, marginLeft: "auto" }, "data-testid": "d-review-run", disabled: busy, onClick: onRun }, "重跑审核")
+					]),
+					result
+						? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-dim": d.key, "data-status": d.status }, [
+							h("span", { key: "m", style: { color: DIM_COLOR[d.status], width: 14, flex: "0 0 14px" } }, DIM_MARK[d.status]),
+							h("span", { key: "l", style: { width: 62, flex: "0 0 62px", color: "#c3c8ce" } }, d.label),
+							h("span", { key: "n", style: { ...S.muted, flex: 1, minWidth: 0 } }, d.note)
+						])).concat([h("div", { key: "s", style: { ...S.muted, marginTop: 5, color: result.pass ? "#6fd388" : "#f0877f" }, "data-testid": "d-review-summary" }, result.summary)]))
+						: h("div", { key: "e", style: S.muted, "data-testid": "d-review-summary" }, "尚未审核。点「重跑审核」或等待对话产出变化自动触发。")
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 子组件：左面板（R2 / R3 / R5 / R6 + 层级管理）
+			 * ══════════════════════════════════════════════════════════════════ */
+			function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg }) {
+				const counts = react.useMemo(() => countByLevel(tree), [tree]);
+				const [agentSeg, setAgentSeg] = react.useState("agents");
+				const [called, setCalled] = react.useState({});
+			
+				return h("div", { style: S.body, "data-testid": "d-body" }, [
+					/* 分段：总监 / 层级 / 智能体 */
+					h("div", { key: "seg", style: { ...S.seg, margin: "0 0 2px" }, role: "tablist" }, [
+						h("button", { key: "d", role: "tab", style: S.segItem(seg === LEFT_TAB.DIRECTOR), "data-testid": "d-seg-director", "aria-selected": seg === LEFT_TAB.DIRECTOR, onClick: () => setSeg(LEFT_TAB.DIRECTOR) }, "总监"),
+						h("button", { key: "l", role: "tab", style: S.segItem(seg === LEFT_TAB.LEVELS), "data-testid": "d-seg-levels", "aria-selected": seg === LEFT_TAB.LEVELS, onClick: () => setSeg(LEFT_TAB.LEVELS) }, "层级"),
+						h("button", { key: "a", role: "tab", style: S.segItem(seg === LEFT_TAB.AGENTS), "data-testid": "d-seg-agents", "aria-selected": seg === LEFT_TAB.AGENTS, onClick: () => setSeg(LEFT_TAB.AGENTS) }, "智能体")
+					]),
+			
+					/* ── 总监段 ── */
+					seg === LEFT_TAB.DIRECTOR ? h("div", { key: "dir", style: { display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "director" }, [
+						/* R2 项目总览 */
+						h("div", { key: "r2", style: S.blk, "data-testid": "d-r2" }, [
+							h("div", { key: "t", style: S.blkT }, ["R2 项目总览"]),
+							h("div", { key: "k", style: S.kv }, [
+								h("div", { key: "p", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.project)), h("div", { key: "k", style: S.kvK }, "项目 / 文件夹")]),
+								h("div", { key: "s", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.session)), h("div", { key: "k", style: S.kvK }, "对话")]),
+								h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "#e0b341" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
+								h("div", { key: "td", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String((node && node.todos ? node.todos.length : 0))), h("div", { key: "k", style: S.kvK }, "待办")])
+							]),
+							h("div", { key: "m", style: { ...S.muted, marginTop: 6 } }, "阶段：" + ((node && node.meta && node.meta.currentPhase) || "未设置") + " · 目标：" + ((node && node.meta && node.meta.goal) || "未设置"))
+						]),
+			
+						/* R5 总监流（只治理不执行） */
+						h("div", { key: "r5", style: S.blk, "data-testid": "d-r5" }, [
+							h("div", { key: "t", style: S.blkT }, ["R5 总监对话区", h("span", { key: "x", style: { marginLeft: "auto", color: "#8b9199" } }, "只治理 · 不执行")]),
+							messages.length
+								? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
+									h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
+									h("div", { key: "b", style: S.bub }, [
+										m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
+										h("span", { key: "t2" }, m.text)
+									])
+								]))
+								: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。")
+						]),
+			
+						/* 六维审核 */
+						h(ReviewCard, { key: "rv", result: reviewResult, onRun: onReview }),
+			
+						/* R6 记忆面板 */
+						h("div", { key: "r6", style: S.blk, "data-testid": "d-r6" }, [
+							h("div", { key: "t", style: S.blkT }, ["R6 总监记忆面板"]),
+							h("div", { key: "m", style: S.muted }, [
+								h("div", { key: "1", "data-testid": "d-memo-core" }, "核心记忆 · 双层数据元独立（" + PLUGIN_DB_NAME + " v1）"),
+								h("div", { key: "2", "data-testid": "d-memo-decision" }, "决策记录 · " + (engineStats && engineStats.decisions ? engineStats.decisions + " 条" : "0 条")),
+								h("div", { key: "3", "data-testid": "d-memo-risk" }, "审核记录 · " + (engineStats && engineStats.reviews ? engineStats.reviews + " 条" : "0 条") + " · 总监消息 · " + (engineStats && engineStats.conversations ? engineStats.conversations : 0) + " 条")
+							]),
+							engineStats ? h("div", { key: "st", style: { ...S.muted, marginTop: 5, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5 }, "data-testid": "d-dbstats" },
+								"自有库 " + PLUGIN_DB_NAME + "：" + engineStats.nodes + " 节点 / " + engineStats.conversations + " 消息 / " + engineStats.reviews + " 审核 / " + engineStats.decisions + " 决策") : null
+						])
+					]) : null,
+			
+					/* ── 层级段（复用 DirectorHierarchy，compact 形态；保留 h-* testid 全套）── */
+					seg === LEFT_TAB.LEVELS ? h("div", { key: "lv", style: { minHeight: 0 }, "data-panel": "levels" },
+						h(DirectorHierarchy, { compact: true })) : null,
+			
+					/* ── 智能体段（R3：分段切换 + 调用情况 + 手选调用）── */
+					seg === LEFT_TAB.AGENTS ? h("div", { key: "ag", style: { display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "agents" }, [
+						h("div", { key: "r3", style: S.blk, "data-testid": "d-r3" }, [
+							h("div", { key: "t", style: S.blkT }, ["R3 智能体 ｜ 技能", h("span", { key: "x", style: { marginLeft: "auto", color: "#8b9199" } }, "总监自动 / 客户手选")]),
+							h("div", { key: "seg", style: { ...S.seg, margin: "0 0 7px" } }, [
+								h("button", { key: "a", style: S.segItem(agentSeg === "agents"), "data-testid": "d-agent-seg-agents", onClick: () => setAgentSeg("agents") }, "智能体"),
+								h("button", { key: "s", style: S.segItem(agentSeg === "skills"), "data-testid": "d-agent-seg-skills", onClick: () => setAgentSeg("skills") }, "技能")
+							]),
+							h("div", { key: "c", style: S.chips }, (agentSeg === "agents" ? AGENTS : SKILLS).map((a) =>
+								h("button", {
+									key: a.key, style: S.chip(a.mode, Boolean(called[a.key])), title: a.desc + "｜检查项：" + ((a.checks || ["—"]).join(" / ")),
+									"data-testid": "d-agent-" + a.key, "data-mode": a.mode,
+									onClick: () => { setCalled((c) => ({ ...c, [a.key]: true })); onCallAgent(a); }
+								}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "#b794f6" : "#e0b341") }), h("span", { key: "l" }, a.label)])
+							)
+						)]),
+						h("div", { key: "run", style: S.blk, "data-testid": "d-agent-runs", "data-run-total": agentRuns.length }, [
+							h("div", { key: "t", style: S.blkT }, ["调用情况（最近" + (agentRuns.length > RUNS_SHOWN ? " " + RUNS_SHOWN + "/" + agentRuns.length : "") + "）"]),
+							agentRuns.length
+								? agentRuns.slice(0, RUNS_SHOWN).map((r, i) => h("div", { key: i, style: { ...S.muted, display: "flex", gap: 6 }, "data-run-key": r.key }, [
+									h("i", { key: "d", style: S.dot(r.status === "ok" ? "#3fb950" : "#d29922") }),
+									h("span", { key: "k", style: { width: 54, flex: "0 0 54px" } }, r.key),
+									h("span", { key: "s", style: { flex: 1, minWidth: 0 } }, r.status + (r.note ? " · " + r.note : ""))
+								]))
+								: h("div", { key: "e", style: S.muted, "data-testid": "d-agent-runs-empty" }, "尚无调用记录。点击上方任一智能体/技能即产生一条。")
+						])
+					]) : null
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 主组件：弹窗外壳
+			 * ══════════════════════════════════════════════════════════════════ */
+			function DirectorDialog(props = {}) {
+				installChatBridgeApi(); // 幂等
+				const st = useStore(directorLayoutStore);
+				const open = Boolean(st.dialogOpen) && props.open !== false;
+				const collapsed = Boolean(st.dialogCollapsed);
+				const leftCollapsed = Boolean(st.directorPanelCollapsed);
+				const rightCollapsed = Boolean(st.chatPanelCollapsed);
+				const leftWidth = Number(st.directorPanelWidth) || PANEL_MIN_WIDTH;
+			
+				const [geo, setGeo] = react.useState(() => getSplitRootRect());
+				const [tree, setTree] = react.useState(null);
+				const [crumbs, setCrumbs] = react.useState([]);
+				const [messages, setMessages] = react.useState([]);
+				const [stats, setStats] = react.useState(null);
+				const [reviewResult, setReviewResult] = react.useState(null);
+				const [routeResult, setRouteResult] = react.useState(null);
+				const [runs, setRuns] = react.useState([]);
+				const [draft, setDraft] = react.useState("");
+				const [busy, setBusy] = react.useState(false);
+				const [toast, setToast] = react.useState("");
+				const [dragW, setDragW] = react.useState(null);
+				const [unread, setUnread] = react.useState(0);
+				const panelRef = react.useRef(null);
+				const dragRef = react.useRef(null);
+				const convRef = react.useRef({ count: 0, lastText: "" });
+			
+				const nodeId = st.activeNodeId || GLOBAL_NODE_ID;
+				const seg = st.leftTab || LEFT_TAB.DIRECTOR;
+			
+				/** 当前层级节点（值，非函数 —— 供各 effect 与渲染共用） */
+				const node = react.useMemo(() => {
+					if (!tree) return null;
+					let found = null;
+					const walk = (n) => {
+						if (found) return;
+						if (n.id === nodeId) { found = n; return; }
+						(n.childNodes || []).forEach(walk);
+					};
+					walk(tree);
+					return found;
+				}, [tree, nodeId]);
+			
+				/* ── 布局计算（须在下方分屏 effect 之前，`padLeft` 为其依赖）── */
+				const W = geo ? geo.w : 1162;
+				const H = geo ? geo.h : 816;
+				const rightCollapsePad = Math.max(RAIL, W - RAIL - 4);
+				const padLeft = rightCollapsed ? rightCollapsePad : (leftCollapsed ? RAIL : leftWidth);
+				const panelWidth = leftCollapsed ? RAIL : (rightCollapsed ? Math.max(PANEL_MIN_WIDTH, W - RAIL - 8) : leftWidth);
+			
+				/* ── 几何跟随 + 分屏注入 / 撤销（**必须成对**，见 docs/11 §三 3.2 教训）──
+				 * 🔴 两者合并成一个 effect：宿主每次重渲染都可能**丢掉 `data-dsh-split-root` 标记**
+				 *    （标记挂在宿主节点上，不在 React 树里），只同步几何不重挂标记 ⇒ 分屏**静默失效**
+				 *    （样式节点还在、`isSplitActive()` 仍 true，但选择器命中不到任何元素）。
+				 *    故按 900ms 心跳 + resize 一并「重挂标记 + 重算几何」；`applySplit` 幂等。
+				 */
+				react.useEffect(() => {
+					if (!open || collapsed) { clearSplit(); return undefined; }
+					const sync = () => {
+						setGeo(getSplitRootRect());
+						applySplit({ paddingLeft: padLeft, collapsed: rightCollapsed ? "right" : (leftCollapsed ? "left" : null) });
+					};
+					sync();
+					window.addEventListener("resize", sync);
+					const t = setInterval(sync, 900);
+					return () => { window.removeEventListener("resize", sync); clearInterval(t); clearSplit(); };
+				}, [open, collapsed, padLeft, leftCollapsed, rightCollapsed]);
+			
+				/* ── 数据：层级树 / 消息 / 统计 ── */
+				const refresh = react.useCallback(async () => {
+					try {
+						const t = await loadTree();
+						setTree(t);
+						setCrumbs(await getBreadcrumb(nodeId));
+						const [msgs, s] = await Promise.all([listDirectorMessages(nodeId), pluginDbStats()]);
+						setMessages(msgs || []);
+						setStats(s);
+						setRuns(listAgentRuns());
+					} catch (e) { /* 数据层异常不影响 UI */ }
+				}, [nodeId]);
+			
+				react.useEffect(() => { if (open) refresh(); }, [open, refresh]);
+				react.useEffect(() => onHierarchyChange(() => { if (open) refresh(); }), [open, refresh]);
+			
+				/* ── 右 → 左：产出变化 → 六维审核 + 未读 ── */
+				react.useEffect(() => {
+					if (!open || collapsed) return undefined;
+					convRef.current = readConversation();
+					const off = observeConversation((info) => {
+						if (info.delta > 0) {
+							setUnread((u) => u + info.delta);
+							// 自动触发六维审核（要求 3：审核对话实际产出是否达标）
+							const r = review6({
+								goal: String((node && node.name) || "") + " " + ((node && node.meta && node.meta.goal) || ""),
+								output: info.lastText,
+								evidence: info.lastText ? ["对话产出片段 " + info.lastText.slice(0, 60)] : [],
+								risks: []
+							});
+							setReviewResult(r);
+							recordAgentRun("review", r.pass ? "ok" : "warn", "自动审核 " + r.score + " 分");
+							setRuns(listAgentRuns());
+						}
+					});
+					return off;
+					// eslint-disable-next-line react-hooks/exhaustive-deps
+				}, [open, collapsed, node, nodeId]);
+			
+				/* ── 焦点路由（要求 11 · R8；非拦截，仅观测）── */
+				react.useEffect(() => {
+					if (!open || collapsed) return undefined;
+					const onDown = (e) => {
+						const t = e.target;
+						if (panelRef.current && panelRef.current.contains(t)) { directorLayoutStore.setFocusTarget("director"); return; }
+						const g = getSplitRootRect();
+						if (!g) return;
+						const x = e.clientX, y = e.clientY;
+						if (x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h) directorLayoutStore.setFocusTarget("chat");
+					};
+					document.addEventListener("pointerdown", onDown, true);
+					return () => document.removeEventListener("pointerdown", onDown, true);
+				}, [open, collapsed]);
+			
+				/* ── 键盘：Esc 关闭，Alt+1/2/3 三态（docs/11 §一 7）── */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const onKey = (e) => {
+						if (e.key === "Escape") { directorLayoutStore.setDialogOpen(false); return; }
+						if (e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
+							e.preventDefault();
+							if (e.key === "1") directorLayoutStore.toggleDirectorCollapsed();
+							if (e.key === "2") directorLayoutStore.toggleChatCollapsed();
+							if (e.key === "3") directorLayoutStore.toggleDialogCollapsed();
+						}
+					};
+					document.addEventListener("keydown", onKey);
+					return () => document.removeEventListener("keydown", onKey);
+				}, [open]);
+			
+				/* ── 拖拽中缝 ── */
+				const dragWRef = react.useRef(null);
+				react.useEffect(() => { dragWRef.current = dragW; }, [dragW]);
+			
+				const calcDragW = react.useCallback((clientX) => {
+					if (!dragRef.current || typeof clientX !== "number") return null;
+					return Math.max(RAIL, dragRef.current.w0 + (clientX - dragRef.current.x0));
+				}, []);
+			
+				const onDragMove = react.useCallback((e) => {
+					const next = calcDragW(e.clientX);
+					if (next == null) return;
+					setDragW(next);
+				}, [calcDragW]);
+				const onDragEnd = react.useCallback((e) => {
+					if (!dragRef.current) return;
+					/* 🔴 `dragWRef.current` 可能为 null：pointerdown → pointermove → pointerup 若落在
+					 *    **同一个 task**（用户快速甩动 / 自动化脚本连发），React 尚未提交 `setDragW`
+					 *    ⇒ ref 仍是 null ⇒ 位移被**静默丢弃**，拖拽"没反应"。
+					 *    故以 pointerup 的坐标**兜底重算**（两者取幂等值，无副作用）。 */
+					const w = dragWRef.current != null ? dragWRef.current : calcDragW(e && e.clientX);
+					document.removeEventListener("pointermove", onDragMove);
+					document.removeEventListener("pointerup", onDragEnd);
+					dragRef.current = null;
+					// 提交到 store：`dragDirectorWidth` 内部做边界钳制与"过窄自动折叠"吸附（docs/11 §二 I8）
+					if (w != null) lastDragSnap = directorLayoutStore.dragDirectorWidth(w);
+					setDragW(null);
+				}, [onDragMove, calcDragW]);
+			
+				const startDrag = (e) => {
+					dragRef.current = { x0: e.clientX, w0: panelWidth };
+					document.addEventListener("pointermove", onDragMove);
+					document.addEventListener("pointerup", onDragEnd);
+				};
+			
+				/* ── 行为 ── */
+				const pushMsg = async (kind, text, role) => {
+					const rec = await appendDirectorMessage(nodeId, { kind, text, role: role || "director" });
+					await refresh();
+					return rec;
+				};
+			
+				const doReview = async () => {
+					setBusy(true);
+					try {
+						const conv = readConversation();
+						const r = await reviewAndSave(nodeId, {
+							goal: (node && node.meta && node.meta.goal) || (node && node.name) || "",
+							output: conv.lastText,
+							evidence: conv.lastText ? ["对话产出 " + conv.count + " 条，末条 " + conv.lastText.slice(0, 50)] : [],
+							risks: (node && node.risks) || []
+						});
+						setReviewResult(r);
+						recordAgentRun("review", r.pass ? "ok" : "warn", "六维 " + r.score + " 分");
+						setRuns(listAgentRuns());
+						setToast("六维审核完成：" + (r.pass ? "通过" : "打回"));
+					} finally { setBusy(false); }
+				};
+			
+				const onSend = async () => {
+					const text = draft.trim();
+					if (!text) { setToast("请输入内容"); return; }
+					setBusy(true);
+					try {
+						if (st.focusTarget === "chat") {
+							// 目标＝对话：直接投给原生对话（要求 5「互相传送消息」）
+							const r = await sendToChat(text, { autoSend: true });
+							await pushMsg("转投对话", r.ok ? (r.mode === "sent" ? "已发送到对话域：" + text : "已填入对话输入框（发送按钮不可用，请手动确认）：" + text) : "发送失败（" + r.reason + "）：" + text, "user");
+							recordAgentRun("code", r.ok ? "ok" : "warn", r.mode || r.reason);
+							setToast(r.mode === "sent" ? "已发送到对话" : "已填入对话输入框");
+						} else {
+							// 目标＝总监：走智能路由（要求 8），先出确认卡，**不静默分发**
+							await pushMsg("需求澄清", text, "user");
+							const flat = [];
+							const walk = (n) => { flat.push({ id: n.id, name: n.name, level: n.level, meta: n.meta, conversations: n.conversations }); (n.childNodes || []).forEach(walk); };
+							if (tree) walk(tree);
+							const r = route(text, { nodes: flat, currentNodeId: nodeId });
+							setRouteResult(r);
+							recordAgentRun("doc", "ok", "路由候选 " + r.candidates.length);
+							setRuns(listAgentRuns());
+							setToast("总监已整理，待你确认去向");
+						}
+						setDraft("");
+					} finally { setBusy(false); }
+				};
+			
+				const onConfirmRoute = async (dest) => {
+					if (!routeResult) return;
+					setBusy(true);
+					try {
+						const r = await confirmRoute(nodeId, routeResult, dest);
+						const cand = (routeResult.candidates || [])[0];
+						const summary = DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : "");
+						if (dest === DESTINATION.DIRECT || dest === DESTINATION.TRANSFER) {
+							const sent = await sendToChat(routeResult.subtasks.map((s) => s.text).join("\n"), { autoSend: dest === DESTINATION.DIRECT });
+							await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + (sent.mode === "sent" ? "已发送" : "已填入输入框") + "）");
+						} else {
+							await pushMsg("方案 · 派活", "路由已落实：" + summary + "（由总监新建对话并初始化其总监节点）");
+						}
+						setRouteResult(null);
+						await refresh();
+						setToast("已落实：" + summary + (r.ok ? "" : "（留痕失败）"));
+					} finally { setBusy(false); }
+				};
+			
+				const onCallAgent = async (a) => {
+					recordAgentRun(a.key, "ok", "客户手选调用");
+					setRuns(listAgentRuns());
+					await pushMsg("方案 · 派活", "手选调用「" + a.label + "」（" + a.desc + "）");
+					setToast("已调用：" + a.label);
+				};
+			
+				/* ── 渲染 ── */
+				if (!open) return null;
+			
+				/* 整窗最小化：只留 chip（并让原生布局完全复原） */
+				if (collapsed) {
+					return h("div", { style: S.layer }, h("div", {
+						id: CHIP_ID, "data-testid": "d-chip", role: "button", tabIndex: 0,
+						onClick: () => directorLayoutStore.setDialogCollapsed(false),
+						onKeyDown: (e) => { if (e.key === "Enter") directorLayoutStore.setDialogCollapsed(false); },
+						style: {
+							position: "absolute", right: 18, bottom: 18, pointerEvents: "auto", cursor: "pointer",
+							display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 20,
+							background: "var(--dsw-alias-bg-sunken, #23262c)", border: "1px solid rgba(137,87,229,.45)",
+							color: "#b794f6", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
+						}
+					}, [
+						h("span", { key: "i" }, "◆"),
+						h("span", { key: "t" }, "总监 · " + ((node && node.name) || "全局总管")),
+						unread > 0 ? h("span", { key: "c", style: { background: "#f85149", color: "#fff", borderRadius: 9, padding: "1px 6px", fontSize: 10 } }, String(unread)) : null
+					]));
+				}
+			
+				const g = geo || { x: 280, y: 0, w: W, h: H };
+			
+				return h("div", { id: DIALOG_ID, style: S.layer, "data-testid": "d-dialog" }, [
+					/* spotlight 遮罩：覆盖原生应用根的"洞"，在洞之外整体压暗；pointer-events:none 不拦截 */
+					h("div", {
+						key: "hole", "data-testid": "d-hole",
+						style: { ...S.hole, left: g.x, top: g.y, width: g.w, height: g.h, boxShadow: "0 0 0 9999px rgba(0,0,0,.34)" }
+					}),
+			
+					/* 左：总监面板 */
+					leftCollapsed
+						? h("div", {
+							key: "lrail", "data-testid": "d-left-rail", role: "button", tabIndex: 0, title: "展开总监面板",
+							style: { ...S.rail("left"), left: g.x, top: g.y, width: RAIL, height: g.h },
+							onClick: () => directorLayoutStore.toggleDirectorCollapsed()
+						}, [
+							h("span", { key: "i" }, "◆"), h("span", { key: "t" }, "总"), h("span", { key: "a" }, "▸"),
+							/* 🔴 折叠左栏后**必须仍可达**的控制簇（真机逐交互暴露的缺陷）：
+							 *    旧实现把「整块面板」替换成 rail ⇒ 标题栏一并消失 ⇒
+							 *    折叠态下**右栏折叠 / 复位 / 最小化 / 关闭全部无入口**，
+							 *    只剩 Alt 快捷键（要求 6 要「弹窗形式 + 允许最小化」——任一时刻都要能最小化）。
+							 *    ⇒ rail 内置竖排图标簇（⇥ ▢ – ✕）。
+							 *    ⚠ 点击须 `stopPropagation`：否则冒泡到 rail 的 onClick 会立刻把左栏重新展开。 */
+							h("div", {
+								key: "ctl", style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 6, paddingTop: 6, borderTop: "1px solid rgba(49,52,58,.9)" },
+								onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); }
+							}, [
+								h("button", { key: "r", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.toggleChatCollapsed(); } }, "⇥"),
+								h("button", { key: "z", style: S.btn, title: "复位栏宽", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.resetPanelWidths(); } }, "▢"),
+								h("button", { key: "m", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogCollapsed(true); } }, "–"),
+								h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
+							])
+						])
+						: h("div", {
+							key: "panel", ref: panelRef, style: { ...S.panel, left: g.x, top: g.y, width: dragW != null ? dragW : panelWidth, height: g.h },
+							// 🔴 面板绑定节点用 `data-active-node-id`，**不可**写成 `data-node-id`：
+							//    后者是全插件「树行」的唯一选择器（`components/DirectorHierarchy.js` TreeItem），
+							//    面板若占用同名属性，`[data-node-id]` 的首个命中会变成面板本身，
+							//    使既有逐交互脚本「点第一行 → 选中态迁移」失效（2026-09-12 真机实测踩中）。
+							role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId
+						}, [
+							/* mhead：R1 顶部栏 + 层级切换器（I5）*/
+							h("div", { key: "h", style: S.head }, [
+								h("span", { key: "t", style: S.headTitle }, "◆ 总监"),
+								h("select", {
+									key: "sel", "data-testid": "d-level", "aria-label": "切换层级",
+									value: nodeId,
+									onChange: (e) => directorLayoutStore.setActiveNode(e.target.value),
+									style: { maxWidth: 132, height: 22, fontSize: 11, borderRadius: 5, border: "1px solid #3d4148", background: "#212429", color: "#c3c8ce" }
+								}, buildOptions(tree)),
+								h("span", { key: "c", style: S.lvchip, "data-testid": "d-level-chip" }, (node ? (LEVEL_LABEL[node.level] || node.level) : "—")),
+								h("div", { key: "b", style: S.btns }, [
+									h("button", { key: "1", style: S.btn, title: "折叠左栏（Alt+1）", "aria-label": "折叠左栏", "data-testid": "d-collapse-left", onClick: () => directorLayoutStore.toggleDirectorCollapsed() }, "⇤"),
+									h("button", { key: "2", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: () => directorLayoutStore.toggleChatCollapsed() }, "⇥"),
+									h("button", { key: "3", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: () => directorLayoutStore.setDialogCollapsed(true) }, "–"),
+									h("button", { key: "4", style: S.btn, title: "复位栏宽（双击中缝同效）", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: () => directorLayoutStore.resetPanelWidths() }, "▢"),
+									h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
+								])
+							]),
+			
+							/* 面包屑（当前层级路径） */
+							h("div", { key: "crumb", style: { ...S.muted, padding: "4px 9px 0", fontSize: 10.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, "data-testid": "d-crumb" },
+								crumbs.length ? crumbs.map((c) => c.name).join(" / ") : "全局总管"),
+			
+							/* 面板主体 */
+							h(DirectorPanel, {
+								key: "body", node, tree, messages, reviewResult, onReview: doReview,
+								agentRuns: runs, onCallAgent, engineStats: stats,
+								seg, setSeg: (s) => directorLayoutStore.setLeftTab(s)
+							}),
+			
+							/* 路由确认卡（要求 8 STEP4）*/
+							routeResult ? h("div", { key: "route", style: { padding: "0 8px 8px" } },
+								h(RouteCard, { result: routeResult, onConfirm: onConfirmRoute, onCancel: () => setRouteResult(null), busy })) : null,
+			
+							/* mfoot：R8 全局输入框 + 焦点路由（I3/I7/I10）*/
+							h("div", { key: "f", style: { borderTop: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1b1e23)", padding: "7px 8px", display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" } }, [
+								h("span", {
+									key: "fc", "data-testid": "d-focus", "data-target": st.focusTarget,
+									style: {
+										fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
+										border: "1px solid " + (st.focusTarget === "director" ? "rgba(137,87,229,.45)" : "rgba(47,111,235,.5)"),
+										background: st.focusTarget === "director" ? "rgba(137,87,229,.16)" : "rgba(47,111,235,.16)",
+										color: st.focusTarget === "director" ? "#b794f6" : "#79a8ff", cursor: "pointer"
+									},
+									title: "点击切换提交目标",
+									onClick: () => directorLayoutStore.setFocusTarget(st.focusTarget === "director" ? "chat" : "director")
+								}, "目标：" + (st.focusTarget === "director" ? "总监" : "对话")),
+								h("input", {
+									key: "i", style: S.input, "data-testid": "d-input", "data-input-scope": "director",
+									placeholder: st.focusTarget === "director" ? "输入后由总监整理确认，再路由到对应对话…" : "输入后直接发送到对话…",
+									value: draft, onChange: (e) => setDraft(e.target.value),
+									onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } },
+									disabled: busy
+								}),
+								h("button", { key: "s", style: S.btnPrimary, "data-testid": "d-send", onClick: onSend, disabled: busy }, "↑")
+							]),
+			
+							/* 提示条 */
+							toast ? h("div", { key: "toast", style: { ...S.muted, padding: "0 9px 7px", color: "#79a8ff" }, "data-testid": "d-toast", onClick: () => setToast("") }, toast) : null
+						]),
+			
+					/* 中缝拖拽手柄（双击复位）*/
+					!leftCollapsed && !rightCollapsed ? h("div", {
+						key: "split", "data-testid": "d-split", "aria-label": "拖拽调宽",
+						style: { position: "absolute", left: g.x + (dragW != null ? dragW : panelWidth) - 4, top: g.y, width: 8, height: g.h, pointerEvents: "auto", cursor: "col-resize", zIndex: 2 },
+						onPointerDown: startDrag, onDoubleClick: () => directorLayoutStore.resetPanelWidths()
+					}) : null,
+			
+					/* 右栏折叠竖条（点击展开）*/
+					rightCollapsed ? h("div", {
+						key: "rrail", "data-testid": "d-right-rail", role: "button", tabIndex: 0, title: "展开对话数据",
+						style: { ...S.rail("right"), left: g.x + g.w - RAIL, top: g.y, width: RAIL, height: g.h },
+						onClick: () => directorLayoutStore.toggleChatCollapsed()
+					}, [h("span", { key: "i" }, "▣"), h("span", { key: "t" }, "对"), h("span", { key: "a" }, "◂")]) : null,
+			
+					/* 右栏装饰（透明，不拦截；原生对话区透过它显示）*/
+					!rightCollapsed ? h("div", {
+						key: "rchrome", "data-testid": "d-right", "data-same-source": "1",
+						style: {
+							position: "absolute", left: g.x + (dragW != null ? dragW : panelWidth), top: g.y, width: Math.max(0, g.w - (dragW != null ? dragW : panelWidth)),
+							height: g.h, pointerEvents: "none", borderLeft: "1px solid rgba(47,111,235,.35)", borderRadius: "0 8px 8px 0"
+						}
+					}, h("div", {
+						style: {
+							position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10,
+							color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
+						}
+					}, "● 与「对话 tab」同源（同一渲染节点）")) : null
+				]);
+			}
+			
+			/** 层级下拉项（扁平遍历树）*/
+			function buildOptions(tree) {
+				const out = [];
+				const walk = (n, d) => {
+					out.push(h("option", { key: n.id, value: n.id }, "　".repeat(d) + (LEVEL_LABEL[n.level] || n.level) + " · " + n.name));
+					(n.childNodes || []).forEach((c) => walk(c, d + 1));
+				};
+				if (tree) walk(tree, 0);
+				return out;
+			}
+			
+			/** 供调试/验证：最近一次拖拽是否触发了"过窄自动折叠"吸附 */
+			let lastDragSnap = false;
+			function getLastDragSnap() { return lastDragSnap; }
+			
+			__defaults["components/DirectorDialog.js"] = DirectorDialog;
+			
+			exports.DIALOG_ID = DIALOG_ID;
+			exports.CHIP_ID = CHIP_ID;
+			exports.AGENTS = AGENTS;
+			exports.SKILLS = SKILLS;
+			exports.RUNS_SHOWN = RUNS_SHOWN;
+			exports.RUNS_KEEP = RUNS_KEEP;
+			exports.recordAgentRun = recordAgentRun;
+			exports.listAgentRuns = listAgentRuns;
+			exports.DirectorDialog = DirectorDialog;
+			exports.getLastDragSnap = getLastDragSnap;
+		};
+
+		// ── bridge/nav-hook.js ──
+		__defs["bridge/nav-hook.js"] = function (exports) {
+			/**
+			 * bridge/nav-hook.js — 「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
+			 *
+			 * ── 为什么用"观察 + 名称匹配"而不是给侧栏挂事件 ────────────────
+			 *   左侧栏由宿主渲染（React 管理其子树）。**给宿主节点挂监听器会把一个外部函数
+			 *   写进宿主的节点对象**，宿主重渲染后节点被替换 ⇒ 监听器静默消失（且无法察觉）。
+			 *   故改为：在 `document` **捕获阶段**观察点击 —— 零节点改动、零宿主依赖、天然幂等。
+			 *
+			 * ── 匹配策略（三级，全部可解释）────────────────────────────────
+			 *   ① 精确同名（`node.name === rowText`）
+			 *   ② 包含匹配（`rowText` 含 `node.name`，或反之；取**最长**匹配，避免"工作区 A"命中"工作区"）
+			 *   ③ 无匹配 → **不打开**（保持宿主原本的导航行为，绝不误弹）
+			 *
+			 * ── 不侵入原则 ──────────────────────────────────────────────────
+			 *   `pointerdown` 只读、不 `preventDefault`、不 `stopPropagation`
+			 *   ⇒ 侧栏的原有导航/展开/折叠行为**完全不受影响**，总监弹窗是"伴随打开"。
+			 *
+			 * ── 判定"侧栏区域" ─────────────────────────────────────────────
+			 *   用聊天应用根的左边界 `x` 作为分界：`clientX < rootRect.x` 即侧栏区。
+			 *   该边界随窗口/侧栏折叠自动跟随，无需硬编码布局常量。
+			 */
+			
+			const { getSplitRootRect } = __m("bridge/split.js");
+			const { loadTree } = __m("store/hierarchy.js");
+			const { directorLayoutStore } = __m("store/layout.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
+			
+			/** 行文本长度上限（超过说明抓到了容器而非单行） */
+			const ROW_TEXT_MAX = 60;
+			
+			/** 从点击目标向上找一个"行"元素并取其文本 */
+			function extractRowText(target) {
+				let el = target;
+				for (let i = 0; i < 5 && el && el !== document.body; i++) {
+					const t = String(el.textContent || "").replace(/\s+/g, " ").trim();
+					if (t && t.length <= ROW_TEXT_MAX) return { text: t, el };
+					el = el.parentElement;
+				}
+				return { text: "", el: null };
+			}
+			
+			/** 拍平层级树为候选列表 */
+			function flattenTree(root) {
+				const out = [];
+				const walk = (n, depth) => {
+					out.push({ id: n.id, name: String(n.name || ""), level: n.level, depth });
+					(n.childNodes || []).forEach((c) => walk(c, depth + 1));
+				};
+				if (root) walk(root, 0);
+				return out;
+			}
+			
+			/**
+			 * 名称匹配（纯函数，便于离线断言）
+			 * @returns {{id:string,name:string,level:string}|null}
+			 */
+			function matchRowToNode(rowText, nodes) {
+				const text = String(rowText || "").trim();
+				if (!text) return null;
+				// ① 精确
+				const exact = (nodes || []).find((n) => n.name === text);
+				if (exact) return exact;
+				// ② 包含（取最长匹配；长度 <2 的名称不参与，避免噪声）
+				let best = null;
+				for (const n of nodes || []) {
+					if (!n.name || n.name.length < 2) continue;
+					if (text.indexOf(n.name) >= 0 || n.name.indexOf(text) >= 0) {
+						if (!best || n.name.length > best.name.length) best = n;
+					}
+				}
+				return best;
+			}
+			
+			/**
+			 * 安装侧栏导航联动
+			 * @param {object} [opts]
+			 * @param {() => boolean} [opts.enabled] 动态开关（默认常开）
+			 * @returns {() => void} 卸载函数
+			 */
+			function installNavHook(opts = {}) {
+				if (!hasDom()) return () => {};
+				const enabled = opts.enabled || (() => true);
+				let disposed = false;
+			
+				const onClick = async (e) => {
+					try {
+						if (disposed || !enabled()) return;
+						const rect = getSplitRootRect();
+						if (!rect) return;
+						// 只在"侧栏区域"响应，且排除总监弹窗自身
+						if (e.clientX >= rect.x) return;
+						if (e.target && e.target.closest && e.target.closest("#dsh-director-dialog")) return;
+						if (e.clientX < 0 || e.clientX > (window.innerWidth || 1440)) return;
+			
+						const { text } = extractRowText(e.target);
+						if (!text) return;
+						const tree = await loadTree();
+						const hit = matchRowToNode(text, flattenTree(tree));
+						if (!hit) return; // ③ 无匹配 → 不打扰宿主导航
+						navHookStats.matched++;
+						navHookStats.lastMatch = { text, nodeId: hit.id, name: hit.name, level: hit.level };
+						directorLayoutStore.setActiveNode(hit.id);
+						directorLayoutStore.setDialogOpen(true);
+						dshLog("nav", "侧栏点击 → 打开总监：" + hit.name + "（" + hit.level + "）");
+					} catch (err) {
+						navHookStats.errors++;
+					}
+				};
+			
+				document.addEventListener("pointerdown", onClick, true);
+				if (typeof window !== "undefined") window.__dshNavHook = navHookStats;
+				return () => { disposed = true; document.removeEventListener("pointerdown", onClick, true); };
+			}
+			
+			/** 统计（供验证脚本断言"真的命中过"） */
+			const navHookStats = { matched: 0, errors: 0, lastMatch: null };
+			
+			/** 安装全局契约 */
+			function installNavHookApi() {
+				if (!hasDom()) return null;
+				window.__dshNavApi = { extractRowText, flattenTree, matchRowToNode, installNavHook, navHookStats };
+				return window.__dshNavApi;
+			}
+			
+			exports.extractRowText = extractRowText;
+			exports.flattenTree = flattenTree;
+			exports.matchRowToNode = matchRowToNode;
+			exports.installNavHook = installNavHook;
+			exports.navHookStats = navHookStats;
+			exports.installNavHookApi = installNavHookApi;
+		};
+
 		// ── mount.js ──
 		__defs["mount.js"] = function (exports) {
 			/**
-			 * mount.js — 多层级总监面板的挂载层（方案 C：slot 优先 / DOM 兜底）
+			 * mount.js — 总监弹窗的挂载层（T-PLUG-015 起：弹窗形态为主通道）
 			 *
-			 * 设计依据：`docs/04-多层级总监结构设计与方案选型.md` §二 选定方案 C
-			 *   - **slot 优先**：若宿主暴露了 slots 服务（window.__DSH_SLOTS__），则注册到
-			 *     `conversation.view`（03号文 §2.1「[总监][对话][轨迹] 三 tab 同属 conversation.view」），
-			 *     与原生 UI 完全一致。
-			 *   - **DOM 兜底**（默认路径）：自行 createRoot 渲染浮层面板。
-			 *     🔴 为什么兜底是默认：宿主 `conversation.view` 的 slots 实例由 app-shell 通过
-			 *     `ctx.slots.install` 注入，**插件侧能否拿到同一实例未经实测**；而本插件当前
-			 *     正是因「宿主已退坡 + 插件未注册入口」导致功能不可达（见 memory 2026-09-11 ⑫）。
-			 *     兜底通道**零宿主依赖、必定可见**，故作为默认与保底。
+			 * ── 形态变更（docs/10 §4.1 + docs/11 §四 方案 F1）───────────────
+			 *   旧：880×560 的单面板浮层（`#dsh-director-hierarchy-overlay`）
+			 *       —— 与原生 tab（26×27，y=48）形态完全不同 ⇒ 用户裁定"看起来像完全重画"。
+			 *   新：**弹窗**（`#dsh-director-dialog`）—— 左＝总监面板（插件 React 组件），
+			 *       右＝**原生对话区本身**（由 `bridge/split.js` 向右挤，零节点移动）。
+			 *
+			 * ── 为什么仍是"自挂 DOM"而不是宿主 slot ─────────────────────────
+			 *   宿主 `conversation.view` tab 环**确实是 slot 驱动**（宿主 `client.js:9172`
+			 *   `renderSlot("conversation.view", …, { only: active.id })`），但**注册入口需要 `ctx.slots`**，
+			 *   而插件侧 `window.__DSH_SLOTS__` **从来不存在**（真机实测）。
+			 *   且本轮形态裁定为**弹窗**（非 tab），故自挂 DOM 仍是正确通道：
+			 *   **零宿主依赖、必定可见、完全可逆**。
+			 *   `tryRegisterHostSlot` 保留为可选增强（日后 `ctx.slots` 可用时可叠加）。
 			 *
 			 * ⚠️ 构建约束：`react-dom/client` 同为平台冻结模块（ADR-001），构建期外置为 `require(...)`。
 			 */
@@ -5418,25 +7733,34 @@ window.__ModuleLoader__.load({
 			const react = require("react");
 			const react_jsx_runtime = require("react/jsx-runtime");
 			const react_dom_client = require("react-dom/client");
-			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
+			const { DirectorDialog, DIALOG_ID } = __m("components/DirectorDialog.js");
+			const { directorLayoutStore } = __m("store/layout.js");
+			const { installSplitApi, clearSplit } = __m("bridge/split.js");
+			const { installChatBridgeApi } = __m("bridge/chat-bridge.js");
+			const { installNavHook, installNavHookApi } = __m("bridge/nav-hook.js");
 			const { dshLog } = __m("util/debug.js");
 			const { emitHierarchyChange } = __m("util/bus.js");
 			
-			const OVERLAY_HOST_ID = "dsh-director-hierarchy-overlay";
+			/** 弹窗 React 挂载宿主（无样式、零布局影响） */
+			const DIALOG_HOST_ID = "dsh-director-dialog-host";
+			/** 入口按钮 id —— 🔴 **保持旧名**，既有真机脚本按此 id 取入口，改名会静默失联 */
 			const LAUNCHER_ID = "dsh-director-hierarchy-launcher";
-			
-			/** 面板尺寸（浮层形态） */
-			const PANEL = { width: 880, height: 560, right: 24, bottom: 64 };
+			/** 旧浮层宿主 id（兼容保留，默认不创建） */
+			const OVERLAY_HOST_ID = "dsh-director-hierarchy-overlay";
 			
 			function makeLauncher(onToggle) {
 				const btn = document.createElement("button");
 				btn.id = LAUNCHER_ID;
-				btn.textContent = "总监层级";
+				btn.type = "button";
+				btn.textContent = "总监";
+				btn.setAttribute("aria-label", "打开总监");
+				btn.title = "打开总监（Alt+` 亦可）";
 				Object.assign(btn.style, {
-					position: "fixed", right: "24px", bottom: "24px", zIndex: 2147483000,
-					padding: "8px 14px", fontSize: "13px", borderRadius: "999px",
-					border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff",
-					cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.35)"
+					position: "fixed", right: "18px", bottom: "18px", zIndex: 2147483000,
+					padding: "7px 14px", fontSize: "12.5px", borderRadius: "999px",
+					border: "1px solid rgba(137,87,229,.5)", background: "rgba(137,87,229,.18)",
+					color: "#b794f6", cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.35)",
+					backdropFilter: "blur(4px)"
 				});
 				btn.addEventListener("click", onToggle);
 				document.body.appendChild(btn);
@@ -5444,47 +7768,55 @@ window.__ModuleLoader__.load({
 			}
 			
 			/**
-			 * 挂载多层级总监面板（浮层兜底通道）
+			 * 挂载总监弹窗
 			 * @param {object} [opts]
 			 * @param {boolean} [opts.withLauncher=true] 是否创建右下角入口按钮
 			 * @param {boolean} [opts.open=false] 初始是否展开
-			 * @returns {{overlay: HTMLElement, launcher: HTMLElement|null, root: object, unmount: () => void, show: () => void, hide: () => void}|null}
+			 * @param {boolean} [opts.legacyOverlay=false] 兼容：额外挂旧浮层（默认关闭）
+			 * @param {boolean} [opts.navHook=true] 是否安装「点击侧栏文件夹/项目 → 打开该层级总监」
+			 * @returns {{host:HTMLElement|null, launcher:HTMLElement|null, root:object, unmount:()=>void, show:()=>void, hide:()=>void}}
 			 */
-			function mountHierarchyOverlay(opts = {}) {
-				if (typeof window === "undefined" || typeof document === "undefined") return null;
-				if (document.getElementById(OVERLAY_HOST_ID)) return null; // 幂等
+			function mountHierarchy(opts = {}) {
+				if (typeof window === "undefined" || typeof document === "undefined") return { host: null, launcher: null, root: null, unmount: () => {}, show: () => {}, hide: () => {} };
 			
-				const overlay = document.createElement("div");
-				overlay.id = OVERLAY_HOST_ID;
-				Object.assign(overlay.style, {
-					position: "fixed", zIndex: 2147483001,
-					right: PANEL.right + "px", bottom: PANEL.bottom + "px",
-					width: PANEL.width + "px", height: PANEL.height + "px",
-					border: "1px solid #2a2c30", borderRadius: "12px", overflow: "hidden",
-					background: "#16171a", boxShadow: "0 12px 40px rgba(0,0,0,.5)",
-					display: opts.open ? "block" : "none"
-				});
-				document.body.appendChild(overlay);
+				// 能力安装（幂等）
+				installSplitApi();
+				installChatBridgeApi();
+				installNavHookApi();
 			
-				const root = react_dom_client.createRoot(overlay);
-				const render = (open) => root.render(
-					(0, react_jsx_runtime.jsx)(DirectorHierarchy, { onClose: () => { hide(); } })
-				);
-				const show = () => { overlay.style.display = "block"; render(true); emitHierarchyChange(); };
-				const hide = () => { overlay.style.display = "none"; };
-				render(opts.open);
+				let host = document.getElementById(DIALOG_HOST_ID);
+				let alreadyMounted = Boolean(host);
+				if (!host) {
+					host = document.createElement("div");
+					host.id = DIALOG_HOST_ID;
+					document.body.appendChild(host);
+				}
+				const root = react_dom_client.createRoot(host);
+				root.render((0, react_jsx_runtime.jsx)(DirectorDialog, {}));
 			
+				const show = () => { directorLayoutStore.setDialogOpen(true); emitHierarchyChange(); };
+				const hide = () => { directorLayoutStore.setDialogOpen(false); };
 				const launcher = opts.withLauncher === false ? null : makeLauncher(() => {
-					if (overlay.style.display === "none") show(); else hide();
+					if (directorLayoutStore.getState().dialogOpen) hide(); else show();
 				});
+				if (opts.open === true) show();
 			
-				dshLog("hierarchy", "浮层面板已挂载（DOM 兜底通道）");
+				// 点击侧栏文件夹 / 项目 → 打开该层级总监（要求 7 / 9）
+				let navOff = null;
+				if (opts.navHook !== false) {
+					navOff = installNavHook();
+					if (typeof window !== "undefined") window.__dshNavUninstall = navOff;
+				}
+			
+				dshLog("hierarchy", "总监弹窗已挂载（弹窗通道，宿主零改动）");
 				return {
-					overlay, launcher, root,
+					host, launcher, root, alreadyMounted,
 					show, hide,
 					unmount: () => {
-						try { root.unmount(); } catch { /* 已卸载 */ }
-						overlay.remove();
+						try { clearSplit(); } catch (e) { /* 已复原 */ }
+						try { root.unmount(); } catch (e) { /* 已卸载 */ }
+						if (navOff) navOff();
+						host.remove();
 						if (launcher) launcher.remove();
 					}
 				};
@@ -5492,47 +7824,38 @@ window.__ModuleLoader__.load({
 			
 			/**
 			 * 尝试注册到宿主 slot（可选增强，失败静默）
-			 * 仅当宿主在 window 上暴露 slots 服务时生效；否则返回 false。
+			 * 🔴 现状：`window.__DSH_SLOTS__` 在真机上**不存在**（实测 2026-09-12），故本通道恒失败；
+			 *    保留以便宿主日后暴露 `ctx.slots` 时可直接叠加，不影响弹窗主通道。
 			 * @returns {boolean} 是否注册成功
 			 */
 			function tryRegisterHostSlot() {
 				try {
 					const slots = typeof window !== "undefined" ? window.__DSH_SLOTS__ : null;
 					if (!slots || typeof slots.register !== "function") return false;
-					slots.register({
-						name: "conversation.view",
-						id: "director",
-						order: -1,
-						title: "总监"
-					}, DirectorHierarchy);
+					slots.register({ name: "conversation.view", id: "director", order: -1, label: () => "总监" }, DirectorDialog);
 					dshLog("hierarchy", "已注册到宿主 conversation.view slot（id=director）");
 					return true;
 				} catch (e) {
-					dshLog("hierarchy", "宿主 slot 注册失败，改用浮层兜底: " + (e && e.message));
+					dshLog("hierarchy", "宿主 slot 注册失败（预期内），使用弹窗通道: " + (e && e.message));
 					return false;
 				}
 			}
 			
-			/**
-			 * 统一入口：先尝试宿主 slot，无论成功与否都确保浮层兜底可用。
-			 * @param {object} [opts] 同 mountHierarchyOverlay
-			 */
-			function mountHierarchy(opts = {}) {
-				const slotOk = tryRegisterHostSlot();
-				const overlay = mountHierarchyOverlay(opts);
-				if (typeof window !== "undefined") {
-					window.__dshHierarchyMount = { slotRegistered: slotOk, overlay: Boolean(overlay), ...(overlay || {}) };
-				}
-				return { slotRegistered: slotOk, overlay };
+			/** 旧浮层通道（兼容保留；默认不再使用，见文件头） */
+			function mountHierarchyOverlay() {
+				if (typeof window === "undefined" || typeof document === "undefined") return null;
+				dshLog("hierarchy", "mountHierarchyOverlay 已退役（弹窗形态取代），如需旧浮层请用 git 历史版本");
+				return null;
 			}
 			
 			__defaults["mount.js"] = mountHierarchy;
 			
-			exports.OVERLAY_HOST_ID = OVERLAY_HOST_ID;
+			exports.DIALOG_HOST_ID = DIALOG_HOST_ID;
 			exports.LAUNCHER_ID = LAUNCHER_ID;
-			exports.mountHierarchyOverlay = mountHierarchyOverlay;
-			exports.tryRegisterHostSlot = tryRegisterHostSlot;
+			exports.OVERLAY_HOST_ID = OVERLAY_HOST_ID;
 			exports.mountHierarchy = mountHierarchy;
+			exports.tryRegisterHostSlot = tryRegisterHostSlot;
+			exports.mountHierarchyOverlay = mountHierarchyOverlay;
 		};
 
 		// ── client-entry.js ──
@@ -5577,9 +7900,25 @@ window.__ModuleLoader__.load({
 			 *      🔴 含一处**迁移期修正**：宿主 `filteredMessages` 属跨作用域越界引用（自诞生即坏，
 			 *         P2 清理删除 DirectorView 后沦为完全未定义）→ 改用 `state.messages`。论证见该文件头。
 			 *
-			 * ── 待迁入（批次 6）─────────────────────────────────────────
-			 *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造  ⬜ F5 插件侧 tab 注册
+			 * ── 批次 6–8（多层级总监 / 自动同步 / 职责完善）───────────────────
+			 *   ✅ hierarchy / summarize / discover / sync / duties / director-run
 			 *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
+			 *
+			 * ── 批次 9 弹窗式总监架构（T-PLUG-015 · docs/10 §四 + docs/11 §六）──
+			 *   ✅ 要求 1 数据元独立 → store/plugin-db.js      `dsh-director-plugin-db` v1 / 6 store
+			 *      🔴 与宿主 `dsh-director-db` v3 **物理隔离**：IDB 版本协商只发生在同名库内，
+			 *         故新库不参与宿主协商 ⇒ 「物理隔离」与「R5 键冻结」可同时成立。见 docs/10 §3.4
+			 *   ✅ 要求 5 布局分屏   → bridge/split.js         只注入 `<style>` + data-* 标记，
+			 *      **零节点移动**、逐值可逆（真机实测：移除后 viewArea x 580→280 / w 854→1154）
+			 *   ✅ 要求 5 双向联动   → bridge/chat-bridge.js   React 受控输入安全写入（原生 setter +
+			 *      input 事件）；`sendToChat` 两级降级（sent → filled），每步写后回读校验
+			 *   ✅ 要求 7/9 层级入口 → bridge/nav-hook.js      捕获阶段 pointerdown + 三级名称匹配
+			 *   ✅ 要求 8 智能路由   → logic/routing.js        五步路由 + `confirmRoute` 留痕（不静默分发）
+			 *   ✅ 要求 3 六维审核   → logic/routing.js        `review6` 六维齐备（17号文 §1A.9，不减项）
+			 *   ✅ 要求 6 弹窗三态   → components/DirectorDialog.js + store/layout.js 新字段
+			 *
+			 * ── 待迁入（存量）───────────────────────────────────────────
+			 *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造（B6，需授权）
 			 *
 			 * ⚠️ 关键约束
 			 *   - 平台模块（react / cordis / web-react 等）**必须 external**，严禁打进产物（ADR-001）；
@@ -5622,8 +7961,15 @@ window.__ModuleLoader__.load({
 			const { installDutyApi, resolveDuties, submitUp } = __m("store/duty-config.js");
 			const { installDirectorRunApi } = __m("logic/director-run.js");
 			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
+			// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+			const { installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME } = __m("store/plugin-db.js");
+			const { installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION } = __m("logic/routing.js");
+			const { installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive } = __m("bridge/split.js");
+			const { installChatBridgeApi, sendToChat, readConversation } = __m("bridge/chat-bridge.js");
+			const { installNavHook, installNavHookApi } = __m("bridge/nav-hook.js");
+			const { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } = __m("components/DirectorDialog.js");
 			
-			const PLUGIN_VERSION = "0.8.0-batch8";
+			const PLUGIN_VERSION = "0.9.0-batch9";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
@@ -5696,6 +8042,21 @@ window.__ModuleLoader__.load({
 					//    window.__dshDirectorRun  §1.2 五步标准执行逻辑（整理/分支/模型/上下文/审核）
 					window.__dshDuties = installDutyApi();
 					window.__dshDirectorRun = installDirectorRunApi();
+			
+					// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+					//    要求 1 数据元独立  window.__dshPluginDb   → dsh-director-plugin-db@v1（6 store）
+					//    要求 8 智能路由    window.__dshRouter     → route / confirmRoute（五步，不静默分发）
+					//    要求 3 六维审核    window.__dshReview6    → REVIEW_DIMS + review6 + reviewAndSave
+					//    要求 5 布局分屏    window.__dshSplitApi   → applySplit / clearSplit（幂等可逆）
+					//    要求 5 双向联动    window.__dshChatBridge → sendToChat / readConversation
+					//    要求 7/9 层级入口  window.__dshNavApi     → installNavHook（点侧栏 → 打开该层级总监）
+					window.__dshPluginDb = installPluginDbApi();
+					window.__dshRouter = installRoutingApi();
+					window.__dshSplitApi = installSplitApi();
+					window.__dshChatBridge = installChatBridgeApi();
+					window.__dshNavApi = installNavHookApi();
+					window.__dshReview6 = { REVIEW_DIMS, review6 };
+					window.__dshDirectorDialog = DirectorDialog;
 				}
 			
 				// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -5778,10 +8139,12 @@ window.__ModuleLoader__.load({
 					// ── 批次 6 多层级总监结构 ──
 					hierarchyApi: typeof window !== "undefined" ? Boolean(window.__dshHierarchy) : false,
 					summarizeApi: typeof window !== "undefined" ? Boolean(window.__dshSummarize) : false,
-					// 语义：hierarchyMounted = 「浮层入口是否已挂载」（默认通道，必定可用）
-					//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」
-					hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.overlay),
-					hierarchySlotRegistered: Boolean(hierarchyMount && hierarchyMount.slotRegistered),
+					// 语义：hierarchyMounted = 「弹窗主通道是否已挂载」（`#dsh-director-dialog-host` 是否就位，
+					//        零宿主依赖 ⇒ 必定可用）；
+					//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」——
+					//        需 `ctx.slots`，真机 `window.__DSH_SLOTS__` 不存在 ⇒ 恒 false（docs/10 §四 4.1）。
+					hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.host),
+					hierarchySlotRegistered: false,
 					hierarchyTreeReady: false, // 异步，稍后就绪
 					// ── 批次 7 自动同步 ──
 					discoverApi: typeof window !== "undefined" ? Boolean(window.__dshDiscover) : false,
@@ -5792,7 +8155,29 @@ window.__ModuleLoader__.load({
 					// ── 批次 8 总监逻辑完善 ──
 					dutyApi: typeof window !== "undefined" ? Boolean(window.__dshDuties) : false,
 					directorRunApi: typeof window !== "undefined" ? Boolean(window.__dshDirectorRun) : false,
-					workbench: typeof DirectorWorkbench === "function"
+					workbench: typeof DirectorWorkbench === "function",
+					// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
+					//    要求 1：独立数据元（物理隔离库，与宿主 `dsh-director-db` v3 不同名）
+					pluginDb: typeof window !== "undefined" ? Boolean(window.__dshPluginDb) : false,
+					pluginDbName: PLUGIN_DB_NAME,
+					//    要求 8 + 3：智能路由（五步，STEP4 必须确认）与六维审核
+					routerApi: typeof window !== "undefined" ? Boolean(window.__dshRouter) : false,
+					review6Api: typeof window !== "undefined" ? Boolean(window.__dshReview6) : false,
+					reviewDimCount: REVIEW_DIMS.length, // 必须 = 6（17号文 §1A.9，不得减项）
+					//    要求 5：布局分屏通道 + 与原生对话的双向联动通道
+					splitApi: typeof window !== "undefined" ? Boolean(window.__dshSplitApi) : false,
+					chatBridgeApi: typeof window !== "undefined" ? Boolean(window.__dshChatBridge) : false,
+					//    要求 7/9：点侧栏文件夹/项目 → 打开该层级总监
+					navApi: typeof window !== "undefined" ? Boolean(window.__dshNavApi) : false,
+					//    要求 6/10/11：弹窗本体 + 可调用智能体/技能清单
+					dialogComponent: typeof DirectorDialog === "function",
+					dialogId: DIALOG_ID,
+					agents: AGENTS.map((a) => a.key),
+					skills: SKILLS.map((s) => s.key),
+					// 分屏当前是否生效（弹窗打开且未最小化时为 true）
+					splitActive: isSplitActive(),
+					// 独立库落盘统计（异步，稍后就绪）
+					pluginDbStats: null
 				};
 			
 				hierarchyReady.then((t) => {
@@ -5803,6 +8188,8 @@ window.__ModuleLoader__.load({
 			
 				docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 				preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
+				// 独立库统计（异步；仅用于真机取证与弹窗 R6「数据元独立」展示，失败静默）
+				pluginDbStats().then((s) => { installed.pluginDbStats = s; }).catch(() => { });
 			
 				if (typeof window !== "undefined") {
 					window.__dshDirectorBatch1 = installed;
@@ -5813,21 +8200,19 @@ window.__ModuleLoader__.load({
 					window.__dshDirectorBatch6 = installed; // 批次 6 别名
 					window.__dshDirectorBatch7 = installed; // 批次 7 别名
 					window.__dshDirectorBatch8 = installed; // 批次 8 别名
+					window.__dshDirectorBatch9 = installed; // 批次 9 别名（弹窗式总监架构）
 				}
 				return installed;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench };
-			
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns // 要求 6/10/11 弹窗本体 }; 
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
 			exports.directorLayoutStore = directorLayoutStore;
 			exports.dshThemeStore = dshThemeStore;
 			exports.directorConfig = directorConfig;
 			exports.directorDocsStore = directorDocsStore;
-			exports.// ── 批次 3 ──
-	directorStoreFactory = // ── 批次 3 ──
-	directorStoreFactory;
+			exports.directorStoreFactory = directorStoreFactory;
 			exports.createDirectorStore = createDirectorStore;
 			exports.useDirectorStore = useDirectorStore;
 			exports.safeDirectorKey = safeDirectorKey;
@@ -5836,16 +8221,10 @@ window.__ModuleLoader__.load({
 			exports.DIRECTOR_DEFAULT_CONFIG = DIRECTOR_DEFAULT_CONFIG;
 			exports.exportViaFsa = exportViaFsa;
 			exports.importViaFsa = importViaFsa;
-			exports.// ── 批次 4 ──
-	directorProcess = // ── 批次 4 ──
-	directorProcess;
+			exports.directorProcess = directorProcess;
 			exports.directorReviewReturn = directorReviewReturn;
-			exports.// ── 批次 5 ──
-	DirectorFlow = // ── 批次 5 ──
-	DirectorFlow;
-			exports.// ── 批次 6 多层级总监结构 ──
-	installHierarchyApi = // ── 批次 6 多层级总监结构 ──
-	installHierarchyApi;
+			exports.DirectorFlow = DirectorFlow;
+			exports.installHierarchyApi = installHierarchyApi;
 			exports.installSummarizeApi = installSummarizeApi;
 			exports.mountHierarchy = mountHierarchy;
 			exports.summarizeTree = summarizeTree;
@@ -5854,18 +8233,38 @@ window.__ModuleLoader__.load({
 			exports.LEVEL = LEVEL;
 			exports.GLOBAL_NODE_ID = GLOBAL_NODE_ID;
 			exports.DirectorHierarchy = DirectorHierarchy;
-			exports.// ── 批次 7 自动同步 ──
-	installDiscoverApi = // ── 批次 7 自动同步 ──
-	installDiscoverApi;
+			exports.installDiscoverApi = installDiscoverApi;
 			exports.installSyncApi = installSyncApi;
 			exports.syncFromSource = syncFromSource;
 			exports.auditCoverage = auditCoverage;
-			exports.// ── 批次 8 总监逻辑完善 ──
-	installDutyApi = // ── 批次 8 总监逻辑完善 ──
-	installDutyApi;
+			exports.installDutyApi = installDutyApi;
 			exports.resolveDuties = resolveDuties;
 			exports.submitUp = submitUp;
 			exports.DirectorWorkbench = DirectorWorkbench;
+			exports.installPluginDbApi = installPluginDbApi;
+			exports.pluginDbStats = pluginDbStats;
+			exports.PLUGIN_DB_NAME = PLUGIN_DB_NAME;
+			exports.installRoutingApi = installRoutingApi;
+			exports.route = route;
+			exports.confirmRoute = confirmRoute;
+			exports.review6 = review6;
+			exports.REVIEW_DIMS = REVIEW_DIMS;
+			exports.DESTINATION = DESTINATION;
+			exports.installSplitApi = installSplitApi;
+			exports.applySplit = applySplit;
+			exports.clearSplit = clearSplit;
+			exports.getSplitRootRect = getSplitRootRect;
+			exports.isSplitActive = isSplitActive;
+			exports.installChatBridgeApi = installChatBridgeApi;
+			exports.sendToChat = sendToChat;
+			exports.readConversation = readConversation;
+			exports.installNavHook = installNavHook;
+			exports.installNavHookApi = installNavHookApi;
+			exports.DirectorDialog = DirectorDialog;
+			exports.DIALOG_ID = DIALOG_ID;
+			exports.AGENTS = AGENTS;
+			exports.SKILLS = SKILLS;
+			exports.listAgentRuns = listAgentRuns;
 		};
 
 		// ── Harness client 插件契约导出 ──

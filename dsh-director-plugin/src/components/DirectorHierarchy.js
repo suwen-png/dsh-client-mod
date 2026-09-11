@@ -87,9 +87,13 @@ function findNode(root, id) {
 /**
  * 多层级总监面板根组件
  * @param {object} props
- * @param {() => void} [props.onClose] 关闭回调（浮层形态用）
+ * @param {() => void} [props.onClose] 关闭回调
+ * @param {boolean} [props.compact] 紧凑形态（弹窗左栏内嵌用）——
+ *   侧栏 240px 固定列改为**顶部可折叠块**（240px 在 300px 左栏里放不下主内容），
+ *   其余逻辑、页签、`h-*` 定位标识**完全不变**（既有真机逐交互脚本可原样复用）。
  */
 export function DirectorHierarchy(props = {}) {
+	const compact = props.compact === true;
 	const [tree, setTree] = react.useState(null);
 	const [selectedId, setSelectedId] = react.useState(GLOBAL_NODE_ID);
 	const [crumb, setCrumb] = react.useState([]);
@@ -218,17 +222,25 @@ export function DirectorHierarchy(props = {}) {
 		setMsg("已删除节点");
 	});
 
-	return (0, react_jsx_runtime.jsxs)("div", { style: S.root, children: [
-		/* ── 左：层级树 ── */
-		(0, react_jsx_runtime.jsxs)("div", { style: S.side, children: [
-			(0, react_jsx_runtime.jsx)("div", { style: { padding: "4px 12px 8px", ...S.muted }, children: "总监层级" }),
-			tree
-				? (0, react_jsx_runtime.jsx)(TreeItem, { node: tree, depth: 0, selectedId: selectedId, onSelect: setSelectedId })
-				: (0, react_jsx_runtime.jsx)("div", { style: { padding: 12, ...S.muted }, children: "加载中…" })
-		] }),
+	return (0, react_jsx_runtime.jsxs)("div", { style: compact ? { ...S.root, flexDirection: "column" } : S.root, children: [
+		/* ── 左：层级树（compact 时改为顶部可折叠块）── */
+		(0, react_jsx_runtime.jsxs)("div", {
+			style: compact
+				? { flex: "0 0 auto", maxHeight: 168, overflowY: "auto", borderBottom: "1px solid var(--dsw-alias-border-l2, #2a2c30)", padding: "6px 0" }
+				: S.side,
+			children: [
+				(0, react_jsx_runtime.jsxs)("div", { style: { padding: "4px 12px 8px", ...S.muted, display: "flex", alignItems: "center", gap: 6 }, children: [
+					"总监层级",
+					compact ? (0, react_jsx_runtime.jsx)("span", { style: { ...S.badge, marginLeft: "auto" }, "data-testid": "h-compact-hint", children: "紧凑" }) : null
+				] }),
+				tree
+					? (0, react_jsx_runtime.jsx)(TreeItem, { node: tree, depth: 0, selectedId: selectedId, onSelect: setSelectedId })
+					: (0, react_jsx_runtime.jsx)("div", { style: { padding: 12, ...S.muted }, children: "加载中…" })
+			]
+		}),
 
 		/* ── 右：内容区 ── */
-		(0, react_jsx_runtime.jsxs)("div", { style: S.main, children: [
+		(0, react_jsx_runtime.jsxs)("div", { style: compact ? { ...S.main, padding: 8 } : S.main, children: [
 			(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }, children: [
 				(0, react_jsx_runtime.jsx)("h3", { style: S.h, children: crumb.map((c) => c.name).join(" / ") || "全局总管" }),
 				selected ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: LEVEL_LABEL[selected.level] || selected.level }) : null,
