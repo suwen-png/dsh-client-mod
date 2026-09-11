@@ -1,11 +1,23 @@
 # DSH Client Mod — DeepSeek Harness 原客户端修改工作区
 
-> 版本：V1.1 ｜ 创建：2026-08-24 ｜ 最后更新：2026-09-06 ｜ Harness 版本：0.1.0-rc.11
+> 版本：V1.2 ｜ 创建：2026-08-24 ｜ 最后更新：2026-09-11 ｜ Harness 版本：0.1.0-rc.11
 > 定位：在 DeepSeek Harness 原客户端编译产物基础上直接修改，通过 Junction 符号链接替换原包，支持一键备份与复原。
+> 🔴 **当前形态已转为插件化**：`dsh-director-plugin`（官方 cordis client 插件通道）。早期「直接改产物」的 MOD-A/MOD-B 已进入退坡收敛阶段。
 
 ## 这是什么
 
 放弃「外部 bundle 注入」路线，直接修改 Harness 原客户端的 `lib/client.js` 等编译产物。修改在 `workspace/` 中进行，通过 Windows Junction 符号链接替换原安装目录中的对应包。出问题时从 `original/` 一键复原。
+
+### 当前进展（2026-09-11）
+
+「总监」能力已作为**独立插件**交付，不再需要改宿主产物：
+
+| 项 | 状态 |
+|:--|:--|
+| 数据隔离 | 插件自有库 `dsh-director-plugin-db` v1（6 store），宿主库 `dsh-director-db` v3 零改动 |
+| 界面形态 | **总监弹窗**（左＝总监面板 / 右＝原生对话区**分屏**，三态最小化，`lib/client.js` 413,359 B） |
+| 测试 | 真机 **100/100 ×2 轮** · **70/70** · **39/39**；离线 **269/269** · **60/60** · **49/49** 等全绿 |
+| 代码索引 | `dsh-director-plugin/README.md` · 台账 `docs/00-统筹入口/` |
 
 ## 目录结构
 
@@ -87,5 +99,13 @@ cd scripts
 
 ## 关联文档
 
-- 开发文档：`D:\workspace\starfield-agent\docs\20-任务文档\12-Starfield主区覆盖与对话模式切换-开发文档.md`
-- 总统筹入口：`D:\workspace\starfield-agent\docs\00-导航与入口\00-总统筹入口文档.md`
+| 用途 | 路径 |
+|:--|:--|
+| **总统筹入口** | `docs/00-统筹入口/00-总统筹入口文档.md` |
+| **待完成任务清单**（当前最新 `T-PLUG-015`） | `docs/00-统筹入口/03-待完成任务清单.md` |
+| **工作快照**（断点恢复依据） | `docs/00-统筹入口/06-工作快照.md` |
+| **业务不变量唯一真相源** | `dsh-director-plugin/docs/10-总监与对话架构总纲.md` |
+| **设计稿（最新）** | `docs/50-信息中心/V14.1-弹窗式总监架构设计稿.html` |
+| **设计稿审核 + 实施清单 + 反模式** | `dsh-director-plugin/docs/11-设计稿审核与实现方案.md` |
+| **插件安装权威说明**（三处安装点 / 启动陷阱 / 回滚） | `dsh-director-plugin/INSTALL.md` |
+| **踩坑速查** | `docs/50-信息中心/01-Harness客户端修改-踩坑记录与快速定位索引.md` |

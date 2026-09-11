@@ -60,3 +60,11 @@ coverage/
 # === 10. 体系级未跟踪 ===
 .workbuddy/
 .cache/
+
+# === 11. 一次性勘察探针与临时产物（不入仓） ===
+# 这些是排障期间的一次性脚本/中间产物，无长期价值。
+# 🔴 注意：scripts/_platform-stub*.mjs 是离线验证套件的依赖，**必须入仓**，故此处只匹配 _probe-。
+# 如需保留某个探针，用 `git add -f <path>` 强制入库。
+dsh-director-plugin/scripts/_probe-*.mjs
+dsh-director-plugin/.tmpcheck/
+

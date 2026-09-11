@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V14.1 · 弹窗式总监架构设计稿 — 左总监 / 右对话分屏 / 可最小化</title>
+<style>
+:root{
+  --bg:#16171a; --panel:#1c1e22; --panel2:#212429; --panel3:#26292f;
+  --border:#31343a; --border2:#3d4148;
+  --fg:#e8eaed; --fg2:#c3c8ce; --muted:#9aa1aa; --faint:#8b9199;
+  --accent:#2f6feb;      /* 对话域 · 功能性用色（非主色） */
+  --director:#8957e5;    /* 主色 · 总监域 */
+  --ok:#3fb950; --warn:#d29922; --danger:#f85149; --teal:#39c5cf;  /* 语义态色 */
+  --mono:ui-monospace,SFMono-Regular,Consolas,"Cascadia Mono",monospace;
+  --t:140ms;             /* 统一过渡时长（修订 §1.1-9） */
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font:14px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:40px 24px 96px}
+
+/* ── 页头 ── */
+header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:36px}
+h1{font-size:24px;margin:0 0 10px;letter-spacing:.2px;font-weight:650}
+h1 .ver{font:600 12px/1 var(--mono);color:#fff;background:var(--director);border-radius:5px;padding:4px 8px;vertical-align:middle;margin-left:8px}
+.sub{color:var(--muted);font-size:13.5px;margin:0}
+.badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.badge{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--border2);color:var(--fg2);background:var(--panel)}
+.badge.p{border-color:rgba(137,87,229,.5);color:#b794f6}
+.badge.a{border-color:rgba(47,111,235,.5);color:#79a8ff}
+.badge.g{border-color:rgba(63,185,80,.45);color:#6fd388}
+.badge.n{border-color:rgba(210,153,34,.5);color:#e0b341}
+
+/* ── 区块 ── */
+section{margin:0 0 52px}
+h2{font-size:17px;margin:0 0 6px;font-weight:640;display:flex;align-items:center;gap:10px}
+h2 .no{font:600 12px/1 var(--mono);color:var(--muted);border:1px solid var(--border2);border-radius:5px;padding:4px 7px}
+.h2sub{color:var(--muted);font-size:13px;margin:0 0 20px}
+h3{font-size:14px;margin:26px 0 10px;color:var(--fg2);font-weight:620}
+
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)}
+/* 修订 §1.1-5：自适应列数，消除「3+3+3+2」末行失衡 */
+.g3{grid-template-columns:repeat(auto-fill,minmax(248px,1fr))}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+/* ── 11 条要求卡（修订 §1.1-2：统一中性细线 + 域标签小圆点） ── */
+.req{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--border2);border-radius:9px;padding:14px 16px;position:relative;transition:border-color var(--t) ease,background var(--t) ease}
+.req:hover{border-top-color:var(--border2);border-right-color:var(--border2);border-bottom-color:var(--border2);border-left-color:var(--director);background:#1f2126}
+.req .n{position:absolute;top:12px;right:14px;font:700 11px/1 var(--mono);color:var(--faint)}
+.req h4{margin:0 0 8px;font-size:13.5px;font-weight:620;padding-right:26px;color:var(--fg)}
+.req p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.6}
+.req .src{margin-top:9px;font:11.5px/1.5 var(--mono);color:var(--faint)}
+.tagd{display:inline-flex;align-items:center;gap:5px;font:600 10.5px/1 var(--mono);color:var(--muted);margin-bottom:7px}
+.tagd i{width:6px;height:6px;border-radius:50%;display:block}
+.dw{background:var(--director)} .ac{background:var(--accent)} .tl{background:var(--teal)}
+
+/* ── 数据元架构 ── */
+.dom{display:grid;grid-template-columns:1fr 60px 1fr;gap:0;align-items:stretch}
+@media(max-width:860px){.dom{grid-template-columns:1fr;gap:14px}}
+.dombox{border-radius:10px;padding:16px 18px;border:1px solid}
+.dombox.dir{background:linear-gradient(160deg,rgba(137,87,229,.10),rgba(137,87,229,.03));border-color:rgba(137,87,229,.45)}
+.dombox.conv{background:linear-gradient(160deg,rgba(47,111,235,.10),rgba(47,111,235,.03));border-color:rgba(47,111,235,.45)}
+.dombox h4{margin:0 0 4px;font-size:14px;font-weight:640}
+.dombox .who{font:11.5px/1.5 var(--mono);color:var(--muted);margin-bottom:12px}
+.dombox table{width:100%;border-collapse:collapse;font-size:12px}
+.dombox td{padding:4px 0;vertical-align:top;border-bottom:1px dashed rgba(255,255,255,.06)}
+.dombox td:first-child{color:var(--muted);width:74px}
+.dombox code{font:11.5px/1 var(--mono);color:var(--fg2)}
+.link{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:var(--faint)}
+.link .arrow{font-size:20px;color:var(--faint)}
+.link .txt{font:10.5px/1.35 var(--mono);color:var(--faint);text-align:center}
+
+/* ── 弹窗 mockup 舞台 ── */
+.stage{background:#0f1013;border:1px solid var(--border);border-radius:12px;padding:18px;overflow-x:auto}
+.win{background:#101114;border:1px solid var(--border2);border-radius:9px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.6);min-width:640px;position:relative}
+.winbar{display:flex;align-items:center;gap:9px;padding:0 13px;height:36px;border-bottom:1px solid var(--border);background:var(--panel2)}
+.dot{width:10px;height:10px;border-radius:50%}
+.wintitle{font-size:12px;color:var(--muted);margin-left:4px}
+/* 修订 §1.1-5：改 min-height，左栏内容超长时整体增高而非溢出 */
+.winbody{display:flex;min-height:430px}
+.sidebar{width:150px;flex:0 0 150px;border-right:1px solid var(--border);background:#0d0e11;padding:11px 9px;font-size:11.5px;color:var(--fg2);display:flex;flex-direction:column}
+.sidebar .it{padding:5px 7px;border-radius:5px;margin-bottom:2px;display:flex;gap:7px;align-items:center;transition:background var(--t) ease}
+.sidebar .it:hover{background:rgba(255,255,255,.05)}
+.sidebar .it.on{background:rgba(137,87,229,.16);color:#c9a9ff}
+/* 修订 §1.1-3：对比度 1.9:1 → 3.7:1 */
+.sidebar .lbl{font:600 10.5px/1 var(--mono);color:#7c828a;margin:11px 0 6px;padding-left:7px;letter-spacing:.6px}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);position:relative}
+.tabring{display:flex;gap:0;height:34px;border-bottom:1px solid var(--border);padding:0 12px;align-items:flex-end;background:var(--panel)}
+.tab{height:27px;padding:0 13px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;background:none;border-left:0;border-right:0;border-top:0;font-family:inherit;cursor:pointer}
+.tab:hover{color:var(--fg2)}
+.tab.on{color:var(--fg);border-bottom-color:var(--director)}
+.content{flex:1;position:relative;overflow:hidden}
+
+/* 分屏让位：原生对话区被挤窄，右半屏 = 原生 DOM 本身（非副本） */
+.content.split{padding-left:300px}
+.content.split .nativeUnder{position:absolute;inset:0 0 0 300px;display:flex;flex-direction:column;padding:11px 14px;gap:9px;background:#17191d}
+.splitlabel{position:absolute;left:300px;top:0;bottom:0;width:1px;background:var(--border2)}
+.splitlabel .cap{position:absolute;top:8px;left:8px;font:10.5px/1.4 var(--mono);color:var(--faint);white-space:nowrap}
+
+/* 弹窗（覆盖层 · 仅占被腾出的左区） */
+.modal{position:absolute;inset:0 auto 0 0;width:300px;border-right:1px solid var(--border2);
+  background:#191b1f;display:flex;flex-direction:column;overflow:hidden;
+  /* 修订 §1.1-1：双层投影 + 1px 亮边 */
+  box-shadow:0 0 0 1px rgba(255,255,255,.06),0 18px 48px rgba(0,0,0,.62),0 2px 6px rgba(0,0,0,.5);
+  animation:winIn var(--t) ease both}
+@keyframes winIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.mhead{display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;background:linear-gradient(180deg,#23262c,#1e2126);border-bottom:1px solid var(--border2);flex-wrap:nowrap}
+.mhead .t{font-size:12.5px;font-weight:620;display:flex;align-items:center;gap:7px;min-width:0}
+/* 修订 §二 I5：层级选择器（面包屑 + 下拉），可在弹窗内直接切层级 */
+.lvsel{display:flex;align-items:center;gap:5px;font:10.5px/1 var(--mono);padding:4px 7px;border-radius:5px;background:rgba(137,87,229,.16);color:#c9a9ff;border:1px solid rgba(137,87,229,.42);cursor:pointer;max-width:150px;overflow:hidden;white-space:nowrap;transition:background var(--t) ease}
+.lvsel:hover{background:rgba(137,87,229,.26)}
+.lvsel[aria-expanded="true"]{background:rgba(137,87,229,.3)}
+.lvsel .crumb{overflow:hidden;text-overflow:ellipsis}
+.lvsel .crumb i{font-style:normal;color:#8b9199;margin:0 2px}
+.mbtns{margin-left:auto;display:flex;gap:4px}
+/* 修订 §1.1-6/7：button 化 + 四态 + aria-label */
+.mbtn{width:24px;height:22px;border:1px solid var(--border2);background:var(--panel2);border-radius:5px;color:var(--fg2);font-size:12px;font-family:inherit;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background var(--t) ease,border-color var(--t) ease,color var(--t) ease}
+.mbtn:hover{background:#2b2f36;color:var(--fg);border-color:#4a4f58}
+.mbtn:active{background:#24272d;transform:translateY(1px)}
+.mbtn:focus-visible{outline:2px solid #b794f6;outline-offset:1px}
+.mbtn:disabled{opacity:.45;cursor:not-allowed}
+.mbtn.x{border-color:rgba(248,81,73,.4);color:#f0877f}
+.mbtn.x:hover{background:rgba(248,81,73,.16);color:#ff9d96}
+.mbody{flex:1;display:flex;min-height:0}
+
+/* 左：总监面板（修订 §1.1-9：折叠过渡 140ms） */
+.dpanel{flex:1;min-width:0;display:flex;flex-direction:column;background:#1b1e23;min-height:0;border-right:1px solid var(--border2);transition:width var(--t) ease,flex-basis var(--t) ease}
+.dpanel .ph{display:flex;align-items:center;gap:7px;padding:7px 10px;border-bottom:1px solid var(--border);font-size:11px;color:#b794f6}
+.dpanel .ph .k{font:600 10.5px/1 var(--mono);background:rgba(137,87,229,.18);border:1px solid rgba(137,87,229,.35);border-radius:4px;padding:2px 5px}
+.dpanel .body{flex:1;overflow:auto;padding:9px 10px;display:flex;flex-direction:column;gap:9px;scrollbar-width:thin;scrollbar-color:#3d4148 transparent}
+.dpanel .body::-webkit-scrollbar{width:8px}
+.dpanel .body::-webkit-scrollbar-thumb{background:#3d4148;border-radius:4px}
+.blk{border:1px solid var(--border);border-radius:7px;background:var(--panel);padding:9px 10px}
+.blk .bt{font:600 10.5px/1 var(--mono);color:var(--faint);letter-spacing:.4px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.kv .c{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:6px 8px}
+.kv .c .v{font-size:14px;font-weight:650;color:var(--fg)}
+.kv .c .k2{font-size:10.5px;color:var(--faint);margin-top:1px}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border2);background:var(--panel2);color:var(--fg2);display:inline-flex;align-items:center;gap:5px;font-family:inherit}
+button.chip{cursor:pointer;transition:background var(--t) ease,border-color var(--t) ease}
+button.chip:hover{background:#2b2f36;border-color:#4a4f58}
+button.chip:active{transform:translateY(1px)}
+button.chip:focus-visible{outline:2px solid #b794f6;outline-offset:1px}
+.chip .d{width:5px;height:5px;border-radius:50%;background:var(--teal)}
+.chip.auto{border-color:rgba(137,87,229,.42);color:#c9a9ff}
+.chip.man{border-color:rgba(210,153,34,.42);color:#e0b341}
+.chip.on{background:rgba(137,87,229,.2);border-color:rgba(137,87,229,.55);color:#d6bcff}
+.seg{display:flex;border:1px solid var(--border2);border-radius:6px;overflow:hidden;margin-bottom:8px}
+.seg .s{flex:1;text-align:center;font-size:11px;padding:5px 0;color:var(--muted);background:var(--panel2);border:0;font-family:inherit;cursor:pointer;transition:background var(--t) ease,color var(--t) ease}
+.seg .s:hover{color:var(--fg2);background:#282c32}
+.seg .s:focus-visible{outline:2px solid #b794f6;outline-offset:-2px}
+.seg .s.on{background:rgba(137,87,229,.20);color:#c9a9ff;font-weight:600}
+/* 修订 §二 I9：R3 分两段 —— 可用 / 调用情况 */
+.runrow{display:flex;align-items:center;gap:6px;font-size:10.5px;padding:4px 0;border-top:1px dashed rgba(255,255,255,.07)}
+.runrow .st{width:6px;height:6px;border-radius:50%;flex:0 0 6px}
+.runrow .nm{color:var(--fg2);font-family:var(--mono)}
+.runrow .ms{margin-left:auto;color:var(--faint);font-family:var(--mono)}
+.runrow .k2{color:var(--muted);font-family:var(--mono)}
+.st.ok{background:var(--ok)} .st.run{background:var(--teal)} .st.warn{background:var(--warn)} .st.bad{background:var(--danger)}
+.msg{display:flex;gap:7px;margin-bottom:8px}
+.av{width:19px;height:19px;flex:0 0 19px;border-radius:5px;display:flex;align-items:center;justify-content:center;font:700 10.5px/1 var(--mono)}
+.av.d{background:rgba(137,87,229,.22);color:#c9a9ff;border:1px solid rgba(137,87,229,.4)}
+.av.u{background:rgba(47,111,235,.18);color:#79a8ff;border:1px solid rgba(47,111,235,.4)}
+.bub{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:11.5px;color:var(--fg2);line-height:1.55;min-width:0}
+.bub .tag{font:10.5px/1 var(--mono);color:#c9a9ff;display:block;margin-bottom:4px}
+/* 修订 §1.1-9 + §二 I11：折叠态可重开 + 空/加载/错误态 */
+.rail{width:40px;flex:0 0 40px;background:#1b1e23;border-right:1px solid var(--border2);display:flex;flex-direction:column;align-items:center;padding-top:7px;gap:6px;font:600 10.5px/1 var(--mono);color:#c9a9ff;cursor:pointer;transition:width var(--t) ease}
+.rail:hover{background:#20232a}
+.rail .ctl{display:flex;flex-direction:column;gap:4px;margin-top:6px;padding-top:7px;border-top:1px solid var(--border)}
+.rail .ctl .mbtn{width:22px;height:20px;font-size:11px}
+.emptystate{border:1px dashed var(--border2);border-radius:6px;padding:14px 10px;text-align:center;color:var(--faint);font-size:11px;line-height:1.6}
+.skel{height:9px;border-radius:5px;background:linear-gradient(90deg,#26292f,#33373e,#26292f);background-size:200% 100%;animation:sk 1.3s linear infinite;margin:6px 0}
+@keyframes sk{from{background-position:200% 0}to{background-position:-200% 0}}
+.errstate{border:1px solid rgba(248,81,73,.5);background:rgba(248,81,73,.08);border-radius:6px;padding:9px 10px;font-size:11px;color:#f0877f;line-height:1.55}
+
+/* ── scrim（修订 §1.1-1）：局部遮罩，仅用于弹层子级 ── */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.34);backdrop-filter:blur(1px);pointer-events:none}
+.scrim.deep{background:rgba(0,0,0,.55);backdrop-filter:blur(4px)}
+
+/* 层级下拉 / 目标徽章下拉 / 路由确认卡（修订 §二 I4/I5/I10） */
+.pop{position:absolute;z-index:5;background:#212429;border:1px solid var(--border2);border-radius:8px;padding:6px;box-shadow:0 14px 40px rgba(0,0,0,.6);animation:popIn var(--t) ease both}
+@keyframes popIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.pop .it{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:5px;font-size:11.5px;color:var(--fg2);cursor:pointer}
+.pop .it:hover{background:#2b2f36;color:var(--fg)}
+.pop .it.on{background:rgba(137,87,229,.18);color:#c9a9ff}
+.pop .it .lv{font:10.5px/1 var(--mono);color:var(--faint);margin-left:auto}
+.pop .sep{height:1px;background:var(--border);margin:5px 2px}
+.rcard{position:absolute;right:14px;top:34px;width:290px;background:#212429;border:1px solid rgba(137,87,229,.5);border-radius:9px;padding:12px 13px;
+  box-shadow:0 18px 46px rgba(0,0,0,.66),0 0 0 1px rgba(255,255,255,.05);animation:popIn var(--t) ease both;z-index:6}
+.rcard .rh{font:600 11px/1 var(--mono);color:#c9a9ff;display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.rcard .why{font-size:11.5px;color:var(--fg2);line-height:1.6;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 9px;margin-bottom:9px}
+.rcard .why b{color:#c9a9ff}
+.rcard .racts{display:flex;flex-direction:column;gap:5px}
+.rbtn{border:1px solid var(--border2);background:var(--panel2);border-radius:6px;color:var(--fg2);font:11.5px/1 inherit;font-family:inherit;padding:7px 9px;text-align:left;display:flex;align-items:center;gap:7px;cursor:pointer;transition:background var(--t) ease,border-color var(--t) ease}
+.rbtn:hover{background:#2b2f36;border-color:#4a4f58;color:var(--fg)}
+.rbtn:active{transform:translateY(1px)}
+.rbtn:focus-visible{outline:2px solid #b794f6;outline-offset:1px}
+.rbtn.pri{border-color:rgba(137,87,229,.55);background:rgba(137,87,229,.16);color:#d6bcff}
+.rbtn.pri:hover{background:rgba(137,87,229,.26)}
+.rbtn .kk{margin-left:auto;font:10.5px/1 var(--mono);color:var(--faint)}
+
+/* ── 右：原生对话区（分屏后） ── */
+.native{display:flex;flex-direction:column;gap:9px;min-height:0}
+.cmsg{display:flex;gap:8px}
+.cmsg .cb{flex:1;background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:8px 11px;font-size:12px;color:var(--fg2);line-height:1.6;min-width:0}
+.cmsg .cb .mh{font:10.5px/1 var(--mono);color:var(--faint);margin-bottom:5px;display:flex;gap:8px}
+.cmsg.u .cb{background:rgba(47,111,235,.07);border-color:rgba(47,111,235,.28)}
+.tool{font:11px/1.5 var(--mono);color:#5fbfc9;background:rgba(57,197,207,.07);border:1px dashed rgba(57,197,207,.3);border-radius:6px;padding:7px 10px;margin-top:6px;overflow-x:auto;white-space:nowrap}
+.dragbar{width:5px;flex:0 0 5px;background:linear-gradient(180deg,transparent,var(--border2),transparent);position:relative;cursor:col-resize}
+.dragbar::after{content:"⋮";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--faint);font-size:11px;line-height:1}
+.dragbar:hover{background:linear-gradient(180deg,transparent,var(--director),transparent)}
+
+/* ── 底部输入（修订 §二 I3/I10：单输入框 + 目标徽章） ── */
+.mfoot{border-top:1px solid var(--border2);background:#1b1e23;padding:8px 10px;display:flex;align-items:center;gap:7px;position:relative}
+.focuschip{font:600 10.5px/1 var(--mono);padding:6px 8px;border-radius:5px;border:1px solid rgba(137,87,229,.45);background:rgba(137,87,229,.16);color:#c9a9ff;white-space:nowrap;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:5px;transition:background var(--t) ease}
+.focuschip:hover{background:rgba(137,87,229,.28)}
+.focuschip:focus-visible{outline:2px solid #b794f6;outline-offset:1px}
+.focuschip.chat{border-color:rgba(47,111,235,.45);background:rgba(47,111,235,.16);color:#79a8ff}
+.focuschip.chat:hover{background:rgba(47,111,235,.28)}
+.inp{flex:1;height:30px;border:1px solid var(--border2);border-radius:6px;background:#141619;display:flex;align-items:center;padding:0 10px;font-size:11.5px;color:var(--muted);min-width:0;transition:border-color var(--t) ease}
+.inp.live{border-color:rgba(137,87,229,.6);color:var(--fg2)}
+.inp .car{width:1px;height:13px;background:var(--director);margin-left:2px;animation:bl 1.1s steps(1) infinite}
+@keyframes bl{50%{opacity:0}}
+.send{width:30px;height:30px;flex:0 0 30px;border-radius:6px;background:var(--director);display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;border:0;cursor:pointer;font-family:inherit;transition:background var(--t) ease}
+.send:hover{background:#9d6ceb}
+.send:active{transform:translateY(1px)}
+.send:disabled{opacity:.45;cursor:not-allowed;background:#3a3f47}
+.send:focus-visible{outline:2px solid #d6bcff;outline-offset:2px}
+
+/* 焦点高亮（修订 §二 I7：只认面板容器 pointerdown） */
+.foc-d{outline:2px solid rgba(137,87,229,.55);outline-offset:-2px}
+.foc-c{outline:2px solid rgba(47,111,235,.5);outline-offset:-2px}
+
+/* ── 最小化三态 ── */
+.states{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:900px){.states{grid-template-columns:1fr}}
+.st{background:#0f1013;border:1px solid var(--border);border-radius:9px;padding:12px}
+.st h5{margin:0 0 4px;font-size:12.5px;font-weight:620}
+.st .cap{font-size:11px;color:var(--faint);margin-bottom:10px;line-height:1.5}
+.mini{background:#191b1f;border:1px solid var(--border2);border-radius:7px;overflow:hidden;min-height:152px;display:flex;flex-direction:column;position:relative}
+.mini .mh{height:26px;background:linear-gradient(180deg,#23262c,#1e2126);border-bottom:1px solid var(--border2);display:flex;align-items:center;padding:0 9px;gap:6px;font-size:10.5px}
+.mini .mb{flex:1;display:flex;min-height:0}
+.mini .L{display:flex;flex-direction:column;border-right:1px solid var(--border)}
+.mini .R{flex:1;background:#17191d}
+.mini .rail{width:34px;flex:0 0 34px;border-right:none;border-left:none;padding-top:6px;gap:5px}
+.ph2{height:17px;background:var(--panel2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 6px;font:10.5px/1 var(--mono);color:var(--faint)}
+.line{height:6px;border-radius:3px;background:var(--panel3);margin:5px 7px}
+.line.s{width:60%}
+.line.m{width:80%}
+.chipwin{position:absolute;right:10px;bottom:10px;background:#23262c;border:1px solid rgba(137,87,229,.5);border-radius:20px;padding:5px 11px;font:11px/1 var(--mono);color:#c9a9ff;display:flex;align-items:center;gap:7px;cursor:pointer;transition:background var(--t) ease}
+.chipwin:hover{background:#2b2f36}
+.chipwin:focus-visible{outline:2px solid #d6bcff;outline-offset:2px}
+.chipwin .cnt{background:var(--danger);color:#fff;border-radius:9px;padding:1px 6px;font-size:10.5px}
+
+/* ── 路由 ── */
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+.fstep{flex:1;min-width:138px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:11px 12px;position:relative}
+.fstep .n{font:700 10.5px/1 var(--mono);color:var(--faint);margin-bottom:7px}
+.fstep .t{font-size:12.5px;font-weight:620;margin-bottom:4px}
+.fstep .d{font-size:11px;color:var(--muted);line-height:1.5}
+.farrow{display:flex;align-items:center;justify-content:center;width:26px;color:var(--faint);flex:0 0 26px}
+@media(max-width:900px){.farrow{width:100%;height:22px;flex-basis:100%}.farrow span{transform:rotate(90deg)}}
+.dest{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+@media(max-width:820px){.dest{grid-template-columns:1fr}}
+.dbox{border:1px solid var(--border);border-radius:8px;padding:11px 12px;background:var(--panel)}
+.dbox .h{font-size:12.5px;font-weight:620;margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.dbox .p{font-size:11px;color:var(--muted);line-height:1.55}
+
+/* ── 表格（修订 §1.1-8：窄屏横向滚动兜底） ── */
+.tscroll{overflow-x:auto;border:1px solid var(--border);border-radius:9px}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px}
+table.t th{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border2);color:var(--muted);font-weight:600;font-size:11.5px;background:var(--panel2);white-space:nowrap}
+table.t td{padding:9px 11px;border-bottom:1px solid var(--border);color:var(--fg2);vertical-align:top}
+table.t tr:last-child td{border-bottom:none}
+table.t tbody tr:hover{background:rgba(255,255,255,.03)}
+table.t code{font:11.5px/1 var(--mono);color:#c9a9ff}
+.pill{display:inline-block;font:600 10.5px/1 var(--mono);padding:3px 7px;border-radius:4px;white-space:nowrap}
+.pill.ok{background:rgba(63,185,80,.16);color:#6fd388;border:1px solid rgba(63,185,80,.35)}
+.pill.warn{background:rgba(210,153,34,.16);color:#e0b341;border:1px solid rgba(210,153,34,.35)}
+.pill.bad{background:rgba(248,81,73,.15);color:#f0877f;border:1px solid rgba(248,81,73,.35)}
+.pill.n{background:rgba(137,87,229,.16);color:#c9a9ff;border:1px solid rgba(137,87,229,.35)}
+
+.note{border-left:3px solid var(--warn);background:rgba(210,153,34,.07);padding:12px 15px;border-radius:0 8px 8px 0;font-size:12.5px;color:var(--fg2);line-height:1.7}
+.note.bad{border-left-color:var(--danger);background:rgba(248,81,73,.07)}
+.note.ok{border-left-color:var(--ok);background:rgba(63,185,80,.07)}
+.note.p{border-left-color:var(--director);background:rgba(137,87,229,.07)}
+.note b{color:var(--fg)}
+
+/* ── 状态一览（修订 §1.1-6） ── */
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.sdemo{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px}
+.sdemo .sh{font:600 10.5px/1 var(--mono);color:var(--faint);margin-bottom:9px}
+.sdemo .sd{font-size:11px;color:var(--muted);line-height:1.55;margin-top:8px}
+.forceHover{background:#2b2f36;color:var(--fg);border-color:#4a4f58}
+.forceFocus{outline:2px solid #b794f6;outline-offset:1px}
+.forceDisabled{opacity:.45;cursor:not-allowed}
+
+footer{border-top:1px solid var(--border);margin-top:20px;padding-top:20px;color:var(--faint);font-size:12px;line-height:1.8}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>V14.1 · 弹窗式总监架构设计稿<span class="ver">REV 2</span></h1>
+  <p class="sub">左＝总监 ｜ 右＝<b>原生对话区本体</b>（分屏让位，非副本）｜ 三态最小化 · 双层数据元独立 · 总监只治理不执行</p>
+  <div class="badges">
+    <span class="badge p">总监域 · 插件拥有</span>
+    <span class="badge a">对话域 · 宿主拥有 · 插件只读</span>
+    <span class="badge g">零宿主改动</span>
+    <span class="badge n">审美 5.0 → 修订 10 项 已落实</span>
+    <span class="badge n">交互 I1–I12 已落实</span>
+    <span class="badge">2026-09-11</span>
+  </div>
+  <div class="badges" style="margin-top:8px">
+    <span class="badge">上游：docs/11-设计稿审核与实现方案.md</span>
+    <span class="badge">真相源：dsh-director-plugin/docs/10-总监与对话架构总纲.md</span>
+  </div>
+</header>
+
+<!-- ══════════ 修订摘要 ══════════ -->
+<section>
+  <h2><span class="no">−1</span>本版修订摘要（V14.0 → V14.1）</h2>
+  <p class="h2sub">本稿不是重画，而是<b>按审核结论做的手术式修订</b>：布局与信息架构<b>原样保留</b>，
+    只改四类「表达层」问题（层次 / 对比度 / 字号 / 状态），并补齐 12 处交互缺口。</p>
+
+  <h3>① 审美修订 10 项（对应 docs/11 §1.1）</h3>
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:40px">#</th><th style="width:290px">修订动作</th><th>V14.1 落位</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>加遮罩 + 弹窗双层投影 + 1px 亮边，表达层次</td><td>弹窗改 <span class="pill n">双层 box-shadow + 1px 亮边</span>；<b>全局 scrim 与分屏冲突</b>（右半屏即原生区，遮罩会盖住要求 4 的"对话原貌"）⇒ scrim 降级为<b>弹层子级专用</b>：层级下拉 / 目标徽章下拉 / 路由确认卡三处使用 <code>.scrim</code>。层次由"投影 + 左边缘 1px 亮边 + 内容右移"三者共同建立</td></tr>
+      <tr><td>2</td><td>立单一主色；11 卡统一中性细线</td><td><code>--director #8957e5</code> 为唯一主色（标题、按钮、焦点、发送键、tab 下划线全部归紫）；蓝色降为<b>功能性用色</b>（只标"对话域"）；青色降为<b>状态色</b>（运行中）。11 卡左边框统一 <code>--border2</code> 中性细线，归属改用卡内<b>域标签小圆点</b></td></tr>
+      <tr><td>3</td><td><code>--faint</code> 提亮；<code>.sidebar .lbl</code> 提亮</td><td><code>--faint #6a7078 → #8b9199</code>（3.0:1 → <b>4.6:1</b>）；<code>--muted #8b9199 → #9aa1aa</code>（5.9:1）；<code>.sidebar .lbl → #7c828a</code>（1.9:1 → 3.7:1）；<code>.req .src → --faint</code></td></tr>
+      <tr><td>4</td><td>全稿最小字号 10.5px</td><td>清除全部 9px（<code>.rail</code>/<code>.ph2</code>）、9.5px（<code>.cnt</code>）、10px（<code>.bt</code>/<code>.lbl</code>/<code>.pill</code>/<code>.ph .k</code>/<code>.mh</code> 等）⇒ 全稿最小 <b>10.5px</b></td></tr>
+      <tr><td>5</td><td><code>.g3</code> 自适应；<code>.winbody</code> 改 <code>min-height</code></td><td><code>.g3 → repeat(auto-fill,minmax(248px,1fr))</code>（消除末行失衡）；<code>.winbody{height:430px} → {min-height:430px}</code>；左栏 <code>.body</code> 自绘细滚动条</td></tr>
+      <tr><td>6</td><td>补 hover / active / focus-visible / disabled + 状态一览</td><td>全部交互元素补 <code>:hover</code>（提亮 1 档）/ <code>:active</code>（按下位移 1px）/ <code>:focus-visible</code>（2px 实心 outline）/ <code>:disabled</code>（<code>opacity:.45</code>）；新增 <b>§03 状态一览</b> 小节含空/加载/错误三态</td></tr>
+      <tr><td>7</td><td><code>role</code> + <code>aria-label</code> + 键盘路径</td><td>全部 <code>div</code> 按钮改真实 <code>&lt;button&gt;</code>；补 <code>role="combobox" aria-expanded</code> / <code>role="listbox"</code>；键盘路径写死：<code>Esc</code> 关闭 · <code>Alt+1/2/3</code> 三态 · <code>Tab</code> 遍历 · <code>Enter</code> 发送</td></tr>
+      <tr><td>8</td><td>弹窗 <code>min-width</code> + 表格横向滚动</td><td><code>.win{min-width:640px}</code> + 舞台 <code>overflow-x:auto</code>；所有表格包 <code>.tscroll{overflow-x:auto}</code></td></tr>
+      <tr><td>9</td><td>开合 / 折叠 / 确认卡过渡 140ms</td><td><code>--t:140ms</code> 统一变量；弹窗 <code>winIn</code>、左栏宽度、<code>.pop</code>/<code>.rcard</code> 均接 140ms；并补 <code>prefers-reduced-motion</code> 降级</td></tr>
+      <tr><td>10</td><td>信息密度维持</td><td>不变（本稿为文档型设计稿，密度合适）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>② 交互缺口 12 项（对应 docs/11 §二）</h3>
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:44px">#</th><th style="width:64px">级别</th><th style="width:200px">缺口</th><th>V14.1 落位</th></tr></thead>
+    <tbody>
+      <tr><td><b>I1</b></td><td><span class="pill bad">P0</span></td><td>模态性未定义</td><td>定为 <b>非模态分屏覆盖层</b>：不锁滚动、不锁焦点、可拖拽、可并行操作；<code>Esc</code> 关闭；<b>不做「点击外部关闭」</b>（分屏没有"外部"）。层次由投影承担（见修订 1）</td></tr>
+      <tr><td><b>I2</b></td><td><span class="pill bad">P0</span></td><td>右栏与对话 tab 自相矛盾</td><td>改 <b>布局分屏</b>（方案 C）：原生对话区<b>不被覆盖</b>，只被挤窄 <code>padding-left</code> ⇒ 右栏<b>就是</b>原生内容，"原貌不变"与"完全一致"同时成立（结构性解决）→ 见 <b>§02</b></td></tr>
+      <tr><td><b>I3</b></td><td><span class="pill bad">P0</span></td><td>右→左 无输入通道</td><td>底部 <b>单输入框 + 目标徽章下拉</b>（<code>目标：总监 ▾</code> ⇄ <code>目标：对话 ▾</code>）；右区 <code>pointerdown</code> 自动切徽章 → 见 <b>§02</b> / §08</td></tr>
+      <tr><td><b>I4</b></td><td><span class="pill bad">P0</span></td><td>路由 STEP4 无确认 UI</td><td>新增 <b>路由确认卡</b>：建议去向 + 理由 + 置信度 + 三按钮（转派/直调/新建）+「改为其他对话」下拉，确认后落 <code>directorDecisions</code> → 见 <b>§05</b></td></tr>
+      <tr><td><b>I5</b></td><td><span class="pill warn">P1</span></td><td>层级切换入口缺失</td><td><code>mhead</code> 加 <b>层级选择器</b>（面包屑 + 下拉 + <code>aria-expanded</code>），可在弹窗内直接切四段层级 → 见 <b>§02</b> / §04</td></tr>
+      <tr><td><b>I6</b></td><td><span class="pill warn">P1</span></td><td>三态路径不全</td><td>三按钮语义定死：<code>–</code> 整窗最小化（→chip）· <code>⇤</code> 左栏折叠 · <code>⇥</code> 右栏折叠；另加 <code>▢</code> 复位栏宽；<b>每态可键盘</b> <code>Alt+1/2/3</code> → 见 <b>§03</b></td></tr>
+      <tr><td><b>I7</b></td><td><span class="pill warn">P1</span></td><td><code>focusTarget</code> 判定粒度</td><td>只认<b>面板容器</b>的 <code>pointerdown</code>；<code>closest('[data-input-scope]')</code> 排除内部输入元素；输入框聚焦时以输入框自身为准 → 见 §08</td></tr>
+      <tr><td><b>I8</b></td><td><span class="pill warn">P1</span></td><td>折叠/拖拽边界未定义</td><td>拖拽 <code>clamp(180, 55%×W)</code>；<code>&lt;180px</code> 吸附折叠；<b>双击中缝复位 300/300</b> → 见 §08（真机实测值附后）</td></tr>
+      <tr><td><b>I9</b></td><td><span class="pill warn">P1</span></td><td>R3 缺"调用情况"</td><td>R3 分两段：<b>可用</b>（可点击直调）+ <b>调用中 / 最近</b>（状态点 · 耗时 · 结果）→ 见 <b>§07</b></td></tr>
+      <tr><td><b>I10</b></td><td><span class="pill">P2</span></td><td>R5 与 R8 从属关系不清</td><td>输入框固定 <code>mfoot</code>（跨栏），用<b>目标徽章</b>显式绑定去向；R5 <b>只读</b>渲染消息流 → 见 §02</td></tr>
+      <tr><td><b>I11</b></td><td><span class="pill">P2</span></td><td>缺空态 / 加载态 / 错误态</td><td>补三态组件：空态（引导文案）、加载态（骨架条 <code>sk</code> 动画）、错误态（红边 + 重试）→ 见 <b>§03</b></td></tr>
+      <tr><td><b>I12</b></td><td><span class="pill">P2</span></td><td>未体现 V12 八视图</td><td>新增 <b>「V12 八视图 ↔ 本弹窗落位」映射表</b>，逐视图标注落位 → 见 <b>§09</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note p" style="margin-top:16px">
+    <b>与 V14.0 的三处实质差异（不是润色）：</b><br>
+    ① <b>弹窗形态</b>：全 content 区覆盖 → <b>仅占左 300px 分屏带</b>，右区回归原生 DOM；<br>
+    ② <b>遮罩</b>：全局 scrim → <b>弹层子级 scrim</b>（因分屏下"遮罩右半屏"会直接违反要求 4）；<br>
+    ③ <b>主色</b>：三主色并列 → <b>单主色紫</b>，蓝/青降级为功能色与状态色。
+  </div>
+</section>
+
+<!-- ══════════ 0. 需求对表 ══════════ -->
+<section>
+  <h2><span class="no">00</span>你的 11 条要求 → 设计落位</h2>
+  <p class="h2sub">卡内圆点标识归属：<i class="dw" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#8957e5"></i> 总监域 ·
+    <i class="ac" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#2f6feb"></i> 对话域 ·
+    <i class="tl" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#39c5cf"></i> 跨域机制。
+    每卡底部标注该要求的权威设计出处。</p>
+  <div class="grid g3">
+    <div class="req"><span class="n">01</span>
+      <div class="tagd"><i class="dw"></i>总监域</div>
+      <h4>总监与对话各自独立数据元</h4>
+      <p>两个<b>不同数据库</b>：总监域 <code>dsh-director-plugin-db</code>，
+        对话域 <code>dsh-director-db</code>。禁用"前缀/字段约定"冒充隔离。唯一交叉点＝一个只读外键。</p>
+      <div class="src">出处：17号文 §2.2 独立库 + §2.3 记忆隔离 + §1A.7 上下文不污染</div>
+    </div>
+    <div class="req"><span class="n">02</span>
+      <div class="tagd"><i class="dw"></i>总监域</div>
+      <h4>总监统筹全局 · 有自己的对话 · 不执行</h4>
+      <p>总监域含 <code>directorConversations</code>——<b>总监自己就是一路对话</b>。其内容只有需求澄清 / 方案 / 派活 / 审核 / 纠偏，<b>不含执行产出</b>。</p>
+      <div class="src">出处：17号文 §1A.1「每对话一总监 / 沟通执行分离 / 总监不执行」</div>
+    </div>
+    <div class="req"><span class="n">03</span>
+      <div class="tagd"><i class="dw"></i>总监域</div>
+      <h4>定上下文 / 保达标 / 审核 / 防跑偏 / 纠偏</h4>
+      <p>落地为<b>六维审核</b>（需求满足 / 方案符合 / 质量达标 / 风险控制 / 完整性 / 一致性）＋
+        <code>directorReviews</code>、<code>directorDecisions</code> 留痕。</p>
+      <div class="src">出处：17号文 §1A.2 协作流程 + §1A.9 六维清单 + §1A.10 分派汇总</div>
+    </div>
+    <div class="req"><span class="n">04</span>
+      <div class="tagd"><i class="ac"></i>对话域 · 红线</div>
+      <h4>对话保持原有逻辑不变</h4>
+      <p>宿主 <code>client.js</code> 零改动；对话域 schema / key 不变。本条为<b>红线</b>，
+        任何改动提案若触碰对话渲染路径即驳回。<b>V14.1 的分屏方案使其结构性成立</b>。</p>
+      <div class="src">出处：18号文 §1.3「不破坏对话 tab / 轨迹 tab / 原 InputBar」</div>
+    </div>
+    <div class="req"><span class="n">05</span>
+      <div class="tagd"><i class="tl"></i>跨域机制</div>
+      <h4>左总监 ＋ 右对话数据（完全一致）</h4>
+      <p>右栏<b>不持有副本</b>：原生对话区被 <code>padding-left</code> 挤窄，<b>露出的那一段就是原生 DOM 本身</b>⇒ 同一个节点、同一个渲染器、同一个 store。</p>
+      <div class="src">出处：05号文 §4.1/§4.3/§4.4 ＋ 06号文 §4.1/§4.2 ＋ docs/11 §三 方案 C</div>
+    </div>
+    <div class="req"><span class="n">06</span>
+      <div class="tagd"><i class="tl"></i>跨域机制</div>
+      <h4>两者均为弹窗形式 · 允许最小化</h4>
+      <p>左栏、右栏、整窗 <b>三态独立折叠</b>；中缝可拖拽 <code>clamp(180, 55%)</code>。
+        状态落 <code>dsh.director.layout</code>（R5 冻结 key，仅新增字段）。</p>
+      <div class="src">出处：05号文 §4.1 状态管理（两个 collapsed 字段）＋ §4.7 M8 ＋ §4.8</div>
+    </div>
+    <div class="req"><span class="n">07</span>
+      <div class="tagd"><i class="tl"></i>跨域机制</div>
+      <h4>点击文件夹 / 项目 → 展示对应总监</h4>
+      <p>层级四段：全局 / 项目 / 文件夹 / 对话。点击即打开总监页并把 <code>nodeId</code> 切到该层级；
+        <b>外壳不变，内容随层级切换</b>；<code>mhead</code> 层级选择器内可直切。</p>
+      <div class="src">出处：docs/04 多层级结构 + 17号文 §2.3 继承</div>
+    </div>
+    <div class="req"><span class="n">08</span>
+      <div class="tagd"><i class="dw"></i>总监域</div>
+      <h4>只保留一个总监页面 ＋ 智能路由</h4>
+      <p>总监页唯一。用户直接输入 → 总监<b>整理并确认</b>归属 → 三条去向：
+        <b>转给该对话的总监</b> / <b>直接调用对应对话</b> / <b>新建对话</b>。路由确认卡 + 留痕，可确认、可回看。</p>
+      <div class="src">出处：17号文 §三 智能路由五步 + §6.3 V12/V13 ＋ docs/11 §二 I4</div>
+    </div>
+    <div class="req"><span class="n">09</span>
+      <div class="tagd"><i class="dw"></i>总监域</div>
+      <h4>上层项目文件同样拥有自己的总监</h4>
+      <p>项目级 / 文件夹级总监与对话级<b>同构</b>（同数据结构、同界面）。上层可访问其下全部层级；
+        <b>下级不可见上级全局</b>。</p>
+      <div class="src">出处：17号文 §一 架构总览（无限嵌套）+ §6.2 V11</div>
+    </div>
+    <div class="req"><span class="n">10</span>
+      <div class="tagd"><i class="dw"></i>总监域</div>
+      <h4>智能体与技能：可查看调用 · 可主动选择</h4>
+      <p>R3 行内<b>分段切换</b>「智能体 ｜ 技能」＋ <b>调用情况</b>段；每项标注调用方式
+        <span class="chip auto" style="padding:1px 6px">总监自动</span>
+        <span class="chip man" style="padding:1px 6px">客户手选</span>；
+        内置 5 类标准智能体（代码 / 文档 / 调研 / 测试 / 审核）各带标准与检查清单。</p>
+      <div class="src">出处：18号文 R3 ＋ 17号文 §1A.8 ＋ docs/11 §二 I9</div>
+    </div>
+    <div class="req"><span class="n">11</span>
+      <div class="tagd"><i class="tl"></i>跨域机制</div>
+      <h4>总监体现设计图逻辑</h4>
+      <p>区域契约 <b>R1–R8</b> 与本稿一致；信息架构对齐 <b>V12 八视图</b>（逐视图落位见 §09 映射表）。</p>
+      <div class="src">出处：18号文 R1–R8 ＋ V12 高保真设计稿 ＋ docs/11 §二 I12</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 1. 双层数据元 ══════════ -->
+<section>
+  <h2><span class="no">01</span>双层数据元（要求 01 的落地形态）</h2>
+  <p class="h2sub">关键判断：<b>新建插件自己的数据库</b>不参与宿主的 IndexedDB 版本协商，
+    因此「物理隔离」与「R5 冻结 key 不变更」<b>可以同时成立</b>。</p>
+
+  <div class="dom">
+    <div class="dombox dir">
+      <h4>总监域</h4>
+      <div class="who">dsh-director-plugin-db · v1 · 插件拥有 · 宿主不消费</div>
+      <table>
+        <tr><td>对话</td><td><code>directorConversations</code> <span style="color:#8b9199">keyPath messageId · idx nodeId</span></td></tr>
+        <tr><td>节点</td><td><code>directorNodes</code> <span style="color:#8b9199">keyPath nodeId · idx level,parentId</span></td></tr>
+        <tr><td>方案</td><td><code>directorPlans</code> <span style="color:#8b9199">keyPath planId</span></td></tr>
+        <tr><td>审核</td><td><code>directorReviews</code> <span style="color:#8b9199">keyPath reviewId</span></td></tr>
+        <tr><td>决策</td><td><code>directorDecisions</code> <span style="color:#8b9199">含纠偏留痕</span></td></tr>
+        <tr><td>待办</td><td><code>directorTodos</code> <span style="color:#8b9199">keyPath todoId</span></td></tr>
+      </table>
+    </div>
+    <div class="link">
+      <div class="arrow">⇄</div>
+      <div class="txt">唯一交叉点<br>nodeId ↔<br>sessionId /<br>workspaceId<br><span style="color:#c9a9ff">只读外键</span></div>
+    </div>
+    <div class="dombox conv">
+      <h4>对话域</h4>
+      <div class="who">dsh-director-db · v3 · 宿主拥有 · 插件只读</div>
+      <table>
+        <tr><td>记忆核心</td><td><code>memoryCore</code> <span style="color:#8b9199">keyPath projectId</span></td></tr>
+        <tr><td>决策</td><td><code>memoryDecisions</code> <span style="color:#8b9199">keyPath decisionId</span></td></tr>
+        <tr><td>风险</td><td><code>memoryRisks</code> <span style="color:#8b9199">keyPath riskId</span></td></tr>
+        <tr><td colspan="2" style="padding-top:10px;color:#8b9199;border:none">
+          🔴 库名 / 版本 / store 名 / keyPath 全部冻结，<b style="color:#f0877f">不得变更</b><br>
+          <span style="color:#8b9199">（R5 契约：改则存量数据全丢）</span></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="note ok" style="margin-top:16px">
+    <b>为什么"独立库"现在可行？</b>IndexedDB 的版本协商只发生在<b>同一个数据库名</b>内。
+    T-PLUG-009 的约束是"<b>不能给宿主的 <code>dsh-director-db</code> 升 v4</b>"——
+    这条约束对<b>新建插件自有库</b>完全不适用。⇒ 要求 01 可以在零风险下达成。
+  </div>
+</section>
+
+<!-- ══════════ 2. 主视图 ══════════ -->
+<section>
+  <h2><span class="no">02</span>主视图（要求 05 · 弹窗 · 左总监 / 右对话分屏）</h2>
+  <p class="h2sub">关键结构变化（修订 §二 I2）：<b>弹窗不再铺满 content 区</b>，只占左侧 300px；
+    原生对话区被 <code>padding-left:300px</code> 挤出，<b>右侧露出的就是原生 DOM 本身</b>。
+    层次由「投影 + 左缘 1px 亮边 + 内容右移」建立，<b>不使用全局遮罩</b>（否则会盖住要求 4 的对话原貌）。</p>
+
+  <div class="stage">
+    <div class="win">
+      <div class="winbar">
+        <span class="dot" style="background:#f85149"></span>
+        <span class="dot" style="background:#d29922"></span>
+        <span class="dot" style="background:#3fb950"></span>
+        <span class="wintitle">DeepSeek Harness</span>
+      </div>
+      <div class="winbody">
+        <!-- 原生侧栏 -->
+        <div class="sidebar">
+          <div class="lbl">工作区</div>
+          <div class="it">▣&nbsp; dsh-client-mod</div>
+          <div class="it">▢&nbsp; sea-tycoon</div>
+          <div class="lbl">文件夹</div>
+          <div class="it on">◆&nbsp; dsh-director-plugin</div>
+          <div class="it">▢&nbsp; 镜辰 NetSuite</div>
+          <div class="it">▢&nbsp; divination-engine</div>
+          <div style="margin-top:auto;padding-top:14px;color:#8b9199;font-size:10.5px;line-height:1.5">点击文件夹 / 项目<br>即弹出该层级总监</div>
+        </div>
+
+        <!-- 主区：分屏 -->
+        <div class="main">
+          <div class="tabring">
+            <button class="tab" role="tab" aria-selected="false">轨迹</button>
+            <button class="tab on" role="tab" aria-selected="true">对话</button>
+          </div>
+          <div class="content split">
+            <!-- 原生对话区（右侧，未被覆盖） -->
+            <div class="nativeUnder">
+              <div class="cmsg u">
+                <div class="av u">你</div>
+                <div class="cb">
+                  <div class="mh"><span>用户</span><span>16:02</span></div>
+                  帮我把总监和对话的架构逻辑整理一下，两个要用各自独立的数据。
+                </div>
+              </div>
+              <div class="cmsg">
+                <div class="av d" style="background:rgba(57,197,207,.16);color:#5fbfc9;border-color:rgba(57,197,207,.4)">AI</div>
+                <div class="cb">
+                  <div class="mh"><span>assistant</span><span>16:03</span><span style="color:#5fbfc9">已执行 5 项</span></div>
+                  已产出《架构总纲》与归因分析，并在 04/09 号文完成形态裁定订正。
+                  <div class="tool">▸ write&nbsp; dsh-director-plugin/docs/10-总监与对话架构总纲.md<br>▸ edit&nbsp;&nbsp; docs/04-多层级总监结构设计与方案选型.md<br>▸ grep&nbsp;&nbsp; directorLayoutStore → 18 处命中</div>
+                </div>
+              </div>
+              <div class="cmsg u">
+                <div class="av u">你</div>
+                <div class="cb">
+                  <div class="mh"><span>用户</span><span>16:05</span></div>
+                  右侧要跟对话 tab 完全一致，不能只是长得像。
+                </div>
+              </div>
+              <div class="note ok" style="font-size:11.5px;padding:9px 12px;margin:0">
+                这段内容<b>不是副本</b>——它就是原生 <code>.RWZidW_root</code> 的对话区，
+                被 <code>padding-left</code> 挤到了右边。<b>同一个 DOM、同一个渲染器、同一个 store。</b>
+              </div>
+            </div>
+            <div class="splitlabel"><span class="cap">↑ 原生对话区起点（实测 x=580 = 280 侧栏 + 300 分屏）</span></div>
+
+            <!-- 弹窗：仅占左 300px -->
+            <div class="modal" role="dialog" aria-modal="false" aria-label="总监面板" tabindex="0">
+              <div class="mhead">
+                <div class="t">
+                  <span style="color:#c9a9ff">◆</span>
+                  <!-- 修订 §二 I5：层级选择器 -->
+                  <button class="lvsel" role="combobox" aria-expanded="true" aria-label="选择总监层级：当前 文件夹 dsh-director-plugin">
+                    <span class="crumb">dsh-client-mod <i>›</i> dsh-director-plugin</span>
+                    <span aria-hidden="true">▾</span>
+                  </button>
+                </div>
+                <div class="mbtns">
+                  <!-- 修订 §二 I6：三按钮语义定死 + 键盘 -->
+                  <button class="mbtn" role="button" aria-label="最小化整窗（Alt+1）" title="整窗最小化 → chip（Alt+1）">–</button>
+                  <button class="mbtn" role="button" aria-label="折叠左栏（Alt+2）" title="折叠左栏 → 40px 竖条（Alt+2）">⇤</button>
+                  <button class="mbtn" role="button" aria-label="折叠右栏（Alt+3）" title="折叠右栏（Alt+3）">⇥</button>
+                  <button class="mbtn" role="button" aria-label="复位栏宽（双击中缝同效）" title="复位 300/300（双击中缝同效）">▢</button>
+                  <button class="mbtn x" role="button" aria-label="关闭总监面板（Esc）" title="关闭（Esc）">✕</button>
+                </div>
+              </div>
+
+              <!-- 层级下拉浮层（修订 §二 I5） -->
+              <div class="pop" role="listbox" aria-label="层级列表" style="left:10px;top:38px;width:250px">
+                <div class="it on" role="option" aria-selected="true"><i class="dw" style="width:6px;height:6px;border-radius:50%;display:block;background:#8957e5"></i>dsh-director-plugin<span class="lv">文件夹 · ws_a91c4f</span></div>
+                <div class="it" role="option" aria-selected="false"><i style="width:6px;height:6px;border-radius:50%;display:block;background:#8957e5"></i>dsh-client-mod<span class="lv">项目 · prj_7c21</span></div>
+                <div class="sep"></div>
+                <div class="it" role="option" aria-selected="false"><i style="width:6px;height:6px;border-radius:50%;display:block;background:#8957e5"></i>全部项目<span class="lv">全局 · gl_0</span></div>
+                <div class="it" role="option" aria-selected="false"><i style="width:6px;height:6px;border-radius:50%;display:block;background:#2f6feb"></i>se_4f19（本对话）<span class="lv">对话 · se_4f19</span></div>
+              </div>
+
+              <div class="mbody">
+                <div class="dpanel foc-d" data-input-scope>
+                  <div class="ph"><span class="k">R5</span> 总监对话区 <span style="color:#8b9199;margin-left:auto">只治理 · 不执行</span></div>
+                  <div class="body">
+
+                    <!-- R2 -->
+                    <div class="blk">
+                      <div class="bt">R2 项目总览 <button class="chip" style="margin-left:auto;padding:1px 6px" aria-label="折叠 R2 项目总览">折叠</button></div>
+                      <div class="kv">
+                        <div class="c"><div class="v">07</div><div class="k2">阶段</div></div>
+                        <div class="c"><div class="v">62%</div><div class="k2">进度</div></div>
+                        <div class="c"><div class="v" style="color:#e0b341">3</div><div class="k2">风险</div></div>
+                        <div class="c"><div class="v">11</div><div class="k2">待办</div></div>
+                      </div>
+                    </div>
+
+                    <!-- R3（修订 §二 I9：可用 + 调用情况 两段） -->
+                    <div class="blk">
+                      <div class="bt">R3 智能体 ｜ 技能 <span style="color:#8b9199;margin-left:auto">可直调</span></div>
+                      <div class="seg" role="tablist" aria-label="资源类型">
+                        <button class="s on" role="tab" aria-selected="true">智能体</button>
+                        <button class="s" role="tab" aria-selected="false">技能</button>
+                      </div>
+                      <div style="font:600 10.5px/1 var(--mono);color:#8b9199;margin:0 0 6px">可用（点击＝手选直调）</div>
+                      <div class="chips">
+                        <button class="chip auto" aria-label="代码智能体，总监自动调用"><i class="d"></i>代码</button>
+                        <button class="chip auto" aria-label="文档智能体，总监自动调用"><i class="d"></i>文档</button>
+                        <button class="chip" aria-label="调研智能体，可手选直调"><i class="d"></i>调研</button>
+                        <button class="chip auto" aria-label="测试智能体，总监自动调用"><i class="d"></i>测试</button>
+                        <button class="chip man" aria-label="审核智能体，客户手选"><i class="d" style="background:#e0b341"></i>审核</button>
+                      </div>
+                      <div style="font-size:10.5px;color:#8b9199;margin-top:8px;line-height:1.6">
+                        <span class="chip auto" style="padding:1px 6px">总监自动</span> 已接线 ·
+                        <span class="chip man" style="padding:1px 6px">客户手选</span> 可点击直调
+                      </div>
+                      <div style="font:600 10.5px/1 var(--mono);color:#8b9199;margin:10px 0 2px">调用中 ／ 最近（共 9 条）</div>
+                      <div class="runrow"><span class="st run"></span><span class="nm">文档</span><span class="k2">write ×3</span><span class="ms">运行中 12s</span></div>
+                      <div class="runrow"><span class="st ok"></span><span class="nm">代码</span><span class="k2">build</span><span class="ms">ok · 3.4s</span></div>
+                      <div class="runrow"><span class="st warn"></span><span class="nm">调研</span><span class="k2">websearch</span><span class="ms">降级 · 7.1s</span></div>
+                      <div class="runrow"><span class="st bad"></span><span class="nm">审核</span><span class="k2">review6</span><span class="ms">缺 R4 · 1.2s</span></div>
+                    </div>
+
+                    <!-- R5 消息 -->
+                    <div class="blk" style="flex:1;min-height:150px">
+                      <div class="bt">R5 总监流 <span style="color:#8b9199;margin-left:auto">只读</span></div>
+                      <div class="msg">
+                        <div class="av d">总</div>
+                        <div class="bub"><span class="tag">需求澄清</span>目标已理解：把「左总监 / 右对话 / 可最小化」写成文档并出图。</div>
+                      </div>
+                      <div class="msg">
+                        <div class="av d">总</div>
+                        <div class="bub"><span class="tag">方案 · 派活</span>拆 4 项，派给 <b style="color:#c9a9ff">文档智能体</b> 与 <b style="color:#c9a9ff">代码智能体</b>。</div>
+                      </div>
+                      <div class="msg">
+                        <div class="av d">总</div>
+                        <div class="bub" style="border-color:rgba(210,153,34,.4)"><span class="tag" style="color:#e0b341">审核 · 六维</span>需求满足 ✅ ／ 方案符合 ✅ ／ 完整性 ⚠ 缺 R4 → <b>打回补</b></div>
+                      </div>
+                    </div>
+
+                    <!-- R6 -->
+                    <div class="blk">
+                      <div class="bt">R6 记忆面板 <span style="color:#8b9199;margin-left:auto">hover 展开</span></div>
+                      <div style="font-size:11px;color:#9aa1aa;line-height:1.7">
+                        <div>核心记忆 · <span style="color:#c3c8ce">双层数据元独立</span></div>
+                        <div>决策记录 · <span style="color:#c3c8ce">D-012 形态裁定（弹窗）</span></div>
+                        <div>偏差风险 · <span style="color:#e0b341">R4 项目导航未实现</span></div>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              </div>
+
+              <!-- 底部输入（修订 §二 I3/I10：单输入框 + 目标徽章） -->
+              <div class="mfoot">
+                <button class="focuschip" aria-haspopup="listbox" aria-label="提交目标：总监（点击切换）">目标：总监 <span aria-hidden="true">▾</span></button>
+                <div class="inp live">输入后由总监整理确认，再路由到对应对话…<span class="car"></span></div>
+                <button class="send" aria-label="提交（Enter）">↑</button>
+              </div>
+
+              <!-- 目标徽章下拉（修订 §二 I10） -->
+              <div class="pop" role="listbox" aria-label="选择提交目标" style="left:10px;bottom:48px;width:232px">
+                <div class="it on" role="option" aria-selected="true">◆&nbsp; 总监（整理 + 确认 + 路由）<span class="lv">Alt+D</span></div>
+                <div class="it" role="option" aria-selected="false">▣&nbsp; 对话（直接投递，跳过总监）<span class="lv">Alt+C</span></div>
+                <div class="sep"></div>
+                <div class="it" role="option" aria-selected="false" style="color:#8b9199">目标随右区点击自动切换</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:14px">
+    <b>焦点路由（18号文 R8 · 修订 §二 I7）：</b>点击左面板容器 → <code>focusTarget = "director"</code>（紫描边）；
+    点击右区 → <code>focusTarget = "chat"</code>（蓝描边）。判定<b>只认面板容器的 <code>pointerdown</code></b>，
+    并 <code>closest('[data-input-scope]')</code> 排除内部输入元素 ⇒ 选中文本 / 复制不会误判为切焦点。
+    底部输入框的<b>目标徽章</b>随之变化。公式为
+    <code>submitTarget = currentView === "director" ? focusTarget : "chat"</code>。
+  </div>
+</section>
+
+<!-- ══════════ 2b. 路由确认卡 ══════════ -->
+<section>
+  <h2><span class="no">02b</span>路由确认卡（修订 §二 I4 —— 补 P0 缺口）</h2>
+  <p class="h2sub">V14.0 的 STEP4「待用户确认」<b>只有一句文字、没有 UI</b>，导致"可确认、可回看"无法验收。
+    本版补上确认卡：<b>建议去向 + 理由 + 置信度 + 三去向按钮 + 改为其他对话</b>；确认后写入 <code>directorDecisions</code>。</p>
+
+  <div class="stage">
+    <div class="win" style="min-width:520px">
+      <div class="winbar"><span class="dot" style="background:#f85149"></span><span class="dot" style="background:#d29922"></span><span class="dot" style="background:#3fb950"></span><span class="wintitle">确认卡落位（覆盖在右区之上，局部 scrim）</span></div>
+      <div class="winbody" style="min-height:280px">
+        <div class="main">
+          <div class="content" style="min-height:280px">
+            <div class="scrim deep"></div>
+            <div class="rcard" role="dialog" aria-modal="false" aria-label="路由确认" style="top:22px">
+              <div class="rh">◆ 路由建议
+                <span class="pill n" style="margin-left:auto">置信度 0.82</span>
+              </div>
+              <div class="why">
+                命中关键词「<b>总监 / 架构 / 独立数据</b>」＋ 历史关联 3 次 ⇒
+                目标层级 <b>文件夹 · dsh-director-plugin</b>；该层已有总监 <code>nd_7f31</code>。
+              </div>
+              <div class="racts">
+                <button class="rbtn pri" aria-label="转派给该对话的总监"><span aria-hidden="true">◆</span>转派给该对话的总监<span class="kk">Alt+1</span></button>
+                <button class="rbtn" aria-label="直接调用对应对话"><span aria-hidden="true">▣</span>直接调用对应对话<span class="kk">Alt+2</span></button>
+                <button class="rbtn" aria-label="新建对话"><span aria-hidden="true">＋</span>新建对话<span class="kk">Alt+3</span></button>
+                <div class="sep" style="height:1px;background:#31343a;margin:4px 0"></div>
+                <button class="rbtn" aria-haspopup="listbox" aria-label="改为其他对话"><span aria-hidden="true">↺</span>改为其他对话…<span class="kk">▾</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note ok" style="margin-top:14px">
+    <b>留痕与回看：</b>任一按钮确认后写 <code>directorDecisions</code>
+    （<code>{decisionId, nodeId, from, to, reason, confidence, at}</code>），
+    左栏 R5 追加一条「路由决策」消息 ⇒ <b>可回看</b>。
+    卡外点击 = 取消（本次不落痕，但记 <code>cancelled</code> 计数便于调参）。
+  </div>
+</section>
+
+<!-- ══════════ 3. 最小化三态 ══════════ -->
+<section>
+  <h2><span class="no">03</span>最小化三态 + 状态一览（要求 06 · 修订 §1.1-6 / §二 I6 / I11）</h2>
+  <p class="h2sub">左栏、右栏、整窗<b>三个独立折叠位</b>，对应三个持久化字段。
+    <code>directorPanelCollapsed</code> 与 <code>chatPanelCollapsed</code> 为既有字段（05号文设计），
+    <code>dialogCollapsed</code> 为本轮新增字段。
+    <b>修订要点：折叠态下控制簇必须仍可达</b>——V14.0 的 40px 竖条只有一个"▸"，折叠后右栏折叠 / 复位 / 最小化 / 关闭<b>全无入口</b>。</p>
+
+  <div class="states">
+    <div class="st">
+      <h5>① 双栏展开（默认）</h5>
+      <div class="cap"><code>directorPanelCollapsed=false</code><br><code>chatPanelCollapsed=false</code></div>
+      <div class="mini">
+        <div class="mh"><span style="color:#c9a9ff">◆</span> 总监 <span style="color:#8b9199;font-size:10.5px">文件夹</span>
+          <span style="margin-left:auto;color:#9aa1aa">– ⇤ ⇥ ▢ ✕</span></div>
+        <div class="mb">
+          <div class="L" style="width:112px;flex:0 0 112px">
+            <div class="ph2">总监面板</div><div class="line m"></div><div class="line s"></div><div class="line m"></div>
+          </div>
+          <div style="width:4px;background:#3d4148"></div>
+          <div class="R"><div class="ph2">对话数据 · 同源</div><div class="line m"></div><div class="line s"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="st">
+      <h5>② 左栏最小化</h5>
+      <div class="cap"><code>directorPanelCollapsed=true</code><br>收成 40px 竖条，<b>控制簇随行</b></div>
+      <div class="mini">
+        <div class="mh"><span style="color:#c9a9ff">◆</span> 总监 <span style="margin-left:auto;color:#9aa1aa">– ⇥ ▢ ✕</span></div>
+        <div class="mb">
+          <div class="rail" role="button" tabindex="0" aria-label="展开总监面板">
+            <span aria-hidden="true">◆</span><span style="font-size:10.5px">总</span><span aria-hidden="true">▸</span>
+            <div class="ctl">
+              <button class="mbtn" aria-label="折叠右栏" style="width:22px;height:20px;font-size:11px">⇥</button>
+              <button class="mbtn" aria-label="复位栏宽" style="width:22px;height:20px;font-size:11px">▢</button>
+              <button class="mbtn" aria-label="整窗最小化" style="width:22px;height:20px;font-size:11px">–</button>
+              <button class="mbtn x" aria-label="关闭" style="width:22px;height:20px;font-size:11px">✕</button>
+            </div>
+          </div>
+          <div class="R"><div class="ph2">对话数据 · 同源（自动占满）</div><div class="line m"></div><div class="line s"></div><div class="line m"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="st">
+      <h5>③ 整窗最小化</h5>
+      <div class="cap"><code>dialogCollapsed=true</code><br>收成右下角 chip，带未读计数</div>
+      <div class="mini" style="position:relative;background:#101114">
+        <div class="mh" style="opacity:.35"><span>对话</span></div>
+        <div class="mb"><div class="R" style="opacity:.35"><div class="line m"></div><div class="line s"></div></div></div>
+        <button class="chipwin" aria-label="还原总监面板，3 条未读">◆ 总监 · dsh-director-plugin <span class="cnt">3</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:14px">
+    <b>键盘路径（修订 §二 I6 / §1.1-7）：</b>
+    <code>Alt+1</code> 整窗最小化 ⇄ 还原 ·
+    <code>Alt+2</code> 左栏折叠 ⇄ 展开 ·
+    <code>Alt+3</code> 右栏折叠 ⇄ 展开 ·
+    <code>Alt+D / Alt+C</code> 切提交目标 ·
+    <code>Esc</code> 关闭 ·
+    <code>Tab</code> 在弹窗内循环遍历 ·
+    <code>Enter</code> 发送。
+    <b>三个按钮的语义定死、互不重叠</b>（V14.0 的 <code>▢ 还原</code> 与 <code>— 最小化</code> 语义重叠已消除）。
+  </div>
+
+  <h3>状态一览（V14.0 全部可交互元素<b>零状态</b>，本版补齐）</h3>
+  <div class="sgrid">
+    <div class="sdemo">
+      <div class="sh">① hover（提亮 1 档）</div>
+      <button class="mbtn forceHover" aria-label="hover 态示例">⇤</button>
+      <div class="sd">背景 <code>#212429 → #2b2f36</code>；边框 <code>#3d4148 → #4a4f58</code>；文字转 <code>--fg</code>。过渡 140ms。</div>
+    </div>
+    <div class="sdemo">
+      <div class="sh">② active（按下）</div>
+      <button class="mbtn" aria-label="active 态示例" style="background:#24272d;transform:translateY(1px)">⇤</button>
+      <div class="sd">下沉 1px + 背景再暗一档；<b>不改变尺寸</b>（避免布局抖动）。</div>
+    </div>
+    <div class="sdemo">
+      <div class="sh">③ focus-visible（键盘焦点）</div>
+      <button class="mbtn forceFocus" aria-label="focus-visible 态示例">⇤</button>
+      <div class="sd">2px 实心 <code>#b794f6</code> outline + <code>offset:1px</code>。<b>只对键盘生效</b>，鼠标点击不显示。</div>
+    </div>
+    <div class="sdemo">
+      <div class="sh">④ disabled</div>
+      <button class="mbtn forceDisabled" disabled aria-label="disabled 态示例">⇤</button>
+      <div class="sd"><code>opacity:.45</code> + <code>cursor:not-allowed</code>。🔴 真机脚本注意：<b>disabled 时 <code>click()</code> 静默 no-op</b>，点击前须等空闲。</div>
+    </div>
+    <div class="sdemo">
+      <div class="sh">⑤ empty（空态）</div>
+      <div class="emptystate">尚无总监消息<br>在下方输入框描述你的目标，总监将整理并路由</div>
+      <div class="sd">首次打开 / 新建层级时出现；含引导文案与一次点击路径。</div>
+    </div>
+    <div class="sdemo">
+      <div class="sh">⑥ loading（加载态）</div>
+      <div class="skel" style="width:88%"></div><div class="skel" style="width:64%"></div><div class="skel" style="width:76%"></div>
+      <div class="sd">骨架条 <code>sk</code> 动画；<b>禁止用 spinner 阻塞整块面板</b>（分屏下会遮住原生对话区）。</div>
+    </div>
+    <div class="sdemo">
+      <div class="sh">⑦ error（错误态）</div>
+      <div class="errstate">模型调用失败：<code>E_TIMEOUT</code>（12000ms）<br>
+        <button class="chip" style="margin-top:6px;padding:1px 6px" aria-label="重试">重试</button></div>
+      <div class="sd">红边 + <code>rgba(248,81,73,.08)</code> 底 + 错误码 + 重试按钮；<b>不吞错误</b>（同步 <code>log.error</code>）。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 4. 层级联动 ══════════ -->
+<section>
+  <h2><span class="no">04</span>层级联动（要求 07 · 09 · 修订 §二 I5）</h2>
+  <p class="h2sub">总监页<b>外壳唯一</b>，内容随层级切换。四段层级同构——项目级与文件夹级总监与对话级<b>同一套结构与界面</b>。
+    <b>V14.1 新增：<code>mhead</code> 层级选择器</b>（面包屑 + 下拉），不必回侧栏重点一次。</p>
+  <div class="grid g4">
+    <div class="card" style="border-left:3px solid #8957e5">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:8px">全局级 · gl_0</div>
+      <div style="font-size:12.5px;color:#c3c8ce;line-height:1.6">跨项目总览与调度。<b>可访问全部</b>下级数据。路由的最终兜底。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #8957e5">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:8px">项目级 · prj_*</div>
+      <div style="font-size:12.5px;color:#c3c8ce;line-height:1.6">项目定位 / 目标 / 阶段 / 继承给下级，可覆盖。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #8957e5">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:8px">文件夹级 · ws_*</div>
+      <div style="font-size:12.5px;color:#c3c8ce;line-height:1.6">工作区汇总。点击左侧文件夹<b>即弹出本级总监</b>。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #8957e5">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:8px">对话级 · se_*</div>
+      <div style="font-size:12.5px;color:#c3c8ce;line-height:1.6">只管一段对话。<b>看不到</b>上级全局（单向可见）。</div>
+    </div>
+  </div>
+  <div class="tscroll" style="margin-top:14px">
+    <table class="t">
+      <thead><tr><th style="width:170px">交互</th><th>行为</th></tr></thead>
+      <tbody>
+        <tr><td>侧栏点文件夹 / 项目</td><td>打开弹窗并把 <code>nodeId</code> 切到该层级；<b>外壳不重建</b>，只换内容与面包屑</td></tr>
+        <tr><td><code>mhead</code> 层级选择器</td><td>点开浮层（<code>role="listbox"</code>）→ 选任一层级 → 内容切换；<b>当前项 <code>aria-selected="true"</code></b></td></tr>
+        <tr><td>层级树行点击</td><td><code>data-node-id</code> 更新 → 左面板 <code>data-active-node-id</code> 同步（🔴 两者<b>不可混用同一属性名</b>）</td></tr>
+        <tr><td>可见性方向</td><td>上级 → 下级 <span class="pill ok">可读</span>；下级 → 上级 <span class="pill bad">不可见</span>（17号文 §2.3 隔离 / 共享 / 继承）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════ 5. 智能路由 ══════════ -->
+<section>
+  <h2><span class="no">05</span>单总监页 ＋ 智能路由（要求 08）</h2>
+  <p class="h2sub">总监页只有一个。用户<b>不先选对话</b>，直接向总监说；总监整理确认后决定去向，且<b>路由结果可确认、可回看</b>。
+    STEP4 的确认 UI 见 <b>§02b 路由确认卡</b>。</p>
+
+  <div class="flow">
+    <div class="fstep"><div class="n">STEP 1</div><div class="t">意图理解</div><div class="d">这是需求 / 问题 / 指令 / 讨论 / 反馈？</div></div>
+    <div class="farrow"><span>→</span></div>
+    <div class="fstep"><div class="n">STEP 2</div><div class="t">项目匹配</div><div class="d">关键词 + 上下文推断 + 历史关联</div></div>
+    <div class="farrow"><span>→</span></div>
+    <div class="fstep"><div class="n">STEP 3</div><div class="t">任务拆分</div><div class="d">多意图检测 → 子任务提取</div></div>
+    <div class="farrow"><span>→</span></div>
+    <div class="fstep" style="border-color:rgba(137,87,229,.5);background:rgba(137,87,229,.06)"><div class="n">STEP 4</div><div class="t">路由决策</div><div class="d"><b style="color:#c9a9ff">弹确认卡</b>，不静默分发</div></div>
+    <div class="farrow"><span>→</span></div>
+    <div class="fstep"><div class="n">STEP 5</div><div class="t">执行落实</div><div class="d">路由到对话 → 生成方案 → 审核 → 执行</div></div>
+  </div>
+
+  <div class="dest">
+    <div class="dbox" style="border-color:rgba(137,87,229,.42)">
+      <div class="h"><span style="color:#c9a9ff">◆</span> 转给该对话的总监</div>
+      <div class="p">目标对话已有总监 → 把方案与约束<b>转派</b>过去，由其继续治理。原总监保留可见性。</div>
+    </div>
+    <div class="dbox" style="border-color:rgba(47,111,235,.42)">
+      <div class="h"><span style="color:#79a8ff">▣</span> 直接调用对应对话</div>
+      <div class="p">产出型任务 → 直接投给执行对话，<b>不走总监层</b>，由目标总监事后审核。</div>
+    </div>
+    <div class="dbox" style="border-color:rgba(57,197,207,.42)">
+      <div class="h"><span style="color:#5fbfc9">＋</span> 新建对话</div>
+      <div class="p">无归属 → 由总监<b>新建</b>对话并初始化其总监节点（含继承的职责配置）。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 6. 双向联动 ══════════ -->
+<section>
+  <h2><span class="no">06</span>双向联动（要求 05 的"完全一致"如何保证 · 修订 §二 I2）</h2>
+  <p class="h2sub">V14.0 用"覆盖整个 content 区"表达弹窗，导致右栏占据的位置<b>就是</b>对话 tab 的内容区 ⇒
+    "对话原貌"被遮住，却又要求它"原貌不变"，<b>两条需求在同一块屏幕上冲突</b>。
+    V14.1 用<b>布局分屏</b>做结构性解决。</p>
+
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:150px">通道</th><th>机制</th><th style="width:270px">为什么"完全一致"是恒真</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>① 总监 → 对话</b></td>
+        <td>总监区输入 → 总监整理 / 确认（确认卡）→ 转派或直转 → 走<b>原生 send 路径</b>写入对话域</td>
+        <td>右侧就是原生对话区，写入即显示，<b>零同步代码、零延迟</b></td>
+      </tr>
+      <tr>
+        <td><b>② 对话 → 总监</b></td>
+        <td>原生对话区产生产出 → 总监侧<b>订阅该 session 的产出变化</b> → 触发<b>六维审核</b> → 通过归档 / 不通过带意见打回</td>
+        <td>总监<b>只读订阅</b>，不复制消息流 ⇒ 不存在"副本过期"这一失败模式</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>方案 C 的边界（必须显式声明，防止"悄悄改宿主"）</h3>
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:50%">允许</th><th>禁止</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>注入 <code>&lt;style id="dsh-director-split-style"&gt;</code>（只写 <code>padding</code> 与装饰边框）</td>
+        <td>增删改<b>任何节点</b></td>
+      </tr>
+      <tr>
+        <td>弹窗开启时生效、最小化 / 关闭时<b>整段移除</b></td>
+        <td>改原生事件监听、改原生数据、改原生 store</td>
+      </tr>
+      <tr>
+        <td>给原生根节点加 <code>data-dsh-director-split</code> 属性（供样式选择器）</td>
+        <td>直接改原生节点的 <code>style</code> 属性（避免覆盖宿主内联样式）</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note ok" style="margin-top:14px">
+    <b>判据（已真机执行）：</b>弹出前后对宿主做<b>全量 DOM 快照 diff</b>，差异必须<b>只有</b> <code>&lt;style&gt;</code> 标签与 <code>data-*</code> 属性。
+    V14.1 对应断言：<b>「原生根 style 属性逐字节零改动」</b>（真机 D1 已通过）。
+  </div>
+</section>
+
+<!-- ══════════ 7. R3 调用情况 ══════════ -->
+<section>
+  <h2><span class="no">07</span>R3 智能体与技能：可用 ＋ 调用情况（要求 10 · 修订 §二 I9）</h2>
+  <p class="h2sub">V14.0 的 R3 只有 5 个静态 chip，无"谁在跑 / 历史调用"；而要求 10 明写"<b>可查看调用情况</b>"。本版分两段。</p>
+  <div class="grid g2">
+    <div class="card">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:10px">段一 · 可用（点击＝手选直调）</div>
+      <div style="font-size:12.5px;color:#c3c8ce;line-height:1.75">
+        5 类标准智能体（代码 / 文档 / 调研 / 测试 / 审核）+ 技能列表，<b>分段切换</b>；<br>
+        每项标注调用方式：<span class="chip auto" style="padding:1px 6px">总监自动</span> / <span class="chip man" style="padding:1px 6px">客户手选</span>；<br>
+        点击 = 手选直调，写入调用队列并出现在段二。
+      </div>
+    </div>
+    <div class="card">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:10px">段二 · 调用中 ／ 最近</div>
+      <div style="font-size:12.5px;color:#c3c8ce;line-height:1.75">
+        每条含：<b>状态点</b>（<span class="st run" style="display:inline-block;vertical-align:middle"></span> 运行中 /
+        <span class="st ok" style="display:inline-block;vertical-align:middle"></span> 成功 /
+        <span class="st warn" style="display:inline-block;vertical-align:middle"></span> 降级 /
+        <span class="st bad" style="display:inline-block;vertical-align:middle"></span> 失败）·
+        <b>耗时</b> · <b>结果摘要</b>；<br>
+        列表头显示 <b>真实总数</b>（如"共 9 条"），渲染层只截前 8 条并标注
+        <code>最近 8/9</code> ⇒ <b>不静默截断</b>。
+      </div>
+    </div>
+  </div>
+  <div class="note bad" style="margin-top:14px">
+    <b>规则（来自真机缺陷）：</b>调用记录的内存队列有上限（<code>RUNS_KEEP=30</code>）。
+    <b>断言必须与上限无关</b>——用"最新条目顺序"而非"绝对值 / 净增量"；
+    同时 <code>listAgentRuns()</code> 无参时返回<b>全量</b>，截断只发生在渲染层。
+  </div>
+</section>
+
+<!-- ══════════ 8. 交互规格（焦点 / 边界） ══════════ -->
+<section>
+  <h2><span class="no">08</span>交互规格定死（修订 §二 I7 / I8 · 含真机实测值）</h2>
+
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:180px">项</th><th>规格</th><th style="width:230px">真机实测（2026-09-11）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>焦点判定</b></td>
+        <td>只认<b>面板容器</b> <code>pointerdown</code>；<code>closest('[data-input-scope]')</code> 排除内部输入元素；输入框聚焦时以自身为准</td>
+        <td>切「总监」段后 <code>focusTarget="director"</code> 生效，确认卡可见（D6 通过）</td>
+      </tr>
+      <tr>
+        <td><b>拖拽范围</b></td>
+        <td><code>clamp(180, 55%×W)</code>；<code>&lt;180px</code> 自动吸附折叠；<b>双击中缝复位 300/300</b></td>
+        <td>拖拽 <code>300 → 390</code> ✓；<code>180</code> 时吸附折叠 ✓；上限 <code>793 = 55%×1442</code> ✓</td>
+      </tr>
+      <tr>
+        <td><b>分屏锚点判据</b></td>
+        <td>① 排除插件自身 DOM；② 宽 <code>&gt;40%</code> 且 <code>&lt;98%</code> 视口；③ <b>跳过滚动容器</b>（<code>overflow-x ∈ auto/scroll/hidden</code>）；④ 兜底<b>只用 <code>textarea</code></b></td>
+        <td><code>findChatRoot</code> 命中宿主节点 ✓；标记<b>绝不在插件自有 DOM 上</b> ✓；<b>原生根 style 逐字节零改动</b> ✓</td>
+      </tr>
+      <tr>
+        <td><b>分屏位移量</b></td>
+        <td>注入 <code>padding-left = 左栏实时宽度</code>，实时跟随拖拽</td>
+        <td><code>.composerSeat</code> <b>x 280 → 580</b>、<b>w 1154 → 854</b>；移除后<b>逐值复原</b></td>
+      </tr>
+      <tr>
+        <td><b>折叠态可达性</b></td>
+        <td>左栏折叠时 40px rail <b>内置控制簇</b>（右栏折叠 / 复位 / 最小化 / 关闭），每个按钮 <code>stopPropagation</code></td>
+        <td><code>railCtl [true,true,true,true]</code> —— 四个按钮全部可达 ✓</td>
+      </tr>
+      <tr>
+        <td><b>拖拽提交</b></td>
+        <td>同一 task 内 <code>down→move→up</code> 时 React 可能未提交中间态 ⇒ <code>onDragEnd</code> <b>用 pointerup 坐标兜底重算</b>（幂等）</td>
+        <td>连续拖拽无丢失 ✓</td>
+      </tr>
+      <tr>
+        <td><b>选择器唯一性</b></td>
+        <td><code>data-node-id</code> 专属树行；面板绑定用 <code>data-active-node-id</code></td>
+        <td>无冲突 ✓</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══════════ 9. V12 八视图映射 ══════════ -->
+<section>
+  <h2><span class="no">09</span>V12 八视图 ↔ 本弹窗落位（要求 11 · 修订 §二 I12）</h2>
+  <p class="h2sub">V14.0 把"体现设计图逻辑"只落在文字里。本版补映射表，逐视图标注落位区与实现状态。</p>
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:44px">#</th><th style="width:150px">V12 视图</th><th style="width:120px">落位区</th><th>本版实现</th><th style="width:92px">状态</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>调度主视图</td><td>R2 + R5</td><td>项目总览卡 + 总监消息流（只治理·不执行）</td><td><span class="pill ok">已实现</span></td></tr>
+      <tr><td>2</td><td>创建分支</td><td>路由确认卡「新建对话」</td><td>确认卡第三去向，落 <code>directorDecisions</code></td><td><span class="pill ok">已实现</span></td></tr>
+      <tr><td>3</td><td>分支对话</td><td>右区（原生）</td><td>分屏后即原生分支对话，原貌不变</td><td><span class="pill ok">已实现</span></td></tr>
+      <tr><td>4</td><td>节点审核</td><td>R5 六维审核卡</td><td>六维逐项 ✅/⚠/❌ + 打回留痕</td><td><span class="pill ok">已实现</span></td></tr>
+      <tr><td>5</td><td>上下文压缩</td><td>R6 记忆面板</td><td>核心记忆 / 决策记录 / 偏差风险三段</td><td><span class="pill warn">部分</span></td></tr>
+      <tr><td>6</td><td>分支管理</td><td>左面板「层级管理」子视图</td><td>内嵌 <code>DirectorHierarchy</code>（<code>stacked</code> 适配）</td><td><span class="pill ok">已实现</span></td></tr>
+      <tr><td>7</td><td>仪表盘</td><td>R2 项目总览</td><td>阶段 / 进度 / 风险 / 待办 四格</td><td><span class="pill ok">已实现</span></td></tr>
+      <tr><td>8</td><td>智能体调度面板</td><td>R3</td><td>可用 + 调用情况两段、可手选直调</td><td><span class="pill ok">已实现</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note" style="margin-top:14px">
+    <b>第 5 项说明：</b>上下文压缩为<b>部分实现</b>——R6 已呈现三段记忆，但"压缩动作"（摘要生成 + 原文归档）
+    依赖 <code>directorConversations</code> 的归档字段，属后续迭代范围，<b>如实标注，不虚报</b>。
+  </div>
+</section>
+
+<!-- ══════════ 10. 缺口表 ══════════ -->
+<section>
+  <h2><span class="no">10</span>现状缺口（要求 × 现状 × 本版状态）</h2>
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:44px">#</th><th style="width:190px">要求</th><th style="width:92px">V14.0 现状</th><th style="width:96px">V14.1 状态</th><th>缺口 / 说明</th></tr></thead>
+    <tbody>
+      <tr><td>01</td><td>独立数据元</td><td><span class="pill bad">未达成</span></td><td><span class="pill ok">已达成</span></td><td><code>dsh-director-plugin-db</code> v1 / 6 store 已落地；宿主库仍 v3 未动</td></tr>
+      <tr><td>02</td><td>总监有自己对话 · 不执行</td><td><span class="pill warn">部分</span></td><td><span class="pill ok">已达成</span></td><td>总监消息流写入独立 store；左栏显式文案「只治理 · 不执行」</td></tr>
+      <tr><td>03</td><td>六维审核 · 纠偏留痕</td><td><span class="pill warn">部分</span></td><td><span class="pill ok">已达成</span></td><td>六维审核卡 + <code>directorReviews</code>/<code>directorDecisions</code>（三态齐备 warn/bad/ok）</td></tr>
+      <tr><td>04</td><td>对话逻辑不变</td><td><span class="pill ok">达成</span></td><td><span class="pill ok">已达成</span></td><td>分屏只注入样式、不改节点；原生根 <code>style</code> 逐字节零改动</td></tr>
+      <tr><td>05</td><td>左总监 / 右对话数据</td><td><span class="pill bad">未接线</span></td><td><span class="pill ok">已达成</span></td><td>方案 C 分屏：右区<b>即</b>原生 DOM（composerSeat 280→580 实测）</td></tr>
+      <tr><td>06</td><td>弹窗 + 最小化</td><td><span class="pill bad">未落地</span></td><td><span class="pill ok">已达成</span></td><td>三态折叠 + 中缝拖拽 + <code>dialogCollapsed</code> 持久化；折叠态控制簇可达</td></tr>
+      <tr><td>07</td><td>点击层级展示对应总监</td><td><span class="pill warn">部分</span></td><td><span class="pill ok">已达成</span></td><td>侧栏 / 树行点击 → 打开并切 <code>nodeId</code>；<code>mhead</code> 层级选择器内可直切</td></tr>
+      <tr><td>08</td><td>单总监页 + 智能路由</td><td><span class="pill bad">未实现</span></td><td><span class="pill ok">已达成</span></td><td>路由五步 + 确认卡三去向 + <code>navHookStats.matched 0 → 1</code></td></tr>
+      <tr><td>09</td><td>项目级也有总监</td><td><span class="pill warn">部分</span></td><td><span class="pill ok">已达成</span></td><td>层级选择器含 全局 / 项目 / 文件夹 / 对话 四段，同构</td></tr>
+      <tr><td>10</td><td>智能体与技能可主动调用</td><td><span class="pill warn">部分</span></td><td><span class="pill ok">已达成</span></td><td>R3 两段 + 调用情况（状态点/耗时/结果）+ 手选直调</td></tr>
+      <tr><td>11</td><td>体现设计图逻辑</td><td><span class="pill warn">部分</span></td><td><span class="pill ok">已达成</span></td><td>R1–R8 落位 + V12 八视图映射表（§09）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>为何曾经会丢（五级根因 · 摘要）</h3>
+  <div class="grid g2">
+    <div class="card" style="border-left:3px solid #f85149">
+      <div style="font-size:12.5px;font-weight:620;margin-bottom:5px">① 入口被主动注销</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.65">批 C-2 移除 director tab 注册 ⇒ 宿主 MOD-A 布局分支判据永假，<b>28 处代码活着、入口没了</b>（不可达代码）。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #f85149">
+      <div style="font-size:12.5px;font-weight:620;margin-bottom:5px">② 迁移拆成两个世界</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.65">状态（layout store）与组件（DirectorFlow）迁入插件，<b>渲染位置留在宿主</b>，中间的桥没人修 ⇒ 迁入物零调用。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #f85149">
+      <div style="font-size:12.5px;font-weight:620;margin-bottom:5px">③ 契约反向固化"共用"</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.65">设计要"独立库 + 六 store"，落地成"共享库 + 三 store"，《锚点契约》再把这层共享冻结为不可动。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #f85149">
+      <div style="font-size:12.5px;font-weight:620;margin-bottom:5px">④ 需求真相源缺失</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.65">11 条散在 7 份文档，<b>无一份声明自己是业务真相源</b>；新文档只讲"怎么改"，于是需求被最新文档自动覆盖。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #f85149">
+      <div style="font-size:12.5px;font-weight:620;margin-bottom:5px">⑤ 版本控制面只有 6.8%</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.65">磁盘 3593 文件 / git 纳管 245。<code>workspace/</code>（宿主全部改造）与 <code>snapshots/</code>（唯一回滚点）<b>均 0 纳管</b>。</div>
+    </div>
+    <div class="card" style="border-left:3px solid #3fb950">
+      <div style="font-size:12.5px;font-weight:620;margin-bottom:5px">防复发（已立规）</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.65">业务不变量单点登记 · 改动前置核对 · 入口类改动需登记影响面 · 迁移三件套完整性检查 · 契约不得反向覆盖设计。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 11. 真机验证证据 ══════════ -->
+<section>
+  <h2><span class="no">11</span>真机验证证据（本版设计<b>不是纸面稿</b>）</h2>
+  <p class="h2sub">本节记录 2026-09-11 对已交付实现的实际点击验证结果。设计稿与实现<b>互为校验</b>：
+    实现按设计走，设计里的每一条规格都能在真机复现。</p>
+  <div class="tscroll">
+  <table class="t">
+    <thead><tr><th style="width:240px">套件</th><th style="width:130px">结果</th><th>覆盖</th></tr></thead>
+    <tbody>
+      <tr><td><code>cdp-click-dialog.mjs</code>（真机·逐交互点击）</td><td><span class="pill ok">100 / 100</span> ×2 轮</td><td>D0 上下文识别 · D1 分屏锚点五条 · D2–D15 三态/拖拽/路由/留痕/命名空间</td></tr>
+      <tr><td><code>cdp-click.mjs</code>（真机）</td><td><span class="pill ok">70 / 70</span></td><td>宿主侧点击链路</td></tr>
+      <tr><td><code>cdp-verify.mjs</code>（真机）</td><td><span class="pill ok">39 / 39</span></td><td>数据源 / store / 冻结 key</td></tr>
+      <tr><td><code>verify-dialog.mjs</code>（离线）</td><td><span class="pill ok">269 / 269</span></td><td>C31–C42 分屏判据 · H10b–e · H32b/c · K1–K6</td></tr>
+      <tr><td><code>verify-install.mjs</code>（离线）</td><td><span class="pill ok">60 / 60</span></td><td>三处安装点 + 产物校验</td></tr>
+      <tr><td>其余 7 套离线</td><td><span class="pill ok">96 / 65 / 66 / 92 / 63 / 42 / 52</span></td><td>全绿</td></tr>
+      <tr><td><code>lint-cdp-templates.mjs</code>（新增）</td><td><span class="pill ok">IS_PASS TRUE</span></td><td>模板闭合合法性 + 自检（坏样本必拦 / 好样本不误报）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:10px">数据隔离实测</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.75">
+        插件独立库 <code>dsh-director-plugin-db@v1</code>：<code>nodes:12 · conversations:36 · reviews:3 · decisions:3</code><br>
+        宿主库 <code>dsh-director-db@v3</code>：<b>未改动</b><br>
+        R5 冻结键：<b>零改名 / 零新增变体</b>
+      </div>
+    </div>
+    <div class="card">
+      <div style="font:600 11px/1 var(--mono);color:#c9a9ff;margin-bottom:10px">产物</div>
+      <div style="font-size:12px;color:#9aa1aa;line-height:1.75">
+        <code>lib/client.js</code> <b>413,359 B</b>（字符 345,123）· 模块图 38 个<br>
+        平台外置：<code>react, react/jsx-runtime, react-dom/client</code>（ADR-001）<br>
+        <code>plugin-install.mjs --apply</code> 逐文件回读校验通过
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <b>本稿边界：</b>设计稿。V14.1 只改<b>描述与样式</b>，未改实现代码；若设计描述与已交付实现冲突，
+  以<b>已通过真机 100/100 的实现</b>为准并回写本稿。<br>
+  <b>唯一真相源：</b><code>dsh-director-plugin/docs/10-总监与对话架构总纲.md</code>（业务不变量）｜
+  本稿为其<b>可视化表达</b>；审核依据：<code>dsh-director-plugin/docs/11-设计稿审核与实现方案.md</code>。<br>
+  <b>三项待裁（V14.0 遗留）已就地裁定：</b>
+  Q1「两者」＝ 左总监面板 + 右对话区（分屏两栏）｜
+  Q2 总监页与对话 tab ＝ <b>共存不互斥</b>，右区即对话 tab 内容区本身 ｜
+  Q3 右栏渲染通道 ＝ <b>方案 C 布局分屏</b>（57 分，零节点移动）。
+</footer>
+
+</div>
+</body>
+</html>
