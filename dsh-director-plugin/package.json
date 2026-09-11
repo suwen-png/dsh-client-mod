@@ -1,24 +1,55 @@
 {
   "name": "@deepseek-ai/dsh-director-plugin",
-  "description": "总监驾驶舱插件包（P0 骨架）—— 从 dsh-client-ui-conversation 内联实现迁移的独立 client 插件（T-PLUG-004）",
-  "version": "0.1.0-alpha.1",
+  "description": "总监驾驶舱插件包 —— 从 dsh-client-ui-conversation 内联实现迁移的独立 client 插件（T-PLUG-005）",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js"
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
   },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "assets/**",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "pluginCenter": {
+      "expectedEntries": [
+        "deepseek-ai.director"
+      ],
+      "expectedClientModules": [
+        "@deepseek-ai/dsh-director-plugin"
+      ],
+      "expectedSkillIds": []
+    },
     "client": {
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-sidebar",
         "@deepseek-ai/dsh-client-locale"
       ],
       "immediately": false
     }
   },
   "scripts": {
-    "build": "node build/build.mjs"
+    "build": "node build/build.mjs",
+    "verify": "node scripts/verify-batch1.mjs"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
   }
 }

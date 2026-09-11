@@ -1,0 +1,15 @@
+/**
+ * cordis.patch.yml — 插件包自带的 loader 补丁层
+ *
+ * 契约来源（实测）：resources/host/node_modules/@fufan/dsh-plugin-llm-wiki/cordis.patch.yml
+ *   - insert: 向 loader entry 列表插入本插件的 host 侧 entry
+ *   - id:   entry 标识符（须与 package.json 的 dsh.pluginCenter.expectedEntries 一致）
+ *   - name: 包名（Node 解析 → 本包 lib/index.js）
+ *
+ * 作用：声明 「Harness 加载本插件的 host face」。
+ *   client face 由 dsh-client-modules 依据 package.json 的 dsh.client 声明自动接入 boot graph，
+ *   无需在 patch 中声明。
+ */
+- insert:
+    - id: deepseek-ai.director
+      name: '@deepseek-ai/dsh-director-plugin'

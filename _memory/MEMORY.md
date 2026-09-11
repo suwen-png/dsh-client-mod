@@ -677,3 +677,67 @@ E2 `DirectorView` 删除后，`DirectorFlow`（7085 止）与 `ConversationRoot`
 **A5 原样保留的历史遗留行为**（勿"顺手优化"）：种子文档 `doc-sample-2` 的 docType 为 `requirement_index`，**不在** `DIRECTOR_DOC_TYPES` 中，故其 `folderId` 指向不存在的文件夹；`createDoc`/`createFolder` 用 `Math.random()` 生成 id 后缀（非确定性 RNG 场景，为兼容既有数据形态保留）。
 
 **批次进度**：1 ✅ · 2 ✅ · 3 ⬜（受阻 T5 spike）· 4 ⬜ · 5 ⬜ · 6 ⬜
+
+### 14.11 🎯 插件真机装载成功（2026-09-11 · 决定性里程碑）
+
+**结论：插件不再是「源码就绪」，而是已被 Harness 实际加载并运行。**
+
+**构建**：`build/build.mjs` —— **零依赖打包器**（环境无 esbuild）。把 `src/**` ESM 按拓扑序展平为
+`window.__ModuleLoader__.load({ id, factory })` 单文件 `lib/client.js`（83,913 B）。
+平台模块（react/cordis/ui-slots 等）不打包，由 `require` 提供。踩坑：多行 `import { ... }` 需
+**语句级**解析而非逐行正则（`store/memory.js` 曾因此漏改）。
+
+**安装三处（缺一不可）**：
+1. `resources/host/node_modules/@deepseek-ai/dsh-director-plugin/`（实体包）
+2. `~/.dsh/profiles/node_modules/@deepseek-ai/dsh-director-plugin`（junction，供 profile 侧 `createRequire` 解析）
+3. `~/.dsh/profiles/web/cordis.patch.yml` 的 `insert` entry（`id: deepseek-ai.director`）
+
+**profile 机制实测**：桌面端 `loadProfile("desktop", "web", installAnchor, ~/.dsh)`；
+`~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles` 须与
+`PROFILE_TEMPLATES.web` + `BUILT_IN_APPLICATION_BUNDLES`（= `["@fufan/dsh-plugin-llm-wiki"]`）一致。
+`initProfile` **只补缺失文件、不覆盖已有**；`reconcileBuiltInApplications` 会**幂等补回**内置应用 bundle；
+`healProfilesModuleFallback` 只 `ensureSymlink`（**只增不删**，手建 junction 能存活）。
+`~/.dsh/profiles/web` 之前是空目录（仅被 Plugin Center 操作建过根目录），非「配置丢失」。
+
+**四层验证（全部退出码 0）**：
+| 层 | 脚本 | 结果 |
+|:--|:--|:--|
+| 源码级 | `verify-batch1.mjs` | 66/66 |
+| bundle 级 | `verify-bundle.mjs` | 在 `__ModuleLoader__` 桩中真实执行 factory |
+| 安装链路级 | `verify-install.mjs` | **37/37**（用官方 `loadProfile`/`composeEntries`/`ClientModuleRegistry`/`injectBootManifest`） |
+| 真机级 | `cdp-verify.mjs` | **15/15** |
+
+**真机实测关键值**：`__DSH_BOOT__` **42 entries** 含本包；`__dshDirectorBatch1` 11 字段全 true；
+**`__dshDocsIndex` docCount = 90** → **A14 外置资源由插件运行时成功回填**；`/plugins/<pkg>/client.js` HTTP 200；
+宿主既有 `__dshShowToast` 完好。
+
+**🔴 启动踩坑（必记）**：本机 shell 带 `ELECTRON_RUN_AS_NODE=1`，使 Electron **退化为纯 Node**，
+Chromium 开关被 Node 参数解析器拒绝（报 `bad option: --remote-debugging-port=9222`）。
+正解：`env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./DeepSeek Harness.exe" --remote-debugging-port=9222`，
+且必须**后台常驻**启动（普通 `&` 随 shell 退出被回收）。`cmd //c start` 在 Git Bash 下会被解析成交互式 cmd；
+PowerShell 通道本机无输出。
+
+### 14.12 ✅ T5（R3）实测闭环 —— 文件通道定性（2026-09-11 · 真机 CDP）
+
+**判定：`ALL_UNREACHABLE`** —— `window.require` / `global.require` / `electron.remote.require` /
+`process.versions.electron` **全部 `undefined`**（渲染进程无 Node 集成）。
+
+**推论：宿主 A6（client.js 6036~6214）三法为死代码** —— 生产环境恒不可达，原「三级降级链」实际只走浏览器层。
+
+**但同时发现文件能力确实存在**（原 R3 决策规则遗漏）：
+| 能力 | 实测 |
+|:--|:--|
+| `showOpenFilePicker` / `showSaveFilePicker` / `showDirectoryPicker` | ✅ function（File System Access API） |
+| `navigator.storage.getDirectory()` | ✅ function（**OPFS**） |
+| `window.dshDesktop` | ✅ 存在，但**无 fs API**（仅 `platform` / `workspace.pickDirectory` / `updates` / `catalog` / `installedPlugins` / `pluginOperations` / `pluginOwnedData` / `pluginRecovery`） |
+| `indexedDB` / `localStorage` | ✅ |
+
+**A6 迁移定案（修正原「不可达即放弃」）**：`src/store/file-adapter.js` 改建三通道 ——
+**FSA API（主，需用户手势）→ OPFS（免手势持久层）→ IndexedDB（既有主层）**；
+legacy 三法仅保留 `typeof` 探测留痕。**批次 3 前置解除。**
+
+**方法论**：插件 bundle 经 `<script src="/plugins/<id>/client.js">` 注入，与宿主内联代码
+**同属渲染进程主 realm** → 用 CDP 在页面默认执行上下文求值，结论可直接外推至插件代码。
+
+**批次进度**：1 ✅ · 2 ✅ · 3 🟢（前置已解除）· 4 ⬜ · 5 ⬜ · 6 ⬜
+
