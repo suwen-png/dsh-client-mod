@@ -3,8 +3,8 @@
 > 项目名称：dsh-client-mod（DeepSeek Harness 客户端修改工具）
 > 项目定位：DeepSeek 客户端的模块化修改工具，支持备份、工作区初始化、补丁应用、复原、状态检查等功能
 > 创建日期：2026-08-24
-> 最后更新：2026-09-06（V1.2 整改：版本基线+V10 V3 完工状态+整改总览+git 工作机制）
-> 项目状态：标准整改完成（V1.2），V10 总监控制台 V3 完工（46/46 测试通过）
+> 最后更新：2026-09-11（项目认知初始化报告 07 号 + V11/V12 设计稿纳管 + 台账漂移整改：deploy.py 引用清理）
+> 项目状态：V12 多分支流水线协作系统设计稿定型；V9.4/V9.5 修复代码已 apply，待重启人工验证
 
 ---
 
@@ -31,7 +31,7 @@ dsh-client-mod 是一个用于修改 DeepSeek 客户端的工具集，核心目�
 | 快照 | scripts/snapshot.ps1 | 创建当前状态快照 |
 | 文档索引 | scripts/gen-docs-index.ps1 | 生成 dsh_docs_index.txt |
 | 缓存清除 | scripts/clear-cache.ps1 | 清 Harness 5 类缓存 |
-| 部署 | scripts/deploy.ps1 / deploy.py | 一键部署（snapshot+diff+apply） |
+| 部署 | scripts/deploy.ps1 | 一键部署（snapshot+diff+apply；deploy.py 已于 V10 整改期删除） |
 
 ### 1.3 技术栈
 

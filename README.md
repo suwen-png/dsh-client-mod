@@ -39,7 +39,8 @@ dsh-client-mod/
 | 包名 | 用途 | 关键文件 |
 |------|------|---------|
 | dsh-client-ui-layout | 主布局 AppFrame，main.page/conversation/sidebar 渲染 | lib/client.js |
-| dsh-client-ui-conversation | 对话页/探索未至之境/模型选择槽 | lib/client.js |
+| dsh-client-ui-conversation | 对话页/探索未至之境/模型选择槽 ← **唯一被实际修改的包** | lib/client.js |
+| dsh-client-ui-trajectory | 轨迹视图 tab（id:trajectory） | lib/client.js |
 | dsh-client-ui-sidebar | 侧边栏 slot 与新建会话 | lib/client.js |
 | dsh-client-ui-slots | 通用插槽服务 register/inject | lib/index.js |
 | dsh-client-runtime | __ModuleLoader__/defineStore/inject | lib/client.js |

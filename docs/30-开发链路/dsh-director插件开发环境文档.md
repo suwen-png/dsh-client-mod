@@ -108,28 +108,30 @@ export const inject = ['webServer', 'sessions']
 ```
 1. 修改源代码（src/目录下的.ts/.tsx文件）
 2. 编译：node build.mjs
-3. 部署：python D:\hermes-data\dsh-client-mod\scripts\deploy.py
+3. 部署：powershell -File D:\hermes-data\dsh-client-mod\scripts\deploy.ps1
 4. 测试：Harness自动重启，验证功能
 5. 自动化测试：node test-v10-cdp.mjs
 ```
 
 ### 3.2 一键部署脚本
 
-**路径**: `D:\hermes-data\dsh-client-mod\scripts\deploy.py`
+**路径**: `D:\hermes-data\dsh-client-mod\scripts\deploy.ps1`
 
 **功能**: 编译 → 关闭Harness → 复制文件 → 清除缓存 → 重启Harness
 
 **耗时**: 约13.6秒
 
+> ⚠ **2026-09-11 修正**：原文档引用 `scripts\deploy.py`，该文件已在 V10 整改期删除（见 `docs/40-测试质量/12-scripts探针审核-20260906.md` P3「已删 10 文件（含 deploy.py）」）。现行唯一部署脚本为 `deploy.ps1`，参数与原 py 版一一对应。
+
 ```bash
 # 完整部署
-python D:\hermes-data\dsh-client-mod\scripts\deploy.py
+powershell -File D:\hermes-data\dsh-client-mod\scripts\deploy.ps1
 
 # 只编译+复制，不重启
-python deploy.py --no-restart
+powershell -File .\scripts\deploy.ps1 -NoRestart
 
 # 不清除缓存
-python deploy.py --no-cache-clear
+powershell -File .\scripts\deploy.ps1 -NoCacheClear
 ```
 
 ### 3.3 缓存清除（必须！）
@@ -226,7 +228,7 @@ await page.waitForTimeout(3000)  // 仅用于页面初始加载
 
 | 症状 | 可能原因 | 解决方案 |
 |------|---------|---------|
-| 修改代码后页面无变化 | 缓存未清除 | 运行deploy.py自动清缓存，或手动清5个缓存目录 |
+| 修改代码后页面无变化 | 缓存未清除 | 运行`deploy.ps1`自动清缓存，或手动清5个缓存目录 |
 | 总监tab不显示 | 插件未启用 | 检查package.json的bundles数组 |
 | 控制台报错"组件未定义" | 编译失败 | 运行`node build.mjs`检查编译错误 |
 | 样式不生效 | 内联样式被覆盖 | 检查CSS优先级，使用!important |
@@ -250,7 +252,7 @@ await page.waitForTimeout(3000)  // 仅用于页面初始加载
 | 总监面板后备 | `D:\hermes-data\dsh-director\src\client\components\director\DirectorPanel.tsx` | 5.9KB，三栏布局后备 |
 | 服务端入口 | `D:\hermes-data\dsh-director\src\index.ts` | webServer路由注册 |
 | 编译产物 | `D:\hermes-data\dsh-director\lib\client.js` | 274.8KB，编译后客户端代码 |
-| 一键部署脚本 | `D:\hermes-data\dsh-client-mod\scripts\deploy.py` | 13.6秒完成部署 |
+| 一键部署脚本 | `D:\hermes-data\dsh-client-mod\scripts\deploy.ps1` | 13.6秒完成部署 |
 | 自动化测试脚本 | `D:\hermes-data\dsh-director\test-v10-cdp.mjs` | 28项Playwright测试 |
 | 美化设计图 | `D:\hermes-data\dsh-client-mod\docs\50-信息中心\V10总监控制台-美化设计图V2.0.html` | 高保真原型+50+项交互清单 |
 | 整改进展报告 | `D:\hermes-data\dsh-client-mod\docs\20-任务文档\V10整改进展报告-20260906.md` | 进度跟踪 |
@@ -264,7 +266,7 @@ await page.waitForTimeout(3000)  // 仅用于页面初始加载
 ### 7.1 开发规范
 
 1. **修改源代码，不修改编译产物** — 永远修改`src/`目录，然后运行`node build.mjs`编译
-2. **使用一键部署脚本** — 不要手动复制文件和清缓存，用`deploy.py`
+2. **使用一键部署脚本** — 不要手动复制文件和清缓存，用`deploy.ps1`
 3. **小步提交** — 每完成一个功能点就编译部署测试，避免一次性大量修改
 4. **保留后备方案** — DirectorPanel.tsx作为三栏布局后备，V10出问题时可快速回退
 

@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dsh-director V12 多分支流水线协作系统 — 高保真设计稿</title>
+<style>
+/* ===== 设计令牌（L0） ===== */
+:root {
+  --primary: #2563eb;
+  --primary-light: #eff6ff;
+  --primary-dark: #1d4ed8;
+  --success: #16a34a;
+  --success-bg: #f0fdf4;
+  --warning: #d97706;
+  --warning-bg: #fffbeb;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --text: #1f2937;
+  --text-secondary: #6b7280;
+  --text-placeholder: #9ca3af;
+  --bg: #ffffff;
+  --bg-secondary: #f9fafb;
+  --border: #e5e7eb;
+  --border-light: #f3f4f6;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+  --type-doc: #8b5cf6;
+  --type-doc-bg: #f5f3ff;
+  --type-code: #2563eb;
+  --type-code-bg: #eff6ff;
+  --type-test: #16a34a;
+  --type-test-bg: #f0fdf4;
+  --type-research: #d97706;
+  --type-research-bg: #fffbeb;
+  --type-design: #db2777;
+  --type-design-bg: #fdf2f8;
+  --type-general: #6b7280;
+  --type-general-bg: #f3f4f6;
+  --director: #0891b2;
+  --director-bg: #ecfeff;
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #e5e7eb; color: var(--text); font-size: 13px; line-height: 1.5; }
+.svg-icon { width: 14px; height: 14px; display: inline-block; vertical-align: middle; }
+
+/* ===== 页面布局 ===== */
+.design-label { text-align: center; font-size: 12px; color: var(--text-secondary); padding: 12px 0 8px; font-weight: 600; }
+.view-tabs { display: flex; gap: 4px; margin-bottom: 12px; justify-content: center; flex-wrap: wrap; padding: 0 16px; }
+.view-tab { padding: 6px 14px; font-size: 11px; font-weight: 600; color: var(--text-secondary); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+.view-tab:hover { color: var(--primary); border-color: var(--primary); }
+.view-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.view-panel { display: none; }
+.view-panel.active { display: block; }
+
+/* ===== Harness 窗口 ===== */
+.harness-window { width: 100%; max-width: 1400px; margin: 0 auto; background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; display: flex; flex-direction: column; height: 820px; }
+.tabbar { display: flex; align-items: center; padding: 0 16px; height: 40px; background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.project-picker { display: flex; align-items: center; gap: 8px; margin-right: 24px; }
+.project-picker .icon { color: var(--text-secondary); }
+.project-picker .name { font-size: 12px; font-weight: 600; color: var(--text); }
+.tab { padding: 0 14px; height: 40px; display: flex; align-items: center; font-size: 12px; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.tabbar-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.icon-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; color: var(--text-secondary); }
+.icon-btn:hover { background: var(--bg-secondary); color: var(--text); }
+
+/* ===== 总监调度主视图（分屏） ===== */
+.main-content { flex: 1; display: flex; overflow: hidden; }
+.mindmap-panel { width: 38%; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.mindmap-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.mindmap-title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+.mindmap-tools { display: flex; gap: 4px; }
+.mm-tool-btn { padding: 3px 8px; font-size: 10px; border: 1px solid var(--border); background: var(--bg); border-radius: 4px; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; gap: 3px; }
+.mm-tool-btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.mindmap-canvas { flex: 1; overflow: auto; padding: 20px; position: relative; background: linear-gradient(135deg, #fafbff 0%, #f0f4ff 100%); }
+.mm-tree { display: flex; flex-direction: column; gap: 0; }
+.mm-node-wrapper { display: flex; align-items: flex-start; }
+.mm-children { margin-left: 24px; border-left: 2px solid var(--border); padding-left: 16px; display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.mm-node { padding: 8px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); cursor: pointer; transition: all 0.15s; min-width: 140px; }
+.mm-node:hover { border-color: var(--primary); box-shadow: var(--shadow-sm); }
+.mm-node.selected { border-color: var(--primary); border-width: 2px; background: var(--primary-light); }
+.mm-node.root { background: var(--primary); color: #fff; border-color: var(--primary); }
+.mm-node.done { border-left: 3px solid var(--success); }
+.mm-node.busy { border-left: 3px solid var(--warning); }
+.mm-node-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+.mm-node-meta { font-size: 10px; color: var(--text-secondary); margin-top: 3px; display: flex; align-items: center; gap: 4px; }
+.mm-node.root .mm-node-meta { color: rgba(255,255,255,0.8); }
+.mm-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.mm-status-dot.done { background: var(--success); }
+.mm-status-dot.busy { background: var(--warning); animation: pulse 2s infinite; }
+.mm-status-dot.pending { background: var(--text-placeholder); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.mm-type-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+.mm-type-badge.doc { background: var(--type-doc-bg); color: var(--type-doc); }
+.mm-type-badge.code { background: var(--type-code-bg); color: var(--type-code); }
+.mm-type-badge.test { background: var(--type-test-bg); color: var(--type-test); }
+.mm-type-badge.research { background: var(--type-research-bg); color: var(--type-research); }
+.mm-type-badge.design { background: var(--type-design-bg); color: var(--type-design); }
+
+/* 总监对话面板 */
+.director-panel { flex: 1; display: flex; flex-direction: column; background: var(--bg-secondary); }
+.director-header { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg); display: flex; align-items: center; justify-content: space-between; }
+.director-title { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+.director-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--director); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.chat-msg { display: flex; max-width: 85%; }
+.chat-msg.user { align-self: flex-end; }
+.chat-msg.assistant { align-self: flex-start; }
+.chat-msg.director { align-self: flex-start; max-width: 92%; }
+.chat-msg.system { align-self: center; max-width: 90%; }
+.chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 12px; line-height: 1.6; }
+.chat-bubble.user { background: var(--primary); color: #fff; border-bottom-right-radius: 2px; }
+.chat-bubble.assistant { background: var(--bg); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
+.chat-bubble.director { background: var(--director-bg); border: 1px solid #a5f3fc; border-bottom-left-radius: 2px; }
+.chat-bubble.system { background: var(--bg-secondary); border: 1px solid var(--border); font-size: 11px; color: var(--text-secondary); text-align: center; padding: 6px 12px; }
+.director-msg-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #a5f3fc; }
+.director-msg-title { font-size: 11px; font-weight: 700; color: var(--director); display: flex; align-items: center; gap: 4px; }
+.director-msg-action { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: var(--director); color: #fff; font-weight: 600; }
+.msg-section { margin-bottom: 8px; }
+.msg-section:last-child { margin-bottom: 0; }
+.msg-section-title { font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.msg-section-content { font-size: 11px; color: var(--text); line-height: 1.6; }
+.msg-file-list { font-size: 11px; color: var(--text); font-family: monospace; line-height: 1.8; background: rgba(0,0,0,0.03); padding: 6px 10px; border-radius: 4px; }
+.msg-buttons { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.msg-btn { padding: 4px 10px; font-size: 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-weight: 600; }
+.msg-btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.msg-btn.success { background: var(--success); color: #fff; border-color: var(--success); }
+
+/* 输入栏 */
+.chat-input-area { padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg); }
+.input-model-bar { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--text-secondary); margin-bottom: 6px; }
+.model-tag { display: flex; align-items: center; gap: 4px; padding: 2px 8px; background: var(--bg-secondary); border-radius: 4px; font-weight: 600; color: var(--text); }
+.input-wrapper { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input { flex: 1; min-height: 36px; max-height: 120px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; font-family: inherit; resize: none; outline: none; }
+.chat-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.send-btn { height: 36px; padding: 0 16px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+.ghost-btn { padding: 4px 10px; font-size: 11px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.ghost-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ===== 通用按钮 ===== */
+.btn { padding: 6px 14px; font-size: 12px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-secondary { background: var(--bg); color: var(--text); border-color: var(--border); }
+.btn-secondary:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ===== 弹窗 ===== */
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: var(--bg); border-radius: var(--radius-lg); width: 640px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-lg); }
+.modal-title { padding: 16px 20px 12px; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); }
+.modal-subtitle { padding: 0 20px 12px; font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+.modal-body { padding: 16px 20px; }
+.modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.modal-footer-left { font-size: 10px; color: var(--text-placeholder); }
+.modal-footer-right { display: flex; gap: 8px; }
+.form-group { margin-bottom: 14px; }
+.form-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+.form-label .required { color: var(--danger); }
+.form-input { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; outline: none; }
+.form-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.form-select { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; background: var(--bg); outline: none; }
+.form-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; font-family: inherit; resize: vertical; outline: none; }
+.form-row { display: flex; gap: 12px; }
+.form-row .form-group { flex: 1; }
+.type-selector { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.type-option { padding: 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; text-align: center; transition: all 0.15s; }
+.type-option:hover { border-color: var(--primary); }
+.type-option.selected { border-color: var(--primary); background: var(--primary-light); border-width: 2px; }
+.type-icon { font-size: 20px; margin-bottom: 4px; }
+.type-name { font-size: 11px; font-weight: 600; color: var(--text); }
+.type-desc { font-size: 9px; color: var(--text-secondary); margin-top: 2px; }
+.agent-selector { display: flex; flex-direction: column; gap: 8px; }
+.agent-option { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.15s; }
+.agent-option:hover { border-color: var(--primary); }
+.agent-option.selected { border-color: var(--primary); background: var(--primary-light); border-width: 2px; }
+.agent-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+.agent-info { flex: 1; }
+.agent-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.agent-desc { font-size: 10px; color: var(--text-secondary); margin-top: 2px; line-height: 1.4; }
+.agent-model { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: var(--bg-secondary); color: var(--text-secondary); font-weight: 600; flex-shrink: 0; }
+.dep-selector { display: flex; flex-wrap: wrap; gap: 6px; }
+.dep-chip { padding: 4px 10px; border-radius: 16px; font-size: 10px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; display: flex; align-items: center; gap: 5px; }
+.dep-chip.selected { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+.dep-status { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.folder-input { display: flex; gap: 6px; }
+.folder-input .form-input { flex: 1; }
+.folder-browse { padding: 0 10px; font-size: 10px; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 6px; cursor: pointer; color: var(--text-secondary); white-space: nowrap; }
+
+/* ===== 分支状态栏 ===== */
+.branch-status-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.branch-info { display: flex; align-items: center; gap: 8px; }
+.branch-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+.branch-icon.code { background: var(--type-code-bg); }
+.branch-name { font-size: 13px; font-weight: 700; color: var(--text); }
+.branch-type-tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.branch-agent, .branch-model, .branch-dep { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-secondary); }
+.branch-spacer { flex: 1; }
+.branch-back-btn { padding: 5px 12px; font-size: 11px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+.branch-back-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ===== 上下文摘要卡片 ===== */
+.context-summary-card { margin: 12px 16px 0; background: var(--primary-light); border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 12px; flex-shrink: 0; }
+.csc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.csc-title { font-size: 11px; font-weight: 700; color: var(--primary); display: flex; align-items: center; gap: 4px; }
+.csc-actions { display: flex; gap: 6px; }
+.csc-action { font-size: 10px; color: var(--primary); background: none; border: none; cursor: pointer; text-decoration: underline; }
+.csc-content { font-size: 11px; color: var(--text); line-height: 1.6; }
+.csc-source { font-size: 10px; color: var(--text-placeholder); margin-top: 6px; display: flex; align-items: center; gap: 4px; }
+.csc-source a { color: var(--primary); cursor: pointer; }
+
+/* ===== 产出物面板 ===== */
+.deliverables-panel { width: 240px; background: var(--bg); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.deliverables-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.deliverables-title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+.deliverables-count { font-size: 10px; padding: 1px 7px; border-radius: 10px; background: var(--primary-light); color: var(--primary); font-weight: 700; }
+.deliverables-list { flex: 1; overflow-y: auto; padding: 8px; }
+.deliverable-item { padding: 8px 10px; border-radius: 6px; margin-bottom: 4px; background: var(--bg-secondary); cursor: pointer; transition: all 0.15s; }
+.deliverable-item:hover { background: var(--primary-light); }
+.di-header { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.di-icon { font-size: 13px; }
+.di-name { font-size: 11px; font-weight: 600; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.di-status { font-size: 9px; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
+.di-status.done { background: var(--success-bg); color: var(--success); }
+.di-status.in_progress { background: var(--warning-bg); color: var(--warning); }
+.di-status.pending { background: var(--bg); color: var(--text-placeholder); border: 1px solid var(--border); }
+.di-path { font-size: 9px; color: var(--text-placeholder); font-family: monospace; }
+
+/* ===== 节点详情面板 ===== */
+.node-detail-panel { position: absolute; top: 60px; right: 20px; width: 280px; background: var(--bg); border-radius: 10px; box-shadow: var(--shadow-lg); border: 1px solid var(--border); z-index: 50; overflow: hidden; }
+.ndp-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--primary-light); }
+.ndp-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.ndp-close { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-secondary); border-radius: 4px; }
+.ndp-close:hover { background: var(--bg); color: var(--text); }
+.ndp-body { padding: 10px 14px; max-height: 400px; overflow-y: auto; }
+.ndp-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border-light); font-size: 11px; }
+.ndp-label { color: var(--text-secondary); }
+.ndp-value { color: var(--text); font-weight: 500; text-align: right; max-width: 60%; }
+.ndp-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ndp-section-title { font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.ndp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+.ndp-action-btn { padding: 6px 8px; font-size: 10px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; gap: 3px; font-weight: 600; }
+.ndp-action-btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.ndp-action-btn.danger { color: var(--danger); border-color: #fecaca; }
+.ndp-action-btn:hover { border-color: var(--primary); color: var(--primary); }
+.ndp-action-btn.primary:hover { background: var(--primary-dark); color: #fff; }
+
+/* ===== 标注框 ===== */
+.annotation-box { position: absolute; cursor: pointer; transition: all 0.15s; z-index: 20; }
+.annotation-box:hover { box-shadow: 0 0 0 2px rgba(0,0,0,0.1); }
+.annotation-box.active { box-shadow: 0 0 0 3px rgba(37,99,235,0.3); }
+.ann-label { position: absolute; white-space: nowrap; z-index: 21; }
+
+/* ===== 设计说明区 ===== */
+.spec-section { max-width: 1400px; margin: 24px auto; padding: 0 16px; }
+.spec-section h2 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid var(--primary); }
+.spec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.spec-block { background: var(--bg); border-radius: 10px; padding: 16px; border: 1px solid var(--border); }
+.spec-block h3 { font-size: 13px; font-weight: 700; color: var(--primary); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.spec-block ul { list-style: none; padding: 0; }
+.spec-block li { font-size: 11px; color: var(--text); line-height: 1.7; margin-bottom: 6px; padding-left: 14px; position: relative; }
+.spec-block li::before { content: "•"; position: absolute; left: 0; color: var(--primary); font-weight: 700; }
+.spec-block code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 3px; font-size: 10px; font-family: monospace; color: var(--primary); }
+.spec-block strong { color: var(--text); }
+
+/* ===== 响应式 ===== */
+@media (max-width: 900px) {
+  .harness-window { height: auto; min-height: 600px; }
+  .main-content { flex-direction: column; }
+  .mindmap-panel { width: 100%; height: 300px; border-right: none; border-bottom: 1px solid var(--border); }
+  .deliverables-panel { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+  .spec-grid { grid-template-columns: 1fr; }
+  .modal { width: 95%; margin: 10px; }
+}
+</style>
+</head>
+<body>
+
+<div class="design-label">dsh-director V12 多分支流水线协作系统 · 高保真设计稿 · 1440×860</div>
+
+<!-- 视图切换 -->
+<div class="view-tabs">
+  <div class="view-tab active" onclick="switchView('view1', this)">视图1 · 总监调度主视图</div>
+  <div class="view-tab" onclick="switchView('view2', this)">视图2 · 创建分支（三维定义）</div>
+  <div class="view-tab" onclick="switchView('view3', this)">视图3 · 分支对话+产出物</div>
+  <div class="view-tab" onclick="switchView('view4', this)">视图4 · 节点详情+审核流程</div>
+  <div class="view-tab" onclick="switchView('view5', this)">视图5 · 设计图标注模式</div>
+  <div class="view-tab" onclick="switchView('view6', this)">视图6 · 上下文压缩+模型切换</div>
+  <div class="view-tab" onclick="switchView('view7', this)">视图7 · 分支管理+流水线+合并</div>
+  <div class="view-tab" onclick="switchView('view8', this)">视图8 · 总监仪表盘</div>
+</div>
+
+<!-- ============ 视图1：总监调度主视图（分屏模式） ============ -->
+<div id="view1" class="view-panel active">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker">
+      <span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+      <span class="name">用户登录功能开发</span>
+    </div>
+    <div class="tab active">总监</div>
+    <div class="tab">对话</div>
+    <div class="tab">轨迹</div>
+    <div class="tabbar-right">
+      <div class="icon-btn" title="设置"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+    </div>
+  </div>
+  <div class="main-content">
+    <!-- 左侧：思维导图面板 -->
+    <div class="mindmap-panel">
+      <div class="mindmap-header">
+        <div class="mindmap-title">
+          <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          分支流水线
+        </div>
+        <div class="mindmap-tools">
+          <button class="mm-tool-btn" title="从当前对话生成思维导图"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg> 生成导图</button>
+          <button class="mm-tool-btn" title="布局切换"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> 布局</button>
+          <button class="mm-tool-btn" title="搜索节点"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> 搜索</button>
+          <button class="mm-tool-btn primary">新建分支</button>
+        </div>
+      </div>
+      <div class="mindmap-canvas">
+        <div class="mm-tree">
+          <div class="mm-node-wrapper">
+            <div class="mm-node root selected" onclick="selectNode(this)">
+              <div class="mm-node-label">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                主线 · 项目了解
+              </div>
+              <div class="mm-node-meta"><span class="mm-status-dot done"></span> 共享上下文 · 12条</div>
+            </div>
+            <div class="mm-children">
+              <div class="mm-node done" onclick="selectNode(this)">
+                <div class="mm-node-label"><span class="mm-type-badge research">调研</span> 需求分析</div>
+                <div class="mm-node-meta"><span class="mm-status-dot done"></span> 已完成 · 8条</div>
+              </div>
+              <div class="mm-node done" onclick="selectNode(this)">
+                <div class="mm-node-label"><span class="mm-type-badge doc">文档</span> 架构设计</div>
+                <div class="mm-node-meta"><span class="mm-status-dot done"></span> 已完成 · 15条</div>
+              </div>
+              <div class="mm-node busy" onclick="selectNode(this)">
+                <div class="mm-node-label"><span class="mm-type-badge code">开发</span> 前端开发</div>
+                <div class="mm-node-meta"><span class="mm-status-dot busy"></span> 进行中 · 6条</div>
+              </div>
+              <div class="mm-node" onclick="selectNode(this)" style="opacity:0.6;">
+                <div class="mm-node-label"><span class="mm-type-badge code">开发</span> 后端开发</div>
+                <div class="mm-node-meta"><span class="mm-status-dot pending"></span> 待开始 · 等待前端</div>
+              </div>
+              <div class="mm-node" onclick="selectNode(this)" style="opacity:0.6;">
+                <div class="mm-node-label"><span class="mm-type-badge test">测试</span> 测试验证</div>
+                <div class="mm-node-meta"><span class="mm-status-dot pending"></span> 待开始</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 右键菜单（展示态） -->
+        <div style="position:absolute;top:200px;left:180px;width:170px;background:var(--bg);border-radius:8px;box-shadow:var(--shadow-lg);border:1px solid var(--border);padding:4px 0;z-index:50;">
+          <div style="padding:6px 12px;font-size:10px;font-weight:700;color:var(--text-secondary);border-bottom:1px solid var(--border-light);margin-bottom:4px;">前端开发</div>
+          <div style="padding:6px 12px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--primary);font-weight:600;">进入对话</div>
+          <div style="padding:6px 12px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--text);">重命名</div>
+          <div style="padding:6px 12px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--text);">查看产出物</div>
+          <div style="padding:6px 12px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--text);">创建子分支</div>
+          <div style="height:1px;background:var(--border-light);margin:4px 0;"></div>
+          <div style="padding:6px 12px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--warning);">暂停分支</div>
+          <div style="padding:6px 12px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--danger);">删除分支</div>
+        </div>
+        <div style="position:absolute;bottom:10px;left:10px;font-size:10px;color:var(--text-placeholder);background:var(--bg);padding:5px 10px;border-radius:5px;border:1px solid var(--border-light);">💡 右键节点查看更多操作 · 拖拽调整位置</div>
+      </div>
+    </div>
+    <!-- 右侧：总监对话面板 -->
+    <div class="director-panel">
+      <div class="director-header">
+        <div class="director-title">
+          <div class="director-avatar">总</div>
+          总监对话 · 全局调度
+        </div>
+        <div style="font-size:10px;color:var(--success);display:flex;align-items:center;gap:4px;"><span class="mm-status-dot done"></span> 在线 · 监控5个分支</div>
+      </div>
+      <div class="chat-messages">
+        <div class="chat-msg user">
+          <div class="chat-bubble user">我要做一个用户登录功能，支持邮箱和手机号注册登录，还要有密码找回</div>
+        </div>
+        <div class="chat-msg director">
+          <div class="chat-bubble director">
+            <div class="director-msg-header">
+              <div class="director-msg-title">🎯 总监 · 需求拆解与流水线方案</div>
+              <div class="director-msg-action">方案生成</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">需求理解</div>
+              <div class="msg-section-content">用户登录功能，支持邮箱/手机号双渠道注册登录 + 密码找回。需要前端页面、后端API、数据库设计、测试验证。</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">流水线方案（5个分支）</div>
+              <div class="msg-file-list">1. 需求分析（调研）→ 确认功能范围<br>2. 架构设计（文档）→ 技术选型+API+数据库<br>3. 前端开发（开发）→ 注册/登录/找回页面<br>4. 后端开发（开发）→ API接口+数据库<br>5. 测试验证（测试）→ 功能测试+安全测试</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">依赖关系</div>
+              <div class="msg-section-content">需求分析→架构设计→(前端+后端并行)→测试。前端和后端共享架构设计产出，通过文件夹流转数据。</div>
+            </div>
+            <div class="msg-buttons">
+              <button class="msg-btn primary">✅ 确认方案，创建分支</button>
+              <button class="msg-btn">调整方案</button>
+              <button class="msg-btn">查看详细依赖图</button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-msg system">
+          <div class="chat-bubble system">📦 总监已创建5个分支，自动分配任务并传递上下文</div>
+        </div>
+        <div class="chat-msg director">
+          <div class="chat-bubble director">
+            <div class="director-msg-header">
+              <div class="director-msg-title">📋 总监 → 前端开发分支</div>
+              <div class="director-msg-action">分配任务</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">任务</div>
+              <div class="msg-section-content">基于架构设计开发前端登录功能：注册页/登录页/密码找回页/会话管理。React+TypeScript。</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">传递的上下文（自动压缩）</div>
+              <div class="msg-section-content">项目背景摘要 + 架构设计产出要点（技术选型/API定义/数据库设计）+ 输入文件列表（docs/design/ 下4个文件）</div>
+            </div>
+            <div class="msg-buttons">
+              <button class="msg-btn success">✅ 已接收，开始执行</button>
+              <button class="msg-btn">查看完整上下文</button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-msg director">
+          <div class="chat-bubble director">
+            <div class="director-msg-header">
+              <div class="director-msg-title">✅ 总监 · 架构设计审核通过</div>
+              <div class="director-msg-action">审核通过</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">审核结果</div>
+              <div class="msg-section-content">完整性95分 / 质量90分 / 一致性92分 / 规范性78分。综合88.75分，通过（有小建议：API命名需统一）。</div>
+            </div>
+            <div class="msg-section">
+              <div class="msg-section-title">下一步</div>
+              <div class="msg-section-content">自动创建前端开发+后端开发分支，传递架构设计摘要作为上下文。</div>
+            </div>
+          </div>
+        </div>
+        <div class="thinking" style="text-align:center;color:var(--text-secondary);font-size:11px;padding:8px;">⏳ 总监正在监控前端开发进度（60%）...</div>
+      </div>
+      <div class="chat-input-area">
+        <div class="input-model-bar">
+          <div class="model-tag"><span style="width:6px;height:6px;border-radius:50%;background:var(--director);display:inline-block;"></span> 总监模式 ▾</div>
+          <span>向总监下达指令或询问分支状态</span>
+        </div>
+        <div class="input-wrapper">
+          <textarea class="chat-input" placeholder="例如：前端开发进度怎么样了？/ 暂停后端开发分支 / 帮我看看架构设计的审核结果"></textarea>
+          <button class="send-btn">发送 <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图2：创建分支弹窗（三维定义） ============ -->
+<div id="view2" class="view-panel">
+<div class="harness-window" style="background:#e5e7eb;align-items:center;justify-content:center;">
+  <div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);">
+    <div class="modal" style="width:620px;max-height:90vh;">
+      <div class="modal-title">
+        <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--primary);width:16px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        创建新分支
+      </div>
+      <div class="modal-subtitle">分支是专业化的工作单元，由<strong>处理类型</strong>、<strong>智能体角色</strong>、<strong>模型</strong>三个维度定义。总监会自动传递必要的上下文。</div>
+      <div style="display:flex;align-items:center;gap:8px;margin:0 20px 16px;">
+        <div style="display:flex;align-items:center;gap:6px;"><div style="width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;">1</div><span style="font-size:11px;font-weight:600;color:var(--primary);">处理类型</span></div>
+        <div style="flex:1;height:2px;background:var(--border);"></div>
+        <div style="display:flex;align-items:center;gap:6px;"><div style="width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;">2</div><span style="font-size:11px;font-weight:600;color:var(--primary);">智能体</span></div>
+        <div style="flex:1;height:2px;background:var(--border);"></div>
+        <div style="display:flex;align-items:center;gap:6px;"><div style="width:22px;height:22px;border-radius:50%;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;">3</div><span style="font-size:11px;color:var(--text-secondary);">模型与配置</span></div>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">处理类型 <span class="required">*</span> — 这个分支"做什么"</label>
+          <div class="type-selector">
+            <div class="type-option"><div class="type-icon" style="color:var(--type-doc);">📄</div><div class="type-name">文档</div><div class="type-desc">需求/设计/文档</div></div>
+            <div class="type-option selected"><div class="type-icon" style="color:var(--type-code);">💻</div><div class="type-name">开发</div><div class="type-desc">前端/后端/代码</div></div>
+            <div class="type-option"><div class="type-icon" style="color:var(--type-test);">🧪</div><div class="type-name">测试</div><div class="type-desc">测试/验证/质量</div></div>
+            <div class="type-option"><div class="type-icon" style="color:var(--type-research);">🔍</div><div class="type-name">调研</div><div class="type-desc">技术调研/评估</div></div>
+            <div class="type-option"><div class="type-icon" style="color:var(--type-design);">🎨</div><div class="type-name">设计</div><div class="type-desc">UI/UX/视觉</div></div>
+            <div class="type-option"><div class="type-icon" style="color:var(--type-general);">⚙️</div><div class="type-name">通用</div><div class="type-desc">其他/通用</div></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">智能体角色 <span class="required">*</span> — 这个分支"谁来做"</label>
+          <div class="agent-selector">
+            <div class="agent-option selected">
+              <div class="agent-icon" style="background:var(--type-code-bg);color:var(--type-code);">💻</div>
+              <div class="agent-info"><div class="agent-name">前端工程师</div><div class="agent-desc">资深前端，精通React/Vue/TS，注重代码规范和用户体验</div></div>
+              <div class="agent-model">DeepSeek-Coder</div>
+            </div>
+            <div class="agent-option">
+              <div class="agent-icon" style="background:var(--type-code-bg);color:var(--type-code);">⚙️</div>
+              <div class="agent-info"><div class="agent-name">后端工程师</div><div class="agent-desc">资深后端，精通Node.js/Python/Go，注重架构和性能</div></div>
+              <div class="agent-model">DeepSeek-Coder</div>
+            </div>
+            <div class="agent-option">
+              <div class="agent-icon" style="background:var(--type-doc-bg);color:var(--type-doc);">📄</div>
+              <div class="agent-info"><div class="agent-name">架构师</div><div class="agent-desc">系统架构专家，擅长技术选型、系统设计、API定义</div></div>
+              <div class="agent-model">DeepSeek-V4</div>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">分支名称 <span class="required">*</span></label><input class="form-input" value="前端开发"></div>
+          <div class="form-group"><label class="form-label">使用模型</label><select class="form-select"><option>DeepSeek-Coder（推荐）</option><option>DeepSeek-V4-Flash</option><option>Qwen2:7b（本地）</option></select></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">依赖分支 — 这些分支的产出是本分支的输入</label>
+          <div class="dep-selector">
+            <div class="dep-chip selected"><span class="dep-status" style="background:var(--success);"></span>架构设计（已完成）</div>
+            <div class="dep-chip"><span class="dep-status" style="background:var(--success);"></span>需求分析（已完成）</div>
+            <div class="dep-chip" style="opacity:0.5;cursor:not-allowed;"><span class="dep-status" style="background:var(--warning);"></span>后端开发（进行中）</div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">输入文件夹</label><div class="folder-input"><input class="form-input" value="docs/design/"><button class="folder-browse">浏览</button></div></div>
+          <div class="form-group"><label class="form-label">输出文件夹</label><div class="folder-input"><input class="form-input" value="src/frontend/"><button class="folder-browse">浏览</button></div></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">任务描述</label>
+          <textarea class="form-textarea" rows="2">基于架构设计文档，开发用户登录功能前端：注册/登录/密码找回页面，React+TypeScript。</textarea>
+        </div>
+        <div style="background:var(--primary-light);border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;">
+          <div style="font-size:11px;font-weight:600;color:var(--primary);margin-bottom:4px;">📦 总监将自动传递以下上下文</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.6;">✓ 项目背景摘要（主线对话压缩）<br>✓ 依赖分支产出摘要（架构设计文档要点）<br>✓ 依赖分支产出文件列表（docs/design/ 下的文件）<br>✓ 任务描述与验收标准</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-footer-left">创建后总监将自动分配任务并传递上下文</div>
+        <div class="modal-footer-right">
+          <button class="btn btn-secondary">取消</button>
+          <button class="btn btn-primary">创建分支并分配任务</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图3：分支对话+产出物面板 ============ -->
+<div id="view3" class="view-panel">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker">
+      <span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+      <span class="name">用户登录功能开发</span>
+    </div>
+    <div class="tab active">总监</div><div class="tab">对话</div><div class="tab">轨迹</div>
+  </div>
+  <div class="branch-status-bar">
+    <div class="branch-info">
+      <div class="branch-icon code">💻</div>
+      <div><div class="branch-name">前端开发</div></div>
+      <span class="branch-type-tag" style="background:var(--type-code-bg);color:var(--type-code);">开发</span>
+    </div>
+    <div class="branch-agent">前端工程师</div>
+    <div class="branch-model">DeepSeek-Coder</div>
+    <div class="branch-dep">依赖：架构设计 ✓</div>
+    <div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--warning);"><span class="mm-status-dot busy"></span>进行中 · 6/10条</div>
+    <div class="branch-spacer"></div>
+    <button class="branch-back-btn">返回总监</button>
+  </div>
+  <div class="main-content">
+    <div style="flex:1;display:flex;flex-direction:column;background:var(--bg-secondary);min-width:0;">
+      <div class="context-summary-card">
+        <div class="csc-header">
+          <div class="csc-title">📦 总监传递的上下文</div>
+          <div class="csc-actions"><button class="csc-action">编辑摘要</button><button class="csc-action">查看完整对话</button></div>
+        </div>
+        <div class="csc-content">
+          <strong>项目背景：</strong>开发用户登录功能，支持邮箱/手机号注册登录，包含密码找回。<br>
+          <strong>前置产出（架构设计）：</strong>技术选型React+Node.js+PostgreSQL；RESTful API；bcrypt加密；JWT会话管理。数据库含users/sessions/password_resets三张表。<br>
+          <strong>任务：</strong>基于架构设计开发前端部分，包含注册/登录/密码找回页面。
+        </div>
+        <div class="csc-source">来源：主线对话压缩 + 架构设计分支产出摘要 · 由总监于14:32传递</div>
+      </div>
+      <div class="chat-messages" style="padding-top:8px;">
+        <div class="chat-msg director">
+          <div class="chat-bubble director">
+            <div class="director-msg-header"><div class="director-msg-title">总监 → 前端开发分支</div><div class="director-msg-action">分配任务</div></div>
+            <div class="msg-section"><div class="msg-section-title">任务描述</div><div class="msg-section-content">基于架构设计文档，开发用户登录功能前端：注册/登录/密码找回页面，React+TypeScript。</div></div>
+            <div class="msg-section"><div class="msg-section-title">输入文件</div><div class="msg-file-list">docs/design/01-技术选型.md<br>docs/design/02-系统架构.md<br>docs/design/03-API接口定义.md<br>docs/design/04-数据库设计.md</div></div>
+            <div class="msg-section"><div class="msg-section-title">输出位置</div><div class="msg-file-list">src/frontend/<br>├── pages/Login.tsx<br>├── pages/Register.tsx<br>└── services/auth.ts</div></div>
+          </div>
+        </div>
+        <div class="chat-msg assistant"><div class="chat-bubble assistant">收到任务。我先阅读架构设计文档，然后按顺序开发：1.项目结构 2.auth service 3.登录页 4.注册页 5.密码找回 6.会话管理。开始阅读 docs/design/...</div></div>
+        <div class="chat-msg user"><div class="chat-bubble user">登录页面需要支持记住密码和自动登录</div></div>
+        <div class="chat-msg assistant"><div class="chat-bubble assistant">好的，已记录。登录页将增加：1.记住密码（加密存储localStorage）2.自动登录（7天refresh token）3.安全提示。这部分在auth service中增加token持久化和刷新逻辑。</div></div>
+        <div class="chat-msg system"><div class="chat-bubble system">📦 智能体已创建产出物：src/frontend/services/auth.ts（进行中）</div></div>
+        <div style="text-align:center;color:var(--text-secondary);font-size:12px;padding:8px;">⏳ 前端工程师正在开发登录页面...</div>
+      </div>
+      <div class="chat-input-area">
+        <div class="input-model-bar"><div class="model-tag">DeepSeek-Coder ▾</div><span>在此分支中与前端工程师对话</span><div style="flex:1"></div><button class="ghost-btn" style="font-size:10px;padding:2px 8px;">向总监汇报</button></div>
+        <div class="input-wrapper"><textarea class="chat-input" placeholder="向当前分支的智能体下达指令或提出问题..."></textarea><button class="send-btn">发送</button></div>
+      </div>
+    </div>
+    <div class="deliverables-panel">
+      <div class="deliverables-header"><div class="deliverables-title">📦 产出物</div><span class="deliverables-count">4</span></div>
+      <div class="deliverables-list">
+        <div class="deliverable-item"><div class="di-header"><span class="di-icon">📄</span><span class="di-name">auth.ts</span><span class="di-status in_progress">进行中</span></div><div class="di-path">src/frontend/services/</div></div>
+        <div class="deliverable-item"><div class="di-header"><span class="di-icon">📄</span><span class="di-name">Login.tsx</span><span class="di-status pending">待开始</span></div><div class="di-path">src/frontend/pages/</div></div>
+        <div class="deliverable-item"><div class="di-header"><span class="di-icon">📄</span><span class="di-name">Register.tsx</span><span class="di-status pending">待开始</span></div><div class="di-path">src/frontend/pages/</div></div>
+        <div class="deliverable-item"><div class="di-header"><span class="di-icon">📄</span><span class="di-name">ForgotPassword.tsx</span><span class="di-status pending">待开始</span></div><div class="di-path">src/frontend/pages/</div></div>
+        <div style="padding:12px 8px;border-top:1px solid var(--border-light);margin-top:8px;">
+          <div style="font-size:10px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">输入文件（来自架构设计）</div>
+          <div class="deliverable-item" style="background:var(--bg);opacity:0.8;"><div class="di-header"><span class="di-icon">📋</span><span class="di-name">03-API接口定义.md</span><span class="di-status done">已读取</span></div><div class="di-path">docs/design/</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图4：节点详情+审核流程 ============ -->
+<div id="view4" class="view-panel">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker"><span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="name">节点详情+审核流程</span></div>
+    <div class="tab active">总监</div><div class="tab">对话</div><div class="tab">轨迹</div>
+  </div>
+  <div style="flex:1;position:relative;background:linear-gradient(135deg,#fafbff 0%,#f0f4ff 100%);padding:40px;overflow:auto;">
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:20px;">思维导图视图 · 点击节点查看详情 · 审核弹窗展示</div>
+    <div style="display:flex;align-items:center;gap:40px;">
+      <div class="mm-node root" style="min-width:180px;"><div class="mm-node-label">主线 · 项目了解</div><div class="mm-node-meta"><span class="mm-status-dot done"></span>共享上下文</div></div>
+      <div style="width:40px;height:2px;background:var(--border);"></div>
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <div class="mm-node done" style="min-width:160px;"><div class="mm-node-label"><span class="mm-type-badge research">调研</span>需求分析</div><div class="mm-node-meta"><span class="mm-status-dot done"></span>已完成</div></div>
+        <div class="mm-node done" style="min-width:160px;"><div class="mm-node-label"><span class="mm-type-badge doc">文档</span>架构设计</div><div class="mm-node-meta"><span class="mm-status-dot done"></span>已完成</div></div>
+        <div class="mm-node selected busy" style="min-width:160px;"><div class="mm-node-label"><span class="mm-type-badge code">开发</span>前端开发</div><div class="mm-node-meta"><span class="mm-status-dot busy"></span>进行中</div></div>
+      </div>
+    </div>
+    <!-- 节点详情面板 -->
+    <div class="node-detail-panel" style="top:80px;right:40px;width:280px;">
+      <div class="ndp-header"><div class="ndp-title">💻 前端开发</div><div class="ndp-close">✕</div></div>
+      <div class="ndp-body">
+        <div class="ndp-row"><span class="ndp-label">处理类型</span><span class="ndp-value"><span class="mm-type-badge code">开发</span></span></div>
+        <div class="ndp-row"><span class="ndp-label">智能体</span><span class="ndp-value">前端工程师</span></div>
+        <div class="ndp-row"><span class="ndp-label">模型</span><span class="ndp-value">DeepSeek-Coder</span></div>
+        <div class="ndp-row"><span class="ndp-label">状态</span><span class="ndp-value" style="color:var(--warning);"><span class="mm-status-dot busy"></span>进行中</span></div>
+        <div class="ndp-row"><span class="ndp-label">消息数</span><span class="ndp-value">6 / 预估10条</span></div>
+        <div class="ndp-row"><span class="ndp-label">依赖</span><span class="ndp-value" style="color:var(--success);">架构设计 ✓</span></div>
+        <div class="ndp-row"><span class="ndp-label">输入文件夹</span><span class="ndp-value" style="font-family:monospace;font-size:10px;">docs/design/</span></div>
+        <div class="ndp-row"><span class="ndp-label">输出文件夹</span><span class="ndp-value" style="font-family:monospace;font-size:10px;">src/frontend/</span></div>
+        <div class="ndp-row"><span class="ndp-label">产出物</span><span class="ndp-value">1进行中 / 3待开始</span></div>
+        <div class="ndp-section"><div class="ndp-section-title">上下文摘要</div><div style="font-size:11px;color:var(--text);line-height:1.5;background:var(--primary-light);padding:8px 10px;border-radius:6px;">基于架构设计开发前端登录功能...</div></div>
+        <div class="ndp-actions">
+          <button class="ndp-action-btn primary">进入对话</button>
+          <button class="ndp-action-btn">重命名</button>
+          <button class="ndp-action-btn">查看产出</button>
+          <button class="ndp-action-btn danger">删除</button>
+        </div>
+      </div>
+    </div>
+    <!-- 审核弹窗 -->
+    <div style="position:absolute;top:50%;left:35%;transform:translate(-50%,-50%);width:500px;background:var(--bg);border-radius:12px;box-shadow:var(--shadow-lg);padding:20px;z-index:100;">
+      <div class="modal-title" style="padding:0 0 8px;border:none;">
+        <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--success);width:16px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        总监审核 · 架构设计分支
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;">分支已完成，总监正在多维度审核产出物</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--success-bg);border-radius:8px;border:1px solid #bbf7d0;">
+          <span style="font-size:11px;font-weight:600;">✓ 完整性</span><span style="font-size:11px;color:var(--success);font-weight:600;">5/5项 · 95分</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--success-bg);border-radius:8px;border:1px solid #bbf7d0;">
+          <span style="font-size:11px;font-weight:600;">✓ 质量</span><span style="font-size:11px;color:var(--success);font-weight:600;">文档清晰 · 90分</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--success-bg);border-radius:8px;border:1px solid #bbf7d0;">
+          <span style="font-size:11px;font-weight:600;">✓ 一致性</span><span style="font-size:11px;color:var(--success);font-weight:600;">与需求一致 · 92分</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--warning-bg);border-radius:8px;border:1px solid #fde68a;">
+          <span style="font-size:11px;font-weight:600;">! 规范性</span><span style="font-size:11px;color:var(--warning);font-weight:600;">API命名需统一 · 78分</span>
+        </div>
+      </div>
+      <div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-bottom:14px;">
+        <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">总监审核意见</div>
+        <div style="font-size:11px;color:var(--text);line-height:1.5;">整体质量良好，技术选型合理。<strong style="color:var(--warning);">小问题：</strong>API命名风格不统一，建议开发前统一为RESTful规范。不阻塞下游开发。</div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px;background:var(--success-bg);border-radius:8px;margin-bottom:14px;border:1px solid #bbf7d0;">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:18px;">✅</span><div><div style="font-size:12px;font-weight:600;color:var(--success);">审核通过（有小建议）</div><div style="font-size:10px;color:var(--text-secondary);">综合88.75分 · 自动创建下游分支</div></div></div>
+      </div>
+      <div class="modal-footer" style="padding:0;margin:0;border:none;">
+        <div class="modal-footer-left">审核记录保存到项目文档</div>
+        <div class="modal-footer-right"><button class="btn btn-secondary">退回修改</button><button class="btn btn-primary">确认通过，创建下游分支</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图5：设计图标注模式（增强版） ============ -->
+<div id="view5" class="view-panel">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker"><span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="name">登录页面设计稿 · 标注与修改</span></div>
+    <div class="tab active">总监</div><div class="tab">对话</div><div class="tab">轨迹</div>
+    <div class="tabbar-right">
+      <div class="icon-btn active" style="background:var(--primary-light);color:var(--primary);"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></div>
+      <div class="icon-btn" style="background:var(--success-bg);color:var(--success);"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+      <div class="icon-btn"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+    </div>
+  </div>
+  <!-- 标注工具栏 -->
+  <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg);border-bottom:1px solid var(--border);flex-wrap:wrap;">
+    <div style="font-size:11px;font-weight:600;color:var(--text-secondary);">标注工具：</div>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;background:var(--primary);color:#fff;border-color:var(--primary);">区域</button>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;">箭头</button>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;">文字</button>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;">备注</button>
+    <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
+    <div style="font-size:11px;font-weight:600;color:var(--text-secondary);">快速标注：</div>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;background:var(--type-code-bg);color:var(--type-code);border-color:var(--type-code);">🔘 按钮</button>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;background:var(--type-doc-bg);color:var(--type-doc);border-color:var(--type-doc);">📝 输入框</button>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;background:var(--type-research-bg);color:var(--type-research);border-color:var(--type-research);">📐 范围区域</button>
+    <button class="ghost-btn" style="padding:4px 10px;font-size:11px;background:var(--type-design-bg);color:var(--type-design);border-color:var(--type-design);">🖼️ 图片/图标</button>
+    <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span style="font-size:11px;color:var(--text-secondary);">网格：</span>
+      <div style="display:flex;align-items:center;gap:2px;background:var(--success-bg);padding:2px 6px;border-radius:4px;border:1px solid #bbf7d0;">
+        <span style="font-size:10px;font-weight:700;color:var(--success);">3×3</span>
+        <span style="font-size:9px;color:var(--success);">横1-3 纵a-c</span>
+      </div>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="font-size:11px;color:var(--text-secondary);">已标注 <strong style="color:var(--primary);">8</strong> 个区域</div>
+  </div>
+  <!-- 主内容 -->
+  <div style="flex:1;display:flex;overflow:hidden;">
+    <!-- 设计图区域（带网格坐标） -->
+    <div style="flex:1;position:relative;background:#f3f4f6;overflow:auto;padding:24px;">
+      <!-- 横向坐标标签 -->
+      <div style="position:absolute;top:8px;left:50%;transform:translateX(-210px);width:420px;display:flex;justify-content:space-around;z-index:10;">
+        <div style="width:33.33%;text-align:center;font-size:10px;font-weight:700;color:var(--success);background:var(--success-bg);padding:2px 0;border-radius:3px 3px 0 0;">1</div>
+        <div style="width:33.33%;text-align:center;font-size:10px;font-weight:700;color:var(--success);background:var(--success-bg);padding:2px 0;border-radius:3px 3px 0 0;">2</div>
+        <div style="width:33.33%;text-align:center;font-size:10px;font-weight:700;color:var(--success);background:var(--success-bg);padding:2px 0;border-radius:3px 3px 0 0;">3</div>
+      </div>
+      <!-- 纵向坐标标签 -->
+      <div style="position:absolute;top:24px;left:calc(50% - 230px);height:340px;display:flex;flex-direction:column;justify-content:space-around;z-index:10;">
+        <div style="height:33.33%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--success);background:var(--success-bg);padding:0 4px;border-radius:3px 0 0 3px;writing-mode:vertical-rl;">a</div>
+        <div style="height:33.33%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--success);background:var(--success-bg);padding:0 4px;border-radius:3px 0 0 3px;writing-mode:vertical-rl;">b</div>
+        <div style="height:33.33%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--success);background:var(--success-bg);padding:0 4px;border-radius:3px 0 0 3px;writing-mode:vertical-rl;">c</div>
+      </div>
+      <!-- 设计图容器 -->
+      <div style="position:relative;width:420px;margin:0 auto;background:#fff;border-radius:0 0 12px 12px;box-shadow:var(--shadow-lg);overflow:hidden;margin-top:20px;">
+        <!-- 网格线 -->
+        <div style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5;">
+          <div style="position:absolute;top:33.33%;left:0;width:100%;height:1px;border-top:1px dashed rgba(22,163,74,0.3);"></div>
+          <div style="position:absolute;top:66.66%;left:0;width:100%;height:1px;border-top:1px dashed rgba(22,163,74,0.3);"></div>
+          <div style="position:absolute;top:0;left:33.33%;width:1px;height:100%;border-left:1px dashed rgba(22,163,74,0.3);"></div>
+          <div style="position:absolute;top:0;left:66.66%;width:1px;height:100%;border-left:1px dashed rgba(22,163,74,0.3);"></div>
+        </div>
+        <!-- 设计图内容 -->
+        <div style="height:60px;background:linear-gradient(135deg,#2563eb,#1d4ed8);display:flex;align-items:center;padding:0 20px;position:relative;z-index:1;">
+          <div style="width:32px;height:32px;background:rgba(255,255,255,0.2);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;">L</div>
+          <span style="color:#fff;font-size:14px;font-weight:600;margin-left:10px;">登录</span>
+        </div>
+        <div style="padding:24px;position:relative;z-index:1;">
+          <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px;">欢迎回来</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:20px;">登录您的账户继续使用</div>
+          <div style="margin-bottom:14px;"><div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">邮箱/手机号</div><div style="height:38px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);"></div></div>
+          <div style="margin-bottom:14px;"><div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">密码</div><div style="height:38px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);"></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div style="display:flex;align-items:center;gap:6px;"><div style="width:14px;height:14px;border:1px solid var(--border);border-radius:3px;background:var(--primary);"></div><span style="font-size:11px;color:var(--text-secondary);">记住我</span></div>
+            <span style="font-size:11px;color:var(--primary);">忘记密码？</span>
+          </div>
+          <div style="height:40px;background:var(--primary);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:600;">登录</div>
+          <div style="text-align:center;margin-top:16px;font-size:11px;color:var(--text-secondary);">还没有账户？<span style="color:var(--primary);">立即注册</span></div>
+        </div>
+      </div>
+      <!-- 标注层 -->
+      <div class="annotation-box active" style="position:absolute;top:44px;left:50%;transform:translateX(-210px);width:140px;height:60px;border:2px solid var(--type-research);border-radius:8px 0 0 0;background:rgba(217,119,6,0.08);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;top:-10px;left:8px;background:var(--type-research);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">a1 · 顶部导航</div>
+        <div style="position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--type-research);font-weight:600;">📐 范围区域</div>
+      </div>
+      <div class="annotation-box" style="position:absolute;top:44px;left:50%;transform:translateX(-70px);width:280px;height:60px;border:2px dashed var(--type-design);border-radius:0 8px 0 0;background:rgba(219,39,119,0.05);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;top:-10px;left:8px;background:var(--type-design);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">a2-a3 · 品牌区</div>
+        <div style="position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--type-design);font-weight:600;">📝 备注</div>
+      </div>
+      <div class="annotation-box" style="position:absolute;top:124px;left:50%;transform:translateX(-210px);width:140px;height:113px;border:2px dashed #6b7280;border-radius:0;background:rgba(107,114,128,0.05);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;top:-10px;left:8px;background:#6b7280;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">b1 · 表单标签</div>
+        <div style="position:absolute;bottom:4px;right:6px;font-size:9px;color:#6b7280;font-weight:600;">📝 备注</div>
+      </div>
+      <div class="annotation-box" style="position:absolute;top:124px;left:50%;transform:translateX(-70px);width:280px;height:113px;border:2px solid var(--type-doc);border-radius:0 8px 0 0;background:rgba(139,92,246,0.08);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;top:-10px;left:8px;background:var(--type-doc);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">b2-b3 · 输入框×2</div>
+        <div style="position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--type-doc);font-weight:600;">📝 输入框</div>
+      </div>
+      <div class="annotation-box" style="position:absolute;top:257px;left:50%;transform:translateX(-210px);width:140px;height:30px;border:2px dashed #6b7280;border-radius:0;background:rgba(107,114,128,0.05);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;top:-10px;left:8px;background:#6b7280;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">c1 · 选项行</div>
+      </div>
+      <div class="annotation-box" style="position:absolute;top:299px;left:50%;transform:translateX(-70px);width:280px;height:40px;border:2px solid var(--type-code);border-radius:0 8px 8px 0;background:rgba(37,99,235,0.08);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;top:-10px;left:8px;background:var(--type-code);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">c2-c3 · 登录按钮</div>
+        <div style="position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--type-code);font-weight:600;">🔘 按钮</div>
+      </div>
+      <div class="annotation-box" style="position:absolute;top:351px;left:50%;transform:translateX(30px);width:180px;height:20px;border:2px dashed var(--type-design);border-radius:0 0 8px 0;background:rgba(219,39,119,0.05);cursor:pointer;z-index:20;">
+        <div class="ann-label" style="position:absolute;bottom:-10px;right:8px;background:var(--type-design);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">c3 · 注册入口</div>
+      </div>
+      <div style="position:absolute;bottom:12px;left:12px;font-size:10px;color:var(--text-placeholder);background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--border-light);max-width:280px;line-height:1.5;">
+        💡 <strong>网格坐标：</strong>横向1-3 / 纵向a-c<br>用户说"c2-c3的按钮颜色不对"→直接定位登录按钮<br>右键标注框可查看关联组件和设计令牌
+      </div>
+    </div>
+    <!-- 右侧：设计图对话面板 -->
+    <div style="width:320px;background:var(--bg);border-left:1px solid var(--border);display:flex;flex-direction:column;">
+      <div style="display:flex;border-bottom:1px solid var(--border);">
+        <div style="flex:1;padding:10px;text-align:center;font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;">标注列表（8）</div>
+        <div style="flex:1;padding:10px;text-align:center;font-size:12px;font-weight:600;color:var(--primary);border-bottom:2px solid var(--primary);cursor:pointer;background:var(--primary-light);">💬 设计图对话</div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <!-- 上下文提示 -->
+        <div style="padding:8px 12px;background:var(--primary-light);border-bottom:1px solid #bfdbfe;font-size:10px;color:var(--primary);line-height:1.5;">
+          <strong>📌 本对话已自动加载：</strong><br>
+          ✓ 设计系统规范（L0令牌+L1组件）<br>
+          ✓ 前端页面开发技能（html skill）<br>
+          ✓ 执行规范（execution-standards）<br>
+          <span style="color:var(--text-secondary);">上下文仅含设计图相关，不加载全项目</span>
+        </div>
+        <!-- 对话区 -->
+        <div style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;">
+          <div style="background:var(--bg-secondary);border-radius:8px;padding:8px 10px;font-size:10px;color:var(--text-secondary);line-height:1.5;">
+            <div style="font-weight:600;margin-bottom:4px;">🔧 已加载技能与规范</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;">
+              <span style="background:var(--type-code-bg);color:var(--type-code);padding:1px 6px;border-radius:3px;font-size:9px;">html skill</span>
+              <span style="background:var(--type-doc-bg);color:var(--type-doc);padding:1px 6px;border-radius:3px;font-size:9px;">execution-standards</span>
+              <span style="background:var(--type-design-bg);color:var(--type-design);padding:1px 6px;border-radius:3px;font-size:9px;">design-tokens</span>
+              <span style="background:var(--success-bg);color:var(--success);padding:1px 6px;border-radius:3px;font-size:9px;">Button组件</span>
+              <span style="background:var(--success-bg);color:var(--success);padding:1px 6px;border-radius:3px;font-size:9px;">Input组件</span>
+            </div>
+          </div>
+          <div style="align-self:flex-end;max-width:85%;background:var(--primary);color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;font-size:11px;line-height:1.5;">c2-c3区域的登录按钮，颜色太浅了，用户可能看不到。改成更深的蓝色，hover时再深一点</div>
+          <div style="align-self:flex-start;max-width:90%;background:var(--bg);border:1px solid var(--border);border-radius:12px 12px 12px 2px;padding:10px 12px;font-size:11px;line-height:1.6;">
+            <div style="font-weight:600;color:var(--text);margin-bottom:6px;">✅ 已定位 c2-c3 · 登录按钮</div>
+            <div style="color:var(--text-secondary);margin-bottom:8px;">
+              <strong>关联组件：</strong>Button.tsx（主按钮变体）<br>
+              <strong>关联设计令牌：</strong><code>--primary: #2563eb</code><br>
+              <strong>当前问题：</strong>对比度4.2:1，未达WCAG AA（4.5:1）
+            </div>
+            <div style="background:var(--success-bg);border-radius:6px;padding:8px;margin-bottom:8px;">
+              <div style="font-size:10px;font-weight:600;color:var(--success);margin-bottom:4px;">📝 修改方案（仅改2个文件）</div>
+              <div style="font-size:10px;color:var(--text);line-height:1.5;">
+                1. <code>design-tokens.css</code>：--primary #2563eb→#1d4ed8<br>
+                2. <code>Button.tsx</code>：hover #1d4ed8→#1e40af<br>
+                <span style="color:var(--text-secondary);">影响范围：所有主按钮（全局统一）</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button style="font-size:10px;padding:4px 10px;border-radius:5px;background:var(--primary);color:#fff;border:none;cursor:pointer;font-weight:600;">应用修改</button>
+              <button style="font-size:10px;padding:4px 10px;border-radius:5px;background:var(--bg);color:var(--text);border:1px solid var(--border);cursor:pointer;">预览效果</button>
+              <button style="font-size:10px;padding:4px 10px;border-radius:5px;background:var(--bg);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;">调整方案</button>
+            </div>
+          </div>
+          <div style="align-self:flex-end;max-width:85%;background:var(--primary);color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;font-size:11px;line-height:1.5;">b2-b3的输入框，高度太矮了，而且聚焦时没有明显反馈。加到44px，聚焦时边框变粗加发光</div>
+          <div style="align-self:flex-start;max-width:90%;background:var(--bg);border:1px solid var(--border);border-radius:12px 12px 12px 2px;padding:10px 12px;font-size:11px;line-height:1.6;">
+            <div style="font-weight:600;color:var(--text);margin-bottom:6px;">✅ 已定位 b2-b3 · 输入框×2</div>
+            <div style="color:var(--text-secondary);margin-bottom:8px;">
+              <strong>关联组件：</strong>Input.tsx<br>
+              <strong>关联令牌：</strong><code>--input-height: 38px</code> / <code>--focus-ring</code><br>
+              <strong>修改文件：</strong>仅 Input.tsx + design-tokens.css
+            </div>
+            <div style="background:var(--success-bg);border-radius:6px;padding:8px;">
+              <div style="font-size:10px;font-weight:600;color:var(--success);margin-bottom:4px;">📝 修改方案</div>
+              <div style="font-size:10px;color:var(--text);line-height:1.5;">
+                1. --input-height: 38px→44px<br>
+                2. Focus：border 1px→2px + box-shadow 0 0 0 3px rgba(37,99,235,0.15)<br>
+                <span style="color:var(--text-secondary);">上下文消耗：约300行，非全项目数万行</span>
+              </div>
+            </div>
+          </div>
+          <div style="align-self:flex-start;font-size:10px;color:var(--text-secondary);padding:4px 8px;">⏳ 等待用户确认或继续提出修改...</div>
+        </div>
+        <!-- 输入栏 -->
+        <div style="padding:10px 12px;border-top:1px solid var(--border);background:var(--bg);">
+          <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;">
+            <button style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;">@技能</button>
+            <button style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;">@智能体</button>
+            <button style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;">@区域</button>
+            <button style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;">截图对比</button>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <input style="flex:1;height:32px;font-size:11px;padding:0 10px;border:1px solid var(--border);border-radius:6px;" placeholder="说区域坐标+修改要求，如：a1的导航栏加个返回按钮">
+            <button style="height:32px;padding:0 14px;font-size:11px;background:var(--primary);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">发送</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图6：上下文压缩+模型切换 ============ -->
+<div id="view6" class="view-panel">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker"><span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="name">上下文压缩 + 模型切换</span></div>
+    <div class="tab active">总监</div><div class="tab">对话</div><div class="tab">轨迹</div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden;">
+    <!-- 左侧：压缩流程 -->
+    <div style="flex:1;display:flex;flex-direction:column;background:var(--bg-secondary);overflow-y:auto;padding:20px;">
+      <div style="margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px;">切换模型 → 自动压缩上下文 → 创建新分支</div>
+        <div style="font-size:11px;color:var(--text-secondary);">当用户切换模型时，总监自动触发压缩引擎，将当前对话压缩为摘要，然后用新模型创建新分支并传递摘要</div>
+      </div>
+      <!-- 步骤1 -->
+      <div style="background:var(--bg);border-radius:10px;padding:14px;margin-bottom:12px;border-left:3px solid var(--primary);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">1</span>
+          <span style="font-size:13px;font-weight:600;">触发：用户切换模型</span>
+          <span style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:4px;background:var(--success-bg);color:var(--success);font-weight:600;">已触发</span>
+        </div>
+        <div style="background:var(--bg-secondary);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--text);line-height:1.6;">
+          <strong>用户：</strong>这个需求用 DeepSeek-Coder 来做吧<br>
+          <strong style="color:var(--primary);">系统检测：</strong>当前 DeepSeek-V4 → 目标 DeepSeek-Coder<br>
+          <strong style="color:var(--warning);">触发条件：</strong>对话超过5条/2000字 → 自动压缩
+        </div>
+      </div>
+      <!-- 步骤2 -->
+      <div style="background:var(--bg);border-radius:10px;padding:14px;margin-bottom:12px;border-left:3px solid var(--warning);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="width:22px;height:22px;border-radius:50%;background:var(--warning);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">2</span>
+          <span style="font-size:13px;font-weight:600;">压缩引擎执行（降级链：AI→规则→手动）</span>
+          <span style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:4px;background:var(--warning-bg);color:var(--warning);font-weight:600;">压缩中...</span>
+        </div>
+        <div style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>原始：12条/3,842字</span><span>目标：≤500字</span></div>
+          <div style="height:6px;background:var(--bg-secondary);border-radius:3px;overflow:hidden;"><div style="width:70%;height:100%;background:linear-gradient(90deg,var(--warning),var(--primary));border-radius:3px;"></div></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <div style="flex:1;padding:8px 10px;border-radius:6px;background:var(--primary-light);border:1px solid #bfdbfe;">
+            <div style="font-size:10px;font-weight:600;color:var(--primary);margin-bottom:2px;">AI智能压缩（推荐）</div>
+            <div style="font-size:9px;color:var(--text-secondary);">提取关键信息，保留决策和结论</div>
+          </div>
+          <div style="flex:1;padding:8px 10px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);opacity:0.7;">
+            <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-bottom:2px;">规则压缩</div>
+            <div style="font-size:9px;color:var(--text-placeholder);">AI不可用时降级</div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border-radius:6px;padding:10px 12px;">
+          <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">压缩结果预览（可编辑）</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.6;">
+            <strong>项目：</strong>用户登录功能开发<br>
+            <strong>已确认：</strong>React+Node.js+PostgreSQL；邮箱/手机号注册；密码找回；记住密码+自动登录（7天）<br>
+            <strong>待办：</strong>前端页面；后端API；数据库3张表<br>
+            <strong>决策：</strong>bcrypt加密；JWT会话；RESTful API
+          </div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer;">编辑摘要</button>
+            <button style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer;">查看原文</button>
+            <button style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer;">重新压缩</button>
+          </div>
+        </div>
+      </div>
+      <!-- 步骤3 -->
+      <div style="background:var(--bg);border-radius:10px;padding:14px;margin-bottom:12px;border-left:3px solid var(--success);opacity:0.8;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="width:22px;height:22px;border-radius:50%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">3</span>
+          <span style="font-size:13px;font-weight:600;">用新模型创建分支并传递摘要</span>
+          <span style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:4px;background:var(--bg);color:var(--text-placeholder);font-weight:600;">等待压缩完成</span>
+        </div>
+        <div style="background:var(--bg-secondary);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--text);line-height:1.6;">
+          <strong>新分支：</strong>前端开发（DeepSeek-Coder）<br>
+          <strong>传递内容：</strong>压缩摘要 + 任务描述 + 输入文件列表<br>
+          <strong>原分支：</strong>保留为"需求讨论"（DeepSeek-V4），可随时切换
+        </div>
+      </div>
+      <!-- 压缩设置 -->
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+        <div style="font-size:12px;font-weight:600;margin-bottom:10px;">⚙️ 压缩引擎设置</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;"><span style="font-size:11px;color:var(--text-secondary);">自动压缩阈值</span><select style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);"><option>超过5条或2000字</option><option>超过10条或4000字</option><option>仅手动触发</option></select></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;"><span style="font-size:11px;color:var(--text-secondary);">压缩目标长度</span><select style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);"><option>≤500字（精简）</option><option>≤1000字（标准）</option></select></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;"><span style="font-size:11px;color:var(--text-secondary);">切换模型自动创建分支</span><div style="width:36px;height:20px;background:var(--primary);border-radius:10px;position:relative;"><div style="width:16px;height:16px;background:#fff;border-radius:50%;position:absolute;top:2px;right:2px;"></div></div></div>
+        </div>
+      </div>
+    </div>
+    <!-- 右侧：模型选择 -->
+    <div style="width:280px;background:var(--bg);border-left:1px solid var(--border);display:flex;flex-direction:column;">
+      <div style="padding:12px 14px;border-bottom:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:600;margin-bottom:2px;">模型选择</div>
+        <div style="font-size:10px;color:var(--text-secondary);">不同模型适合不同任务，切换时自动压缩上下文</div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:8px;">
+        <div style="padding:10px 12px;border-radius:8px;margin-bottom:8px;background:var(--primary-light);border:1px solid #bfdbfe;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="font-size:14px;">🤖</span><span style="font-size:12px;font-weight:600;color:var(--primary);">DeepSeek-V4</span><span style="margin-left:auto;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--primary);color:#fff;font-weight:600;">当前</span></div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5;">通用对话/需求分析/架构设计。128K上下文。</div>
+        </div>
+        <div style="padding:10px 12px;border-radius:8px;margin-bottom:8px;background:var(--bg-secondary);cursor:pointer;border:1px solid transparent;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="font-size:14px;">💻</span><span style="font-size:12px;font-weight:600;">DeepSeek-Coder</span><span style="margin-left:auto;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--type-code-bg);color:var(--type-code);font-weight:600;">推荐</span></div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5;">代码生成/调试/重构。128K上下文。</div>
+        </div>
+        <div style="padding:10px 12px;border-radius:8px;margin-bottom:8px;background:var(--bg-secondary);cursor:pointer;border:1px solid transparent;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="font-size:14px;">⚡</span><span style="font-size:12px;font-weight:600;">DeepSeek-V4-Flash</span></div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5;">快速响应/简单任务。32K上下文。</div>
+        </div>
+        <div style="padding:10px 12px;border-radius:8px;margin-bottom:8px;background:var(--bg-secondary);cursor:pointer;border:1px solid transparent;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="font-size:14px;">🏠</span><span style="font-size:12px;font-weight:600;">Qwen2:7b（本地）</span><span style="margin-left:auto;font-size:9px;padding:2px 6px;border-radius:3px;background:var(--success-bg);color:var(--success);font-weight:600;">离线可用</span></div>
+          <div style="font-size:10px;color:var(--text-secondary);line-height:1.5;">本地模型/隐私敏感。需Ollama运行。8K上下文。</div>
+        </div>
+      </div>
+      <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--warning-bg);">
+        <div style="font-size:10px;color:var(--warning);line-height:1.5;"><strong>提示：</strong>切换模型会自动压缩当前对话并创建新分支。原对话保留在思维导图中，可随时切换回去。</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图7：分支管理中心+流水线模板+合并汇总 ============ -->
+<div id="view7" class="view-panel">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker"><span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="name">分支管理中心</span></div>
+    <div class="tab active">总监</div><div class="tab">对话</div><div class="tab">轨迹</div>
+  </div>
+  <div style="display:flex;gap:0;padding:0 16px;background:var(--bg);border-bottom:1px solid var(--border);">
+    <div style="padding:10px 16px;font-size:12px;font-weight:600;color:var(--primary);border-bottom:2px solid var(--primary);cursor:pointer;">分支列表（5）</div>
+    <div style="padding:10px 16px;font-size:12px;color:var(--text-secondary);cursor:pointer;">流水线模板</div>
+    <div style="padding:10px 16px;font-size:12px;color:var(--text-secondary);cursor:pointer;">合并汇总</div>
+    <div style="flex:1;"></div>
+    <div style="display:flex;align-items:center;gap:8px;"><input style="height:28px;font-size:11px;padding:0 10px;border:1px solid var(--border);border-radius:6px;width:140px;" placeholder="搜索分支..."><select style="height:28px;font-size:11px;padding:0 8px;border:1px solid var(--border);border-radius:6px;"><option>全部状态</option><option>进行中</option><option>已完成</option></select></div>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:16px;background:var(--bg-secondary);">
+    <!-- 流水线进度 -->
+    <div style="background:var(--bg);border-radius:10px;padding:14px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;"><div style="font-size:13px;font-weight:600;">📊 流水线进度</div><div style="font-size:11px;color:var(--text-secondary);">3/5完成 · 预计剩余15分钟</div></div>
+      <div style="display:flex;align-items:center;gap:0;margin-bottom:12px;">
+        <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">✓</div><div style="font-size:9px;font-weight:600;">需求分析</div></div>
+        <div style="flex:1;height:2px;background:var(--success);"></div>
+        <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">✓</div><div style="font-size:9px;font-weight:600;">架构设计</div></div>
+        <div style="flex:1;height:2px;background:linear-gradient(90deg,var(--success),var(--warning));"></div>
+        <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--warning);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;animation:pulse 2s infinite;">⚙️</div><div style="font-size:9px;font-weight:600;">前端开发</div><div style="font-size:8px;color:var(--warning);">60%</div></div>
+        <div style="flex:1;height:2px;background:var(--border);"></div>
+        <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--bg);border:2px solid var(--border);color:var(--text-placeholder);display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">⏳</div><div style="font-size:9px;font-weight:600;color:var(--text-secondary);">后端开发</div></div>
+        <div style="flex:1;height:2px;background:var(--border);"></div>
+        <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:#fee2e2;color:var(--danger);display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">⚠️</div><div style="font-size:9px;font-weight:600;">测试</div><div style="font-size:8px;color:var(--danger);">出错</div></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>整体进度</span><span>40% (2/5完成)</span></div>
+      <div style="height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden;"><div style="width:40%;height:100%;background:linear-gradient(90deg,var(--primary),var(--success));border-radius:4px;"></div></div>
+    </div>
+    <!-- 分支卡片 -->
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--warning);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:var(--type-code-bg);display:flex;align-items:center;justify-content:center;font-size:16px;">💻</div>
+          <div style="flex:1;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:600;">前端开发</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--type-code-bg);color:var(--type-code);font-weight:600;">开发</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--warning-bg);color:var(--warning);font-weight:600;">进行中</span></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px;">前端工程师 · DeepSeek-Coder · 6/10条 · 已运行8分钟</div></div>
+          <div style="display:flex;gap:6px;"><button class="ghost-btn" style="padding:4px 10px;font-size:10px;">进入对话</button><button class="ghost-btn" style="padding:4px 10px;font-size:10px;">暂停</button><button class="ghost-btn" style="padding:4px 10px;font-size:10px;color:var(--danger);border-color:#fecaca;">终止</button></div>
+        </div>
+        <div style="margin-bottom:6px;"><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>进度：登录页面开发中</span><span>60%</span></div><div style="height:4px;background:var(--bg-secondary);border-radius:2px;overflow:hidden;"><div style="width:60%;height:100%;background:var(--warning);border-radius:2px;"></div></div></div>
+        <div style="display:flex;gap:16px;font-size:10px;color:var(--text-secondary);"><span>📦 产出物：1进行中/3待开始</span><span>📥 输入：docs/design/（4文件）</span><span>📤 输出：src/frontend/</span><span>🔗 依赖：架构设计 ✓</span></div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--success);opacity:0.9;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:var(--type-doc-bg);display:flex;align-items:center;justify-content:center;font-size:16px;">📄</div>
+          <div style="flex:1;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:600;">架构设计</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--type-doc-bg);color:var(--type-doc);font-weight:600;">文档</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--success-bg);color:var(--success);font-weight:600;">已完成</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--primary-light);color:var(--primary);font-weight:600;">审核通过 88.75分</span></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px;">架构师 · DeepSeek-V4 · 15条 · 耗时12分钟</div></div>
+          <div style="display:flex;gap:6px;"><button class="ghost-btn" style="padding:4px 10px;font-size:10px;">查看产出</button><button class="ghost-btn" style="padding:4px 10px;font-size:10px;">审核记录</button></div>
+        </div>
+        <div style="display:flex;gap:16px;font-size:10px;color:var(--text-secondary);"><span>📦 产出物：4个文件（docs/design/）</span><span>✅ 下游：前端开发+后端开发（已创建）</span></div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--danger);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:#fee2e2;display:flex;align-items:center;justify-content:center;font-size:16px;">⚠️</div>
+          <div style="flex:1;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:600;">测试验证</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--type-test-bg);color:var(--type-test);font-weight:600;">测试</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--danger-bg);color:var(--danger);font-weight:600;">出错</span></div><div style="font-size:10px;color:var(--danger);margin-top:2px;">错误：Qwen2:7b本地模型调用超时，已自动暂停</div></div>
+          <div style="display:flex;gap:6px;"><button class="ghost-btn" style="padding:4px 10px;font-size:10px;background:var(--primary);color:#fff;border-color:var(--primary);">重试</button><button class="ghost-btn" style="padding:4px 10px;font-size:10px;">切换模型</button><button class="ghost-btn" style="padding:4px 10px;font-size:10px;color:var(--danger);border-color:#fecaca;">终止</button></div>
+        </div>
+      </div>
+    </div>
+    <!-- 流水线模板 -->
+    <div style="margin-top:20px;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px;">📋 流水线模板（快速创建标准流程）</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+        <div style="background:var(--bg);border-radius:8px;padding:12px;border:1px solid var(--border);cursor:pointer;"><div style="font-size:12px;font-weight:600;margin-bottom:4px;">🚀 标准开发流程</div><div style="font-size:10px;color:var(--text-secondary);margin-bottom:8px;">需求→设计→前端+后端→测试→部署</div><div style="font-size:9px;color:var(--text-placeholder);">5个分支 · 预计30分钟</div></div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px;border:1px solid var(--border);cursor:pointer;"><div style="font-size:12px;font-weight:600;margin-bottom:4px;">📝 文档撰写流程</div><div style="font-size:10px;color:var(--text-secondary);margin-bottom:8px;">调研→大纲→初稿→审核→终稿</div><div style="font-size:9px;color:var(--text-placeholder);">5个分支 · 预计20分钟</div></div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px;border:1px dashed var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;min-height:80px;"><span style="font-size:11px;color:var(--text-placeholder);">+ 创建自定义模板</span></div>
+      </div>
+    </div>
+    <!-- 合并汇总 -->
+    <div style="margin-top:20px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-size:13px;font-weight:600;">🔗 合并汇总（多分支结论整合）</div>
+        <div style="display:flex;gap:8px;"><select style="height:28px;font-size:11px;padding:0 8px;border:1px solid var(--border);border-radius:6px;"><option>合并策略：结论摘要</option><option>合并策略：完整内容</option></select><button class="btn btn-primary" style="padding:4px 12px;font-size:11px;">生成汇总报告</button></div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+          <span style="font-size:11px;color:var(--text-secondary);">合并来源：</span>
+          <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--success-bg);color:var(--success);font-weight:600;">✓ 需求分析</span>
+          <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--success-bg);color:var(--success);font-weight:600;">✓ 架构设计</span>
+          <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--warning-bg);color:var(--warning);font-weight:600;">⏳ 前端开发（进行中）</span>
+          <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--bg);color:var(--text-placeholder);font-weight:600;">○ 后端开发</span>
+        </div>
+        <div style="background:var(--bg-secondary);border-radius:8px;padding:12px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">📄 汇总报告预览（自动生成）</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.8;">
+            <strong>项目：</strong>用户登录功能开发<br>
+            <strong>状态：</strong>进行中（2/5分支完成）<br>
+            <strong>已确认结论：</strong>技术选型React+Node.js+PostgreSQL（架构设计）；功能范围邮箱/手机号注册+密码找回（需求分析）；安全方案bcrypt+JWT（架构设计）<br>
+            <strong>待完成：</strong>前端页面、后端API、测试验证<br>
+            <strong>产出物统计：</strong>4设计文档 + 1前端文件（进行中）
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 视图8：总监仪表盘 ============ -->
+<div id="view8" class="view-panel">
+<div class="harness-window">
+  <div class="tabbar">
+    <div class="project-picker"><span class="icon"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg></span><span class="name">总监仪表盘 · 全局监控</span></div>
+    <div class="tab active">总监</div><div class="tab">对话</div><div class="tab">轨迹</div>
+    <div class="tabbar-right"><div class="icon-btn"><svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></div></div>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:16px;background:var(--bg-secondary);">
+    <!-- 统计卡片 -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--primary);"><div style="font-size:10px;color:var(--text-secondary);margin-bottom:4px;">总分支数</div><div style="font-size:24px;font-weight:700;">5</div><div style="font-size:10px;color:var(--success);margin-top:2px;">↑ 2个进行中</div></div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--success);"><div style="font-size:10px;color:var(--text-secondary);margin-bottom:4px;">已完成</div><div style="font-size:24px;font-weight:700;color:var(--success);">2</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px;">平均审核88.75分</div></div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--warning);"><div style="font-size:10px;color:var(--text-secondary);margin-bottom:4px;">进行中</div><div style="font-size:24px;font-weight:700;color:var(--warning);">2</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px;">预计剩余15分钟</div></div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;border-left:3px solid var(--danger);"><div style="font-size:10px;color:var(--text-secondary);margin-bottom:4px;">告警/出错</div><div style="font-size:24px;font-weight:700;color:var(--danger);">1</div><div style="font-size:10px;color:var(--danger);margin-top:2px;">测试验证：模型超时</div></div>
+    </div>
+    <!-- 流水线+告警 -->
+    <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:16px;">
+      <div style="background:var(--bg);border-radius:10px;padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📊 流水线进度</div>
+        <div style="display:flex;align-items:center;gap:0;margin-bottom:16px;">
+          <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">✓</div><div style="font-size:9px;font-weight:600;">需求分析</div></div>
+          <div style="flex:1;height:2px;background:var(--success);"></div>
+          <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">✓</div><div style="font-size:9px;font-weight:600;">架构设计</div></div>
+          <div style="flex:1;height:2px;background:linear-gradient(90deg,var(--success),var(--warning));"></div>
+          <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--warning);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">⚙️</div><div style="font-size:9px;font-weight:600;">前端开发</div><div style="font-size:8px;color:var(--warning);">60%</div></div>
+          <div style="flex:1;height:2px;background:var(--border);"></div>
+          <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:var(--bg);border:2px solid var(--border);color:var(--text-placeholder);display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">⏳</div><div style="font-size:9px;font-weight:600;color:var(--text-secondary);">后端开发</div></div>
+          <div style="flex:1;height:2px;background:var(--border);"></div>
+          <div style="text-align:center;flex:1;"><div style="width:32px;height:32px;border-radius:50%;background:#fee2e2;color:var(--danger);display:flex;align-items:center;justify-content:center;margin:0 auto 4px;font-size:12px;">⚠️</div><div style="font-size:9px;font-weight:600;">测试</div><div style="font-size:8px;color:var(--danger);">出错</div></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>整体进度</span><span>40% (2/5完成)</span></div>
+        <div style="height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden;"><div style="width:40%;height:100%;background:linear-gradient(90deg,var(--primary),var(--success));border-radius:4px;"></div></div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">⚠️ 告警中心</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="padding:10px;border-radius:8px;background:var(--danger-bg);border:1px solid #fecaca;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;"><span style="font-size:12px;">🔴</span><span style="font-size:11px;font-weight:600;color:var(--danger);">测试验证分支出错</span><span style="margin-left:auto;font-size:9px;color:var(--text-secondary);">2分钟前</span></div>
+            <div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px;">Qwen2:7b本地模型调用超时，已自动暂停</div>
+            <div style="display:flex;gap:6px;"><button style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--primary);color:#fff;border:none;cursor:pointer;">重试</button><button style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--bg);color:var(--text);border:1px solid var(--border);cursor:pointer;">切换模型</button><button style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--bg);color:var(--danger);border:1px solid #fecaca;cursor:pointer;">终止</button></div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--warning-bg);border:1px solid #fde68a;">
+            <div style="display:flex;align-items:center;gap:6px;"><span style="font-size:12px;">🟡</span><span style="font-size:11px;font-weight:600;color:var(--warning);">后端开发等待依赖</span><span style="margin-left:auto;font-size:9px;color:var(--text-secondary);">5分钟前</span></div>
+            <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">后端开发依赖前端完成，当前前端进度60%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 资源+活动 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="background:var(--bg);border-radius:10px;padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">💻 资源使用</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>Token消耗（今日）</span><span>128K / 1M (12.8%)</span></div><div style="height:6px;background:var(--bg-secondary);border-radius:3px;overflow:hidden;"><div style="width:12.8%;height:100%;background:var(--primary);border-radius:3px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>模型调用（今日）</span><span>47次</span></div><div style="height:6px;background:var(--bg-secondary);border-radius:3px;overflow:hidden;"><div style="width:23.5%;height:100%;background:var(--success);border-radius:3px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>产出物文件</span><span>9个 (docs:4, src:4, summary:1)</span></div><div style="height:6px;background:var(--bg-secondary);border-radius:3px;overflow:hidden;"><div style="width:45%;height:100%;background:var(--type-doc);border-radius:3px;"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-bottom:4px;"><span>本地Ollama状态</span><span style="color:var(--success);">● 运行中 (Qwen2:7b)</span></div><div style="height:6px;background:var(--bg-secondary);border-radius:3px;overflow:hidden;"><div style="width:100%;height:100%;background:var(--success);border-radius:3px;"></div></div></div>
+        </div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📋 最近活动</div>
+        <div style="display:flex;flex-direction:column;gap:0;">
+          <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);"><div style="width:8px;height:8px;border-radius:50%;background:var(--danger);margin-top:4px;flex-shrink:0;"></div><div style="flex:1;"><div style="font-size:11px;">测试验证分支出错（模型超时）</div><div style="font-size:9px;color:var(--text-placeholder);">2分钟前 · 总监</div></div></div>
+          <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);"><div style="width:8px;height:8px;border-radius:50%;background:var(--warning);margin-top:4px;flex-shrink:0;"></div><div style="flex:1;"><div style="font-size:11px;">前端开发创建产出物 auth.ts</div><div style="font-size:9px;color:var(--text-placeholder);">5分钟前 · 前端工程师</div></div></div>
+          <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);"><div style="width:8px;height:8px;border-radius:50%;background:var(--success);margin-top:4px;flex-shrink:0;"></div><div style="flex:1;"><div style="font-size:11px;">架构设计审核通过（88.75分）</div><div style="font-size:9px;color:var(--text-placeholder);">12分钟前 · 总监</div></div></div>
+          <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);"><div style="width:8px;height:8px;border-radius:50%;background:var(--primary);margin-top:4px;flex-shrink:0;"></div><div style="flex:1;"><div style="font-size:11px;">总监创建前端+后端开发分支</div><div style="font-size:9px;color:var(--text-placeholder);">14分钟前 · 总监</div></div></div>
+          <div style="display:flex;gap:10px;padding:8px 0;"><div style="width:8px;height:8px;border-radius:50%;background:var(--type-doc);margin-top:4px;flex-shrink:0;"></div><div style="flex:1;"><div style="font-size:11px;">架构设计完成，产出4个文档</div><div style="font-size:9px;color:var(--text-placeholder);">15分钟前 · 架构师</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============ 设计说明区 ============ -->
+<div class="spec-section">
+  <h2>V12 多分支流水线协作系统 — 设计说明</h2>
+  <div class="spec-grid">
+    <div class="spec-block">
+      <h3>🎯 核心设计理念</h3>
+      <ul>
+        <li><strong>分支是专业化工作单元</strong>：处理类型（做什么）+智能体角色（谁来做）+模型（用什么做）三维定义</li>
+        <li><strong>总监是全局调度者</strong>：需求拆解→任务分配→上下文传递→进度监控→质量审核→下一步安排</li>
+        <li><strong>上下文由总监传递</strong>：每个分支只接收必要上下文（项目背景+前置产出摘要）</li>
+        <li><strong>分支间通过文件夹流转数据</strong>：A的outputFolder = B的inputFolder</li>
+        <li><strong>思维导图是第一公民</strong>：全局可视化+导航入口+操作中心</li>
+        <li><strong>设计图对话节省上下文</strong>：专用对话通道，默认加载设计规范+前端技能，不加载全项目</li>
+        <li><strong>网格坐标快速定位</strong>：横向1-3+纵向a-c，用户说"c2-c3按钮"即直接定位</li>
+      </ul>
+    </div>
+    <div class="spec-block">
+      <h3>📐 八个核心视图</h3>
+      <ul>
+        <li><strong>视图1：总监调度主视图</strong>（分屏）：左思维导图（右键菜单6项操作+生成导图入口）+右总监对话</li>
+        <li><strong>视图2：创建分支弹窗</strong>（三维定义）：三步引导（处理类型→智能体→模型与配置）</li>
+        <li><strong>视图3：分支对话+产出物面板</strong>：上下文摘要卡片+对话区+右侧产出物面板</li>
+        <li><strong>视图4：节点详情+审核流程</strong>：节点详情面板+总监多维度审核弹窗</li>
+        <li><strong>视图5：设计图标注模式</strong>（增强版）：3×3网格坐标+常见元素快速标注（按钮/输入框/范围/图片）+备注框+设计图独立对话（默认加载设计规范+html skill+execution-standards）+@技能/@智能体/@区域调用</li>
+        <li><strong>视图6：上下文压缩+模型切换</strong>：三步流程+压缩引擎（AI→规则→手动降级链）+阈值设置</li>
+        <li><strong>视图7：分支管理中心</strong>：分支卡片（暂停/终止/错误处理）+流水线进度+模板库+合并汇总</li>
+        <li><strong>视图8：总监仪表盘</strong>：统计卡片+流水线进度+告警中心+资源使用+最近活动</li>
+      </ul>
+    </div>
+    <div class="spec-block">
+      <h3>🔄 核心交互流程</h3>
+      <ul>
+        <li><strong>总监调度</strong>：用户提需求→总监拆解→生成流水线方案→用户确认→自动创建分支→分配任务→传递上下文</li>
+        <li><strong>分支执行</strong>：智能体读取输入文件夹→执行任务→更新产出物→完成后通知总监审核</li>
+        <li><strong>总监审核</strong>：多维度评分（完整性/质量/一致性/规范性）→通过/退回→自动创建下游分支</li>
+        <li><strong>切换模型</strong>：用户切换模型→自动压缩上下文→用新模型创建新分支→传递压缩摘要</li>
+        <li><strong>设计图修改</strong>：用户说"c2-c3按钮颜色不对"→系统定位网格坐标→识别关联组件（Button.tsx）和设计令牌（--primary）→仅加载2个文件（约300行）→生成修改方案→应用修改→实时预览</li>
+        <li><strong>设计图对话</strong>：专用对话通道，默认注入设计系统规范（L0令牌+L1组件）+html skill+execution-standards，上下文仅含设计图相关，不加载全项目</li>
+        <li><strong>技能/智能体调用</strong>：对话中可@技能（html/sheet/ppt等）、@智能体（前端工程师/架构师/总监等）、@区域（a1/b2/c3等），自动加载对应规范</li>
+      </ul>
+    </div>
+    <div class="spec-block">
+      <h3>🎨 设计系统（V12）</h3>
+      <ul>
+        <li><strong>分支类型色</strong>：文档紫/开发蓝/测试绿/调研橙/设计粉/通用灰</li>
+        <li><strong>状态语义</strong>：待开始灰/进行中橙脉冲/已完成绿/出错红</li>
+        <li><strong>总监消息样式</strong>：青色背景+青色边框+消息头（总监→分支+动作标签）+分节内容</li>
+        <li><strong>上下文摘要卡片</strong>：浅蓝背景+可展开/编辑/查看完整对话/来源溯源</li>
+        <li><strong>网格坐标系统</strong>：3×3网格（横向1-3/纵向a-c），绿色虚线叠加在设计图上，标注框自动关联坐标</li>
+        <li><strong>设计图对话</strong>：右侧面板，默认加载设计规范+前端技能+执行规范，支持@技能/@智能体/@区域</li>
+        <li><strong>L0-L3分层架构</strong>：设计令牌→基础组件→业务组件→页面视图，修改风格只改变量，修改组件只改对应文件，无需全量读取</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div style="text-align:center;color:var(--text-placeholder);font-size:11px;margin-top:16px;">
+  dsh-director V12 多分支流水线协作系统设计稿 · 8视图 · 网格坐标+设计图对话+技能调用 · 基于v1.2方案
+</div>
+
+<script>
+function switchView(viewId, tabEl) {
+  document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(viewId).classList.add('active');
+  if (tabEl) tabEl.classList.add('active');
+}
+function selectNode(el) {
+  document.querySelectorAll('.mm-node').forEach(n => n.classList.remove('selected'));
+  el.classList.add('selected');
+}
+function showModal(id) { document.getElementById(id).style.display = 'flex'; }
+function hideModal(id) { document.getElementById(id).style.display = 'none'; }
+</script>
+
+</body>
+</html>
