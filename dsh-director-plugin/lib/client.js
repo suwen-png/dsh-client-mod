@@ -3204,14 +3204,15 @@ window.__ModuleLoader__.load({
 			/**
 			 * 创建层级节点（17号文 §2.1 MemoryNode 形态）
 			 * @param {object} p
+			 * @param {string} [p.id] 指定节点 id（自动同步必须用**数据源派生的稳定 id**，见 logic/discover.js）
 			 * @param {string} p.name 节点名
 			 * @param {"global"|"project"|"session"} p.level
 			 * @param {string|null} p.parentId 父节点 id（全局级为 null）
 			 */
-			function makeNode({ name, level, parentId = null, meta = {} }) {
+			function makeNode({ id, name, level, parentId = null, meta = {} }) {
 				const now = Date.now();
 				return {
-					id: level === LEVEL.GLOBAL ? GLOBAL_NODE_ID : makeNodeId(level),
+					id: level === LEVEL.GLOBAL ? GLOBAL_NODE_ID : (id || makeNodeId(level)),
 					name: name || "未命名",
 					level,
 					parentId: level === LEVEL.GLOBAL ? null : parentId,
@@ -3322,8 +3323,12 @@ window.__ModuleLoader__.load({
 					const parent = n.parentId ? byId.get(n.parentId) : null;
 					(parent || root).childNodes.push(n);
 				}
+				// 🔴 排序依据 `meta.order` 优先：自动同步的节点在同一毫秒内批量创建，
+				//    若按 createdAt 排序则顺序不确定（每次刷新树都在抖）。
+				//    同步时写入数据源中的序号 ⇒ 树顺序与宿主会话列表一致。
+				const rank = (n) => (n.meta && typeof n.meta.order === "number") ? n.meta.order : (n.meta?.createdAt || 0);
 				const sortRec = (node) => {
-					node.childNodes.sort((a, b) => (a.meta?.createdAt || 0) - (b.meta?.createdAt || 0));
+					node.childNodes.sort((a, b) => rank(a) - rank(b));
 					node.childNodes.forEach(sortRec);
 				};
 				sortRec(root);
@@ -3465,6 +3470,54 @@ window.__ModuleLoader__.load({
 			exports.installHierarchyApi = installHierarchyApi;
 		};
 
+		// ── util/bus.js ──
+		__defs["util/bus.js"] = function (exports) {
+			/**
+			 * util/bus.js — 层级数据变更事件总线（极简，零依赖）
+			 *
+			 * 为什么需要（🔴 实测缺陷，2026-09-12）
+			 *   面板组件在**插件启动时**即挂载并渲染首帧，而此时自动同步
+			 *   （`syncFromSource`，异步）**尚未完成**。组件拿到的是"同步前"的陈旧快照：
+			 *     实测现象：真机覆盖度已是 会话 8/8 · 文件夹 2/2 · 全局 1/1，
+			 *               面板却显示「⚠️ 存在未覆盖 · 会话 0/8 · 文件夹 0/2」，
+			 *               且树上只有「全局总管」一个节点。
+			 *   根因：缺少"数据已变更"的通知通道，组件首帧之后不再刷新。
+			 *
+			 * 用法
+			 *   数据写入方（sync / summarize / CRUD）：`emitHierarchyChange()`
+			 *   视图消费方（组件 / 浮层）      ：`onHierarchyChange(cb)` → 返回取消订阅函数
+			 */
+			
+			const listeners = new Set();
+			
+			/**
+			 * 订阅层级数据变更
+			 * @param {() => void} fn
+			 * @returns {() => void} 取消订阅
+			 */
+			function onHierarchyChange(fn) {
+				if (typeof fn !== "function") return () => {};
+				listeners.add(fn);
+				return () => { listeners.delete(fn); };
+			}
+			
+			/** 广播层级数据变更（所有订阅者按注册顺序调用，单个抛错不影响其他） */
+			function emitHierarchyChange() {
+				for (const fn of Array.from(listeners)) {
+					try { fn(); } catch (e) { /* 单个订阅者失败不影响其他 */ }
+				}
+			}
+			
+			/** 当前订阅数（调试/验证用） */
+			function hierarchyListenerCount() {
+				return listeners.size;
+			}
+			
+			exports.onHierarchyChange = onHierarchyChange;
+			exports.emitHierarchyChange = emitHierarchyChange;
+			exports.hierarchyListenerCount = hierarchyListenerCount;
+		};
+
 		// ── logic/summarize.js ──
 		__defs["logic/summarize.js"] = function (exports) {
 			/**
@@ -3493,6 +3546,7 @@ window.__ModuleLoader__.load({
 			const { callLocalModel, directorConfig } = __m("config/model.js");
 			const { getNode, saveNode, LEVEL, LEVEL_LABEL } = __m("store/hierarchy.js");
 			const { dshLog } = __m("util/debug.js");
+			const { emitHierarchyChange } = __m("util/bus.js");
 			
 			/** 梯度定义 */
 			const GRADE = { RULE: "G0", LOCAL: "G1", ROLLUP: "G2" };
@@ -3631,6 +3685,7 @@ window.__ModuleLoader__.load({
 					if (res.degraded) stats.degraded++;
 				};
 				await walk(root);
+				emitHierarchyChange();
 				return stats;
 			}
 			
@@ -3654,6 +3709,7 @@ window.__ModuleLoader__.load({
 				parent.summaryGrade = res.grade;
 				parent.summaryAt = res.at;
 				await saveNode(parent);
+				emitHierarchyChange();
 				return { node: parent, result: res };
 			}
 			
@@ -3673,6 +3729,427 @@ window.__ModuleLoader__.load({
 			exports.summarizeTree = summarizeTree;
 			exports.propagateUp = propagateUp;
 			exports.installSummarizeApi = installSummarizeApi;
+		};
+
+		// ── logic/discover.js ──
+		__defs["logic/discover.js"] = function (exports) {
+			/**
+			 * logic/discover.js — 真实会话 / 文件夹（workspace）数据源发现层
+			 *
+			 * 需求来源：「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层全局总管负责」
+			 *   要让**每一个**对话/文件夹都有总监，节点就不能靠手工创建 ——
+			 *   必须从宿主真实数据源**自动发现**会话与文件夹，再逐一定向生成总监节点。
+			 *
+			 * ── 数据源（实测，2026-09-12 真机 Harness 渲染进程）────────────────
+			 *   ① `localStorage["dsh.workspace.view.v5"]`
+			 *        {"groupBy":"workspace",
+			 *         "sessionOrderByAccount":{ "<workspaceId>": ["session-xxx", ...], "": [...] },
+			 *         "sessionUpdatedAtByAccount":{ "<workspaceId>": {"session-xxx": ts, ...} }}
+			 *        ⇒ **workspace = 文件夹级**（groupBy 明确为 workspace），
+			 *          **session   = 对话级**，且自带更新时间。
+			 *   ② `localStorage["dsh.sessions.current"]` → {"sessionId":"session-xxx"} 当前会话
+			 *   ③ 兜底：IDB `directorFolders`（keyPath folderId）/ `directorStores`（会话 store）
+			 *
+			 * ⚠️ ① 的 key 带版本号（v5），宿主升级后会变。故用**前缀模糊匹配**
+			 *    `dsh.workspace.view`，而非写死 v5 —— 否则宿主一升级就全量失联。
+			 *
+			 * 🔴 稳定 id 约定（幂等的根基）
+			 *    节点 id 必须由**数据源主键**派生，不能用随机 id：
+			 *      workspace → `ws_<workspaceId>`（未分组为 `ws__ungrouped__`）
+			 *      session   → `se_<sessionId>`
+			 *    否则每次同步都会新建一套节点（重复膨胀），且无法判定「已覆盖」。
+			 */
+			
+			const { idbListFolders } = __m("store/idb.js");
+			
+			/** 稳定 id 前缀 */
+			const ID_PREFIX = { workspace: "ws_", session: "se_" };
+			/** 未分组 workspace 的占位 id（数据源中 key 为空串） */
+			const UNGROUPED_ID = "__ungrouped__";
+			
+			/** 通用短码（标题缺失时的兜底显示名） */
+			function shortId(id, keep = 8) {
+				const s = String(id || "");
+				return s.length <= keep ? s : s.slice(0, keep);
+			}
+			
+			/**
+			 * 会话显示名（标题缺失时的兜底）
+			 * 🔴 必须先剥离 `session-` 前缀再截断 —— 会话 id 形如
+			 *    `session-4e8e9e49-0a8c-...`，直接取前 8 位得到的是常量前缀 `session-`，
+			 *    导致**所有会话同名**（实测 8 个会话全部显示为「会话 session-」，无法区分）。
+			 */
+			function sessionLabel(sessionId, keep = 8) {
+				return "会话 " + shortId(String(sessionId || "").replace(/^session-/, ""), keep);
+			}
+			
+			function safeLS() {
+				try {
+					return typeof localStorage !== "undefined" ? localStorage : null;
+				} catch (e) {
+					return null; // 隐私模式 / 禁用存储
+				}
+			}
+			
+			/**
+			 * 前缀模糊匹配 localStorage key（应对宿主版本升级，如 v5 → v6）
+			 * @returns {string|null} 命中的 key
+			 */
+			function findWorkspaceViewKey() {
+				const ls = safeLS();
+				if (!ls) return null;
+				let best = null;
+				for (let i = 0; i < ls.length; i++) {
+					const k = ls.key(i);
+					if (k && k.indexOf("dsh.workspace.view") === 0) best = k; // 取最后一个（版本号最大）
+				}
+				return best;
+			}
+			
+			/** 读取并解析 workspace 视图（宿主真实分组数据） */
+			function readWorkspaceView() {
+				const ls = safeLS();
+				if (!ls) return null;
+				const key = findWorkspaceViewKey();
+				if (!key) return null;
+				let raw = null;
+				try { raw = ls.getItem(key); } catch (e) { return null; }
+				if (!raw) return null;
+				let obj = null;
+				try { obj = JSON.parse(raw); } catch (e) { return null; }
+				if (!obj || typeof obj !== "object") return null;
+				return { key, data: obj };
+			}
+			
+			/** 当前会话 id */
+			function readCurrentSessionId() {
+				const ls = safeLS();
+				if (!ls) return null;
+				try {
+					const raw = ls.getItem("dsh.sessions.current");
+					if (!raw) return null;
+					const o = JSON.parse(raw);
+					return (o && o.sessionId) || null;
+				} catch (e) { return null; }
+			}
+			
+			/** workspace 节点 id（稳定） */
+			function workspaceNodeId(workspaceId) {
+				return ID_PREFIX.workspace + (workspaceId || UNGROUPED_ID);
+			}
+			
+			/** session 节点 id（稳定） */
+			function sessionNodeId(sessionId) {
+				return ID_PREFIX.session + sessionId;
+			}
+			
+			/**
+			 * 发现真实层级：workspaces（文件夹级） + sessions（对话级）
+			 *
+			 * @returns {Promise<{source:string, workspaces:Array, sessions:Array, currentSessionId:string|null}>}
+			 *   workspaces: [{ id, nodeId, sessionIds: string[] }]
+			 *   sessions  : [{ id, nodeId, workspaceId, updatedAt }]
+			 *   source    : "localStorage" | "idb-folders" | "none"
+			 */
+			async function discover() {
+				const view = readWorkspaceView();
+				if (view && view.data.sessionOrderByAccount) {
+					const order = view.data.sessionOrderByAccount || {};
+					const times = view.data.sessionUpdatedAtByAccount || {};
+					const workspaces = [];
+					const sessions = [];
+					for (const wsId of Object.keys(order)) {
+						const ids = Array.isArray(order[wsId]) ? order[wsId] : [];
+						const tmap = times[wsId] || {};
+						workspaces.push({
+							id: wsId || UNGROUPED_ID,
+							rawId: wsId,
+							nodeId: workspaceNodeId(wsId),
+							name: wsId ? ("工作区 " + shortId(wsId)) : "未分组",
+							sessionIds: ids.slice()
+						});
+						for (const sid of ids) {
+							sessions.push({
+								id: sid,
+								nodeId: sessionNodeId(sid),
+								workspaceId: wsId || UNGROUPED_ID,
+								updatedAt: tmap[sid] || 0
+							});
+						}
+					}
+					return {
+						source: "localStorage",
+						workspaceViewKey: view.key,
+						workspaces, sessions,
+						currentSessionId: readCurrentSessionId()
+					};
+				}
+			
+				// ── 兜底：IDB directorFolders（文件夹级）+ directorStores（会话级）──
+				const folders = await idbListFolders();
+				if (folders && folders.length) {
+					const workspaces = folders.map((f) => ({
+						id: f.folderId,
+						rawId: f.folderId,
+						nodeId: workspaceNodeId(f.folderId),
+						name: f.name || f.title || ("文件夹 " + shortId(f.folderId)),
+						sessionIds: []
+					}));
+					return {
+						source: "idb-folders",
+						workspaces,
+						sessions: [],
+						currentSessionId: readCurrentSessionId()
+					};
+				}
+			
+				return { source: "none", workspaces: [], sessions: [], currentSessionId: readCurrentSessionId() };
+			}
+			
+			/** 安装全局契约 */
+			function installDiscoverApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshDiscover = {
+					ID_PREFIX, UNGROUPED_ID,
+					shortId, sessionLabel, findWorkspaceViewKey, readWorkspaceView, readCurrentSessionId,
+					workspaceNodeId, sessionNodeId, discover
+				};
+				return window.__dshDiscover;
+			}
+			
+			exports.ID_PREFIX = ID_PREFIX;
+			exports.UNGROUPED_ID = UNGROUPED_ID;
+			exports.shortId = shortId;
+			exports.sessionLabel = sessionLabel;
+			exports.findWorkspaceViewKey = findWorkspaceViewKey;
+			exports.readWorkspaceView = readWorkspaceView;
+			exports.readCurrentSessionId = readCurrentSessionId;
+			exports.workspaceNodeId = workspaceNodeId;
+			exports.sessionNodeId = sessionNodeId;
+			exports.discover = discover;
+			exports.installDiscoverApi = installDiscoverApi;
+		};
+
+		// ── logic/sync.js ──
+		__defs["logic/sync.js"] = function (exports) {
+			/**
+			 * logic/sync.js — 自动同步：让**每一个**对话 / 文件夹都拥有总监
+			 *
+			 * 需求（用户原话）：「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层有总监负责」
+			 *
+			 * 设计要点
+			 *   1. **稳定 id 幂等**：节点 id 由数据源主键派生（`ws_`/`se_` 前缀，见 discover.js），
+			 *      故重复同步**只会更新、不会重复新建**。这是「每一个都有」能被验证的前提。
+			 *   2. **全局总管单例**：`__global__`，永远存在，所有文件夹级挂其下。
+			 *   3. **文件夹级 = workspace**（宿主 `groupBy:"workspace"`），**对话级 = session**。
+			 *   4. **不覆盖用户改名**：同步写入时打 `meta.autoName = true`；用户改名后该标记被清除，
+			 *      此后同步不再覆盖 `name`。
+			 *   5. **孤儿软标记**：数据源中已消失（被删除）的会话不删除节点（避免误删用户沉淀的
+			 *      总结/决策），只标 `meta.orphaned = true`，UI 可筛选。
+			 *
+			 * 全局契约：`window.__dshSync`
+			 */
+			
+			const { LEVEL, GLOBAL_NODE_ID, makeNode, getNode, saveNode, ensureGlobal, listAllNodes } = __m("store/hierarchy.js");
+			const { discover, workspaceNodeId, sessionNodeId, shortId, sessionLabel } = __m("logic/discover.js");
+			const { idbLoad } = __m("store/idb.js");
+			const { dshLog } = __m("util/debug.js");
+			const { emitHierarchyChange } = __m("util/bus.js");
+			
+			/**
+			 * 从真实数据源同步层级结构（幂等）
+			 * @param {object} [opts]
+			 * @param {boolean} [opts.includeOrphanScan=true] 是否扫描并软标记已消失的会话
+			 * @returns {Promise<{source:string, created:number, updated:number, orphaned:number,
+			 *                    folders:number, sessions:number, total:number, coverage:object}>}
+			 */
+			async function syncFromSource(opts = {}) {
+				const disc = await discover();
+				const stats = {
+					source: disc.source, created: 0, updated: 0, orphaned: 0,
+					folders: 0, sessions: 0, total: 0
+				};
+			
+				// ── 1. 全局总管（单例，必须有）──
+				const root = await ensureGlobal();
+			
+				if (!disc.workspaces.length && !disc.sessions.length) {
+					dshLog("sync", "数据源为空（source=" + disc.source + "），仅确保全局总管存在");
+					stats.total = 1;
+					stats.coverage = await auditCoverage();
+					emitHierarchyChange();
+					return stats;
+				}
+			
+				// ── 2. 文件夹级（workspace）→ 项目总监 ──
+				const rootChildren = new Set(root.children || []);
+				const folderNodeIds = [];
+				disc.workspaces.forEach((ws, idx) => {
+					const id = ws.nodeId || workspaceNodeId(ws.id);
+					folderNodeIds.push(id);
+					rootChildren.add(id);
+					ws.__nodeId = id;
+					ws.__order = idx;
+				});
+			
+				for (const ws of disc.workspaces) {
+					const id = ws.__nodeId;
+					let node = await getNode(id);
+					if (!node) {
+						node = makeNode({
+							id, name: ws.name, level: LEVEL.PROJECT, parentId: GLOBAL_NODE_ID,
+							meta: { sourceId: ws.rawId ?? ws.id, source: "workspace", autoName: true, order: ws.__order }
+						});
+						stats.created++;
+					} else {
+						if (node.meta && node.meta.autoName !== false && node.name !== ws.name) node.name = ws.name;
+						node.parentId = GLOBAL_NODE_ID;
+						node.meta = { ...(node.meta || {}), sourceId: ws.rawId ?? ws.id, source: "workspace", order: ws.__order };
+						stats.updated++;
+					}
+					await saveNode(node);
+					stats.folders++;
+				}
+			
+				// ── 3. 对话级（session）→ 会话总监 ──
+				const folderChildMap = new Map(); // folderNodeId -> [sessionNodeId]
+				const aliveSessionIds = new Set();
+				for (const s of disc.sessions) {
+					const parentId = workspaceNodeId(s.workspaceId);
+					if (!folderChildMap.has(parentId)) folderChildMap.set(parentId, []);
+					folderChildMap.get(parentId).push(s.nodeId || sessionNodeId(s.id));
+					aliveSessionIds.add(s.id);
+				}
+			
+				let sIdx = 0;
+				for (const s of disc.sessions) {
+					const id = s.nodeId || sessionNodeId(s.id);
+					const parentId = workspaceNodeId(s.workspaceId);
+					// 父级不存在（如数据源只有会话没有 workspace）→ 归到全局根，绝不丢弃
+					const parentOk = folderNodeIds.indexOf(parentId) >= 0;
+					const realParent = parentOk ? parentId : GLOBAL_NODE_ID;
+					if (!parentOk) rootChildren.add(id);
+			
+					// 会话消息统计（宿主 directorStores 有则取，无则为 0；失败静默）
+					let messageCount = 0;
+					let lastMessage = "";
+					try {
+						const store = await idbLoad(s.id);
+						if (store && Array.isArray(store.messages)) {
+							messageCount = store.messages.length;
+							const last = store.messages[store.messages.length - 1];
+							if (last) lastMessage = String(last.content || last.text || "").slice(0, 200);
+						}
+					} catch (e) { /* 无该会话的本地 store，属正常 */ }
+			
+					let node = await getNode(id);
+					if (!node) {
+						node = makeNode({
+							id,
+							name: sessionLabel(s.id),
+							level: LEVEL.SESSION,
+							parentId: realParent,
+							meta: { sourceId: s.id, source: "session", autoName: true, order: sIdx }
+						});
+						stats.created++;
+					} else {
+						if (node.meta && node.meta.autoName !== false) node.name = sessionLabel(s.id);
+						node.parentId = realParent;
+						node.meta = { ...(node.meta || {}), sourceId: s.id, source: "session", order: sIdx };
+						stats.updated++;
+					}
+					node.conversations = [{
+						conversationId: s.id,
+						title: node.name,
+						lastMessage,
+						lastTime: s.updatedAt || 0,
+						messageCount
+					}];
+					node.meta.orphaned = false;
+					await saveNode(node);
+					stats.sessions++;
+					sIdx++;
+				}
+			
+				// ── 4. 维护父子关系（幂等：用 Set 去重，不会重复 push）──
+				root.children = Array.from(rootChildren);
+				await saveNode(root);
+				for (const [fid, kids] of folderChildMap.entries()) {
+					const f = await getNode(fid);
+					if (!f) continue;
+					f.children = Array.from(new Set([...(f.children || []), ...kids]));
+					await saveNode(f);
+				}
+			
+				// ── 5. 孤儿软标记（数据源中已消失的自动同步会话）──
+				if (opts.includeOrphanScan !== false) {
+					const all = await listAllNodes();
+					for (const n of all) {
+						if (n.level !== LEVEL.SESSION) continue;
+						const sid = n.meta && n.meta.sourceId;
+						if (!sid) continue;                 // 手工创建的节点不参与
+						if (aliveSessionIds.has(sid)) continue;
+						if (n.meta && n.meta.orphaned) continue;
+						n.meta = { ...n.meta, orphaned: true };
+						await saveNode(n);
+						stats.orphaned++;
+					}
+				}
+			
+				stats.total = stats.folders + stats.sessions + 1;
+				stats.coverage = await auditCoverage();
+				// 🔴 必须广播：面板首帧早于同步完成，若不通知则一直显示陈旧快照（实测 0/8）
+				emitHierarchyChange();
+				dshLog("sync", "同步完成: 新建 " + stats.created + " / 更新 " + stats.updated
+					+ " / 孤儿 " + stats.orphaned + " / 覆盖度 " + JSON.stringify(stats.coverage.rate));
+				return stats;
+			}
+			
+			/**
+			 * 覆盖度自检 —— 直接回答「是否每一个对话 / 文件夹都有总监」
+			 *
+			 * @returns {Promise<{sessions:object, folders:object, global:object, rate:string, ok:boolean}>}
+			 */
+			async function auditCoverage() {
+				const disc = await discover();
+				const all = await listAllNodes();
+				const byId = new Map(all.map((n) => [n.id, n]));
+			
+				const sessionTotal = disc.sessions.length;
+				const sessionCovered = disc.sessions.filter((s) => byId.has(s.nodeId || sessionNodeId(s.id))).length;
+				const sessionMissing = disc.sessions
+					.filter((s) => !byId.has(s.nodeId || sessionNodeId(s.id)))
+					.map((s) => s.id);
+			
+				const folderTotal = disc.workspaces.length;
+				const folderCovered = disc.workspaces.filter((w) => byId.has(w.nodeId || workspaceNodeId(w.id))).length;
+				const folderMissing = disc.workspaces
+					.filter((w) => !byId.has(w.nodeId || workspaceNodeId(w.id)))
+					.map((w) => w.id);
+			
+				const globalOk = byId.has(GLOBAL_NODE_ID);
+				const pct = (a, b) => (b === 0 ? "n/a" : Math.round((a / b) * 100) + "%");
+			
+				return {
+					source: disc.source,
+					sessions: { total: sessionTotal, covered: sessionCovered, missing: sessionMissing, rate: pct(sessionCovered, sessionTotal) },
+					folders: { total: folderTotal, covered: folderCovered, missing: folderMissing, rate: pct(folderCovered, folderTotal) },
+					global: { total: 1, covered: globalOk ? 1 : 0, rate: globalOk ? "100%" : "0%" },
+					rate: "会话 " + pct(sessionCovered, sessionTotal) + " / 文件夹 " + pct(folderCovered, folderTotal) + " / 全局 " + (globalOk ? "100%" : "0%"),
+					ok: globalOk && sessionCovered === sessionTotal && folderCovered === folderTotal
+				};
+			}
+			
+			/** 安装全局契约 */
+			function installSyncApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshSync = { syncFromSource, auditCoverage };
+				return window.__dshSync;
+			}
+			
+			exports.syncFromSource = syncFromSource;
+			exports.auditCoverage = auditCoverage;
+			exports.installSyncApi = installSyncApi;
 		};
 
 		// ── components/DirectorHierarchy.js ──
@@ -3697,6 +4174,8 @@ window.__ModuleLoader__.load({
 			const react_jsx_runtime = require("react/jsx-runtime");
 			const { LEVEL, LEVEL_LABEL, GLOBAL_NODE_ID, loadTree, getNode, saveNode, removeNode, createChild, attachSession, getBreadcrumb } = __m("store/hierarchy.js");
 			const { summarizeNode, summarizeTree, propagateUp, GRADE } = __m("logic/summarize.js");
+			const { syncFromSource, auditCoverage } = __m("logic/sync.js");
+			const { onHierarchyChange } = __m("util/bus.js");
 			const { dshLog } = __m("util/debug.js");
 			
 			/* ── 样式（内联，与宿主编译产物同形态；尽量使用 Harness 主题变量并给 fallback）── */
@@ -3769,14 +4248,23 @@ window.__ModuleLoader__.load({
 				const [sessId, setSessId] = react.useState("");
 				// meta 编辑
 				const [meta, setMeta] = react.useState({ positioning: "", goal: "", currentPhase: "" });
+				const [nodeName, setNodeName] = react.useState("");
+				// 覆盖度：是否每一个对话 / 文件夹都已配总监
+				const [coverage, setCoverage] = react.useState(null);
 			
 				const refresh = react.useCallback(async () => {
 					const t = await loadTree();
 					setTree(t);
+					// 覆盖度自检与树同步刷新（直接回答「每一个对话/文件夹是否都有总监」）
+					try { setCoverage(await auditCoverage()); } catch (e) { /* 静默 */ }
 					return t;
 				}, []);
 			
 				react.useEffect(() => { refresh(); }, [refresh]);
+			
+				// 🔴 订阅层级变更：面板首帧早于自动同步完成（实测显示「会话 0/8」），
+				//    必须在同步/总结/CRUD 完成后收到通知并重新拉取，否则停留在陈旧快照。
+				react.useEffect(() => onHierarchyChange(() => { refresh(); }), [refresh]);
 			
 				const selected = react.useMemo(() => findNode(tree, selectedId), [tree, selectedId]);
 			
@@ -3788,6 +4276,7 @@ window.__ModuleLoader__.load({
 						goal: n?.meta?.goal || "",
 						currentPhase: n?.meta?.currentPhase || ""
 					});
+					setNodeName(n?.name || "");
 				}, [selectedId, tree]);
 			
 				const guard = (fn) => async (...a) => {
@@ -3840,10 +4329,26 @@ window.__ModuleLoader__.load({
 					setMsg("已向上提交到「" + r.node.name + "」（梯度 " + r.result.grade + "）");
 				});
 			
+				/**
+				 * 同步真实会话 / 文件夹 → 为每一个会话和文件夹建立总监（幂等）
+				 * 数据源：宿主 localStorage `dsh.workspace.view.*`（workspace=文件夹级，session=对话级）
+				 */
+				const doSync = guard(async () => {
+					const s = await syncFromSource();
+					await refresh();
+					setMsg("同步完成（数据源：" + s.source + "）：新建 " + s.created + " / 更新 " + s.updated
+						+ " / 孤儿 " + s.orphaned + "；文件夹 " + s.folders + " · 会话 " + s.sessions);
+				});
+			
 				const doSaveMeta = guard(async () => {
 					const node = await getNode(selectedId);
 					if (!node) return;
 					node.meta = { ...(node.meta || {}), ...meta };
+					// 用户主动改名 → 清 autoName，此后自动同步不再覆盖该名称
+					if (nodeName.trim() && nodeName !== node.name) {
+						node.name = nodeName.trim();
+						node.meta.autoName = false;
+					}
 					await saveNode(node);
 					await refresh();
 					setMsg("已保存基础信息");
@@ -3875,9 +4380,37 @@ window.__ModuleLoader__.load({
 							props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, onClick: props.onClose, children: "收起" }) : null
 						] }),
 			
+						/* 覆盖度自检：是否每一个对话 / 文件夹都有总监 */
+						(0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								...S.card,
+								borderColor: coverage && coverage.ok ? "#2f6bdd" : "#6b5320",
+								background: coverage && coverage.ok ? "rgba(47,107,221,.10)" : "rgba(160,120,30,.10)"
+							},
+							children: [
+								(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }, children: [
+									(0, react_jsx_runtime.jsx)("span", { style: { fontSize: 13, fontWeight: 600 }, children: coverage && coverage.ok ? "✅ 总监已全覆盖" : "⚠️ 存在未覆盖" }),
+									(0, react_jsx_runtime.jsxs)("span", { style: { ...S.muted, marginLeft: "auto" }, children: [
+										"会话 ", coverage ? coverage.sessions.covered + "/" + coverage.sessions.total : "-",
+										" · 文件夹 ", coverage ? coverage.folders.covered + "/" + coverage.folders.total : "-",
+										" · 全局 ", coverage ? coverage.global.covered + "/1" : "-"
+									] }),
+									(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSync, disabled: busy, children: "同步真实会话" })
+								] }),
+								(0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "数据源：" + (coverage ? coverage.source : "检测中…")
+									+ "（workspace=文件夹级，session=对话级）。节点 id 由数据源主键派生，重复同步幂等、不会重复新建。" })
+							]
+						}),
+			
 						/* 基础信息（meta） */
 						(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
 							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "定位 / 目标 / 当前阶段（17号文 §1A.13 核心认知）" }),
+							(0, react_jsx_runtime.jsx)("input", {
+								style: { ...S.input, marginBottom: 6 },
+								placeholder: "节点名称（修改后自动同步不再覆盖）",
+								value: nodeName,
+								onChange: (e) => setNodeName(e.target.value)
+							}),
 							["positioning", "goal", "currentPhase"].map((k) => (0, react_jsx_runtime.jsx)("input", {
 								key: k,
 								style: { ...S.input, marginBottom: 6 },
@@ -3970,6 +4503,7 @@ window.__ModuleLoader__.load({
 			const react_dom_client = require("react-dom/client");
 			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
 			const { dshLog } = __m("util/debug.js");
+			const { emitHierarchyChange } = __m("util/bus.js");
 			
 			const OVERLAY_HOST_ID = "dsh-director-hierarchy-overlay";
 			const LAUNCHER_ID = "dsh-director-hierarchy-launcher";
@@ -4019,7 +4553,7 @@ window.__ModuleLoader__.load({
 				const render = (open) => root.render(
 					(0, react_jsx_runtime.jsx)(DirectorHierarchy, { onClose: () => { hide(); } })
 				);
-				const show = () => { overlay.style.display = "block"; render(true); };
+				const show = () => { overlay.style.display = "block"; render(true); emitHierarchyChange(); };
 				const hide = () => { overlay.style.display = "none"; };
 				render(opts.open);
 			
@@ -4164,8 +4698,11 @@ window.__ModuleLoader__.load({
 			const { installSummarizeApi, summarizeTree } = __m("logic/summarize.js");
 			const { mountHierarchy } = __m("mount.js");
 			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
+			// ── 批次 7 自动同步：让每一个对话 / 文件夹都拥有总监 ──
+			const { installDiscoverApi } = __m("logic/discover.js");
+			const { installSyncApi, syncFromSource, auditCoverage } = __m("logic/sync.js");
 			
-			const PLUGIN_VERSION = "0.6.0-batch6";
+			const PLUGIN_VERSION = "0.7.0-batch7";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
@@ -4228,16 +4765,33 @@ window.__ModuleLoader__.load({
 					//      window.__dshHierarchyTree / __dshHierarchyStats  树快照与统计
 					window.__dshHierarchy = installHierarchyApi();
 					window.__dshSummarize = installSummarizeApi();
+					// ── 批次 7 自动同步 ──
+					//    window.__dshDiscover  真实会话/文件夹数据源发现（localStorage 为主，IDB 兜底）
+					//    window.__dshSync      自动同步 + 覆盖度自检
+					window.__dshDiscover = installDiscoverApi();
+					window.__dshSync = installSyncApi();
 				}
 			
 				// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
 				//    ⚠️ ensureGlobal 必须先于 loadTree —— 保证全局根节点存在（tree 构建依赖它）
 				//    ⚠️ 挂载默认开启（传 { mountHierarchy: false } 可关）；DOM 未就绪时延迟到 DOMContentLoaded
 				//    ⚠️ 挂载走「宿主 slot 优先 + 浮层兜底」双通道，兜底零宿主依赖 → 必定可见
-				const hierarchyReady = ensureGlobal().then(() => loadTree()).then((t) => {
-					if (typeof window !== "undefined") window.__dshHierarchyTree = t;
-					return t;
-				}).catch(() => null); // 层级树异步失败不影响其他能力
+				//    ⚠️ 批次 7：ensureGlobal → **自动同步**（把真实会话/文件夹落成总监节点）→ loadTree
+				//       自动同步是「每一个对话 / 文件夹都有总监」的实现根基：节点 id 由数据源主键派生
+				//       （ws_/se_ 前缀），故重复启动只会更新、不会重复新建（幂等）。
+				//       传 { autoSync: false } 可关闭（仅调试用，默认必须开）。
+				let syncStats = null;
+				const hierarchyReady = ensureGlobal()
+					.then(() => (options.autoSync === false ? null : syncFromSource()))
+					.then((s) => {
+						syncStats = s;
+						if (typeof window !== "undefined") window.__dshSyncStats = s;
+						return loadTree();
+					})
+					.then((t) => {
+						if (typeof window !== "undefined") window.__dshHierarchyTree = t;
+						return t;
+					}).catch(() => null); // 层级树异步失败不影响其他能力
 			
 				let hierarchyMount = null;
 				if (options.mountHierarchy !== false) {
@@ -4302,10 +4856,20 @@ window.__ModuleLoader__.load({
 					//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」
 					hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.overlay),
 					hierarchySlotRegistered: Boolean(hierarchyMount && hierarchyMount.slotRegistered),
-					hierarchyTreeReady: false // 异步，稍后就绪
+					hierarchyTreeReady: false, // 异步，稍后就绪
+					// ── 批次 7 自动同步 ──
+					discoverApi: typeof window !== "undefined" ? Boolean(window.__dshDiscover) : false,
+					syncApi: typeof window !== "undefined" ? Boolean(window.__dshSync) : false,
+					// 覆盖度：回答「是否每一个对话 / 文件夹都有总监」
+					coverage: null, // 异步，稍后就绪（{sessions,folders,global,rate,ok}）
+					coverageOk: false
 				};
 			
-				hierarchyReady.then((t) => { installed.hierarchyTreeReady = Boolean(t); });
+				hierarchyReady.then((t) => {
+					installed.hierarchyTreeReady = Boolean(t);
+					installed.coverage = syncStats && syncStats.coverage ? syncStats.coverage : null;
+					installed.coverageOk = Boolean(installed.coverage && installed.coverage.ok);
+				});
 			
 				docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 				preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
@@ -4317,11 +4881,12 @@ window.__ModuleLoader__.load({
 					window.__dshDirectorBatch4 = installed; // 批次 4 别名
 					window.__dshDirectorBatch5 = installed; // 批次 5 别名
 					window.__dshDirectorBatch6 = installed; // 批次 6 别名
+					window.__dshDirectorBatch7 = installed; // 批次 7 别名
 				}
 				return installed;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy };
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage };
 			
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
@@ -4358,6 +4923,12 @@ window.__ModuleLoader__.load({
 			exports.LEVEL = LEVEL;
 			exports.GLOBAL_NODE_ID = GLOBAL_NODE_ID;
 			exports.DirectorHierarchy = DirectorHierarchy;
+			exports.// ── 批次 7 自动同步 ──
+	installDiscoverApi = // ── 批次 7 自动同步 ──
+	installDiscoverApi;
+			exports.installSyncApi = installSyncApi;
+			exports.syncFromSource = syncFromSource;
+			exports.auditCoverage = auditCoverage;
 		};
 
 		// ── Harness client 插件契约导出 ──

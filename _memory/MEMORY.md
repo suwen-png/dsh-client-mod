@@ -884,3 +884,36 @@ F3 依赖 `concreteConversation(ctx)`、F4 依赖 `scopedConversation(sessions, 
 
 
 
+### 14.17 ✅ 批次 8 自动同步 + 覆盖度自检（2026-09-12 · 「每一个对话/文件夹都有总监」落地）
+
+**触发**：用户要求验证「每一个对话都有一个总监 · 每一个文件夹都有总监 · 最上层全局负责」。
+
+**🔴 审计发现批次 7 的实质缺口**：只交付了三层**结构**（CRUD + 总结），节点**全靠手工创建**
+→ 真实 8 个会话**一个都没有总监**。「每一个都有」必须由**自动发现 + 幂等同步**保证，不能靠手工。
+
+**数据源（真机实测，非臆断）**
+- 主：`localStorage["dsh.workspace.view.v5"]` → `groupBy:"workspace"` +
+  `sessionOrderByAccount{wsId:[sessionId…]}` + `sessionUpdatedAtByAccount`
+  ⇒ **workspace = 文件夹级**、**session = 对话级**（由 groupBy 字段确定）
+- 辅：`localStorage["dsh.sessions.current"]` → 当前会话
+- 兜底：IDB `directorFolders` / `directorStores`
+- 实测：workspace `ecf0d762…`(7) + 未分组(1) = **8 个真实会话**
+- ⚠️ key **带版本号**（v5）→ 必须**前缀模糊匹配** `dsh.workspace.view`，写死会在宿主升级后全量失联
+
+**稳定 id = 幂等的根基（关键设计）**
+`ws_<workspaceId>` / `se_<sessionId>`，由**数据源主键派生**，**禁用随机 id** ——
+否则每次同步新建一套（重复膨胀）且无法判定「已覆盖」。
+真机反证：二次同步 `created=0 / updated=10`，总数恒 11。
+
+**新增文件**：`logic/discover.js` · `logic/sync.js` · `util/bus.js` · `scripts/verify-batch7.mjs`
+真机：会话 8/8 · 文件夹 2/2 · 全局 1/1 = **100% 覆盖**；分层总结 94→784→563 字逐级汇总。
+
+**两个实测缺陷（可复用教训）**
+1. **截断短码撞常量前缀**：`shortId(id,8)` 对 `session-4e8e9e49-…` 得 `session-` → 8 个会话同名。
+   ⇒ 对带固定前缀的 id 做短码，**必须先剥离前缀**（新增 `sessionLabel()`）。
+2. **视图首帧早于异步数据就绪**：面板在插件启动时挂载并渲染，此时自动同步未完成
+   → 显示陈旧快照「会话 0/8」（真实 8/8）。⇒ 凡「先渲染后异步填充」的场景，
+   必须有**变更通知通道**（`util/bus.js`：写入方 emit / 视图方订阅 + 打开时刷新）。
+
+**验证**：合计 **389 项全绿**（96/63/60/65/66/39），产物 233,045 B / 29 模块，React 零打包。
+另修 `verify-batch6` 过期断言（版本号写死 → 改范围匹配，防每次升级误报）。

@@ -112,7 +112,8 @@ ok("产物含 __dshHierarchy 契约", has(BUNDLE, /__dshHierarchy/));
 ok("产物含 __dshSummarize 契约", has(BUNDLE, /__dshSummarize/));
 ok("产物含批次 6 契约字段", has(BUNDLE, /hierarchyApi/) && has(BUNDLE, /summarizeApi/) && has(BUNDLE, /hierarchyMounted/));
 ok("产物含批次 6 别名 __dshDirectorBatch6", has(BUNDLE, /__dshDirectorBatch6/));
-ok("产物版本号 0.6.0-batch6", has(BUNDLE, /0\.6\.0-batch6/));
+// 版本号随批次递增（batch6 → batch7…），断言「不低于 batch6」而非写死，避免每次升级都误报
+ok("产物版本号不低于 0.6.0-batch6", has(BUNDLE, /0\.[6-9]\.0-batch[6-9]/));
 ok("挂载入口含浮层兜底", has(BUNDLE, /dsh-director-hierarchy-overlay/));
 ok("挂载含宿主 slot 尝试（conversation.view）", has(BUNDLE, /conversation\.view/));
 

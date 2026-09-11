@@ -24,6 +24,7 @@
 import { callLocalModel, directorConfig } from "../config/model.js";
 import { getNode, saveNode, LEVEL, LEVEL_LABEL } from "../store/hierarchy.js";
 import { dshLog } from "../util/debug.js";
+import { emitHierarchyChange } from "../util/bus.js";
 
 /** 梯度定义 */
 export const GRADE = { RULE: "G0", LOCAL: "G1", ROLLUP: "G2" };
@@ -162,6 +163,7 @@ export async function summarizeTree(root, opts = {}) {
 		if (res.degraded) stats.degraded++;
 	};
 	await walk(root);
+	emitHierarchyChange();
 	return stats;
 }
 
@@ -185,6 +187,7 @@ export async function propagateUp(nodeId, opts = {}) {
 	parent.summaryGrade = res.grade;
 	parent.summaryAt = res.at;
 	await saveNode(parent);
+	emitHierarchyChange();
 	return { node: parent, result: res };
 }
 

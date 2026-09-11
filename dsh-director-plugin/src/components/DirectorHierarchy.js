@@ -22,6 +22,8 @@ import {
 	createChild, attachSession, getBreadcrumb
 } from "../store/hierarchy.js";
 import { summarizeNode, summarizeTree, propagateUp, GRADE } from "../logic/summarize.js";
+import { syncFromSource, auditCoverage } from "../logic/sync.js";
+import { onHierarchyChange } from "../util/bus.js";
 import { dshLog } from "../util/debug.js";
 
 /* ── 样式（内联，与宿主编译产物同形态；尽量使用 Harness 主题变量并给 fallback）── */
@@ -94,14 +96,23 @@ export function DirectorHierarchy(props = {}) {
 	const [sessId, setSessId] = react.useState("");
 	// meta 编辑
 	const [meta, setMeta] = react.useState({ positioning: "", goal: "", currentPhase: "" });
+	const [nodeName, setNodeName] = react.useState("");
+	// 覆盖度：是否每一个对话 / 文件夹都已配总监
+	const [coverage, setCoverage] = react.useState(null);
 
 	const refresh = react.useCallback(async () => {
 		const t = await loadTree();
 		setTree(t);
+		// 覆盖度自检与树同步刷新（直接回答「每一个对话/文件夹是否都有总监」）
+		try { setCoverage(await auditCoverage()); } catch (e) { /* 静默 */ }
 		return t;
 	}, []);
 
 	react.useEffect(() => { refresh(); }, [refresh]);
+
+	// 🔴 订阅层级变更：面板首帧早于自动同步完成（实测显示「会话 0/8」），
+	//    必须在同步/总结/CRUD 完成后收到通知并重新拉取，否则停留在陈旧快照。
+	react.useEffect(() => onHierarchyChange(() => { refresh(); }), [refresh]);
 
 	const selected = react.useMemo(() => findNode(tree, selectedId), [tree, selectedId]);
 
@@ -113,6 +124,7 @@ export function DirectorHierarchy(props = {}) {
 			goal: n?.meta?.goal || "",
 			currentPhase: n?.meta?.currentPhase || ""
 		});
+		setNodeName(n?.name || "");
 	}, [selectedId, tree]);
 
 	const guard = (fn) => async (...a) => {
@@ -165,10 +177,26 @@ export function DirectorHierarchy(props = {}) {
 		setMsg("已向上提交到「" + r.node.name + "」（梯度 " + r.result.grade + "）");
 	});
 
+	/**
+	 * 同步真实会话 / 文件夹 → 为每一个会话和文件夹建立总监（幂等）
+	 * 数据源：宿主 localStorage `dsh.workspace.view.*`（workspace=文件夹级，session=对话级）
+	 */
+	const doSync = guard(async () => {
+		const s = await syncFromSource();
+		await refresh();
+		setMsg("同步完成（数据源：" + s.source + "）：新建 " + s.created + " / 更新 " + s.updated
+			+ " / 孤儿 " + s.orphaned + "；文件夹 " + s.folders + " · 会话 " + s.sessions);
+	});
+
 	const doSaveMeta = guard(async () => {
 		const node = await getNode(selectedId);
 		if (!node) return;
 		node.meta = { ...(node.meta || {}), ...meta };
+		// 用户主动改名 → 清 autoName，此后自动同步不再覆盖该名称
+		if (nodeName.trim() && nodeName !== node.name) {
+			node.name = nodeName.trim();
+			node.meta.autoName = false;
+		}
 		await saveNode(node);
 		await refresh();
 		setMsg("已保存基础信息");
@@ -200,9 +228,37 @@ export function DirectorHierarchy(props = {}) {
 				props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, onClick: props.onClose, children: "收起" }) : null
 			] }),
 
+			/* 覆盖度自检：是否每一个对话 / 文件夹都有总监 */
+			(0, react_jsx_runtime.jsxs)("div", {
+				style: {
+					...S.card,
+					borderColor: coverage && coverage.ok ? "#2f6bdd" : "#6b5320",
+					background: coverage && coverage.ok ? "rgba(47,107,221,.10)" : "rgba(160,120,30,.10)"
+				},
+				children: [
+					(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }, children: [
+						(0, react_jsx_runtime.jsx)("span", { style: { fontSize: 13, fontWeight: 600 }, children: coverage && coverage.ok ? "✅ 总监已全覆盖" : "⚠️ 存在未覆盖" }),
+						(0, react_jsx_runtime.jsxs)("span", { style: { ...S.muted, marginLeft: "auto" }, children: [
+							"会话 ", coverage ? coverage.sessions.covered + "/" + coverage.sessions.total : "-",
+							" · 文件夹 ", coverage ? coverage.folders.covered + "/" + coverage.folders.total : "-",
+							" · 全局 ", coverage ? coverage.global.covered + "/1" : "-"
+						] }),
+						(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSync, disabled: busy, children: "同步真实会话" })
+					] }),
+					(0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "数据源：" + (coverage ? coverage.source : "检测中…")
+						+ "（workspace=文件夹级，session=对话级）。节点 id 由数据源主键派生，重复同步幂等、不会重复新建。" })
+				]
+			}),
+
 			/* 基础信息（meta） */
 			(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
 				(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "定位 / 目标 / 当前阶段（17号文 §1A.13 核心认知）" }),
+				(0, react_jsx_runtime.jsx)("input", {
+					style: { ...S.input, marginBottom: 6 },
+					placeholder: "节点名称（修改后自动同步不再覆盖）",
+					value: nodeName,
+					onChange: (e) => setNodeName(e.target.value)
+				}),
 				["positioning", "goal", "currentPhase"].map((k) => (0, react_jsx_runtime.jsx)("input", {
 					key: k,
 					style: { ...S.input, marginBottom: 6 },

@@ -86,8 +86,11 @@ import { installHierarchyApi, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID } fr
 import { installSummarizeApi, summarizeTree } from "./logic/summarize.js";
 import { mountHierarchy } from "./mount.js";
 import { DirectorHierarchy } from "./components/DirectorHierarchy.js";
+// ── 批次 7 自动同步：让每一个对话 / 文件夹都拥有总监 ──
+import { installDiscoverApi } from "./logic/discover.js";
+import { installSyncApi, syncFromSource, auditCoverage } from "./logic/sync.js";
 
-export const PLUGIN_VERSION = "0.6.0-batch6";
+export const PLUGIN_VERSION = "0.7.0-batch7";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -150,16 +153,33 @@ export function installBatch1(options = {}) {
 		//      window.__dshHierarchyTree / __dshHierarchyStats  树快照与统计
 		window.__dshHierarchy = installHierarchyApi();
 		window.__dshSummarize = installSummarizeApi();
+		// ── 批次 7 自动同步 ──
+		//    window.__dshDiscover  真实会话/文件夹数据源发现（localStorage 为主，IDB 兜底）
+		//    window.__dshSync      自动同步 + 覆盖度自检
+		window.__dshDiscover = installDiscoverApi();
+		window.__dshSync = installSyncApi();
 	}
 
 	// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
 	//    ⚠️ ensureGlobal 必须先于 loadTree —— 保证全局根节点存在（tree 构建依赖它）
 	//    ⚠️ 挂载默认开启（传 { mountHierarchy: false } 可关）；DOM 未就绪时延迟到 DOMContentLoaded
 	//    ⚠️ 挂载走「宿主 slot 优先 + 浮层兜底」双通道，兜底零宿主依赖 → 必定可见
-	const hierarchyReady = ensureGlobal().then(() => loadTree()).then((t) => {
-		if (typeof window !== "undefined") window.__dshHierarchyTree = t;
-		return t;
-	}).catch(() => null); // 层级树异步失败不影响其他能力
+	//    ⚠️ 批次 7：ensureGlobal → **自动同步**（把真实会话/文件夹落成总监节点）→ loadTree
+	//       自动同步是「每一个对话 / 文件夹都有总监」的实现根基：节点 id 由数据源主键派生
+	//       （ws_/se_ 前缀），故重复启动只会更新、不会重复新建（幂等）。
+	//       传 { autoSync: false } 可关闭（仅调试用，默认必须开）。
+	let syncStats = null;
+	const hierarchyReady = ensureGlobal()
+		.then(() => (options.autoSync === false ? null : syncFromSource()))
+		.then((s) => {
+			syncStats = s;
+			if (typeof window !== "undefined") window.__dshSyncStats = s;
+			return loadTree();
+		})
+		.then((t) => {
+			if (typeof window !== "undefined") window.__dshHierarchyTree = t;
+			return t;
+		}).catch(() => null); // 层级树异步失败不影响其他能力
 
 	let hierarchyMount = null;
 	if (options.mountHierarchy !== false) {
@@ -224,10 +244,20 @@ export function installBatch1(options = {}) {
 		//       hierarchySlotRegistered = 「是否额外注册进宿主 conversation.view」
 		hierarchyMounted: Boolean(hierarchyMount && hierarchyMount.overlay),
 		hierarchySlotRegistered: Boolean(hierarchyMount && hierarchyMount.slotRegistered),
-		hierarchyTreeReady: false // 异步，稍后就绪
+		hierarchyTreeReady: false, // 异步，稍后就绪
+		// ── 批次 7 自动同步 ──
+		discoverApi: typeof window !== "undefined" ? Boolean(window.__dshDiscover) : false,
+		syncApi: typeof window !== "undefined" ? Boolean(window.__dshSync) : false,
+		// 覆盖度：回答「是否每一个对话 / 文件夹都有总监」
+		coverage: null, // 异步，稍后就绪（{sessions,folders,global,rate,ok}）
+		coverageOk: false
 	};
 
-	hierarchyReady.then((t) => { installed.hierarchyTreeReady = Boolean(t); });
+	hierarchyReady.then((t) => {
+		installed.hierarchyTreeReady = Boolean(t);
+		installed.coverage = syncStats && syncStats.coverage ? syncStats.coverage : null;
+		installed.coverageOk = Boolean(installed.coverage && installed.coverage.ok);
+	});
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
 	preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
@@ -239,6 +269,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch4 = installed; // 批次 4 别名
 		window.__dshDirectorBatch5 = installed; // 批次 5 别名
 		window.__dshDirectorBatch6 = installed; // 批次 6 别名
+		window.__dshDirectorBatch7 = installed; // 批次 7 别名
 	}
 	return installed;
 }
@@ -266,5 +297,7 @@ export {
 	// ── 批次 6 多层级总监结构 ──
 	installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal,
 	LEVEL, GLOBAL_NODE_ID,
-	DirectorHierarchy
+	DirectorHierarchy,
+	// ── 批次 7 自动同步 ──
+	installDiscoverApi, installSyncApi, syncFromSource, auditCoverage
 };

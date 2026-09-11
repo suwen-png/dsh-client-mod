@@ -48,14 +48,15 @@ export function makeNodeId(level) {
 /**
  * 创建层级节点（17号文 §2.1 MemoryNode 形态）
  * @param {object} p
+ * @param {string} [p.id] 指定节点 id（自动同步必须用**数据源派生的稳定 id**，见 logic/discover.js）
  * @param {string} p.name 节点名
  * @param {"global"|"project"|"session"} p.level
  * @param {string|null} p.parentId 父节点 id（全局级为 null）
  */
-export function makeNode({ name, level, parentId = null, meta = {} }) {
+export function makeNode({ id, name, level, parentId = null, meta = {} }) {
 	const now = Date.now();
 	return {
-		id: level === LEVEL.GLOBAL ? GLOBAL_NODE_ID : makeNodeId(level),
+		id: level === LEVEL.GLOBAL ? GLOBAL_NODE_ID : (id || makeNodeId(level)),
 		name: name || "未命名",
 		level,
 		parentId: level === LEVEL.GLOBAL ? null : parentId,
@@ -166,8 +167,12 @@ export async function loadTree() {
 		const parent = n.parentId ? byId.get(n.parentId) : null;
 		(parent || root).childNodes.push(n);
 	}
+	// 🔴 排序依据 `meta.order` 优先：自动同步的节点在同一毫秒内批量创建，
+	//    若按 createdAt 排序则顺序不确定（每次刷新树都在抖）。
+	//    同步时写入数据源中的序号 ⇒ 树顺序与宿主会话列表一致。
+	const rank = (n) => (n.meta && typeof n.meta.order === "number") ? n.meta.order : (n.meta?.createdAt || 0);
 	const sortRec = (node) => {
-		node.childNodes.sort((a, b) => (a.meta?.createdAt || 0) - (b.meta?.createdAt || 0));
+		node.childNodes.sort((a, b) => rank(a) - rank(b));
 		node.childNodes.forEach(sortRec);
 	};
 	sortRec(root);

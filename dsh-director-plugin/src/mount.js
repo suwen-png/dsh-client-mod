@@ -19,6 +19,7 @@ import * as react_jsx_runtime from "react/jsx-runtime";
 import * as react_dom_client from "react-dom/client";
 import { DirectorHierarchy } from "./components/DirectorHierarchy.js";
 import { dshLog } from "./util/debug.js";
+import { emitHierarchyChange } from "./util/bus.js";
 
 export const OVERLAY_HOST_ID = "dsh-director-hierarchy-overlay";
 export const LAUNCHER_ID = "dsh-director-hierarchy-launcher";
@@ -68,7 +69,7 @@ export function mountHierarchyOverlay(opts = {}) {
 	const render = (open) => root.render(
 		(0, react_jsx_runtime.jsx)(DirectorHierarchy, { onClose: () => { hide(); } })
 	);
-	const show = () => { overlay.style.display = "block"; render(true); };
+	const show = () => { overlay.style.display = "block"; render(true); emitHierarchyChange(); };
 	const hide = () => { overlay.style.display = "none"; };
 	render(opts.open);
 
