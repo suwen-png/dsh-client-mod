@@ -4152,6 +4152,866 @@ window.__ModuleLoader__.load({
 			exports.installSyncApi = installSyncApi;
 		};
 
+		// ── logic/duties.js ──
+		__defs["logic/duties.js"] = function (exports) {
+			/**
+			 * logic/duties.js — 总监职责配置定义（03号文 §3.1「执行逻辑项」）
+			 *
+			 * ⚠️ 本模块**严格按文档实现，不自行改动需求**。
+			 *
+			 * 依据：`docs/20-任务文档/03-总监对话模式开发文档.md` §3.1（:138-148）
+			 *   「本质：每个执行逻辑 = 一段 prompt 模板 + 启停开关，控制总监要做什么。」
+			 *
+			 * ┌──────────────┬────────┬───────────────────────────────────────────┐
+			 * │ 执行逻辑项    │ 默认   │ prompt 模板（文档原文，逐字采用）           │
+			 * ├──────────────┼────────┼───────────────────────────────────────────┤
+			 * │ 整理语言      │ ✅ 启用 │ 你是一个项目总监，请把用户的口语化需求整理为 │
+			 * │              │        │ 精确、无歧义的技术指令，保留核心意图，去除冗余表述。 │
+			 * │ 调整模型      │ ✅ 启用 │ 根据任务类型判断最优模型：代码任务→coder模型，│
+			 * │              │        │ 推理任务→reasoner模型，日常对话→chat模型。输出模型名称和理由。 │
+			 * │ 切换分支      │ ✅ 启用 │ 判断当前消息与已有对话上下文是否连续。连续→沿用当前分支；不连续→建议开新分支。 │
+			 * │ 上下文筛选    │ ⬜ 禁用 │ 当切换模型/分支时，筛选需要传递的上下文片段，去除无关历史，控制token量。 │
+			 * │ 自动审核产出  │ ⬜ 禁用 │ 大模型返回结果后，自动审核文档/代码是否符合原始需求，不符合则标注问题并建议修正。 │
+			 * └──────────────┴────────┴───────────────────────────────────────────┘
+			 *
+			 * ── 与宿主旧 duties 的关系（重要，勿混）─────────────────────────────
+			 * 宿主 `config/model.js#loadDirectorConfig()` 的 `duties` 是**另一套键名**
+			 * （languagePolish / contextMemory / executionLogic / modelRouting / returnReview），
+			 * 且默认值与文档**不一致**（文档要求「上下文筛选」默认禁用，宿主 `contextMemory` 默认启用）。
+			 *
+			 * 因 R5 兼容约束：`localStorage["dsh.director.config"]` 是**持久化契约**且宿主内联仍在读，
+			 * **禁止改写其默认结构**。故本模块在插件侧**独立**定义文档 5 项，
+			 * 存于层级节点 `duties` 字段（§3.2 三级继承），运行时与宿主 config 合并时**插件职责优先**。
+			 *
+			 * 映射关系（供 `director-run.js` 把宿主状态带过来，仅作参考、不改变文档 5 项语义）：
+			 *   languagePolish ↔ languagePolish（同义）
+			 *   modelRouting   ↔ modelRouting（同义）
+			 *   branchSwitch   ← 宿主无对应项
+			 *   contextFilter  ↔ contextMemory（近似）
+			 *   outputReview   ↔ returnReview（近似）
+			 */
+			
+			/** 文档 §3.1 五项职责的固定顺序（UI 渲染顺序同此） */
+			const DUTY_KEYS = [
+				"languagePolish",
+				"modelRouting",
+				"branchSwitch",
+				"contextFilter",
+				"outputReview"
+			];
+			
+			/** 文档 §3.1 默认职责表（prompt 逐字采用文档原文） */
+			const DEFAULT_DUTIES = {
+				languagePolish: {
+					key: "languagePolish",
+					name: "整理语言",
+					enabled: true,
+					prompt: "你是一个项目总监，请把用户的口语化需求整理为精确、无歧义的技术指令，保留核心意图，去除冗余表述。"
+				},
+				modelRouting: {
+					key: "modelRouting",
+					name: "调整模型",
+					enabled: true,
+					prompt: "根据任务类型判断最优模型：代码任务→coder模型，推理任务→reasoner模型，日常对话→chat模型。输出模型名称和理由。"
+				},
+				branchSwitch: {
+					key: "branchSwitch",
+					name: "切换分支",
+					enabled: true,
+					prompt: "判断当前消息与已有对话上下文是否连续。连续→沿用当前分支；不连续→建议开新分支。"
+				},
+				contextFilter: {
+					key: "contextFilter",
+					name: "上下文筛选",
+					enabled: false,
+					prompt: "当切换模型/分支时，筛选需要传递的上下文片段，去除无关历史，控制token量。"
+				},
+				outputReview: {
+					key: "outputReview",
+					name: "自动审核产出",
+					enabled: false,
+					prompt: "大模型返回结果后，自动审核文档/代码是否符合原始需求，不符合则标注问题并建议修正。"
+				}
+			};
+			
+			/** 深拷贝一份默认职责（避免多处共享同一对象引用被污染） */
+			function cloneDefaultDuties() {
+				return JSON.parse(JSON.stringify(DEFAULT_DUTIES));
+			}
+			
+			/**
+			 * 归一化任意输入为合法职责表：缺项补默认，多余项丢弃。
+			 * 用于读回持久化数据（可能被手工改坏或跨版本残留）。
+			 * @param {any} input
+			 * @returns {typeof DEFAULT_DUTIES}
+			 */
+			function normalizeDuties(input) {
+				const base = cloneDefaultDuties();
+				if (!input || typeof input !== "object") return base;
+				for (const k of DUTY_KEYS) {
+					const src = input[k];
+					if (!src || typeof src !== "object") continue;
+					base[k].enabled = src.enabled === undefined ? base[k].enabled : Boolean(src.enabled);
+					if (typeof src.prompt === "string") base[k].prompt = src.prompt;
+					if (typeof src.name === "string" && src.name.trim()) base[k].name = src.name;
+				}
+				return base;
+			}
+			
+			/** 取某节点自身配置的职责（未配置返回 null = 完全继承上层） */
+			function readOwnDuties(node) {
+				const own = node && node.duties;
+				if (!own || typeof own !== "object" || Object.keys(own).length === 0) return null;
+				return normalizeDuties(own);
+			}
+			
+			exports.DUTY_KEYS = DUTY_KEYS;
+			exports.DEFAULT_DUTIES = DEFAULT_DUTIES;
+			exports.cloneDefaultDuties = cloneDefaultDuties;
+			exports.normalizeDuties = normalizeDuties;
+			exports.readOwnDuties = readOwnDuties;
+		};
+
+		// ── store/duty-config.js ──
+		__defs["store/duty-config.js"] = function (exports) {
+			/**
+			 * store/duty-config.js — 职责三级继承（03号文 §3.2「继承制」）
+			 *
+			 * 依据：`docs/20-任务文档/03-总监对话模式开发文档.md` §3.2（:150-165）
+			 * ```
+			 * 默认配置（全局一套）
+			 *     ↓ 继承
+			 * 项目级配置（可单独修改，覆盖默认）
+			 *     ↓ 继承
+			 * 会话级配置（可单独修改，覆盖项目级）
+			 *     ↑ 可向上提交
+			 * 会话中修改可「提交到项目」/「提交到全局」覆盖上层
+			 * ```
+			 *
+			 * 设计要点
+			 * 1. **逐项继承**：继承粒度是「单个职责」而非整个配置对象 ——
+			 *    会话可只覆盖「整理语言」，其余四项仍继承项目级。
+			 *    （复用 `hierarchy.js#getBreadcrumb` 构建链，避免重复遍历）
+			 * 2. **来源可溯源**：每项返回 `origin`，UI 直接显示「继承/本层/项目级」。
+			 * 3. **向上提交**：把本节点**解析后的生效配置**写到父节点（可再往上到全局）。
+			 * 4. **恢复继承**：清空本节点 `duties`，重新完全继承。
+			 *
+			 * ⚠️ 写操作后必须回读校验（执行标准 §3.4）：`saveNode()` 返回成功 ≠ 落库正确。
+			 */
+			
+			const { getNode, saveNode, getBreadcrumb, GLOBAL_NODE_ID } = __m("store/hierarchy.js");
+			const { DUTY_KEYS, cloneDefaultDuties, normalizeDuties, readOwnDuties } = __m("logic/duties.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			/** 来源层级标签 */
+			const ORIGIN = {
+				DEFAULT: "default", // 无任何节点配置 → 文档默认值
+				GLOBAL: "global",
+				PROJECT: "project",
+				SESSION: "session",
+				OWN: "own" // 本层显式配置
+			};
+			
+			const LEVEL_TO_ORIGIN = { global: ORIGIN.GLOBAL, project: ORIGIN.PROJECT, session: ORIGIN.SESSION };
+			
+			/**
+			 * 解析某节点**生效**的职责配置（自顶向下逐项覆盖 —— 越靠近本节点优先级越高）
+			 *
+			 * @param {string} nodeId
+			 * @returns {Promise<{duties: object, origin: Record<string,string>, own: object|null, chain: Array}>}
+			 *          duties  生效配置
+			 *          origin  每项来源（"default" | "global" | "project" | "session" | "own"）
+			 *          own     本节点自身配置（null = 完全继承）
+			 *          chain   继承链（根 → 本节点），供 UI 展示
+			 */
+			async function resolveDuties(nodeId) {
+				const chain = await getBreadcrumb(nodeId || GLOBAL_NODE_ID);
+				// 根 → 本节点；链为空（节点不存在）时退化为纯默认
+				const duties = cloneDefaultDuties();
+				const origin = Object.fromEntries(DUTY_KEYS.map((k) => [k, ORIGIN.DEFAULT]));
+			
+				for (const link of chain) {
+					// getBreadcrumb 只返回 {id,name,level} —— 需取完整节点拿 duties
+					const node = await getNode(link.id);
+					const own = readOwnDuties(node);
+					if (!own) continue;
+					for (const k of DUTY_KEYS) {
+						duties[k] = { ...duties[k], ...own[k] };
+						origin[k] = link.id === nodeId ? ORIGIN.OWN : (LEVEL_TO_ORIGIN[link.level] || ORIGIN.OWN);
+					}
+				}
+			
+				const self = await getNode(nodeId);
+				return { duties, origin, own: readOwnDuties(self), chain };
+			}
+			
+			/**
+			 * 写入本节点职责配置（覆盖模式）
+			 * @param {string} nodeId
+			 * @param {object} duties 职责表（会被 normalizeDuties 归一化）
+			 * @returns {Promise<object>} 回读后的节点（§3.4 写后回读）
+			 */
+			async function setOwnDuties(nodeId, duties) {
+				const node = await getNode(nodeId);
+				if (!node) throw new Error("节点不存在: " + nodeId);
+				node.duties = normalizeDuties(duties);
+				await saveNode(node);
+				const back = await getNode(nodeId); // 🔴 回读校验
+				if (!back || !back.duties) {
+					dshLog("duty", "写后回读失败: nodeId=" + nodeId);
+					throw new Error("职责配置写入未落库: " + nodeId);
+				}
+				return back;
+			}
+			
+			/** 恢复继承：清空本节点自身职责配置 */
+			async function clearOwnDuties(nodeId) {
+				const node = await getNode(nodeId);
+				if (!node) return null;
+				delete node.duties;
+				await saveNode(node);
+				const back = await getNode(nodeId); // 🔴 回读校验
+				if (back && back.duties) throw new Error("恢复继承未落库: " + nodeId);
+				return back;
+			}
+			
+			/**
+			 * 向上提交（§3.2「会话中修改可提交到项目 / 提交到全局」）
+			 * 把本节点**解析后的生效配置**写入父节点。
+			 *
+			 * @param {string} nodeId 来源节点
+			 * @param {number} [levels=1] 向上几层（1=项目级，2=全局级）
+			 * @returns {Promise<{target: object, duties: object}|null>} null = 已在根、无可提交
+			 */
+			async function submitUp(nodeId, levels = 1) {
+				const crumb = await getBreadcrumb(nodeId);
+				const idx = crumb.length - 1 - levels;
+				if (idx < 0) return null; // 已到顶
+				const target = crumb[idx];
+				if (!target || target.id === nodeId) return null;
+			
+				const { duties } = await resolveDuties(nodeId);
+				const written = await setOwnDuties(target.id, duties);
+				dshLog("duty", "向上提交: " + nodeId + " → " + target.id + " (" + target.name + ")");
+				return { target: written, duties };
+			}
+			
+			/** 安装全局契约（供 CDP 真机验证与控制台排查） */
+			function installDutyApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshDuties = {
+					KEYS: DUTY_KEYS,
+					DEFAULT: cloneDefaultDuties,
+					resolve: resolveDuties,
+					set: setOwnDuties,
+					clear: clearOwnDuties,
+					submitUp: submitUp
+				};
+				return window.__dshDuties;
+			}
+			
+			exports.ORIGIN = ORIGIN;
+			exports.resolveDuties = resolveDuties;
+			exports.setOwnDuties = setOwnDuties;
+			exports.clearOwnDuties = clearOwnDuties;
+			exports.submitUp = submitUp;
+			exports.installDutyApi = installDutyApi;
+		};
+
+		// ── logic/director-run.js ──
+		__defs["logic/director-run.js"] = function (exports) {
+			/**
+			 * logic/director-run.js — 总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
+			 *
+			 * ⚠️ 与 `logic/process.js` 的关系（重要）
+			 *   `process.js` 是**宿主内联的逐字迁移品**（保真优先，不得顺手优化），
+			 *   其职责键名沿用宿主旧 5 项，与文档 §3.1 定义不一致。
+			 *   本模块是**插件侧的完整实现**，严格按文档 §1.2 五步 + §3.1 五项职责 + §4.3 降级。
+			 *   两者并存是刻意的：**保真归保真，完善归完善**。
+			 *
+			 * 依据
+			 *   §1.2 总监本质（:27-40）：会话预处理中枢。❌不执行业务 ❌不调用工具 ❌不跑业务推理；
+			 *       ✅索引检索 → 按需加载 → 上下文筛选精简 → 模型路由 → 组装报文 → 写入提交列
+			 *   §1.2 五步（:35-40）：
+			 *       1 整理语言  2 判断是否需要切新分支  3 判断是否需要切模型
+			 *       4 切换分支时判断传哪些上下文      5 自动审核大模型产出
+			 *   §2.3 完整消息流（:90-121）：②预处理 → ③过程展示 → ④自动转发 → ⑤自动审核
+			 *   §4.3 降级策略（:236-242）：Ollama 挂 / 超时 / 格式异常 → 降级，不崩溃
+			 *
+			 * 梯度（与 `logic/summarize.js` 同套口径）
+			 *   G1 = 本地模型（Ollama qwen2:7b）参与；G0 = 纯规则降级。
+			 */
+			
+			const { cloneDefaultDuties, normalizeDuties } = __m("logic/duties.js");
+			const { callLocalModel, polishLanguage, classifyTask } = __m("config/model.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			/** 任务类型 → 模型建议（文档 §1.2 第 3 步 / §3.1「调整模型」模板语义） */
+			const TASK_MODEL = {
+				code: "deepseek-coder",
+				design: "deepseek-reasoner",
+				research: "deepseek-chat",
+				writing: "deepseek-chat",
+				chat: "deepseek-chat"
+			};
+			
+			const TASK_NAME = { code: "代码开发", design: "系统设计", research: "资料调研", writing: "文本整理", chat: "日常对话" };
+			
+			/** 并发保护：同一 store 同时只允许一次处理（沿用 process.js V9.4-P1 语义） */
+			const running = new WeakSet();
+			
+			/**
+			 * 执行总监预处理（五步）
+			 *
+			 * @param {object} p
+			 * @param {string} p.sessionId
+			 * @param {string} p.userText 用户原始输入
+			 * @param {object} p.store 总监 store（createDirectorStore 产物，需有 addMessage/setStatus/getState）
+			 * @param {object} [p.duties] 生效职责配置（resolveDuties 结果）；缺省用文档默认
+			 * @param {object} [p.config] 模型配置（localModel.endpoint/model/enabled）
+			 * @param {boolean} [p.autoForward=false] 是否自动转发到原对话（§2.3 ④）
+			 * @param {(instruction:string)=>void} [p.onForward] 转发回调
+			 * @returns {Promise<{steps: Array<{n:number,name:string,enabled:boolean,grade:string,text:string}>,
+			 *                    instruction: string, model: string, branch: string, taskType: string,
+			 *                    reasoning: string, forward: {done:boolean, at?:number}}>}
+			 */
+			async function runDirector({
+				sessionId, userText, store, duties, config,
+				autoForward = false, onForward
+			}) {
+				const d = normalizeDuties(duties || cloneDefaultDuties());
+				const cfg = config || { localModel: { enabled: false } };
+				const steps = [];
+				const push = (n, name, enabled, grade, text) => steps.push({ n, name, enabled, grade, text });
+			
+				if (store && running.has(store)) {
+					throw new Error("总监正在处理上一条指令，请稍候");
+				}
+				if (store) running.add(store);
+			
+				try {
+					/* 🔴 先取**上屏前**的状态快照：`history` 的语义是「本条之前的上下文」，
+					 *    若在 addMessage 之后取，当前这条会被重复算进 history。
+					 */
+					const state = store ? store.getState() : { messages: [] };
+					const history = (state.messages || []).slice(-10)
+						.map((m) => `${m.role}: ${m.content}`).join("\n");
+					const taskType = classifyTask(userText);
+			
+					/* ── §2.3 消息流 ①：用户消息**立即上屏** ──
+					 * 必须在执行 5 步之前写入。原因：步骤 1/2/3 会调用本地模型（单次超时
+					 * `LOCAL_MODEL_TIMEOUT_MS = 60s`，串行最多 3 次）——若把用户消息放在末尾，
+					 * 模型不可用时用户会**盯着空面板等最长数分钟**，误以为「发送没反应」。
+					 * 实测（2026-09-12）确实如此：点击发送后 1.8s 内消息区零变化。
+					 */
+					if (store) {
+						store.addMessage({ role: "user", content: userText });
+						store.setStatus("running");
+					}
+			
+					/* ── 步骤 1：整理语言（§1.2 ①） ── */
+					let polished = userText;
+					let g1 = "G0";
+					if (d.languagePolish.enabled) {
+						polished = polishLanguage(userText);
+						if (cfg.localModel?.enabled) {
+							const out = await callLocalModel(
+								d.languagePolish.prompt + "\n\n## 用户输入\n" + userText
+								+ "\n\n请只输出整理后的指令本身，不要解释。",
+								cfg
+							);
+							if (out && out.trim()) { polished = out.trim().split("\n")[0]; g1 = "G1"; }
+						}
+					}
+					push(1, "整理语言", d.languagePolish.enabled, g1, polished);
+			
+					/* ── 步骤 2：判断是否需要切新分支（§1.2 ②） ── */
+					let branch = "沿用当前分支";
+					let g2 = "G0";
+					if (d.branchSwitch.enabled) {
+						const prev = (state.messages || []).filter((m) => m.role === "user").slice(-1)[0];
+						branch = prev ? judgeBranch(prev.content, userText) : "新会话首条 → 沿用当前分支";
+						// 分支判断属语义连续性判定，规则不足以覆盖时交本地模型
+						if (cfg.localModel?.enabled) {
+							const out = await callLocalModel(
+								d.branchSwitch.prompt + "\n\n## 上一条用户消息\n" + (prev ? prev.content : "(无)")
+								+ "\n\n## 当前用户消息\n" + userText
+								+ "\n\n只回答：连续 或 不连续，并给一句理由。",
+								cfg
+							);
+							if (out) {
+								g2 = "G1";
+								branch = /不连续/.test(out) ? "建议开新分支（" + out.trim().slice(0, 40) + "）" : "沿用当前分支";
+							}
+						}
+					}
+					push(2, "切换分支", d.branchSwitch.enabled, g2, branch);
+			
+					/* ── 步骤 3：判断是否需要切模型（§1.2 ③） ── */
+					let model = "deepseek-chat";
+					let g3 = "G0";
+					if (d.modelRouting.enabled) {
+						model = TASK_MODEL[taskType] || "deepseek-chat";
+						if (cfg.localModel?.enabled) {
+							const out = await callLocalModel(
+								d.modelRouting.prompt + "\n\n## 用户输入\n" + userText
+								+ "\n\n## 规则初判\n任务类型=" + (TASK_NAME[taskType] || taskType) + "，建议=" + model,
+								cfg
+							);
+							if (out) {
+								g3 = "G1";
+								const m = out.match(/(deepseek-[a-z]+)/);
+								if (m) model = m[1];
+							}
+						}
+					}
+					push(3, "调整模型", d.modelRouting.enabled, g3, "任务类型=" + (TASK_NAME[taskType] || taskType) + " → " + model);
+			
+					/* ── 步骤 4：上下文筛选（§1.2 ④） ── */
+					let context = "";
+					let g4 = "G0";
+					if (d.contextFilter.enabled) {
+						const needSwitch = /新分支/.test(branch) || model !== "deepseek-chat";
+						if (needSwitch) {
+							context = pickContext(state.messages || [], userText, 5);
+							g4 = "G0";
+						} else {
+							context = "无需切换 → 传递完整上下文";
+						}
+					} else {
+						context = "职责未启用 → 不筛选";
+					}
+					push(4, "上下文筛选", d.contextFilter.enabled, g4, context);
+			
+					/* ── 步骤 5：自动审核产出（§1.2 ⑤ / §2.3 ⑤） ── */
+					// 注意：本步审核的是「总监组装出的待提交报文」是否符合原始需求（§3.1 模板语义：
+					// "大模型返回结果后，自动审核文档/代码是否符合原始需求"）。
+					// 真实的大模型产出在转发之后才产生，故此处先产出**审核结论占位 + 规则自检**，
+					// 由 `reviewOutput()` 在拿到产出后调用；本步负责登记开关与规则自检结果。
+					let review = "职责未启用 → 跳过审核";
+					let g5 = "G0";
+					if (d.outputReview.enabled) {
+						const r0 = reviewOutput(userText, polished, d);
+						review = r0.passed ? "自检通过" : "发现 " + r0.issues.length + " 项问题：" + r0.issues.join("；");
+						g5 = "G0";
+					}
+					push(5, "自动审核产出", d.outputReview.enabled, g5, review);
+			
+					/* ── 组装报文 + 写入总监对话流（§2.3 ③） ── */
+					const reasoning = steps
+						.filter((s) => s.enabled)
+						.map((s) => `${s.n}. ${s.name}（${s.grade}）：${s.text}`)
+						.join("\n");
+					const payload = {
+						instruction: polished,
+						model, branch, taskType, reasoning,
+						steps
+					};
+			
+					if (store) {
+						// 用户消息已在上屏前置入（见函数开头），此处只补总监回复
+						store.addMessage({
+							role: "assistant",
+							content: "【总监分析】\n" + (reasoning || "（全部职责已关闭，原文直转）"),
+							parsed: payload
+						});
+						store.setStatus("done");
+					}
+			
+					/* ── 自动转发（§2.3 ④） ── */
+					const forward = { done: false };
+					if (autoForward && typeof onForward === "function") {
+						// 300ms 延迟沿用宿主原实现（等 UI 落定），勿改
+						await new Promise((r) => setTimeout(r, 300));
+						onForward(polished);
+						forward.done = true;
+						forward.at = Date.now();
+					}
+			
+					dshLog("director", "runDirector done: session=" + sessionId + " taskType=" + taskType
+						+ " grade=" + [g1, g2, g3, g4, g5].join("/") + " forward=" + forward.done);
+			
+					return { steps, instruction: polished, model, branch, taskType, reasoning, forward, payload };
+				} catch (e) {
+					/* 🔴 失败不得静默：用户消息已经上屏，若不补一条回复，面板会永远停在
+					 * 「发出去了但没有任何反应」的状态（比直接报错更难排查）。
+					 */
+					if (store) {
+						store.addMessage({
+							role: "assistant",
+							content: "【总监异常】" + (e && e.message ? e.message : String(e))
+						});
+						store.setStatus("error");
+					}
+					throw e;
+				} finally {
+					if (store) running.delete(store);
+				}
+			}
+			
+			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
+			function installDirectorRunApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshDirectorRun = {
+					run: runDirector,
+					judgeBranch,
+					pickContext,
+					reviewOutput
+				};
+				return window.__dshDirectorRun;
+			}
+			
+			/* ── 纯函数（无副作用，可直接单测）── */
+			
+			/**
+			 * 分词：空格词 ∪ CJK 二字组（bigram）
+			 *
+			 * 🔴 为何必须加 CJK bigram：中文**没有空格**，`split(/\s+/)` 会把整句
+			 *    「实现三级总监结构对话级文件夹级全局级」当成 **1 个词** ——
+			 *    实测导致 `reviewOutput` 的「核心关键词丢失」检查因 `srcW.length < 3` 被整段跳过，
+			 *    产出「好的，我明白了。」也被判为**通过**（假阴性，漏报）。
+			 *    二字组是无空格语言上最小可用的语义单元（单字噪声过大）。
+			 */
+			function tokenize(text) {
+				let t = String(text || "").toLowerCase();
+				// 🔴 必须在 CJK 与拉丁/数字之间插空格，否则「改成jwt鉴权」整体成 1 个词，
+				//    其中的 `jwt` 无法作为独立 token 参与重合度计算（实测致同主题被判为话题切换）。
+				t = t.replace(/([\p{Script=Han}])([\p{L}\p{N}])/gu, "$1 $2")
+					.replace(/([\p{L}\p{N}])([\p{Script=Han}])/gu, "$1 $2");
+				const out = new Set();
+				// 空格/标点分词（覆盖英文、数字、代码标识符）
+				for (const w of t.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/)) {
+					if (w.length > 1) out.add(w);
+				}
+				// CJK 二字组
+				const cjk = t.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu);
+				if (cjk && cjk.length >= 2) {
+					for (let i = 0; i < cjk.length - 1; i++) out.add(cjk[i] + cjk[i + 1]);
+				} else if (cjk && cjk.length === 1) {
+					out.add(cjk[0]);
+				}
+				return out;
+			}
+			
+			/**
+			 * 分支连续性判定（规则版，G0）
+			 * 依据：共享实词比例 —— 低于阈值视为话题切换。
+			 */
+			function judgeBranch(prevText, curText, threshold = 0.15) {
+				const a = tokenize(prevText);
+				const b = tokenize(curText);
+				if (!a.size || !b.size) return "沿用当前分支";
+				let hit = 0;
+				for (const w of b) if (a.has(w)) hit++;
+				const ratio = hit / b.size;
+				return ratio >= threshold ? "沿用当前分支" : "建议开新分支（与上文无实质关联）";
+			}
+			
+			/**
+			 * 上下文片段筛选（G0）：按与当前输入的词重合度打分取 TopN
+			 * @param {Array<{role:string,content:string}>} messages
+			 * @param {string} query
+			 * @param {number} limit
+			 */
+			function pickContext(messages, query, limit = 5) {
+				const kw = new Set(String(query || "").toLowerCase().split(/\s+/).filter((w) => w.length > 1));
+				const scored = (messages || [])
+					.filter((m) => m && typeof m.content === "string")
+					.map((m, i) => {
+						const words = m.content.toLowerCase().split(/\s+/);
+						const hit = words.filter((w) => kw.has(w)).length;
+						return { i, role: m.role, score: hit, text: m.content.slice(0, 60) };
+					})
+					.filter((x) => x.score > 0)
+					.sort((a, b) => b.score - a.score || b.i - a.i)
+					.slice(0, limit);
+				if (!scored.length) return "无相关历史片段 → 不携带上下文";
+				return scored.map((x) => `#${x.i}(${x.role}) ${x.text}`).join("\n");
+			}
+			
+			/**
+			 * 自动审核产出（§1.2 ⑤ / §3.1「自动审核产出」）
+			 * 规则版 G0：零模型、零网络，永不抛错（§4.3 降级底线）。
+			 *
+			 * @param {string} original 用户原始需求
+			 * @param {string} output 待审核产出（此处为总监组装的指令；拿到大模型产出后同理调用）
+			 * @param {object} [duties]
+			 * @returns {{passed: boolean, issues: string[], grade: string}}
+			 */
+			function reviewOutput(original, output, duties) {
+				const issues = [];
+				const o = String(output || "").trim();
+				const src = String(original || "").trim();
+				if (!o) issues.push("产出为空");
+				if (src.length > 8 && o.length < src.length * 0.3) issues.push("产出过短，疑似丢失核心意图");
+				// 核心实词保留度检查（tokenize 含 CJK 二字组，避免中文整句被当 1 词而跳过）
+				const srcW = [...tokenize(src)];
+				if (srcW.length >= 3) {
+					const outW = tokenize(o);
+					const lost = srcW.filter((w) => !outW.has(w)).length;
+					if (lost / srcW.length > 0.7) issues.push("核心关键词丢失过多（" + lost + "/" + srcW.length + "）");
+				}
+				if (duties?.outputReview?.enabled === false) issues.length = 0; // 未启用 → 恒通过
+				return { passed: issues.length === 0, issues, grade: "G0" };
+			}
+			
+			exports.runDirector = runDirector;
+			exports.installDirectorRunApi = installDirectorRunApi;
+			exports.tokenize = tokenize;
+			exports.judgeBranch = judgeBranch;
+			exports.pickContext = pickContext;
+			exports.reviewOutput = reviewOutput;
+		};
+
+		// ── components/DirectorWorkbench.js ──
+		__defs["components/DirectorWorkbench.js"] = function (exports) {
+			/**
+			 * components/DirectorWorkbench.js — 总监工作台（方案 E · 文档 06 §五）
+			 *
+			 * 依据
+			 *   §3.1 执行逻辑项（5 项 + 开关 + prompt 模板）→ 执行逻辑面板
+			 *   §3.2 继承制（默认→项目→会话，可覆盖、可向上提交）→ 继承徽标 + 三个按钮
+			 *   §2.2 总监tab内部布局 → 对话流 + 输入栏
+			 *   §2.3 完整消息流 ②③④ → 预处理 / 过程展示 / 自动转发
+			 *   §4.3 降级策略 → 梯度徽标 G0/G1
+			 *
+			 * ⚠️ 构建约束（同 DirectorHierarchy）
+			 *   - `react` / `react/jsx-runtime` 为平台冻结模块，外置为 `require(...)`（ADR-001）
+			 *   - 用 `.js` 而非 `.jsx`，不经 JSX 编译
+			 */
+			
+			const react = require("react");
+			const react_jsx_runtime = require("react/jsx-runtime");
+			const { DUTY_KEYS } = __m("logic/duties.js");
+			const { resolveDuties, setOwnDuties, clearOwnDuties, submitUp, ORIGIN } = __m("store/duty-config.js");
+			const { runDirector } = __m("logic/director-run.js");
+			const { directorStoreFactory } = __m("store/create-store.js");
+			const { useDirectorStore } = __m("store/use-store.js");
+			const { GLOBAL_NODE_ID, LEVEL_LABEL } = __m("store/hierarchy.js");
+			const { loadDirectorConfig } = __m("config/model.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			const S = {
+				card: { border: "1px solid var(--dsw-alias-border-l2, #2a2c30)", borderRadius: 8, padding: 12, marginBottom: 12, background: "var(--dsw-alias-bg-sunken, #1a1c20)" },
+				label: { fontSize: 12, color: "var(--dsw-alias-label-secondary, #a0a4aa)", marginBottom: 6 },
+				btn: { padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #33363b)", background: "var(--dsw-alias-bg-base, #202227)", color: "var(--dsw-alias-label-primary, #e6e6e6)", cursor: "pointer" },
+				btnPrimary: { padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff", cursor: "pointer" },
+				input: { width: "100%", padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #33363b)", background: "var(--dsw-alias-bg-sunken, #1b1d21)", color: "var(--dsw-alias-label-primary, #e6e6e6)", boxSizing: "border-box" },
+				row: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--dsw-alias-border-l2, #24262a)" },
+				badge: { fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b8f96)", background: "var(--dsw-alias-bg-base, #202227)", borderRadius: 8, padding: "0 6px" },
+				pre: { whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0, fontSize: 12, lineHeight: "18px", fontFamily: "var(--ds-font-family-code, ui-monospace, Menlo, Consolas, monospace)" },
+				muted: { color: "var(--dsw-alias-label-tertiary, #8b8f96)", fontSize: 12 }
+			};
+			
+			const ORIGIN_LABEL = {
+				[ORIGIN.DEFAULT]: "默认",
+				[ORIGIN.GLOBAL]: "全局",
+				[ORIGIN.PROJECT]: "项目",
+				[ORIGIN.SESSION]: "会话",
+				[ORIGIN.OWN]: "本层"
+			};
+			
+			/**
+			 * @param {object} props
+			 * @param {object} props.node 当前层级节点（全局/项目/会话）
+			 */
+			function DirectorWorkbench({ node }) {
+				const nodeId = node?.id || GLOBAL_NODE_ID;
+				/* ── 职责配置 ── */
+				const [duties, setDuties] = react.useState(null);
+				const [origin, setOrigin] = react.useState({});
+				const [own, setOwn] = react.useState(null);
+				const [editing, setEditing] = react.useState(null); // 正在编辑 prompt 的 key
+				/* ── 对话流 ── */
+				const [input, setInput] = react.useState("");
+				const [autoForward, setAutoForward] = react.useState(false);
+				const [busy, setBusy] = react.useState(false);
+				const [msg, setMsg] = react.useState("");
+				const [lastSteps, setLastSteps] = react.useState(null);
+				const [forwardLog, setForwardLog] = react.useState([]);
+			
+				// 总监 store：会话级用真实 sessionId，其余用节点 id（同 sessionId 共享，切换不丢）
+				const sessionId = react.useMemo(() => (
+					node?.conversations?.[0]?.conversationId || nodeId
+				), [node, nodeId]);
+				const store = react.useMemo(() => directorStoreFactory(sessionId), [sessionId]);
+				const state = useDirectorStore(store);
+			
+				const reload = react.useCallback(async () => {
+					const r = await resolveDuties(nodeId);
+					setDuties(r.duties);
+					setOrigin(r.origin);
+					setOwn(r.own);
+					return r;
+				}, [nodeId]);
+			
+				react.useEffect(() => { reload(); }, [reload]);
+				react.useEffect(() => { setLastSteps(null); }, [nodeId]);
+			
+				const guard = (fn) => async (...a) => {
+					if (busy) return;
+					setBusy(true);
+					try { await fn(...a); } finally { setBusy(false); }
+				};
+			
+				const toggle = (k) => setDuties((d) => ({ ...d, [k]: { ...d[k], enabled: !d[k].enabled } }));
+			
+				const doSave = guard(async () => {
+					const back = await setOwnDuties(nodeId, duties); // 内部已回读校验
+					setOwn(back.duties);
+					await reload();
+					setMsg("已保存本层职责配置（已回读校验）");
+				});
+			
+				const doSubmitUp = guard(async () => {
+					const r = await submitUp(nodeId, 1);
+					if (!r) { setMsg("已在最上层，无可提交目标"); return; }
+					await reload();
+					setMsg("已向上提交到「" + r.target.name + "」");
+				});
+			
+				const doRestore = guard(async () => {
+					await clearOwnDuties(nodeId);
+					await reload();
+					setMsg("已恢复继承（本层配置已清空）");
+				});
+			
+				const doSend = guard(async () => {
+					const text = input.trim();
+					if (!text) { setMsg("请输入内容"); return; }
+					setInput("");
+					const cfg = loadDirectorConfig();
+					const eff = (await resolveDuties(nodeId)).duties;
+					let r;
+					try {
+						r = await runDirector({
+							sessionId,
+							userText: text,
+							store,
+							duties: eff,
+							config: cfg,
+							autoForward,
+							onForward: (instr) => {
+								setForwardLog((l) => [...l, { at: Date.now(), instruction: instr }]);
+								dshLog("director", "autoForward -> " + instr.slice(0, 60));
+							}
+						});
+					} catch (e) {
+						// runDirector 内部已把【总监异常】写进对话流；此处只补面板提示，避免静默
+						setMsg("总监执行失败：" + (e && e.message ? e.message : String(e)));
+						return;
+					}
+					setLastSteps(r.steps);
+					setMsg("总监处理完成：" + r.steps.filter((s) => s.enabled).length + " 项职责生效"
+						+ " · 任务=" + r.taskType + " · 模型=" + r.model
+						+ (r.forward.done ? " · 已自动转发" : ""));
+				});
+			
+				const messages = state?.messages || [];
+			
+				return (0, react_jsx_runtime.jsxs)("div", { children: [
+					/* ── 执行逻辑面板（§3.1）── */
+					(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
+						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", marginBottom: 6 }, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: { fontSize: 13, fontWeight: 600 }, children: "执行逻辑（03号文 §3.1 五项）" }),
+							(0, react_jsx_runtime.jsxs)("span", { style: { marginLeft: "auto", display: "flex", gap: 6 }, children: [
+								(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, "data-testid": "w-save", onClick: doSave, disabled: busy, children: "保存本层" }),
+								(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "w-submit-up", onClick: doSubmitUp, disabled: busy, children: "向上提交" }),
+								(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "w-restore", onClick: doRestore, disabled: busy, children: "恢复继承" })
+							] })
+						] }),
+						(0, react_jsx_runtime.jsx)("div", { style: { ...S.muted, marginBottom: 8 }, children:
+							"本层状态：" + (own ? "已覆盖（优先于上层）" : "完全继承上层")
+							+ " · 节点层级：" + (LEVEL_LABEL[node?.level] || node?.level || "-")
+							+ "（§3.2 继承制：默认 → 全局 → 项目 → 会话）" }),
+			
+						duties ? DUTY_KEYS.map((k) => (0, react_jsx_runtime.jsxs)("div", { key: k, style: S.row, children: [
+							(0, react_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: duties[k].enabled,
+								onChange: () => toggle(k),
+								"data-duty": k,
+								style: { cursor: "pointer" }
+							}),
+							(0, react_jsx_runtime.jsx)("span", { style: { minWidth: 84 }, children: duties[k].name }),
+							(0, react_jsx_runtime.jsxs)("span", { style: { ...S.muted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: [
+								"来源 ", ORIGIN_LABEL[origin[k]] || origin[k] || "-"
+							] }),
+							(0, react_jsx_runtime.jsx)("button", {
+								style: S.btn, "data-edit-prompt": k,
+								onClick: () => setEditing(editing === k ? null : k),
+								children: editing === k ? "收起" : "prompt"
+							})
+						] }, k)) : (0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "加载中…" }),
+			
+						editing && duties ? (0, react_jsx_runtime.jsxs)("div", { style: { marginTop: 8 }, children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "prompt 模板：" + duties[editing].name }),
+							(0, react_jsx_runtime.jsx)("textarea", {
+								style: { ...S.input, minHeight: 64, resize: "vertical" },
+								"data-prompt-input": editing,
+								value: duties[editing].prompt,
+								onChange: (e) => setDuties((d) => ({ ...d, [editing]: { ...d[editing], prompt: e.target.value } }))
+							})
+						] }) : null
+					] }),
+			
+					/* ── 总监对话流（§2.3 ③）── */
+					(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
+						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", marginBottom: 6 }, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: { fontSize: 13, fontWeight: 600 }, children: "总监对话流" }),
+							(0, react_jsx_runtime.jsx)("span", { style: { ...S.badge, marginLeft: "auto" }, children: messages.length + " 条" })
+						] }),
+						(0, react_jsx_runtime.jsx)("div", {
+							style: { maxHeight: 220, overflowY: "auto", marginBottom: 8 },
+							"data-testid": "director-messages",
+							children: messages.length
+								? messages.map((m, i) => (0, react_jsx_runtime.jsxs)("div", {
+									key: i, style: { marginBottom: 8, paddingLeft: m.role === "user" ? 0 : 8, borderLeft: m.role === "user" ? "none" : "2px solid #2f6bdd" },
+									children: [
+										(0, react_jsx_runtime.jsx)("div", { style: S.muted, children: m.role === "user" ? "你" : (m.role === "assistant" ? "总监" : "系统") }),
+										(0, react_jsx_runtime.jsx)("pre", { style: S.pre, children: m.content })
+									]
+								}, i))
+								: (0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "暂无消息。在下方输入并发送，总监将按 §1.2 五步预处理。" })
+						}),
+			
+						/* 最近一次五步过程 */
+						lastSteps ? (0, react_jsx_runtime.jsxs)("div", { style: { marginBottom: 8 }, children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "本次处理过程（§1.2 五步）" }),
+							lastSteps.map((s) => (0, react_jsx_runtime.jsxs)("div", { key: s.n, style: { ...S.muted, display: "flex", gap: 6 }, children: [
+								(0, react_jsx_runtime.jsx)("span", { style: S.badge, children: s.enabled ? s.grade : "关" }),
+								(0, react_jsx_runtime.jsx)("span", { children: s.n + ". " + s.name + "：" + String(s.text).slice(0, 60) })
+							] }, s.n))
+						] }) : null,
+			
+						/* 输入栏（§2.2） */
+						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6, alignItems: "center" }, children: [
+							(0, react_jsx_runtime.jsx)("input", {
+								style: S.input, "data-testid": "director-input",
+								placeholder: "输入需求，总监将预处理…",
+								value: input,
+								onChange: (e) => setInput(e.target.value),
+								onKeyDown: (e) => { if (e.key === "Enter" && !busy) doSend(); }
+							}),
+							(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, "data-testid": "director-send", onClick: doSend, disabled: busy, children: "发送" }),
+							(0, react_jsx_runtime.jsxs)("label", { style: { ...S.muted, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }, children: [
+								(0, react_jsx_runtime.jsx)("input", { type: "checkbox", "data-testid": "director-autoforward", checked: autoForward, onChange: (e) => setAutoForward(e.target.checked) }),
+								"自动转发"
+							] })
+						] }),
+						forwardLog.length ? (0, react_jsx_runtime.jsx)("div", { style: { ...S.muted, marginTop: 6 }, children:
+							"已转发 " + forwardLog.length + " 条，最近：" + forwardLog[forwardLog.length - 1].instruction.slice(0, 40) }) : null
+					] }),
+			
+					msg ? (0, react_jsx_runtime.jsx)("div", { style: S.muted, children: msg }) : null
+				] });
+			}
+			
+			__defaults["components/DirectorWorkbench.js"] = DirectorWorkbench;
+			
+			exports.DirectorWorkbench = DirectorWorkbench;
+		};
+
 		// ── components/DirectorHierarchy.js ──
 		__defs["components/DirectorHierarchy.js"] = function (exports) {
 			/**
@@ -4176,6 +5036,7 @@ window.__ModuleLoader__.load({
 			const { summarizeNode, summarizeTree, propagateUp, GRADE } = __m("logic/summarize.js");
 			const { syncFromSource, auditCoverage } = __m("logic/sync.js");
 			const { onHierarchyChange } = __m("util/bus.js");
+			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
 			const { dshLog } = __m("util/debug.js");
 			
 			/* ── 样式（内联，与宿主编译产物同形态；尽量使用 Harness 主题变量并给 fallback）── */
@@ -4210,6 +5071,11 @@ window.__ModuleLoader__.load({
 						style: S.row(selectedId === node.id),
 						onClick: () => onSelect(node.id),
 						title: node.name,
+						// 🔴 稳定定位标识：真机交互验证与用户脚本依赖它精确点击**本行**。
+						//    仅靠「textContent 前缀」匹配会命中祖先包裹 div（点击不冒泡向下 → 选中失败）。
+						"data-node-id": node.id,
+						"data-node-level": node.level,
+						"data-selected": selectedId === node.id ? "true" : "false",
 						children: [
 							(0, react_jsx_runtime.jsx)("span", { style: { paddingLeft: depth * 12 }, children: (ICON[node.level] || "•") + " " + node.name }),
 							kids.length ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: String(kids.length) }) : null
@@ -4251,6 +5117,8 @@ window.__ModuleLoader__.load({
 				const [nodeName, setNodeName] = react.useState("");
 				// 覆盖度：是否每一个对话 / 文件夹都已配总监
 				const [coverage, setCoverage] = react.useState(null);
+				// 右栏页签：overview=层级概览（原内容） / director=总监工作台（文档 06 方案 E）
+				const [tab, setTab] = react.useState("overview");
 			
 				const refresh = react.useCallback(async () => {
 					const t = await loadTree();
@@ -4377,8 +5245,28 @@ window.__ModuleLoader__.load({
 							(0, react_jsx_runtime.jsx)("h3", { style: S.h, children: crumb.map((c) => c.name).join(" / ") || "全局总管" }),
 							selected ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: LEVEL_LABEL[selected.level] || selected.level }) : null,
 							selected?.summaryGrade ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: "梯度 " + selected.summaryGrade }) : null,
-							props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, onClick: props.onClose, children: "收起" }) : null
+							props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, "data-testid": "h-close", onClick: props.onClose, children: "收起" }) : null
 						] }),
+			
+						/* 页签：[概览] [总监] */
+						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6, marginBottom: 10 }, children: [
+							(0, react_jsx_runtime.jsx)("button", {
+								style: { ...(tab === "overview" ? S.btnPrimary : S.btn) }, "data-tab": "overview",
+								"data-testid": "h-tab-overview", onClick: () => setTab("overview"), children: "概览"
+							}),
+							(0, react_jsx_runtime.jsx)("button", {
+								style: { ...(tab === "director" ? S.btnPrimary : S.btn) }, "data-tab": "director",
+								"data-testid": "h-tab-director", onClick: () => setTab("director"), children: "总监"
+							})
+						] }),
+			
+						/* 总监工作台（03号文 §3.1 职责 / §3.2 继承 / §2.3 消息流） */
+						tab === "director"
+							? (0, react_jsx_runtime.jsx)("div", { "data-panel": "director", children: (0, react_jsx_runtime.jsx)(DirectorWorkbench, { node: selected }) })
+							: null,
+			
+						/* 概览内容（总监页签时隐藏，保留内部状态不卸载） */
+						(0, react_jsx_runtime.jsxs)("div", { style: { display: tab === "overview" ? "" : "none" }, children: [
 			
 						/* 覆盖度自检：是否每一个对话 / 文件夹都有总监 */
 						(0, react_jsx_runtime.jsxs)("div", {
@@ -4395,7 +5283,7 @@ window.__ModuleLoader__.load({
 										" · 文件夹 ", coverage ? coverage.folders.covered + "/" + coverage.folders.total : "-",
 										" · 全局 ", coverage ? coverage.global.covered + "/1" : "-"
 									] }),
-									(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSync, disabled: busy, children: "同步真实会话" })
+									(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, "data-testid": "h-sync", onClick: doSync, disabled: busy, children: "同步真实会话" })
 								] }),
 								(0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "数据源：" + (coverage ? coverage.source : "检测中…")
 									+ "（workspace=文件夹级，session=对话级）。节点 id 由数据源主键派生，重复同步幂等、不会重复新建。" })
@@ -4407,6 +5295,7 @@ window.__ModuleLoader__.load({
 							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "定位 / 目标 / 当前阶段（17号文 §1A.13 核心认知）" }),
 							(0, react_jsx_runtime.jsx)("input", {
 								style: { ...S.input, marginBottom: 6 },
+								"data-testid": "h-meta-name",
 								placeholder: "节点名称（修改后自动同步不再覆盖）",
 								value: nodeName,
 								onChange: (e) => setNodeName(e.target.value)
@@ -4414,11 +5303,12 @@ window.__ModuleLoader__.load({
 							["positioning", "goal", "currentPhase"].map((k) => (0, react_jsx_runtime.jsx)("input", {
 								key: k,
 								style: { ...S.input, marginBottom: 6 },
+								"data-testid": "h-meta-" + k,
 								placeholder: { positioning: "定位", goal: "目标", currentPhase: "当前阶段" }[k],
 								value: meta[k],
 								onChange: (e) => setMeta((m) => ({ ...m, [k]: e.target.value }))
 							}, k)),
-							(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doSaveMeta, disabled: busy, children: "保存基础信息" })
+							(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-save-meta", onClick: doSaveMeta, disabled: busy, children: "保存基础信息" })
 						] }),
 			
 						/* 总结区 */
@@ -4426,9 +5316,9 @@ window.__ModuleLoader__.load({
 							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", marginBottom: 8 }, children: [
 								(0, react_jsx_runtime.jsx)("span", { style: S.label, children: "分层总结" }),
 								(0, react_jsx_runtime.jsxs)("span", { style: { marginLeft: "auto", display: "flex", gap: 6 }, children: [
-									(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSummarizeOne, disabled: busy, children: "生成本级总结" }),
-									(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doPropagate, disabled: busy, children: "向上提交" }),
-									(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doSummarizeTree, disabled: busy, children: "整树分层总结" })
+									(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, "data-testid": "h-sum-one", onClick: doSummarizeOne, disabled: busy, children: "生成本级总结" }),
+									(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-prop-up", onClick: doPropagate, disabled: busy, children: "向上提交" }),
+									(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-sum-tree", onClick: doSummarizeTree, disabled: busy, children: "整树分层总结" })
 								] })
 							] }),
 							selected?.summary
@@ -4452,25 +5342,26 @@ window.__ModuleLoader__.load({
 						(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
 							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "在当前节点下新建" }),
 							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6, marginBottom: 6 }, children: [
-								(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "名称", value: newName, onChange: (e) => setNewName(e.target.value) }),
-								(0, react_jsx_runtime.jsxs)("select", { style: S.btn, value: newLevel, onChange: (e) => setNewLevel(e.target.value), children: [
+								(0, react_jsx_runtime.jsx)("input", { style: S.input, "data-testid": "h-new-name", placeholder: "名称", value: newName, onChange: (e) => setNewName(e.target.value) }),
+								(0, react_jsx_runtime.jsxs)("select", { style: S.btn, "data-testid": "h-new-level", value: newLevel, onChange: (e) => setNewLevel(e.target.value), children: [
 									(0, react_jsx_runtime.jsx)("option", { value: LEVEL.PROJECT, children: "项目（文件夹级）" }),
 									(0, react_jsx_runtime.jsx)("option", { value: LEVEL.SESSION, children: "会话（对话级）" })
 								] }),
-								(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doCreate, disabled: busy, children: "新建" })
+								(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-create", onClick: doCreate, disabled: busy, children: "新建" })
 							] }),
 							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6 }, children: [
-								(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "会话 ID", value: sessId, onChange: (e) => setSessId(e.target.value) }),
-								(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "会话标题（可选）", value: sessTitle, onChange: (e) => setSessTitle(e.target.value) }),
-								(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doAttach, disabled: busy, children: "挂载会话" })
+								(0, react_jsx_runtime.jsx)("input", { style: S.input, "data-testid": "h-attach-sid", placeholder: "会话 ID", value: sessId, onChange: (e) => setSessId(e.target.value) }),
+								(0, react_jsx_runtime.jsx)("input", { style: S.input, "data-testid": "h-attach-title", placeholder: "会话标题（可选）", value: sessTitle, onChange: (e) => setSessTitle(e.target.value) }),
+								(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-attach", onClick: doAttach, disabled: busy, children: "挂载会话" })
 							] })
 						] }),
 			
 						/* 提示 + 删除 */
 						msg ? (0, react_jsx_runtime.jsx)("div", { style: { ...S.muted, marginBottom: 8 }, children: msg }) : null,
 						selectedId !== GLOBAL_NODE_ID
-							? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, borderColor: "#7a2b2b", color: "#ff8a8a" }, onClick: doRemove, disabled: busy, children: "删除当前节点" })
+							? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, borderColor: "#7a2b2b", color: "#ff8a8a" }, "data-testid": "h-remove", onClick: doRemove, disabled: busy, children: "删除当前节点" })
 							: null
+						] })
 					] })
 				] });
 			}
@@ -4701,8 +5592,12 @@ window.__ModuleLoader__.load({
 			// ── 批次 7 自动同步：让每一个对话 / 文件夹都拥有总监 ──
 			const { installDiscoverApi } = __m("logic/discover.js");
 			const { installSyncApi, syncFromSource, auditCoverage } = __m("logic/sync.js");
+			// ── 批次 8 总监逻辑完善：§3.1 五项职责 + §3.2 继承制 + §1.2 五步执行 ──
+			const { installDutyApi, resolveDuties, submitUp } = __m("store/duty-config.js");
+			const { installDirectorRunApi } = __m("logic/director-run.js");
+			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
 			
-			const PLUGIN_VERSION = "0.7.0-batch7";
+			const PLUGIN_VERSION = "0.8.0-batch8";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
@@ -4770,6 +5665,11 @@ window.__ModuleLoader__.load({
 					//    window.__dshSync      自动同步 + 覆盖度自检
 					window.__dshDiscover = installDiscoverApi();
 					window.__dshSync = installSyncApi();
+					// ── 批次 8 总监逻辑完善 ──
+					//    window.__dshDuties       §3.1 五项职责 + §3.2 三级继承（默认→全局→项目→会话）
+					//    window.__dshDirectorRun  §1.2 五步标准执行逻辑（整理/分支/模型/上下文/审核）
+					window.__dshDuties = installDutyApi();
+					window.__dshDirectorRun = installDirectorRunApi();
 				}
 			
 				// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -4862,7 +5762,11 @@ window.__ModuleLoader__.load({
 					syncApi: typeof window !== "undefined" ? Boolean(window.__dshSync) : false,
 					// 覆盖度：回答「是否每一个对话 / 文件夹都有总监」
 					coverage: null, // 异步，稍后就绪（{sessions,folders,global,rate,ok}）
-					coverageOk: false
+					coverageOk: false,
+					// ── 批次 8 总监逻辑完善 ──
+					dutyApi: typeof window !== "undefined" ? Boolean(window.__dshDuties) : false,
+					directorRunApi: typeof window !== "undefined" ? Boolean(window.__dshDirectorRun) : false,
+					workbench: typeof DirectorWorkbench === "function"
 				};
 			
 				hierarchyReady.then((t) => {
@@ -4882,11 +5786,12 @@ window.__ModuleLoader__.load({
 					window.__dshDirectorBatch5 = installed; // 批次 5 别名
 					window.__dshDirectorBatch6 = installed; // 批次 6 别名
 					window.__dshDirectorBatch7 = installed; // 批次 7 别名
+					window.__dshDirectorBatch8 = installed; // 批次 8 别名
 				}
 				return installed;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage };
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench };
 			
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
@@ -4929,6 +5834,12 @@ window.__ModuleLoader__.load({
 			exports.installSyncApi = installSyncApi;
 			exports.syncFromSource = syncFromSource;
 			exports.auditCoverage = auditCoverage;
+			exports.// ── 批次 8 总监逻辑完善 ──
+	installDutyApi = // ── 批次 8 总监逻辑完善 ──
+	installDutyApi;
+			exports.resolveDuties = resolveDuties;
+			exports.submitUp = submitUp;
+			exports.DirectorWorkbench = DirectorWorkbench;
 		};
 
 		// ── Harness client 插件契约导出 ──

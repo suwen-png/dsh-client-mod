@@ -224,6 +224,50 @@ function transform(abs, code) {
 	return { code: out.join("\n"), deps };
 }
 
+/**
+ * 静态检查：模块内引用的 JSX 组件必须在本模块有绑定。
+ *
+ * 为何必须有：打包器把每个模块包成 `__defs[id] = function (exports) { ... }`，
+ * 模块间靠 `const { X } = __m("...")` 绑定。若源码**用了组件却漏写 import**，
+ * 打包器无从知晓（它只跟着 import 走）→ 产物语法合法、构建通过，
+ * 直到**运行时渲染**才抛 `X is not defined`（React 会把整棵子树卸载 → 面板空白）。
+ * 该缺陷 2026-09-12 真实发生过（DirectorWorkbench），排查成本高，故前移到构建期拦截。
+ */
+function lintUndefinedComponents(id, code) {
+	// 1) 收集本模块所有可能的绑定名（过度收集是安全的，只会减少误报）
+	const bound = new Set();
+	const add = (n) => { const s = String(n || "").trim().replace(/^.*:\s*/, ""); if (s) bound.add(s); };
+	for (const m of code.matchAll(/\bfunction\s+([A-Za-z0-9_$]+)/g)) add(m[1]);
+	for (const m of code.matchAll(/\bclass\s+([A-Za-z0-9_$]+)/g)) add(m[1]);
+	for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=/g)) add(m[1]);
+	for (const m of code.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=/g)) m[1].split(",").forEach(add);
+	for (const m of code.matchAll(/\b(?:const|let|var)\s*\[([^\]]*)\]\s*=/g)) m[1].split(",").forEach(add);
+	// 函数参数/解构（局部组件常来自 props 解构，如 `function Foo({ Bar }) {}`）
+	for (const m of code.matchAll(/function\s*[A-Za-z0-9_$]*\s*\(\s*\{([^}]*)\}/g)) m[1].split(",").forEach(add);
+	for (const m of code.matchAll(/function\s*[A-Za-z0-9_$]*\s*\(\s*([^)]*)\)/g)) m[1].split(",").forEach(add);
+	for (const m of code.matchAll(/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z0-9_$]+)/g)) add(m[1]);
+
+	// 2) 找出所有 JSX 组件引用（仅首字母大写 = 组件；含 `.` 的成员表达式跳过）
+	const missing = new Map();
+	const JSX = /react_jsx_runtime\.j(?:sx|sxs)\)\(\s*([A-Za-z0-9_$]+)\s*[,)]/g;
+	for (const m of code.matchAll(JSX)) {
+		const name = m[1];
+		if (bound.has(name)) continue;
+		if (!missing.has(name)) missing.set(name, m.index);
+	}
+	if (missing.size === 0) return;
+
+	const detail = [...missing.keys()].map((n) => {
+		const idx = missing.get(n);
+		const line = code.slice(0, idx).split("\n").length;
+		return `  - ${n}（模块内第 ${line} 行附近）`;
+	}).join("\n");
+	throw new Error(
+		`[build] ${id}: 使用了未绑定的 JSX 组件（源码缺少 import）：\n${detail}\n` +
+		`  提示：在源文件顶部补 \`import { X } from "./X.js";\``
+	);
+}
+
 /** DFS 后序 → 拓扑序（被依赖者先定义） */
 function visit(abs) {
 	if (modules.has(abs)) return;
@@ -233,6 +277,7 @@ function visit(abs) {
 	const raw = readFileSync(abs, "utf8");
 	const exportNames = collectExportNames(raw);
 	const { code, deps } = transform(abs, raw);
+	lintUndefinedComponents(moduleId(abs), code);
 
 	modules.set(abs, { id: moduleId(abs), code, deps, exportNames });
 	for (const d of deps) visit(d.abs);

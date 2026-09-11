@@ -136,7 +136,15 @@ ok("installed 暴露 coverage / coverageOk", has(S.entry, /coverageOk/) && has(S
 ok("安装 discover 全局契约", has(S.entry, /window\.__dshDiscover = installDiscoverApi\(\)/));
 ok("安装 sync 全局契约", has(S.entry, /window\.__dshSync = installSyncApi\(\)/));
 ok("批次 7 别名 __dshDirectorBatch7", has(S.entry, /__dshDirectorBatch7/));
-ok("版本号升至 0.7.0-batch7", has(S.entry, /0\.7\.0-batch7/));
+// ⚠️ 禁止写死具体版本号（已两次因升版误报：batch6→batch7→batch8）。
+//    改为区间断言：主版本 ≥0.7 且已包含批次 7 的能力（自动同步）。
+ok("版本号 ≥ 0.7.0（批次 7 水位，禁止写死具体版本）", (() => {
+	const m = String(S.entry).match(/PLUGIN_VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)-batch(\d+)"/);
+	if (!m) return false;
+	const minor = Number(m[2]);
+	const batch = Number(m[4]);
+	return minor >= 7 && batch >= 7;
+})());
 
 ok("UI 已接「同步真实会话」按钮", has(S.comp, /同步真实会话/) && has(S.comp, /onClick: doSync/));
 ok("UI 展示覆盖度（会话/文件夹/全局 三项计数）",

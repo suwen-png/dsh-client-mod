@@ -24,6 +24,7 @@ import {
 import { summarizeNode, summarizeTree, propagateUp, GRADE } from "../logic/summarize.js";
 import { syncFromSource, auditCoverage } from "../logic/sync.js";
 import { onHierarchyChange } from "../util/bus.js";
+import { DirectorWorkbench } from "./DirectorWorkbench.js";
 import { dshLog } from "../util/debug.js";
 
 /* ── 样式（内联，与宿主编译产物同形态；尽量使用 Harness 主题变量并给 fallback）── */
@@ -58,6 +59,11 @@ function TreeItem({ node, depth, selectedId, onSelect }) {
 			style: S.row(selectedId === node.id),
 			onClick: () => onSelect(node.id),
 			title: node.name,
+			// 🔴 稳定定位标识：真机交互验证与用户脚本依赖它精确点击**本行**。
+			//    仅靠「textContent 前缀」匹配会命中祖先包裹 div（点击不冒泡向下 → 选中失败）。
+			"data-node-id": node.id,
+			"data-node-level": node.level,
+			"data-selected": selectedId === node.id ? "true" : "false",
 			children: [
 				(0, react_jsx_runtime.jsx)("span", { style: { paddingLeft: depth * 12 }, children: (ICON[node.level] || "•") + " " + node.name }),
 				kids.length ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: String(kids.length) }) : null
@@ -99,6 +105,8 @@ export function DirectorHierarchy(props = {}) {
 	const [nodeName, setNodeName] = react.useState("");
 	// 覆盖度：是否每一个对话 / 文件夹都已配总监
 	const [coverage, setCoverage] = react.useState(null);
+	// 右栏页签：overview=层级概览（原内容） / director=总监工作台（文档 06 方案 E）
+	const [tab, setTab] = react.useState("overview");
 
 	const refresh = react.useCallback(async () => {
 		const t = await loadTree();
@@ -225,8 +233,28 @@ export function DirectorHierarchy(props = {}) {
 				(0, react_jsx_runtime.jsx)("h3", { style: S.h, children: crumb.map((c) => c.name).join(" / ") || "全局总管" }),
 				selected ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: LEVEL_LABEL[selected.level] || selected.level }) : null,
 				selected?.summaryGrade ? (0, react_jsx_runtime.jsx)("span", { style: S.badge, children: "梯度 " + selected.summaryGrade }) : null,
-				props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, onClick: props.onClose, children: "收起" }) : null
+				props.onClose ? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, marginLeft: "auto" }, "data-testid": "h-close", onClick: props.onClose, children: "收起" }) : null
 			] }),
+
+			/* 页签：[概览] [总监] */
+			(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6, marginBottom: 10 }, children: [
+				(0, react_jsx_runtime.jsx)("button", {
+					style: { ...(tab === "overview" ? S.btnPrimary : S.btn) }, "data-tab": "overview",
+					"data-testid": "h-tab-overview", onClick: () => setTab("overview"), children: "概览"
+				}),
+				(0, react_jsx_runtime.jsx)("button", {
+					style: { ...(tab === "director" ? S.btnPrimary : S.btn) }, "data-tab": "director",
+					"data-testid": "h-tab-director", onClick: () => setTab("director"), children: "总监"
+				})
+			] }),
+
+			/* 总监工作台（03号文 §3.1 职责 / §3.2 继承 / §2.3 消息流） */
+			tab === "director"
+				? (0, react_jsx_runtime.jsx)("div", { "data-panel": "director", children: (0, react_jsx_runtime.jsx)(DirectorWorkbench, { node: selected }) })
+				: null,
+
+			/* 概览内容（总监页签时隐藏，保留内部状态不卸载） */
+			(0, react_jsx_runtime.jsxs)("div", { style: { display: tab === "overview" ? "" : "none" }, children: [
 
 			/* 覆盖度自检：是否每一个对话 / 文件夹都有总监 */
 			(0, react_jsx_runtime.jsxs)("div", {
@@ -243,7 +271,7 @@ export function DirectorHierarchy(props = {}) {
 							" · 文件夹 ", coverage ? coverage.folders.covered + "/" + coverage.folders.total : "-",
 							" · 全局 ", coverage ? coverage.global.covered + "/1" : "-"
 						] }),
-						(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSync, disabled: busy, children: "同步真实会话" })
+						(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, "data-testid": "h-sync", onClick: doSync, disabled: busy, children: "同步真实会话" })
 					] }),
 					(0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "数据源：" + (coverage ? coverage.source : "检测中…")
 						+ "（workspace=文件夹级，session=对话级）。节点 id 由数据源主键派生，重复同步幂等、不会重复新建。" })
@@ -255,6 +283,7 @@ export function DirectorHierarchy(props = {}) {
 				(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "定位 / 目标 / 当前阶段（17号文 §1A.13 核心认知）" }),
 				(0, react_jsx_runtime.jsx)("input", {
 					style: { ...S.input, marginBottom: 6 },
+					"data-testid": "h-meta-name",
 					placeholder: "节点名称（修改后自动同步不再覆盖）",
 					value: nodeName,
 					onChange: (e) => setNodeName(e.target.value)
@@ -262,11 +291,12 @@ export function DirectorHierarchy(props = {}) {
 				["positioning", "goal", "currentPhase"].map((k) => (0, react_jsx_runtime.jsx)("input", {
 					key: k,
 					style: { ...S.input, marginBottom: 6 },
+					"data-testid": "h-meta-" + k,
 					placeholder: { positioning: "定位", goal: "目标", currentPhase: "当前阶段" }[k],
 					value: meta[k],
 					onChange: (e) => setMeta((m) => ({ ...m, [k]: e.target.value }))
 				}, k)),
-				(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doSaveMeta, disabled: busy, children: "保存基础信息" })
+				(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-save-meta", onClick: doSaveMeta, disabled: busy, children: "保存基础信息" })
 			] }),
 
 			/* 总结区 */
@@ -274,9 +304,9 @@ export function DirectorHierarchy(props = {}) {
 				(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", marginBottom: 8 }, children: [
 					(0, react_jsx_runtime.jsx)("span", { style: S.label, children: "分层总结" }),
 					(0, react_jsx_runtime.jsxs)("span", { style: { marginLeft: "auto", display: "flex", gap: 6 }, children: [
-						(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, onClick: doSummarizeOne, disabled: busy, children: "生成本级总结" }),
-						(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doPropagate, disabled: busy, children: "向上提交" }),
-						(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doSummarizeTree, disabled: busy, children: "整树分层总结" })
+						(0, react_jsx_runtime.jsx)("button", { style: S.btnPrimary, "data-testid": "h-sum-one", onClick: doSummarizeOne, disabled: busy, children: "生成本级总结" }),
+						(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-prop-up", onClick: doPropagate, disabled: busy, children: "向上提交" }),
+						(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-sum-tree", onClick: doSummarizeTree, disabled: busy, children: "整树分层总结" })
 					] })
 				] }),
 				selected?.summary
@@ -300,25 +330,26 @@ export function DirectorHierarchy(props = {}) {
 			(0, react_jsx_runtime.jsxs)("div", { style: S.card, children: [
 				(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "在当前节点下新建" }),
 				(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6, marginBottom: 6 }, children: [
-					(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "名称", value: newName, onChange: (e) => setNewName(e.target.value) }),
-					(0, react_jsx_runtime.jsxs)("select", { style: S.btn, value: newLevel, onChange: (e) => setNewLevel(e.target.value), children: [
+					(0, react_jsx_runtime.jsx)("input", { style: S.input, "data-testid": "h-new-name", placeholder: "名称", value: newName, onChange: (e) => setNewName(e.target.value) }),
+					(0, react_jsx_runtime.jsxs)("select", { style: S.btn, "data-testid": "h-new-level", value: newLevel, onChange: (e) => setNewLevel(e.target.value), children: [
 						(0, react_jsx_runtime.jsx)("option", { value: LEVEL.PROJECT, children: "项目（文件夹级）" }),
 						(0, react_jsx_runtime.jsx)("option", { value: LEVEL.SESSION, children: "会话（对话级）" })
 					] }),
-					(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doCreate, disabled: busy, children: "新建" })
+					(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-create", onClick: doCreate, disabled: busy, children: "新建" })
 				] }),
 				(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 6 }, children: [
-					(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "会话 ID", value: sessId, onChange: (e) => setSessId(e.target.value) }),
-					(0, react_jsx_runtime.jsx)("input", { style: S.input, placeholder: "会话标题（可选）", value: sessTitle, onChange: (e) => setSessTitle(e.target.value) }),
-					(0, react_jsx_runtime.jsx)("button", { style: S.btn, onClick: doAttach, disabled: busy, children: "挂载会话" })
+					(0, react_jsx_runtime.jsx)("input", { style: S.input, "data-testid": "h-attach-sid", placeholder: "会话 ID", value: sessId, onChange: (e) => setSessId(e.target.value) }),
+					(0, react_jsx_runtime.jsx)("input", { style: S.input, "data-testid": "h-attach-title", placeholder: "会话标题（可选）", value: sessTitle, onChange: (e) => setSessTitle(e.target.value) }),
+					(0, react_jsx_runtime.jsx)("button", { style: S.btn, "data-testid": "h-attach", onClick: doAttach, disabled: busy, children: "挂载会话" })
 				] })
 			] }),
 
 			/* 提示 + 删除 */
 			msg ? (0, react_jsx_runtime.jsx)("div", { style: { ...S.muted, marginBottom: 8 }, children: msg }) : null,
 			selectedId !== GLOBAL_NODE_ID
-				? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, borderColor: "#7a2b2b", color: "#ff8a8a" }, onClick: doRemove, disabled: busy, children: "删除当前节点" })
+				? (0, react_jsx_runtime.jsx)("button", { style: { ...S.btn, borderColor: "#7a2b2b", color: "#ff8a8a" }, "data-testid": "h-remove", onClick: doRemove, disabled: busy, children: "删除当前节点" })
 				: null
+			] })
 		] })
 	] });
 }

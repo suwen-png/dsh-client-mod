@@ -89,8 +89,12 @@ import { DirectorHierarchy } from "./components/DirectorHierarchy.js";
 // ── 批次 7 自动同步：让每一个对话 / 文件夹都拥有总监 ──
 import { installDiscoverApi } from "./logic/discover.js";
 import { installSyncApi, syncFromSource, auditCoverage } from "./logic/sync.js";
+// ── 批次 8 总监逻辑完善：§3.1 五项职责 + §3.2 继承制 + §1.2 五步执行 ──
+import { installDutyApi, resolveDuties, submitUp } from "./store/duty-config.js";
+import { installDirectorRunApi } from "./logic/director-run.js";
+import { DirectorWorkbench } from "./components/DirectorWorkbench.js";
 
-export const PLUGIN_VERSION = "0.7.0-batch7";
+export const PLUGIN_VERSION = "0.8.0-batch8";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -158,6 +162,11 @@ export function installBatch1(options = {}) {
 		//    window.__dshSync      自动同步 + 覆盖度自检
 		window.__dshDiscover = installDiscoverApi();
 		window.__dshSync = installSyncApi();
+		// ── 批次 8 总监逻辑完善 ──
+		//    window.__dshDuties       §3.1 五项职责 + §3.2 三级继承（默认→全局→项目→会话）
+		//    window.__dshDirectorRun  §1.2 五步标准执行逻辑（整理/分支/模型/上下文/审核）
+		window.__dshDuties = installDutyApi();
+		window.__dshDirectorRun = installDirectorRunApi();
 	}
 
 	// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -250,7 +259,11 @@ export function installBatch1(options = {}) {
 		syncApi: typeof window !== "undefined" ? Boolean(window.__dshSync) : false,
 		// 覆盖度：回答「是否每一个对话 / 文件夹都有总监」
 		coverage: null, // 异步，稍后就绪（{sessions,folders,global,rate,ok}）
-		coverageOk: false
+		coverageOk: false,
+		// ── 批次 8 总监逻辑完善 ──
+		dutyApi: typeof window !== "undefined" ? Boolean(window.__dshDuties) : false,
+		directorRunApi: typeof window !== "undefined" ? Boolean(window.__dshDirectorRun) : false,
+		workbench: typeof DirectorWorkbench === "function"
 	};
 
 	hierarchyReady.then((t) => {
@@ -270,6 +283,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch5 = installed; // 批次 5 别名
 		window.__dshDirectorBatch6 = installed; // 批次 6 别名
 		window.__dshDirectorBatch7 = installed; // 批次 7 别名
+		window.__dshDirectorBatch8 = installed; // 批次 8 别名
 	}
 	return installed;
 }
@@ -299,5 +313,7 @@ export {
 	LEVEL, GLOBAL_NODE_ID,
 	DirectorHierarchy,
 	// ── 批次 7 自动同步 ──
-	installDiscoverApi, installSyncApi, syncFromSource, auditCoverage
+	installDiscoverApi, installSyncApi, syncFromSource, auditCoverage,
+	// ── 批次 8 总监逻辑完善 ──
+	installDutyApi, resolveDuties, submitUp, DirectorWorkbench
 };

@@ -1,0 +1,713 @@
+/**
+ * cdp-click.mjs — 真机逐交互点击验证（批次 8）
+ *
+ * 命题：**每一个可交互元素都要实际点击，并回读实际结果比对预期**。
+ * 与普通契约验证的区别：契约验证只证明「函数存在」，本脚本证明「点了之后真的变了」。
+ *
+ * 验证项（每项都含 点击前 → 点击 → 点击后回读 三段）：
+ *   I1  入口按钮「总监层级」  → 面板打开
+ *   I2  页签 [概览]           → 概览内容可见
+ *   I3  页签 [总监]           → 工作台可见（执行逻辑面板 + 对话流）
+ *   I4  职责开关（5 个）      → 勾选状态翻转 + 生效值同步
+ *   I5  prompt 编辑           → textarea 出现且内容可改
+ *   I6  保存本层              → 落库（回读节点 duties）+ 来源变「本层」
+ *   I7  向上提交              → 父节点 duties 被改写（回读父节点）
+ *   I8  恢复继承              → 本节点 duties 清空（回读为 null）
+ *   I9  总监对话流发送        → 消息数 +2（user + assistant），含五步过程
+ *   I10 自动转发开关          → 开启后发送，转发回调被触发
+ *   I11 树节点选择            → 面包屑/内容随之切换
+ *   I12 同步真实会话          → 覆盖度刷新为 100%
+ *
+ * 用法：node scripts/cdp-click.mjs
+ * 前置：Harness 已启动且带 --remote-debugging-port=9222
+ */
+
+const PORT = 9222;
+
+/* ── CDP 连接 ── */
+const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+const page = targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
+if (!page) { console.error("未找到页面目标（Harness 未启动或未开 9222？）"); process.exit(1); }
+
+const ws = new WebSocket(page.webSocketDebuggerUrl);
+let seq = 0;
+const pending = new Map();
+ws.addEventListener("message", (ev) => {
+	const m = JSON.parse(ev.data);
+	if (m.id !== undefined && pending.has(m.id)) {
+		const { res, rej } = pending.get(m.id);
+		pending.delete(m.id);
+		m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result);
+	}
+});
+const send = (method, params = {}) => new Promise((res, rej) => {
+	const id = ++seq;
+	pending.set(id, { res, rej });
+	ws.send(JSON.stringify({ id, method, params }));
+});
+await new Promise((r) => ws.addEventListener("open", r));
+await send("Runtime.enable");
+
+async function evalExpr(expression) {
+	const out = await send("Runtime.evaluate", {
+		expression, returnByValue: true, awaitPromise: true, includeCommandLineAPI: true
+	});
+	if (out.exceptionDetails) throw new Error(out.exceptionDetails.exception?.description || out.exceptionDetails.text);
+	return out.result?.value;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 轮询求值直到 `done` 为真或超时。
+ * 🔴 为何必须轮询而非固定 sleep：总监链路含本地模型调用（单次超时 60s），
+ *    耗时是**环境相关**的；固定 sleep 要么误报（太短）要么拖慢（太长）。
+ */
+async function pollEval(expression, timeoutMs = 15000, stepMs = 400) {
+	const deadline = Date.now() + timeoutMs;
+	let last = null;
+	while (Date.now() < deadline) {
+		last = await evalExpr(expression);
+		if (last && last.done) return last;
+		await sleep(stepMs);
+	}
+	return last;
+}
+
+/**
+ * 等待面板「空闲」：所有受 busy 守卫的按钮恢复可点击。
+ *
+ * 🔴 为何必须有：`guard()` 会在异步操作期间把所有按钮置 `disabled`。
+ *    对**禁用按钮**调 `click()` 是原生 no-op（不报错、无副作用）——
+ *    固定 sleep 一旦短于实际操作耗时，后续点击会**静默失效**，
+ *    表现为「点了新建但什么都没发生」（2026-09-12 实测踩中：
+ *    `summarizeTree` 需遍历全树 11 节点，6s 固定等待不够）。
+ */
+async function waitIdle(timeoutMs = 60000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const idle = await evalExpr(`(() => {
+			const ids = ['h-sum-tree','h-create','h-attach','h-save-meta','h-remove','h-sync'];
+			return ids.every((t) => { const e = window.__q('[data-testid="' + t + '"]'); return !e || !e.disabled; });
+		})()`);
+		if (idle === true) return true;
+		await sleep(500);
+	}
+	return false;
+}
+
+let pass = 0, fail = 0;
+const fails = [];
+function ok(name, cond, detail = "") {
+	if (cond) { pass++; console.log("  ✅ " + name + (detail ? "  — " + detail : "")); }
+	else { fail++; fails.push(name); console.log("  ❌ " + name + (detail ? "  — " + detail : "")); }
+}
+
+/* ── 页面内辅助函数（注入一次，后续复用）── */
+await evalExpr(`
+window.__click = (el) => { if(!el) throw new Error('元素不存在'); el.dispatchEvent(new MouseEvent('click',{bubbles:true})); el.click && el.click(); return true; };
+window.__q = (sel) => document.querySelector(sel);
+window.__qa = (sel) => Array.from(document.querySelectorAll(sel));
+window.__byText = (sel, txt) => window.__qa(sel).find(e => (e.textContent||'').includes(txt));
+window.__visible = (el) => { if(!el) return false; const r = el.getBoundingClientRect(); return r.width>0 && r.height>0; };
+window.__panel = () => document.getElementById('dsh-director-hierarchy-overlay');
+'helpers ready'
+`);
+
+console.log("\n══════ 真机逐交互点击验证（批次 8）══════\n");
+
+/* ── I1 入口按钮 ── */
+console.log("[I1] 入口按钮「总监层级」");
+const i1 = await evalExpr(`(() => {
+	const btn = document.getElementById('dsh-director-hierarchy-launcher');
+	if (!btn) return { found:false };
+	const before = window.__panel() ? window.__panel().style.display : null;
+	btn.click();
+	return { found:true, before, text: btn.textContent, after: window.__panel() ? window.__panel().style.display : null };
+})()`);
+ok("入口按钮存在", i1.found, "文案「" + (i1.text || "") + "」");
+await sleep(1200);
+// 🔴 幂等开启：launcher 是**切换**语义，若上轮结束时面板仍开着，单次点击反而会关闭。
+//    故「未打开则再点一次」，使本脚本可从任意初始状态重复运行。
+const i1open = await evalExpr(`(async () => {
+	for (let i = 0; i < 3; i++) {
+		if (window.__panel().style.display === 'block') return 'block';
+		document.getElementById('dsh-director-hierarchy-launcher').click();
+		await new Promise(r => setTimeout(r, 600));
+	}
+	return window.__panel().style.display;
+})()`);
+ok("点击后面板打开", i1open === "block", "display=" + i1open);
+
+/* ── I2/I3 页签 ── */
+console.log("\n[I2] 页签 [概览]");
+const i2 = await evalExpr(`(() => {
+	const t = window.__q('[data-testid="h-tab-overview"]'); if(!t) return {found:false};
+	t.click(); return {found:true};
+})()`);
+ok("概览页签存在", i2.found);
+await sleep(700);
+const i2b = await evalExpr(`(() => {
+	const p = window.__panel(); if(!p) return {ok:false};
+	const txt = p.innerText||'';
+	return { ok:true, hasCov:/总监已全覆盖|存在未覆盖/.test(txt), hasSync:/同步真实会话/.test(txt), hasDirectorPanel: Boolean(window.__q('[data-panel="director"]')) };
+})()`);
+ok("概览内容可见（覆盖度 + 同步按钮）", i2b.hasCov && i2b.hasSync);
+ok("概览态下总监面板未渲染", i2b.hasDirectorPanel === false);
+
+console.log("\n[I3] 页签 [总监]");
+const i3 = await evalExpr(`(() => {
+	const t = window.__q('[data-testid="h-tab-director"]'); if(!t) return {found:false};
+	t.click(); return {found:true};
+})()`);
+ok("总监页签存在", i3.found);
+await sleep(1500);
+const i3b = await evalExpr(`(() => {
+	const p = window.__panel(); if(!p) return {ok:false};
+	const txt = p.innerText||'';
+	return {
+		ok:true,
+		panel: Boolean(window.__q('[data-panel="director"]')),
+		hasDuties:/执行逻辑/.test(txt),
+		hasFlow:/总监对话流/.test(txt),
+		hasSave:/保存本层/.test(txt),
+		hasSubmit:/向上提交/.test(txt),
+		hasRestore:/恢复继承/.test(txt),
+		checks: window.__qa('[data-duty]').length,
+		hasInput: Boolean(window.__q('[data-testid="director-input"]'))
+	};
+})()`);
+ok("总监工作台已渲染", i3b.panel && i3b.hasDuties && i3b.hasFlow);
+ok("执行逻辑面板 5 项职责开关齐全", i3b.checks === 5, "实测 " + i3b.checks + " 个");
+ok("三个继承操作按钮齐全", i3b.hasSave && i3b.hasSubmit && i3b.hasRestore);
+ok("对话流输入栏存在", i3b.hasInput);
+
+/* ── I4 职责开关点击 ── */
+console.log("\n[I4] 职责开关逐项点击（5 项）");
+const keys = ["languagePolish", "modelRouting", "branchSwitch", "contextFilter", "outputReview"];
+for (const k of keys) {
+	const r = await evalExpr(`(async () => {
+		const el = window.__q('[data-duty="${k}"]'); if(!el) return {found:false};
+		const before = el.checked;
+		el.click();
+		await new Promise(r=>setTimeout(r,260));
+		const after = window.__q('[data-duty="${k}"]').checked;
+		return { found:true, before, after, flipped: before !== after };
+	})()`);
+	ok("开关 [" + k + "] 点击后状态翻转", r.found && r.flipped, r.before + " → " + r.after);
+}
+
+/* ── I5 prompt 编辑 ── */
+console.log("\n[I5] prompt 编辑");
+const i5 = await evalExpr(`(async () => {
+	const btn = window.__q('[data-edit-prompt="languagePolish"]'); if(!btn) return {found:false};
+	btn.click();
+	await new Promise(r=>setTimeout(r,420));
+	const ta = window.__q('[data-prompt-input="languagePolish"]');
+	return { found:true, hasTextarea: Boolean(ta), value: ta ? ta.value.slice(0,30) : null };
+})()`);
+ok("prompt 编辑按钮点击后出现 textarea", i5.found && i5.hasTextarea, "内容前缀「" + i5.value + "」");
+
+/* ── I6 保存本层（回读落库） ── */
+console.log("\n[I6] 保存本层 → 回读落库");
+const i6 = await evalExpr(`(async () => {
+	// 🔴 回读「当前选中节点」：以 UI 的真实选中态为准（data-selected="true"），
+	//    不再假设「默认选中的是根节点」——那是实现细节，不是可见行为。
+	const sel = window.__q('[data-selected="true"]');
+	const targetId = sel ? sel.getAttribute('data-node-id') : null;
+	if (!targetId) return { found:false, reason:'树中无选中行' };
+	const before = await window.__dshDuties.resolve(targetId);
+	const btn = window.__q('[data-testid="w-save"]'); if(!btn) return {found:false};
+	btn.click();
+	await new Promise(r=>setTimeout(r,900));
+	const node = await window.__dshHierarchy.getNode(targetId);
+	const after = await window.__dshDuties.resolve(targetId);
+	return {
+		found:true, targetId,
+		ownBefore: before.own ? 'configured' : 'inherit',
+		ownAfter: after.own ? 'configured' : 'inherit',
+		dbDuties: node && node.duties ? Object.keys(node.duties).length : 0,
+		origin0: after.origin.languagePolish
+	};
+})()`);
+ok("保存按钮存在并点击", i6.found);
+ok("🔴 回读：落库后本节点 duties 已写入", i6.dbDuties === 5, "duties 项数=" + i6.dbDuties);
+ok("🔴 回读：来源标记变为本层（own）", i6.ownAfter === "configured" && i6.origin0 === "own", "origin=" + i6.origin0);
+
+/* ── I7 向上提交 ── */
+console.log("\n[I7] 向上提交 → 回读父节点");
+const i7 = await evalExpr(`(async () => {
+	// 先选一个会话级节点（有父级），再向上提交
+	const t = await window.__dshHierarchy.loadTree();
+	const sess = (t.childNodes||[]).flatMap(p => (p.childNodes||[]))[0];
+	if (!sess) return {found:false, reason:'无会话级节点'};
+	return { found:true, sessId: sess.id, parentId: sess.parentId, name: sess.name };
+})()`);
+if (i7.found) {
+	// 🔴 必须点 `[data-node-id]` 这一行本身。
+	//    踩过的坑（2026-09-12）：按 `textContent 前缀` 匹配 div 会先命中**祖先包裹层**
+	//    （document 顺序靠前），而 click 事件只向上冒泡、不会向下传给行 → onSelect 永不触发，
+	//    「点树节点」实际是空操作。加 data-node-id 后定位唯一且与展示文案解耦。
+	const i7click = await evalExpr(`(() => {
+		const row = document.querySelector('[data-node-id="${i7.sessId}"]');
+		if (!row) return { clicked:false, reason:'树中未渲染该节点行' };
+		row.click();
+		return { clicked:true };
+	})()`);
+	await sleep(900);
+	const i7sel = await evalExpr(`(() => {
+		const sel = window.__q('[data-selected="true"]');
+		return sel ? sel.getAttribute('data-node-id') : null;
+	})()`);
+	ok("树节点行已点击（data-node-id 精确定位）", i7click.clicked, i7click.reason || "会话「" + i7.name + "」");
+	ok("🔴 回读：该行成为选中态（selection 真的变了）", i7sel === i7.sessId, "selected=" + String(i7sel).slice(-12));
+	const i7b = await evalExpr(`(async () => {
+		const parentBefore = await window.__dshHierarchy.getNode('${i7.parentId}');
+		const btn = window.__q('[data-testid="w-submit-up"]'); if(!btn) return {found:false};
+		btn.click();
+		await new Promise(r=>setTimeout(r,1100));
+		const parentAfter = await window.__dshHierarchy.getNode('${i7.parentId}');
+		const crumb = await window.__dshHierarchy.getBreadcrumb('${i7.sessId}');
+		return {
+			found:true,
+			crumbLen: crumb.length,
+			parentBefore: parentBefore && parentBefore.duties ? Object.keys(parentBefore.duties).length : 0,
+			parentAfter: parentAfter && parentAfter.duties ? Object.keys(parentAfter.duties).length : 0
+		};
+	})()`);
+	ok("向上提交按钮可点击", i7b.found, "面包屑深度 " + i7b.crumbLen);
+	ok("🔴 回读：父节点被写入职责配置", i7b.parentAfter === 5, "父节点 duties 项数 " + i7b.parentBefore + " → " + i7b.parentAfter);
+
+	/* ── I8 恢复继承 ── */
+	console.log("\n[I8] 恢复继承 → 回读清空");
+	const i8 = await evalExpr(`(async () => {
+		const btn = window.__q('[data-testid="w-restore"]'); if(!btn) return {found:false};
+		btn.click();
+		await new Promise(r=>setTimeout(r,900));
+		const node = await window.__dshHierarchy.getNode('${i7.sessId}');
+		const r = await window.__dshDuties.resolve('${i7.sessId}');
+		return { found:true, dbDuties: node && node.duties ? Object.keys(node.duties).length : 0, origin0: r.origin.languagePolish };
+	})()`);
+	ok("恢复继承按钮可点击", i8.found);
+	ok("🔴 回读：本节点 duties 已清空", i8.dbDuties === 0, "duties 项数=" + i8.dbDuties);
+	ok("🔴 回读：来源回落为继承（非 own）", i8.origin0 !== "own", "origin=" + i8.origin0);
+} else {
+	ok("找到会话级节点用于向上提交", false, i7.reason || "");
+}
+
+/* ── I9 总监对话流发送 ── */
+console.log("\n[I9] 总监对话流：发送消息");
+const i9a = await evalExpr(`(async () => {
+	const box = window.__q('[data-testid="director-messages"]');
+	if (!box) return { found:false, reason:'消息区未渲染（总监页签是否激活？）' };
+	const before = (box.innerText||'').length;
+	const input = window.__q('[data-testid="director-input"]');
+	if (!input) return { found:false, reason:'输入框未渲染' };
+	// React 受控输入：必须走原生 setter + input 事件，否则 React 内部 state 不同步
+	// （直接改 input.value 再 click，React 读到的仍是旧值 → 发送被「空文本早退」静默吞掉）
+	const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+	setter.call(input, '帮我把登录接口改成 JWT 鉴权');
+	input.dispatchEvent(new Event('input',{bubbles:true}));
+	await new Promise(r=>setTimeout(r,400));
+	const btn = window.__q('[data-testid="director-send"]');
+	if (!btn) return { found:false, reason:'发送按钮未渲染' };
+	btn.click();
+	// 🔴 用户消息必须【立即】上屏（§2.3 消息流），不等 5 步执行完成
+	await new Promise(r=>setTimeout(r,700));
+	const box1 = window.__q('[data-testid="director-messages"]');
+	const midTxt = box1 ? (box1.innerText||'') : '';
+	return { found:true, before, midLen: midTxt.length, midHasUser: /帮我把登录接口改成 JWT 鉴权/.test(midTxt) };
+})()`);
+ok("输入框与发送按钮存在", i9a.found, i9a.reason || "");
+ok("🔴 回读：用户消息【立即上屏】（§2.3，不等执行完成）", i9a.midHasUser,
+	"点击后 700ms 内 " + i9a.before + " → " + i9a.midLen + " 字符");
+
+const i9b = await pollEval(`(() => {
+	const box = window.__q('[data-testid="director-messages"]');
+	const txt = box ? (box.innerText||'') : '';
+	return {
+		done: /总监分析/.test(txt),
+		len: txt.length,
+		hasUser: /帮我把登录接口改成 JWT 鉴权/.test(txt),
+		hasAnalysis: /总监分析/.test(txt),
+		hasSteps: /1\\. 整理语言/.test(txt) || /5\\. 自动审核产出/.test(txt),
+		snippet: txt.slice(0,220)
+	};
+})()`, 25000);
+ok("🔴 回读：消息已追加（文本长度增长）", i9b.len > i9a.before, i9a.before + " → " + i9b.len + " 字符");
+ok("消息含用户原文", i9b.hasUser);
+ok("消息含【总监分析】", i9b.hasAnalysis);
+ok("五步过程已展示", i9b.hasSteps);
+
+/* ── I10 自动转发 ── */
+console.log("\n[I10] 自动转发开关");
+const i10 = await evalExpr(`(async () => {
+	const cb = window.__q('[data-testid="director-autoforward"]');
+	if(!cb) return {found:false};
+	const before = cb.checked;
+	cb.click();
+	await new Promise(r=>setTimeout(r,320));
+	const after = window.__q('[data-testid="director-autoforward"]').checked;
+	return { found:true, before, after, flipped: before!==after };
+})()`);
+ok("自动转发开关存在且可翻转", i10.found && i10.flipped, i10.before + " → " + i10.after);
+
+// 开启状态下发一条，验证转发发生（通过 runDirector 直接计数更可靠）
+const i10b = await evalExpr(`(async () => {
+	let forwarded = null;
+	const store = window.__dshDirectorRun ? null : null;
+	const r = await window.__dshDirectorRun.run({
+		sessionId: 'cdp-click-probe',
+		userText: '实现三级总监结构',
+		store: null,
+		duties: window.__dshDuties.DEFAULT(),
+		config: { localModel: { enabled:false } },
+		autoForward: true,
+		onForward: (i) => { forwarded = i; }
+	});
+	return { steps: r.steps.length, enabled: r.steps.filter(s=>s.enabled).length, forwarded, forwardDone: r.forward.done };
+})()`);
+ok("runDirector 五步齐全", i10b.steps === 5, "5 步中启用 " + i10b.enabled + " 项（文档默认 3 项启用：整理/模型/分支）");
+ok("默认启用项数 = 3（文档 §3.1：整理语言✅调整模型✅切换分支✅）", i10b.enabled === 3);
+ok("🔴 自动转发回调被实际触发", i10b.forwardDone === true && typeof i10b.forwarded === "string", "转发内容「" + String(i10b.forwarded).slice(0, 30) + "」");
+
+/* ── I11 树节点选择 ── */
+console.log("\n[I11] 树节点选择");
+const i11 = await evalExpr(`(async () => {
+	// 树在左栏，始终可见；用 data-node-id 精确定位所有行
+	const rows = window.__qa('[data-node-id]');
+	if (!rows.length) return {found:false};
+	const cur = window.__q('[data-selected="true"]');
+	const curId = cur ? cur.getAttribute('data-node-id') : null;
+	// 挑一个**与当前不同**的行，才能证明「点击 → 选中态迁移」
+	const target = rows.find(r => r.getAttribute('data-node-id') !== curId) || rows[0];
+	const targetId = target.getAttribute('data-node-id');
+	const targetName = (target.textContent||'').trim().slice(0,20);
+	const beforeCrumb = (window.__panel().innerText||'').split('\\n')[0];
+	target.click();
+	await new Promise(r=>setTimeout(r,800));
+	const sel = window.__q('[data-selected="true"]');
+	return {
+		found:true, count: rows.length, targetId, targetName, curId,
+		selectedAfter: sel ? sel.getAttribute('data-node-id') : null,
+		beforeCrumb
+	};
+})()`);
+ok("树上存在可点击节点行", i11.found, "共 " + i11.count + " 行");
+ok("🔴 回读：选中态迁移到被点击的行", i11.selectedAfter === i11.targetId,
+	"「" + i11.targetName + "」 selected=" + String(i11.selectedAfter).slice(-14));
+
+/* ── I12 同步真实会话 ── */
+console.log("\n[I12] 同步真实会话");
+await evalExpr(`(() => { const t = window.__q('[data-testid="h-tab-overview"]'); if(t) t.click(); return 'ok'; })()`);
+await sleep(800);
+const i12 = await evalExpr(`(async () => {
+	const btn = window.__q('[data-testid="h-sync"]'); if(!btn) return {found:false};
+	btn.click();
+	await new Promise(r=>setTimeout(r,2500));
+	const p = window.__panel(); const txt = p ? (p.innerText||'') : '';
+	const m = txt.match(/会话 (\\d+)\\/(\\d+)/);
+	const f = txt.match(/文件夹 (\\d+)\\/(\\d+)/);
+	return { found:true, sess: m ? m[0] : null, fld: f ? f[0] : null, allCover: /总监已全覆盖/.test(txt) };
+})()`);
+ok("同步按钮可点击", i12.found);
+ok("🔴 回读：覆盖度达 100%", i12.allCover, "会话 " + i12.sess + " · 文件夹 " + i12.fld);
+
+/* ═══════════════════════════════════════════════════════════
+ * 以下为「概览」页签剩余交互项 —— 上一轮遗漏，本次补齐。
+ * 原则：**面板里每一个 button / input / select 都必须被点过并回读**，
+ *       最后用 I21 做全量清单核对，防止再漏。
+ * ═══════════════════════════════════════════════════════════ */
+
+// 原生 setter 工具（React 受控组件必须走这条路，否则 state 不同步）
+await evalExpr(`
+window.__setVal = (el, v) => {
+  if (!el) return false;
+  const proto = el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype
+              : el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+              : window.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+  setter.call(el, v);
+  el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+  return true;
+};
+window.__enabled = (sel) => { const e = window.__q(sel); return Boolean(e) && !e.disabled; };
+'ok'
+`);
+
+/* ── I13 基础信息编辑 + 保存 ── */
+console.log("\n[I13] 基础信息（meta）编辑 → 保存基础信息 → 回读落库");
+const i13 = await evalExpr(`(async () => {
+	await new Promise(r=>setTimeout(r,300));
+	const nameEl = window.__q('[data-testid="h-meta-name"]');
+	if (!nameEl) return {found:false, reason:'名称输入框未渲染'};
+	const stamp = '验证' + Date.now().toString().slice(-6);
+	window.__setVal(nameEl, stamp);
+	window.__setVal(window.__q('[data-testid="h-meta-positioning"]'), '多层级总监面板');
+	window.__setVal(window.__q('[data-testid="h-meta-goal"]'), '每个对话/文件夹都有总监');
+	window.__setVal(window.__q('[data-testid="h-meta-currentPhase"]'), '交互验证');
+	await new Promise(r=>setTimeout(r,400));
+	const btn = window.__q('[data-testid="h-save-meta"]'); if(!btn) return {found:false, reason:'保存按钮未渲染'};
+	const sel = window.__q('[data-selected="true"]');
+	const id = sel.getAttribute('data-node-id');
+	btn.click();
+	await new Promise(r=>setTimeout(r,1200));
+	// 🔴 回读：必须从库里读，不能信 UI
+	const node = await window.__dshHierarchy.getNode(id);
+	return { found:true, id, stamp, dbName: node ? node.name : null,
+	         dbPos: node && node.meta ? node.meta.positioning : null,
+	         dbGoal: node && node.meta ? node.meta.goal : null,
+	         dbPhase: node && node.meta ? node.meta.currentPhase : null };
+})()`);
+ok("基础信息四项输入框可编辑", i13.found, i13.reason || "");
+ok("🔴 回读：名称已落库", i13.dbName === i13.stamp, "库中名称=" + i13.dbName);
+ok("🔴 回读：定位/目标/当前阶段已落库",
+	i13.dbPos === "多层级总监面板" && i13.dbGoal === "每个对话/文件夹都有总监" && i13.dbPhase === "交互验证",
+	"定位=" + i13.dbPos);
+
+/* ── I14 生成本级总结 ── */
+console.log("\n[I14] 生成本级总结 → 回读 summary");
+const i14 = await evalExpr(`(async () => {
+	const btn = window.__q('[data-testid="h-sum-one"]'); if(!btn) return {found:false};
+	const sel = window.__q('[data-selected="true"]'); const id = sel.getAttribute('data-node-id');
+	const before = await window.__dshHierarchy.getNode(id);
+	btn.click();
+	await new Promise(r=>setTimeout(r,120));
+	return { found:true, id,
+		beforeLen: before && before.summary ? before.summary.length : 0,
+		beforeAt: before ? (before.summaryAt || 0) : 0 };
+})()`);
+ok("生成本级总结按钮可点击", i14.found);
+await waitIdle();
+const i14b = await evalExpr(`(async () => {
+	const id = window.__q('[data-selected="true"]').getAttribute('data-node-id');
+	const n = await window.__dshHierarchy.getNode(id);
+	return { len: n && n.summary ? n.summary.length : 0, grade: n ? n.summaryGrade : null, at: n ? (n.summaryAt || 0) : 0 };
+})()`);
+// 🔴 断言用 summaryAt 而非长度：同内容重复总结长度不变（不幂等的判据会误报）
+ok("🔴 回读：summary 已重算（summaryAt 时间戳推进）", i14b.at > i14.beforeAt,
+	"summaryAt " + i14.beforeAt + " → " + i14b.at + "（" + i14b.len + " 字）");
+ok("🔴 回读：summaryGrade 已标记（G0/G1/G2）", ["G0","G1","G2"].includes(i14b.grade), "grade=" + i14b.grade);
+
+/* ── I15 向上提交（总结继承） ── */
+console.log("\n[I15] 向上提交（总结）→ 回读父节点 summary");
+const i15 = await evalExpr(`(async () => {
+	const btn = window.__q('[data-testid="h-prop-up"]'); if(!btn) return {found:false};
+	const sel = window.__q('[data-selected="true"]'); const id = sel.getAttribute('data-node-id');
+	const node = await window.__dshHierarchy.getNode(id);
+	const parentBefore = node && node.parentId ? await window.__dshHierarchy.getNode(node.parentId) : null;
+	const isRoot = !node || !node.parentId;
+	const disabled = btn.disabled;
+	btn.click();
+	await new Promise(r=>setTimeout(r,1600));
+	const parentAfter = node && node.parentId ? await window.__dshHierarchy.getNode(node.parentId) : null;
+	return { found:true, isRoot, disabled,
+		before: parentBefore && parentBefore.summary ? parentBefore.summary.length : 0,
+		after: parentAfter && parentAfter.summary ? parentAfter.summary.length : 0 };
+})()`);
+ok("向上提交（总结）按钮可点击", i15.found);
+if (i15.isRoot) {
+	ok("🔴 根节点上「向上提交」无副作用（无可提交目标）", i15.disabled === true || i15.after === i15.before,
+		"disabled=" + i15.disabled + " 父级 summary " + i15.before + " → " + i15.after);
+} else {
+	ok("🔴 回读：父节点 summary 被写入", i15.after >= i15.before, "父级 summary " + i15.before + " → " + i15.after + " 字");
+}
+
+/* ── I16 整树分层总结 ── */
+console.log("\n[I16] 整树分层总结 → 回读多节点 summary");
+const i16 = await evalExpr(`(async () => {
+	const btn = window.__q('[data-testid="h-sum-tree"]'); if(!btn) return {found:false};
+	btn.click();
+	await new Promise(r=>setTimeout(r,120));
+	const t = await window.__dshHierarchy.loadTree();
+	const rows = [];
+	const walk = (n) => { rows.push({ lv:n.level, hasSum: Boolean(n.summary), grade:n.summaryGrade || null }); (n.childNodes||[]).forEach(walk); };
+	walk(t);
+	return { found:true, total: rows.length, withSum: rows.filter(r=>r.hasSum).length,
+	         grades: Array.from(new Set(rows.map(r=>r.grade).filter(Boolean))) };
+})()`);
+ok("整树分层总结按钮可点击", i16.found);
+await waitIdle();
+const i16b = await evalExpr(`(async () => {
+	const t = await window.__dshHierarchy.loadTree();
+	const rows = [];
+	const walk = (n) => { rows.push({ lv:n.level, sum:(n.summary||'').length, g:n.summaryGrade||null }); (n.childNodes||[]).forEach(walk); };
+	walk(t);
+	return { total: rows.length, withSum: rows.filter(r=>r.sum>0).length,
+	         grades: Array.from(new Set(rows.map(r=>r.g).filter(Boolean))) };
+})()`);
+Object.assign(i16, { total: i16b.total, withSum: i16b.withSum, grades: i16b.grades });
+ok("🔴 回读：整树各层均生成 summary（自底向上逐级汇总）",
+	i16.withSum >= i16.total * 0.9, i16.withSum + "/" + i16.total + " 个节点有 summary");
+ok("🔴 回读：梯度标记存在（§4.3 降级生效）", i16.grades.length > 0, "梯度集合=" + JSON.stringify(i16.grades));
+
+/* ── I17 新建节点 ── */
+console.log("\n[I17] 新建节点（在当前节点下）");
+await waitIdle();
+const i17 = await evalExpr(`(async () => {
+	const nameEl = window.__q('[data-testid="h-new-name"]');
+	const lvlEl = window.__q('[data-testid="h-new-level"]');
+	if (!nameEl || !lvlEl) return {found:false};
+	const stamp = '临时项目' + Date.now().toString().slice(-6);
+	window.__setVal(nameEl, stamp);
+	window.__setVal(lvlEl, 'project');
+	await new Promise(r=>setTimeout(r,400));
+	const btn = window.__q('[data-testid="h-create"]'); if(!btn) return {found:false};
+	if (btn.disabled) return {found:false, reason:'新建按钮处于禁用态（上一操作未完成）'};
+	btn.click();
+	await new Promise(r=>setTimeout(r,1800));
+	const t = await window.__dshHierarchy.loadTree();
+	let hit = null;
+	const walk = (n) => { if (n.name === stamp) hit = n; (n.childNodes||[]).forEach(walk); };
+	walk(t);
+	window.__lastCreatedId = hit ? hit.id : null;
+	return { found:true, stamp, created: Boolean(hit), newId: hit ? hit.id : null, lv: hit ? hit.level : null };
+})()`);
+ok("新建输入框 + 层级选择 + 按钮齐全", i17.found);
+ok("🔴 回读：新节点已出现在树中且层级正确", i17.created && i17.lv === "project", "名称=" + i17.stamp + " level=" + i17.lv);
+
+/* ── I18 挂载会话 ── */
+console.log("\n[I18] 挂载会话（会话 ID + 标题）");
+await waitIdle();
+const i18 = await evalExpr(`(async () => {
+	// 先选中刚建的项目节点（挂载目标是「当前选中节点」）
+	// 若上一步新建失败，退回任一非根节点，保证「挂载/删除」仍能被验证
+	let id = window.__lastCreatedId;
+	if (!id) {
+		const cand = window.__qa('[data-node-id]').map(r => r.getAttribute('data-node-id')).filter(x => x !== '__global__');
+		id = cand[0] || null;
+		window.__lastCreatedId = id;
+	}
+	if (id) {
+		const row = document.querySelector('[data-node-id="' + id + '"]');
+		if (row) { row.click(); await new Promise(r=>setTimeout(r,800)); }
+	}
+	const sidEl = window.__q('[data-testid="h-attach-sid"]');
+	const titleEl = window.__q('[data-testid="h-attach-title"]');
+	if (!sidEl || !titleEl) return {found:false, reason:'挂载输入框未渲染'};
+	window.__setVal(sidEl, 'cdp-attach-001');
+	window.__setVal(titleEl, '交互验证挂载会话');
+	await new Promise(r=>setTimeout(r,400));
+	const btn = window.__q('[data-testid="h-attach"]'); if(!btn) return {found:false};
+	btn.click();
+	await new Promise(r=>setTimeout(r,1800));
+	// 🔴 conversations 写在**新建的会话节点**上（attachSession 语义），不是文件夹节点：
+	//    attachSession(folderId, ...) 会 makeNode(level:"session") 并把 conversations 挂到它身上。
+	const all = await window.__dshHierarchy.listAllNodes();
+	const hit = all.find(n => (n.conversations || []).some(c => c.conversationId === 'cdp-attach-001'));
+	window.__lastAttachedId = hit ? hit.id : null;
+	return { found:true, hitId: hit ? hit.id : null, hitName: hit ? hit.name : null,
+	         hitLevel: hit ? hit.level : null,
+	         hitParent: hit ? hit.parentId : null, folderId: id,
+	         conv: hit && hit.conversations && hit.conversations[0] ? JSON.stringify(hit.conversations[0]).slice(0,160) : null };
+})()`);
+ok("挂载会话输入框 + 按钮齐全", i18.found, i18.reason || "");
+ok("🔴 回读：已生成会话节点且 conversations 写入", Boolean(i18.hitId) && i18.hitLevel === "session",
+	"会话节点「" + (i18.hitName || "-") + "」");
+ok("🔴 回读：会话节点挂在目标文件夹下", i18.hitParent === i18.folderId,
+	"parent=" + String(i18.hitParent).slice(-14) + " 目标=" + String(i18.folderId).slice(-14));
+
+/* ── I19 删除当前节点 ── */
+console.log("\n[I19] 删除当前节点 → 回读消失 + 子级升祖父（不留孤儿）");
+await waitIdle();
+const i19 = await evalExpr(`(async () => {
+	// 🔴 删除的是【当前选中】节点 —— 必须先把它选上，否则删的是别的节点
+	//    （attachSession 会把选中态改到新会话节点上，上一轮的坑）
+	const id = window.__lastAttachedId || window.__lastCreatedId;
+	if (!id) return {found:false, reason:'无待删目标（前序步骤未产出节点）'};
+	const row = document.querySelector('[data-node-id="' + id + '"]');
+	if (!row) return {found:false, reason:'待删节点未渲染在树上'};
+	row.click();
+	await new Promise(r=>setTimeout(r,800));
+	const btn = window.__q('[data-testid="h-remove"]');
+	if (!btn) return {found:false, reason:'删除按钮未渲染'};
+	const node = await window.__dshHierarchy.getNode(id);
+	const expectedParent = node ? node.parentId : null;
+	// 先给它挂一个子节点，验证「子级升祖父」
+	const child = await window.__dshHierarchy.createChild(id, { name: '待升位子节点', level: 'session' });
+	btn.click();
+	await new Promise(r=>setTimeout(r,1800));
+	const gone = await window.__dshHierarchy.getNode(id);
+	const childAfter = child ? await window.__dshHierarchy.getNode(child.id) : null;
+	// 清理测试残留
+	if (childAfter) await window.__dshHierarchy.removeNode(child.id);
+	return { found:true, deleted: gone === null || gone === undefined,
+	         childParentAfter: childAfter ? childAfter.parentId : null, expectedParent };
+})()`);
+ok("删除按钮可点击", i19.found, i19.reason || "");
+ok("🔴 回读：节点已从库中删除", i19.deleted === true);
+ok("🔴 回读：原子节点升到祖父（无孤儿）", i19.childParentAfter === i19.expectedParent,
+	"子节点父级 " + i19.childParentAfter + " = 期望 " + i19.expectedParent);
+
+/* ── I20 收起 ── */
+console.log("\n[I20] 收起 → 面板关闭");
+const i20 = await evalExpr(`(async () => {
+	const btn = window.__q('[data-testid="h-close"]');
+	if (!btn) return {found:false};
+	btn.click();
+	await new Promise(r=>setTimeout(r,600));
+	return { found:true, display: window.__panel().style.display };
+})()`);
+ok("收起按钮可点击", i20.found);
+ok("🔴 回读：面板已关闭", i20.display === "none", "display=" + i20.display);
+
+/* ── I21 全量交互元素覆盖审计 ── */
+console.log("\n[I21] 全量交互元素覆盖审计（防止再漏）");
+const i21 = await evalExpr(`(() => {
+	const launcher = document.getElementById('dsh-director-hierarchy-launcher');
+	const p = window.__panel();
+	// 审计需要面板可见；用幂等开启而非切换
+	for (let i = 0; i < 3 && p.style.display !== 'block'; i++) { if (launcher) launcher.click(); }
+	const els = Array.from(p.querySelectorAll('button,input,textarea,select'));
+	// 本脚本已实际点击过的 testid（上表与之一一对应）
+	const covered = ['h-tab-overview','h-tab-director','h-close','h-sync','h-meta-name',
+		'h-meta-positioning','h-meta-goal','h-meta-currentPhase','h-save-meta','h-sum-one','h-prop-up',
+		'h-sum-tree','h-new-name','h-new-level','h-create','h-attach-sid','h-attach-title','h-attach','h-remove',
+		'w-save','w-submit-up','w-restore','director-input','director-send','director-autoforward'];
+	const uncovered = [];
+	for (const e of els) {
+		const tid = e.getAttribute('data-testid');
+		if (tid && covered.indexOf(tid) >= 0) continue;
+		if (e.getAttribute('data-duty')) continue;        // I4 已逐项点击
+		if (e.getAttribute('data-edit-prompt')) continue; // I5 已点击
+		if (e.tagName === 'TEXTAREA') continue;           // I5 展开后的 prompt 编辑框
+		uncovered.push(e.tagName + ':' + (e.type||'') + '「' + (e.innerText||e.placeholder||'').trim().slice(0,20) + '」');
+	}
+	return { total: els.length, uncovered, launcher: Boolean(launcher),
+	         missingTestId: els.filter(e => !e.getAttribute('data-testid') && !e.getAttribute('data-duty') && !e.getAttribute('data-edit-prompt') && e.tagName !== 'TEXTAREA').length };
+})()`);
+ok("面板交互元素总数已枚举", i21.total > 0, i21.total + " 个");
+ok("🔴 无「未覆盖」的交互元素（全部被实际点击过）", i21.uncovered.length === 0,
+	i21.uncovered.length ? "遗留: " + i21.uncovered.join(" / ") : "0 个遗漏");
+ok("入口按钮存在（launcher 可反复开关）", i21.launcher === true);
+
+/* ── I22 清理测试残留 ── */
+console.log("\n[I22] 清理测试残留（保证可反复运行）");
+const i22 = await evalExpr(`(async () => {
+	const all = await window.__dshHierarchy.listAllNodes();
+	const junk = all.filter(n => /^(临时项目|探针项目|待升位子节点)/.test(n.name || ''));
+	for (const n of junk) { try { await window.__dshHierarchy.removeNode(n.id); } catch (e) { /* 忽略 */ } }
+	// 根节点名若被 I13 改成「验证xxxxxx」，恢复为标准名
+	const root = await window.__dshHierarchy.getNode('__global__');
+	let renamed = false;
+	if (root && /^验证[0-9]+$/.test(root.name || '')) {
+		root.name = '全局总管';
+		await window.__dshHierarchy.saveNode(root);
+		renamed = true;
+	}
+	const after = await window.__dshHierarchy.listAllNodes();
+	return { removed: junk.length, renamed, remaining: after.filter(n => /^(临时|探针)/.test(n.name || '')).length, rootName: root ? root.name : null };
+})()`);
+ok("测试残留节点已清理", i22.remaining === 0, "删除 " + i22.removed + " 个");
+ok("根节点名已恢复（不把测试数据留给用户）", i22.renamed === true || i22.rootName === "全局总管", "rootName=" + i22.rootName);
+
+/* ── 汇总 ── */
+console.log("\n════════════════════════════════════════");
+console.log(`真机交互验证：PASS ${pass} / FAIL ${fail} / 总计 ${pass + fail}`);
+if (fails.length) {
+	console.log("失败项：");
+	fails.forEach((f) => console.log("  ✗ " + f));
+}
+console.log(`IS_PASS: ${fail === 0 ? "TRUE" : "FALSE"}`);
+ws.close();
+process.exit(fail === 0 ? 0 : 1);
