@@ -22,16 +22,24 @@
  *   ✅ V10 Cookie 分块存储      → store/cookie.js           （存储降级兜底层）
  *   ✅ IndexedDB 持久化主层     → store/idb.js              （6 store / v3）
  *
- * ── 待迁入（批次 3~6）───────────────────────────────────────
- *   ⬜ A6 文件通道    ⬜ A7~A10 持久化+store
+ * ── 批次 3 持久化层（已迁入）──────────────────────────────────
+ *   ✅ A6  文件通道适配器      → store/file-adapter.js      （client.js 6036~6214，按 T5 实测重建）
+ *   ✅ A7  loadDirectorStore   → store/persist.js           （client.js 6215~6273）
+ *   ✅ A8  saveDirectorStore   → store/persist.js           （client.js 6274~6326）
+ *   ✅ A9  createDirectorStore → store/create-store.js      （client.js 6327~6403 + 6408~6437）
+ *   ✅ A10 useDirectorStore    → store/use-store.js         （client.js 6404~6407，**首个平台模块消费者**）
+ *
+ * ── 待迁入（批次 4~6）───────────────────────────────────────
  *   ⬜ D1 directorProcess  ⬜ D2 审核
  *   ⬜ E1 DirectorFlow
  *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造
  *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
  *
  * ⚠️ 关键约束
- *   - 平台模块（react / cordis / web-react 等）**必须 external**，严禁打进产物（ADR-001）
+ *   - 平台模块（react / cordis / web-react 等）**必须 external**，严禁打进产物（ADR-001）；
+ *     构建期由 build/build.mjs 改写为 `require("<spec>")`，构建日志会列出「平台外置」清单
  *   - 加载顺序：debug → log-collector（后者依赖前者）→ layout / theme / config → docs-index
+ *     → memory → branch → persist（依赖 debug）→ store 工厂
  */
 
 import { installDshDebug } from "./util/debug.js";
@@ -46,10 +54,25 @@ import { directorStores } from "./store/messages.js";
 import { installMemoryApi } from "./store/memory.js";
 import { installBranchApi } from "./store/branch.js";
 import { directorDocsStore } from "./store/docs.js";
+// ── 批次 3 持久化层 ──
+import {
+	installPersistState,
+	probeLegacyRequire,
+	preloadStoreFile,
+	bridgeDebugLogToFile,
+	isFileChannelAvailable,
+	isOpfsAvailable,
+	isFsaAvailable,
+	exportViaFsa,
+	importViaFsa
+} from "./store/file-adapter.js";
+import { directorStoreFactory, installBeforeUnloadSave, createDirectorStore, isBeforeUnloadRegistered } from "./store/create-store.js";
+import { useDirectorStore } from "./store/use-store.js";
+import { safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG } from "./store/persist.js";
 
-export const PLUGIN_VERSION = "0.2.0-batch2";
+export const PLUGIN_VERSION = "0.3.0-batch3";
 
-/** 批次 1 安装器：装配零依赖基础层。返回已安装的能力清单（供宿主与调试读取） */
+/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
 	// 1. 日志基础设施（顺序敏感：debug 先于 log-collector）
 	installDshDebug();
@@ -75,6 +98,16 @@ export function installBatch1(options = {}) {
 	const memoryApi = installMemoryApi();
 	const branchApi = installBranchApi();
 
+	// 6. 批次 3 持久化层（顺序敏感）
+	//    ⚠️ installPersistState 必须先于任何 plog（persist.js 会读它做统计）
+	//    ⚠️ bridgeDebugLogToFile 必须在 installDshDebug 之后（依赖 window.__dshDebug）
+	const persistState = installPersistState();
+	const legacyProbe = probeLegacyRequire();
+	const fileLogBridged = bridgeDebugLogToFile();
+	const beforeUnload = installBeforeUnloadSave();
+	// OPFS 预读：异步。loadDirectorStore 是同步函数，故靠「预读一次 + 同步读缓存」保持签名。
+	const preloadPromise = preloadStoreFile();
+
 	const installed = {
 		debug: typeof window !== "undefined" ? Boolean(window.__dshDebug) : false,
 		v9Log: typeof window !== "undefined" ? Boolean(window.__dshV9Log) : false,
@@ -87,16 +120,49 @@ export function installBatch1(options = {}) {
 		memoryApi: memoryApi,
 		branchApi: branchApi,
 		docsStore: Boolean(directorDocsStore),
-		docsIndex: false // 异步，稍后就绪
+		docsIndex: false, // 异步，稍后就绪
+		// ── 批次 3 ──
+		persistState: Boolean(persistState),
+		storeFactory: typeof directorStoreFactory === "function",
+		hook: typeof useDirectorStore === "function",
+		beforeUnload: beforeUnload,
+		// 语义说明：beforeUnload = 「本次调用是否**新注册**」；
+		// beforeUnloadRegistered = 「能力是否**最终就绪**（宿主或插件任一注册）」。
+		// 真机上宿主内联代码（client.js:6409）先占同名守卫 → beforeUnload=false 属幂等守卫
+		// 按设计生效（假阴性），能力本身健全。验证脚本须用 beforeUnloadRegistered 判定。
+		beforeUnloadRegistered: isBeforeUnloadRegistered(),
+		fileLogBridged: fileLogBridged,
+		fileChannel: isFileChannelAvailable(),
+		opfs: isOpfsAvailable(),
+		fsa: isFsaAvailable(),
+		legacyRequire: legacyProbe.filter((p) => p.ok).map((p) => p.name), // 实测为空数组（T5）
+		opfsPreloaded: false // 异步，稍后就绪
 	};
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
+	preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
 
 	if (typeof window !== "undefined") {
 		window.__dshDirectorBatch1 = installed;
-		window.__dshDirectorBatch2 = installed; // 批次 2 别名：便于逐批次排查
+		window.__dshDirectorBatch2 = installed; // 批次 2 别名
+		window.__dshDirectorBatch3 = installed; // 批次 3 别名
 	}
 	return installed;
 }
 
-export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore };
+export {
+	directorLayoutStore,
+	dshThemeStore,
+	directorConfig,
+	directorDocsStore,
+	// ── 批次 3 ──
+	directorStoreFactory,
+	createDirectorStore,
+	useDirectorStore,
+	safeDirectorKey,
+	loadDirectorStore,
+	saveDirectorStore,
+	DIRECTOR_DEFAULT_CONFIG,
+	exportViaFsa,
+	importViaFsa
+};

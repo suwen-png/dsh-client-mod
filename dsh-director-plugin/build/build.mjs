@@ -38,7 +38,11 @@ const SRC = join(PLUGIN_ROOT, "src");
 const ENTRY = join(SRC, "client-entry.js");
 const OUT = join(PLUGIN_ROOT, "lib/client.js");
 
-/** 平台模块冻结表（getStaticModules）—— 出现在 import 中即构建失败 */
+/**
+ * 平台模块冻结表（getStaticModules）
+ *   - 出现在 import 中 → **不打包**，改写为 factory `require("<spec>")`
+ *   - 非相对且不在表内 → 构建期 fail-loud（禁止外部 npm 依赖）
+ */
 const PLATFORM_MODULES = new Set([
 	"react", "react/jsx-runtime", "react-dom", "react-dom/client",
 	"@deepseek-ai/cordis",
@@ -56,19 +60,22 @@ const PKG_NAME = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf
 const modules = new Map(); // absPath -> { id, code, deps, exportNames }
 const order = [];
 const visiting = new Set();
+const externals = new Set(); // 被引用的平台模块（用于生成 require 语句）
 
 const moduleId = (abs) => relative(SRC, abs).split("\\").join("/");
 
-function assertNotPlatform(spec, fromId) {
-	if (PLATFORM_MODULES.has(spec)) {
-		throw new Error(
-			`[build] 平台模块 "${spec}" 被 ${fromId} import —— 违反 ADR-001。\n` +
-			`  平台模块必须由 factory 的 require 参数提供，严禁打进产物。`
-		);
-	}
-	if (!spec.startsWith(".")) {
-		throw new Error(`[build] ${fromId} 引入了非相对模块 "${spec}" —— 本插件不允许外部依赖。`);
-	}
+/**
+ * 判定一个 import 说明符的类别。
+ * @returns {"platform" | "local"}
+ * @throws 非相对且非平台模块 → fail-loud（ADR-001 禁止外部依赖进产物）
+ */
+function classifySpec(spec, fromId) {
+	if (PLATFORM_MODULES.has(spec)) return "platform";
+	if (spec.startsWith(".")) return "local";
+	throw new Error(
+		`[build] ${fromId} 引入了未知的非相对模块 "${spec}"。\n` +
+		`  仅允许：本地相对导入（./x.js）或平台模块（${[...PLATFORM_MODULES].join(" / ")}）。`
+	);
 }
 
 function resolveModule(abs, spec) {
@@ -124,12 +131,9 @@ function transform(abs, code) {
 			}
 			i = j;
 
-			// import { a, b as c } from "./x.js";
+			// import { a, b as c } from "./x.js" | "react";
 			let m = stmt.match(/^import\s*\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']\s*;?$/);
 			if (m) {
-				const absDep = resolveModule(abs, m[2]);
-				assertNotPlatform(m[2], id);
-				deps.push({ spec: m[2], abs: absDep });
 				const binds = m[1]
 					.split(",")
 					.map((s) => s.trim())
@@ -139,25 +143,54 @@ function transform(abs, code) {
 						return alias ? `${orig}: ${alias}` : orig;
 					})
 					.join(", ");
-				out.push(`\t\t\tconst { ${binds} } = __m(${JSON.stringify(moduleId(absDep))});`);
+				if (classifySpec(m[2], id) === "platform") {
+					externals.add(m[2]);
+					out.push(`\t\t\tconst { ${binds} } = require(${JSON.stringify(m[2])});`);
+				} else {
+					const absDep = resolveModule(abs, m[2]);
+					deps.push({ spec: m[2], abs: absDep });
+					out.push(`\t\t\tconst { ${binds} } = __m(${JSON.stringify(moduleId(absDep))});`);
+				}
 				continue;
 			}
-			// import defaultName from "./x.js";
+			// import * as NS from "./x.js" | "react";
+			m = stmt.match(/^import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*["']([^"']+)["']\s*;?$/);
+			if (m) {
+				if (classifySpec(m[2], id) === "platform") {
+					externals.add(m[2]);
+					out.push(`\t\t\tconst ${m[1]} = require(${JSON.stringify(m[2])});`);
+				} else {
+					const absDep = resolveModule(abs, m[2]);
+					deps.push({ spec: m[2], abs: absDep });
+					out.push(`\t\t\tconst ${m[1]} = __m(${JSON.stringify(moduleId(absDep))});`);
+				}
+				continue;
+			}
+			// import defaultName from "./x.js" | "react";
 			m = stmt.match(/^import\s+([A-Za-z_$][\w$]*)\s+from\s*["']([^"']+)["']\s*;?$/);
 			if (m) {
-				const absDep = resolveModule(abs, m[2]);
-				assertNotPlatform(m[2], id);
-				deps.push({ spec: m[2], abs: absDep });
-				out.push(`\t\t\tconst ${m[1]} = __m(${JSON.stringify(moduleId(absDep))});`);
+				if (classifySpec(m[2], id) === "platform") {
+					externals.add(m[2]);
+					// ESM 默认导入语义：优先取 .default，退回模块对象本身
+					out.push(`\t\t\tconst ${m[1]} = (function (m) { return (m && m.default !== void 0) ? m.default : m; })(require(${JSON.stringify(m[2])}));`);
+				} else {
+					const absDep = resolveModule(abs, m[2]);
+					deps.push({ spec: m[2], abs: absDep });
+					out.push(`\t\t\tconst ${m[1]} = __m(${JSON.stringify(moduleId(absDep))});`);
+				}
 				continue;
 			}
-			// import "./x.js";  （副作用导入）
+			// import "./x.js";  （副作用导入，平台模块无副作用导入意义）
 			m = stmt.match(/^import\s*["']([^"']+)["']\s*;?$/);
 			if (m) {
-				const absDep = resolveModule(abs, m[1]);
-				assertNotPlatform(m[1], id);
-				deps.push({ spec: m[1], abs: absDep });
-				out.push(`\t\t\t__m(${JSON.stringify(moduleId(absDep))});`);
+				if (classifySpec(m[1], id) === "platform") {
+					externals.add(m[1]);
+					out.push(`\t\t\trequire(${JSON.stringify(m[1])});`);
+				} else {
+					const absDep = resolveModule(abs, m[1]);
+					deps.push({ spec: m[1], abs: absDep });
+					out.push(`\t\t\t__m(${JSON.stringify(moduleId(absDep))});`);
+				}
 				continue;
 			}
 			throw new Error(`[build] ${id}: 无法改写的 import 语句 → ${stmt.slice(0, 120)}`);
@@ -214,8 +247,8 @@ function emit() {
 	p.push(`window.__ModuleLoader__.load({`);
 	p.push(`\tid: ${JSON.stringify(PKG_NAME)},`);
 	p.push(`\tfactory: (require) => {`);
-	p.push(`\t\t// 平台模块（React / cordis / slots 等）由 require 提供；本插件不依赖它们。`);
-	p.push(`\t\tvoid require;`);
+	p.push(`\t\t// 平台模块（React / cordis / slots 等）由 factory 的 require 提供，不打包（ADR-001）。`);
+	if (externals.size === 0) p.push(`\t\tvoid require;`);
 	p.push(`\t\tvar module = { exports: {} };`);
 	p.push(`\t\tvar exports = module.exports;`);
 	p.push(`\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: "Module" });`);
@@ -270,8 +303,9 @@ console.log("[build] 入口:", relative(PLUGIN_ROOT, ENTRY).split("\\").join("/"
 visit(ENTRY);
 console.log(`[build] 模块图（拓扑序，共 ${order.length} 个）:`);
 order.forEach((abs, i) => console.log(`  ${i + 1}. ${moduleId(abs)}`));
+console.log(`[build] 平台外置（不打包，由 require 提供）: ${externals.size ? [...externals].join(", ") : "（无）"}`);
 
 const bundle = emit();
 if (!existsSync(dirname(OUT))) mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, bundle, "utf8");
-console.log(`[build] 产物: ${relative(PLUGIN_ROOT, OUT).split("\\").join("/")}  ${bundle.length} B`);
+console.log(`[build] 产物: ${relative(PLUGIN_ROOT, OUT).split("\\").join("/")}  ${Buffer.byteLength(bundle, "utf8")} B（字符 ${bundle.length}）`);

@@ -133,21 +133,48 @@ if (captured) {
 	check("load.factory 为函数", typeof captured.factory === "function", typeof captured.factory);
 }
 
-/* ── 4. 执行 factory（模拟 require 提供平台模块）─────────────── */
+/* ── 4. 执行 factory（按官方 getStaticModules() 提供平台模块桩）──── */
+
+/**
+ * 平台模块桩表 —— 严格对齐 `@deepseek-ai/dsh-client-web/lib/index.js` 的
+ * `getStaticModules()`（第 165 行）返回的 10 项。
+ * 批次 3 起，`store/use-store.js` 会 `require("react")`，故必须提供。
+ */
+const platformStub = {
+	"react": { useCallback: () => {}, useSyncExternalStore: () => ({}), useState: () => [null, () => {}] },
+	"react/jsx-runtime": {},
+	"react-dom": {},
+	"react-dom/client": {},
+	"@deepseek-ai/cordis": {},
+	"@deepseek-ai/dsh-client-ui-slots": {},
+	"@deepseek-ai/dsh-client-web-react": {},
+	"@deepseek-ai/dsh-client-ui-primitives": {},
+	"@deepseek-ai/dsh-client-ui-attachment": {},
+	"@deepseek-ai/dsh-client-schema-form": {}
+};
+const requireCalls = [];
 
 let exportsObj = null;
 let factoryError = null;
 if (captured) {
 	try {
 		exportsObj = captured.factory((name) => {
-			throw new Error(`本插件不应 require 平台模块，却被请求: ${name}`);
+			requireCalls.push(name);
+			if (!(name in platformStub)) {
+				throw new Error(`require 请求了平台表外的模块: ${name}`);
+			}
+			return platformStub[name];
 		});
 	} catch (e) {
 		factoryError = e;
 	}
 }
-check("factory 可执行（不 require 任何平台模块）", factoryError === null,
-	factoryError ? "异常: " + factoryError.message : "require 未被调用 ✓");
+check("factory 可执行", factoryError === null, factoryError ? "异常: " + factoryError.message : "OK");
+check("require 仅请求平台表内模块", requireCalls.every((n) => n in platformStub),
+	`请求: [${requireCalls.join(", ") || "无"}]`);
+check("React 未被误打包（仅经 require 获取）",
+	requireCalls.includes("react") || requireCalls.length === 0,
+	requireCalls.includes("react") ? "已按 ADR-001 经 require 获取" : "本批次未使用 React");
 check("factory 返回 exports.apply", typeof exportsObj?.apply === "function", typeof exportsObj?.apply);
 check("factory 返回 exports.inject", Array.isArray(exportsObj?.inject), JSON.stringify(exportsObj?.inject));
 
@@ -165,19 +192,60 @@ if (exportsObj?.apply) {
 check("apply() 可执行无异常", applyError === null, applyError ? "异常: " + applyError.message : "已执行");
 check("apply() 返回 installed 结构", applied !== null && typeof applied === "object", applied ? Object.keys(applied).join(",") : "null");
 
-/* ── 6. 全局契约断言（批次 1 + 批次 2）───────────────────────── */
+/* ── 6. 全局契约断言（批次 1 + 2 + 3）────────────────────────── */
 
 console.log("\n  ── 全局契约实际挂载检查 ──");
 const CONTRACTS = [
 	"__dshDebug", "__dshV9Log", "__directorLayoutStore", "__dshTheme", "__directorConfig",
 	"__dshCheckOllama", "__dshLayoutProbe",
 	"__dshMemory", "__dshCreateBranch", "__dshSwitchMemoryTab", "__dshShowToast",
+	"__directorPersistState", "__dshDirectorBatch3",
 ];
 const w = windowStub;
 for (const k of CONTRACTS) {
 	const v = w[k];
 	const ok = v !== undefined;
 	check(`window.${k}`, ok, ok ? typeof v : "未挂载");
+}
+
+/* ── 6b. 批次 3 契约与关键不变量 ─────────────────────────────── */
+
+console.log("\n  ── 批次 3（持久化层）契约 ──");
+check("installed.persistState", applied?.persistState === true, String(applied?.persistState));
+check("installed.storeFactory", applied?.storeFactory === true, String(applied?.storeFactory));
+check("installed.hook（useDirectorStore）", applied?.hook === true, String(applied?.hook));
+check("installed.beforeUnload 新注册成功（离线无宿主抢占守卫）", applied?.beforeUnload === true, String(applied?.beforeUnload));
+check("installed.beforeUnloadRegistered 能力就绪", applied?.beforeUnloadRegistered === true, String(applied?.beforeUnloadRegistered));
+check("installed.fileLogBridged", applied?.fileLogBridged === true, String(applied?.fileLogBridged));
+check("legacyRequire 实测为空（T5 结论）", Array.isArray(applied?.legacyRequire) && applied.legacyRequire.length === 0,
+	`[${(applied?.legacyRequire || []).join(", ")}]`);
+check("文件通道能力已判定", typeof applied?.fileChannel === "boolean",
+	`fileChannel=${applied?.fileChannel} opfs=${applied?.opfs} fsa=${applied?.fsa}`);
+
+// 🔴 关键不变量（V9 修复点）：空 sessionId 必须映射到固定 key
+const entry = exportsObj?.__entry;
+check("__entry 导出批次 3 函数", typeof entry?.safeDirectorKey === "function" && typeof entry?.createDirectorStore === "function");
+if (typeof entry?.safeDirectorKey === "function") {
+	check("safeDirectorKey(空) === 'director-main'", entry.safeDirectorKey() === "director-main", entry.safeDirectorKey());
+	check("safeDirectorKey(undefined) === 'director-main'", entry.safeDirectorKey(undefined) === "director-main");
+	check("safeDirectorKey(UUID) 取前 8 位",
+		entry.safeDirectorKey("12345678-1234-1234-1234-123456789abc") === "director-12345678",
+		entry.safeDirectorKey("12345678-1234-1234-1234-123456789abc"));
+	const h1 = entry.safeDirectorKey("session-abc"), h2 = entry.safeDirectorKey("session-abc");
+	check("safeDirectorKey 对同一输入稳定", h1 === h2, h1);
+	check("safeDirectorKey 不同输入不同 key", h1 !== entry.safeDirectorKey("session-xyz"), h1);
+}
+if (typeof entry?.createDirectorStore === "function") {
+	const s1 = entry.createDirectorStore("t1"), s2 = entry.createDirectorStore("t2");
+	// ⚠️ 保真度：各 store 的 config 子对象不得共享引用（宿主每次新建字面量）
+	check("store 配置未共享引用（深克隆保真）",
+		s1.getState().config.duties !== s2.getState().config.duties,
+		"duties 引用不同");
+	check("store.getState/subscribe 齐备",
+		typeof s1.getState === "function" && typeof s1.subscribe === "function"
+		&& typeof s1.addMessage === "function" && typeof s1.hydrate === "function");
+} else {
+	check("store 工厂可创建实例", false, "createDirectorStore 不可用");
 }
 
 /* ── 7. 契约可调用性（抽查）────────────────────────────────── */

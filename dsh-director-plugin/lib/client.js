@@ -1,8 +1,7 @@
 window.__ModuleLoader__.load({
 	id: "@deepseek-ai/dsh-director-plugin",
 	factory: (require) => {
-		// 平台模块（React / cordis / slots 等）由 require 提供；本插件不依赖它们。
-		void require;
+		// 平台模块（React / cordis / slots 等）由 factory 的 require 提供，不打包（ADR-001）。
 		var module = { exports: {} };
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
@@ -1657,6 +1656,1083 @@ window.__ModuleLoader__.load({
 			exports.directorDocsStore = directorDocsStore;
 		};
 
+		// ── store/file-adapter.js ──
+		__defs["store/file-adapter.js"] = function (exports) {
+			/**
+			 * store/file-adapter.js — A6 持久化探测 + 文件通道适配器
+			 *
+			 * 迁移源：client.js **6036 ~ 6214**（179 行）
+			 *   - 6042        `window.__directorPersistState` 初始化
+			 *   - 6044-6112   早期 `__dshDebug` 初始化 → ⛔ **不迁移**（已由批次 1 `util/debug.js` 完整取代）
+			 *   - 6113-6200   Electron 文件存储探测三法（window.require / global.require / electron.remote.require）
+			 *   - 6176-6178   `directorStoreFile` 路径确定（`%APPDATA%/dsh-director/director-store.json`）
+			 *   - 6201-6214   `safeDirectorKey` → 已迁入 `store/persist.js`（A7）
+			 *
+			 * ─────────────────────────────────────────────────────────────────────────
+			 * 🔴 T5 实测结论（2026-09-11 真机 CDP，见《插件迁移明细清单》§8.5）
+			 * ─────────────────────────────────────────────────────────────────────────
+			 *   `window.require` / `global.require` / `electron.remote.require` /
+			 *   `process.versions.electron` —— **全部 `undefined`**。
+			 *
+			 *   ⇒ 宿主 A6 的三法探测链是**死代码**（生产环境恒不可达），其后的
+			 *     `directorFs.writeFileSync(...)` 分支从未真正执行。
+			 *   ⇒ 故本模块**不端口死代码**，改建为现代三通道：
+			 *
+			 *     ① File System Access API（`showSaveFilePicker` / `showOpenFilePicker`）
+			 *        —— 真文件读写，**需用户手势**，用于「导出/导入」类显式操作
+			 *     ② OPFS（`navigator.storage.getDirectory()`）
+			 *        —— 免手势的**异步**持久层，最接近原「文件落盘」语义
+			 *     ③ IndexedDB / localStorage
+			 *        —— 既有主层与兜底层（见 `idb.js` / `persist.js`）
+			 *
+			 *   legacy 三法仅保留 `typeof` 探测（`probeLegacyRequire`）作回归对照与留痕。
+			 *
+			 * ⚠️ 同步性约束（关键设计）
+			 *   宿主的 `loadDirectorStore` 是**同步**函数，而 OPFS 全异步。
+			 *   故本模块提供 `preloadStoreFile()`（异步，安装期调用一次）+ `getCachedPayload()`
+			 *   （同步读缓存），使 `loadDirectorStore` 保持同步签名，语义与宿主一致。
+			 */
+			
+			/** OPFS 内目录名（沿用宿主的 `dsh-director` 命名） */
+			const DIRECTOR_DIR_NAME = "dsh-director";
+			/** store 文件名（沿用宿主的 `director-store.json`） */
+			const DIRECTOR_STORE_FILENAME = "director-store.json";
+			/** 日志文件名（沿用宿主的 `debug.log`） */
+			const DIRECTOR_LOG_FILENAME = "debug.log";
+			
+			/** 宿主 legacy 路径所用的目录名（`%APPDATA%/dsh-director`）—— 仅作展示对照 */
+			const LEGACY_APPDATA_DIR = "dsh-director";
+			
+			/** 内存缓存：OPFS 预读结果（供同步 `loadDirectorStore` 使用） */
+			let __cachedPayload = null;
+			/** 缓存是否已尝试过预读（区分「未预读」与「预读后为空」） */
+			let __preloadAttempted = false;
+			/** OPFS 根句柄缓存 */
+			let __opfsRootPromise = null;
+			
+			/* ── 持久化统计状态（宿主 6042 原样保留字段与语义）────────────────── */
+			
+			/**
+			 * 初始化 `window.__directorPersistState`（宿主 6042 原样迁移）。
+			 * 额外新增 `fileChannel` 字段用于暴露本模块的通道判定（向后兼容：只增不改）。
+			 */
+			function installPersistState() {
+				if (typeof window === "undefined") return null;
+				if (window.__directorPersistState) return window.__directorPersistState;
+				window.__directorPersistState = {
+					saveCount: 0,
+					loadCount: 0,
+					lastSaveTime: null,
+					lastLoadTime: null,
+					lastError: null,
+					savedMessages: 0,
+					localStorageAvailable: typeof localStorage !== "undefined",
+					idbAvailable: typeof indexedDB !== "undefined",
+					// ── 本模块新增（只增不改）──
+					opfsAvailable: null, // 异步探测，见 preloadStoreFile
+					fileChannel: null // "opfs" | "none"
+				};
+				return window.__directorPersistState;
+			}
+			
+			/** 取持久化统计状态（可能为 null） */
+			function getPersistState() {
+				return typeof window !== "undefined" ? window.__directorPersistState || null : null;
+			}
+			
+			/* ── legacy 三法探测（留痕，不参与实际读写）──────────────────────── */
+			
+			/**
+			 * 探测宿主 original 三法是否可达。
+			 * **不用于读写** —— 仅用于回归对照：若未来 Harness 开启 Node 集成，可据此重新评估。
+			 * @returns {{name:string, ok:boolean, detail:string}[]}
+			 */
+			function probeLegacyRequire() {
+				const g = typeof globalThis !== "undefined" ? globalThis : {};
+				const one = (name, getter) => {
+					try {
+						const v = getter();
+						return v == null
+							? { name, ok: false, detail: "值为 " + v }
+							: { name, ok: true, detail: "类型 " + typeof v };
+					} catch (e) {
+						return { name, ok: false, detail: "抛错: " + (e && e.message ? e.message : String(e)) };
+					}
+				};
+				return [
+					one("window.require", () => (typeof window !== "undefined" ? window.require : undefined)),
+					one("global.require", () => g.global && g.global.require),
+					one("electron.remote.require", () => g.electron && g.electron.remote && g.electron.remote.require),
+					one("process.versions.electron", () => g.process && g.process.versions && g.process.versions.electron)
+				];
+			}
+			
+			/* ── 现代通道判定 ─────────────────────────────────────────────── */
+			
+			/** OPFS 是否可用（同步判定，只查 API 是否存在） */
+			function isOpfsAvailable() {
+				// ⚠️ 必须用 Boolean() 收口：Node 21+ 内置 `navigator` 全局但无 `navigator.storage`，
+				//    `a && b && c` 的短路会返回中间值 `undefined` 而非布尔 false，
+				//    导致契约字段 opfs 出现 undefined（已由 verify-install 在离线链路实测捕获）。
+				return Boolean(
+					typeof navigator !== "undefined"
+					&& navigator.storage
+					&& typeof navigator.storage.getDirectory === "function"
+				);
+			}
+			
+			/** File System Access API 是否可用（同步判定） */
+			function isFsaAvailable() {
+				return Boolean(
+					typeof window !== "undefined"
+					&& typeof window.showSaveFilePicker === "function"
+					&& typeof window.showOpenFilePicker === "function"
+				);
+			}
+			
+			/** 是否存在任意可用的持久化文件通道 */
+			function isFileChannelAvailable() {
+				return Boolean(isOpfsAvailable() || isFsaAvailable());
+			}
+			
+			/* ── OPFS 读写 ─────────────────────────────────────────────────── */
+			
+			/** 取 OPFS 根目录句柄（首次调用后缓存 Promise） */
+			function getOpfsRoot() {
+				if (!isOpfsAvailable()) return Promise.resolve(null);
+				if (__opfsRootPromise) return __opfsRootPromise;
+				__opfsRootPromise = navigator.storage.getDirectory().catch(() => null);
+				return __opfsRootPromise;
+			}
+			
+			/** 取 `dsh-director` 子目录句柄（不存在则创建） */
+			async function getDirectorDir(create) {
+				const root = await getOpfsRoot();
+				if (!root) return null;
+				try {
+					return await root.getDirectoryHandle(DIRECTOR_DIR_NAME, { create: Boolean(create) });
+				} catch {
+					return null;
+				}
+			}
+			
+			/**
+			 * 预读 store 文件到内存缓存（**安装期调用一次**）。
+			 * 使后续 `getCachedPayload()` 可同步取值，从而 `loadDirectorStore` 保持同步签名。
+			 * @returns {Promise<boolean>} 是否读到非空内容
+			 */
+			async function preloadStoreFile() {
+				__preloadAttempted = true;
+				const state = getPersistState();
+				if (!isOpfsAvailable()) {
+					if (state) { state.opfsAvailable = false; state.fileChannel = "none"; }
+					return false;
+				}
+				if (state) state.opfsAvailable = true;
+				try {
+					const dir = await getDirectorDir(false);
+					if (!dir) { if (state) state.fileChannel = "none"; return false; }
+					const fh = await dir.getFileHandle(DIRECTOR_STORE_FILENAME, { create: false });
+					const file = await fh.getFile();
+					const text = await file.text();
+					if (text && text.length > 0) {
+						__cachedPayload = text;
+						if (state) state.fileChannel = "opfs";
+						return true;
+					}
+				} catch {
+					/* 文件不存在或不可读 → 静默，走降级链 */
+				}
+				if (state) state.fileChannel = "none";
+				return false;
+			}
+			
+			/**
+			 * 同步取预读缓存。
+			 * @returns {string|null} JSON 文本；未预读或为空时返回 null
+			 */
+			function getCachedPayload() {
+				return __preloadAttempted ? __cachedPayload : null;
+			}
+			
+			/** 清空内存缓存（登出/重置用） */
+			function clearCachedPayload() {
+				__cachedPayload = null;
+				__preloadAttempted = false;
+			}
+			
+			/**
+			 * 写入 store 到 OPFS，并**读回校验**（沿用宿主 6283-6286 的 save-verify 纪律）。
+			 * @param {string} payload JSON 文本
+			 * @returns {Promise<boolean>} 写后读回是否一致
+			 */
+			async function writePayload(payload) {
+				if (!isOpfsAvailable()) return false;
+				try {
+					const dir = await getDirectorDir(true);
+					if (!dir) return false;
+					const fh = await dir.getFileHandle(DIRECTOR_STORE_FILENAME, { create: true });
+					const w = await fh.createWritable();
+					await w.write(payload);
+					await w.close();
+					// 写后读回校验
+					const back = await (await fh.getFile()).text();
+					const ok = back === payload;
+					if (ok) {
+						__cachedPayload = payload;
+						__preloadAttempted = true;
+						const state = getPersistState();
+						if (state) state.fileChannel = "opfs";
+					}
+					return ok;
+				} catch {
+					return false;
+				}
+			}
+			
+			/** 删除 store 文件（重置用） */
+			async function deleteStoreFile() {
+				clearCachedPayload();
+				if (!isOpfsAvailable()) return false;
+				try {
+					const dir = await getDirectorDir(false);
+					if (!dir) return false;
+					await dir.removeEntry(DIRECTOR_STORE_FILENAME);
+					return true;
+				} catch {
+					return false;
+				}
+			}
+			
+			/**
+			 * 追加一行到 OPFS `debug.log`（宿主 6056-6065 / 6072-6081 的文件日志语义）。
+			 * ⚠️ 与宿主不同：这里是**异步**的；调用方不该 await（日志失败不影响主流程）。
+			 * @param {string} line 已格式化的整行（含换行）
+			 */
+			function appendLogLine(line) {
+				if (!isOpfsAvailable()) return Promise.resolve(false);
+				return (async () => {
+					try {
+						const dir = await getDirectorDir(true);
+						if (!dir) return false;
+						const fh = await dir.getFileHandle(DIRECTOR_LOG_FILENAME, { create: true });
+						const existing = await (await fh.getFile()).text();
+						const w = await fh.createWritable();
+						await w.write(existing + line);
+						await w.close();
+						return true;
+					} catch {
+						return false;
+					}
+				})();
+			}
+			
+			/** 读取 OPFS `debug.log` 全文（诊断导用） */
+			async function readLogFile() {
+				if (!isOpfsAvailable()) return null;
+				try {
+					const dir = await getDirectorDir(false);
+					if (!dir) return null;
+					const fh = await dir.getFileHandle(DIRECTOR_LOG_FILENAME, { create: false });
+					return await (await fh.getFile()).text();
+				} catch {
+					return null;
+				}
+			}
+			
+			/* ── File System Access API（需用户手势的显式导入/导出）──────────── */
+			
+			/**
+			 * 用 FSA 保存任意文本（弹系统保存框，需用户手势）。
+			 * @param {string} suggestedName 建议文件名
+			 * @param {string} text 内容
+			 * @returns {Promise<boolean>}
+			 */
+			async function exportViaFsa(suggestedName, text) {
+				if (!isFsaAvailable()) return false;
+				try {
+					const handle = await window.showSaveFilePicker({ suggestedName });
+					const w = await handle.createWritable();
+					await w.write(text);
+					await w.close();
+					return true;
+				} catch {
+					return false; // 用户取消或权限拒绝
+				}
+			}
+			
+			/**
+			 * 用 FSA 读取文本（弹系统打开框，需用户手势）。
+			 * @returns {Promise<string|null>}
+			 */
+			async function importViaFsa() {
+				if (!isFsaAvailable()) return null;
+				try {
+					const [handle] = await window.showOpenFilePicker({
+						types: [{ description: "Director Store", accept: { "application/json": [".json"] } }]
+					});
+					return await (await handle.getFile()).text();
+				} catch {
+					return null;
+				}
+			}
+			
+			/* ── 调试日志 → OPFS 文件桥接 ─────────────────────────────────── */
+			
+			/**
+			 * 把统一调试日志（`window.__dshDebug`）桥接到 OPFS `debug.log`，
+			 * 复现宿主 6056-6065 / 6072-6081 的「日志实时落文件」行为。
+			 *
+			 * 宿主当时是 `directorFs.appendFileSync(logFile, line)`（O(1) 追加）；
+			 * OPFS **无追加 API**，只能「读全文 → 拼接 → 覆盖写」，故为 O(n) 每行。
+			 * 日志本身有 2000 条上限（见 `util/debug.js` 的 `DSH_DEBUG_MAX_LOGS`），
+			 * 实测可行；若后续发现成为热点，改为内存缓冲 + 定时/批量 flush。
+			 *
+			 * 幂等：重复调用只包装一次（`__fileLogBridged` 守卫）。
+			 * @returns {boolean} 是否已完成桥接（或此前已桥接）
+			 */
+			function bridgeDebugLogToFile() {
+				if (typeof window === "undefined" || !window.__dshDebug) return false;
+				const dbg = window.__dshDebug;
+				if (dbg.__fileLogBridged) return true;
+			
+				const format = (scope, message, data, level) =>
+					"[" + new Date().toISOString() + "] [" + level + "] [" + scope + "] " + message
+					+ (data !== undefined && data !== null ? " " + JSON.stringify(data) : "") + "\n";
+			
+				for (const [name, level] of [["log", "INFO"], ["warn", "WARN"]]) {
+					const orig = dbg[name];
+					if (typeof orig !== "function") continue;
+					dbg[name] = function (scope, message, data) {
+						const ret = orig.apply(this, arguments);
+						try {
+							// 不 await：日志落盘失败不得影响主流程
+							appendLogLine(format(scope, message, data, level));
+						} catch {
+							/* 忽略 */
+						}
+						return ret;
+					};
+				}
+				dbg.__fileLogBridged = true;
+				return true;
+			}
+			
+			exports.DIRECTOR_DIR_NAME = DIRECTOR_DIR_NAME;
+			exports.DIRECTOR_STORE_FILENAME = DIRECTOR_STORE_FILENAME;
+			exports.DIRECTOR_LOG_FILENAME = DIRECTOR_LOG_FILENAME;
+			exports.LEGACY_APPDATA_DIR = LEGACY_APPDATA_DIR;
+			exports.installPersistState = installPersistState;
+			exports.getPersistState = getPersistState;
+			exports.probeLegacyRequire = probeLegacyRequire;
+			exports.isOpfsAvailable = isOpfsAvailable;
+			exports.isFsaAvailable = isFsaAvailable;
+			exports.isFileChannelAvailable = isFileChannelAvailable;
+			exports.getOpfsRoot = getOpfsRoot;
+			exports.preloadStoreFile = preloadStoreFile;
+			exports.getCachedPayload = getCachedPayload;
+			exports.clearCachedPayload = clearCachedPayload;
+			exports.writePayload = writePayload;
+			exports.deleteStoreFile = deleteStoreFile;
+			exports.appendLogLine = appendLogLine;
+			exports.readLogFile = readLogFile;
+			exports.exportViaFsa = exportViaFsa;
+			exports.importViaFsa = importViaFsa;
+			exports.bridgeDebugLogToFile = bridgeDebugLogToFile;
+		};
+
+		// ── store/cookie.js ──
+		__defs["store/cookie.js"] = function (exports) {
+			/**
+			 * store/cookie.js — V10 Cookie 同步存储（分块）
+			 *
+			 * 迁移源：client.js 5499 ~ 5560
+			 *
+			 * 职责：因 cookie 是同步持久化的（Electron 下最可靠），实现大对象分块存入 cookie。
+			 *      单条 cookie 限约 4KB → 每块 3KB，用 `<key>_meta` 记录块数与原长度。
+			 *
+			 * ⚠️ 完整性校验：dshCookieLoad 会比对 `json.length !== meta.len`，不匹配即视为损坏返回 null。
+			 *    **此校验不可省** —— 分块存储最易发生静默截断。
+			 */
+			
+			/** 每块字符数（cookie 单条限约 4KB，留安全余量） */
+			const COOKIE_CHUNK_SIZE = 3000;
+			/** 清除旧块时的最大扫描数（原实现硬编码 100） */
+			const COOKIE_MAX_CHUNKS = 100;
+			/** 默认有效期（天） — 10 年 */
+			const COOKIE_DEFAULT_DAYS = 3650;
+			
+			function dshCookieSet(name, value, days) {
+				try {
+					const expires = new Date(Date.now() + (days || COOKIE_DEFAULT_DAYS) * 86400000).toUTCString();
+					document.cookie = name + "=" + encodeURIComponent(value) + "; expires=" + expires + "; path=/";
+					return true;
+				} catch (e) { return false; }
+			}
+			
+			function dshCookieGet(name) {
+				try {
+					const match = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()[\]\/+^])/g, "\$1") + "=([^;]*)"));
+					return match ? decodeURIComponent(match[1]) : null;
+				} catch (e) { return null; }
+			}
+			
+			function dshCookieSave(key, data) {
+				try {
+					const json = JSON.stringify(data);
+					// 分块存储，每块3KB（cookie单条限制约4KB）
+					const chunkSize = COOKIE_CHUNK_SIZE;
+					const chunks = [];
+					for (let i = 0; i < json.length; i += chunkSize) {
+						chunks.push(json.substring(i, i + chunkSize));
+					}
+					// 先清除旧的块
+					for (let i = 0; i < COOKIE_MAX_CHUNKS; i++) {
+						const old = dshCookieGet(key + "_" + i);
+						if (old === null) break;
+						dshCookieSet(key + "_" + i, "", -1);
+					}
+					// 存储元数据
+					dshCookieSet(key + "_meta", JSON.stringify({ chunks: chunks.length, len: json.length }), COOKIE_DEFAULT_DAYS);
+					// 存储每个块
+					for (let i = 0; i < chunks.length; i++) {
+						dshCookieSet(key + "_" + i, chunks[i], COOKIE_DEFAULT_DAYS);
+					}
+					return true;
+				} catch (e) {
+					if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("persist", "cookie save failed: " + e.message);
+					return false;
+				}
+			}
+			
+			function dshCookieLoad(key) {
+				try {
+					const metaStr = dshCookieGet(key + "_meta");
+					if (!metaStr) return null;
+					const meta = JSON.parse(metaStr);
+					if (!meta.chunks || meta.chunks <= 0) return null;
+					let json = "";
+					for (let i = 0; i < meta.chunks; i++) {
+						const chunk = dshCookieGet(key + "_" + i);
+						if (chunk === null) return null;
+						json += chunk;
+					}
+					if (json.length !== meta.len) {
+						if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("persist", "cookie load length mismatch: expected=" + meta.len + " actual=" + json.length);
+						return null;
+					}
+					return JSON.parse(json);
+				} catch (e) {
+					if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("persist", "cookie load failed: " + e.message);
+					return null;
+				}
+			}
+			
+			exports.COOKIE_CHUNK_SIZE = COOKIE_CHUNK_SIZE;
+			exports.COOKIE_MAX_CHUNKS = COOKIE_MAX_CHUNKS;
+			exports.COOKIE_DEFAULT_DAYS = COOKIE_DEFAULT_DAYS;
+			exports.dshCookieSet = dshCookieSet;
+			exports.dshCookieGet = dshCookieGet;
+			exports.dshCookieSave = dshCookieSave;
+			exports.dshCookieLoad = dshCookieLoad;
+		};
+
+		// ── store/persist.js ──
+		__defs["store/persist.js"] = function (exports) {
+			/**
+			 * store/persist.js — A7 + A8 总监 store 的加载与保存
+			 *
+			 * 迁移源：
+			 *   A7 `loadDirectorStore` + `safeDirectorKey`  → client.js **6215 ~ 6273**（59 行）
+			 *   A8 `saveDirectorStore`                      → client.js **6274 ~ 6326**（53 行）
+			 *
+			 * ─────────────────────────────────────────────────────────────────────────
+			 * 持久化层次（与宿主一一对应，仅替换死掉的文件通道）
+			 * ─────────────────────────────────────────────────────────────────────────
+			 *   加载顺序（同步）：
+			 *     ① OPFS 预读缓存（`fileAdapter.getCachedPayload()`）← 替代已死的 `directorFs` 同步读
+			 *     ② Cookie（`dsh_director_<key>`，V10 分块）        ← 宿主 6230 原样
+			 *     ③ localStorage（`dsh.director.store.<key>`）      ← 宿主 6248 原样
+			 *
+			 *   保存顺序（异步，全部双写 + 写后读回校验）：
+			 *     ① OPFS 写入（`fileAdapter.writePayload`，含 verify）
+			 *     ② localStorage 写入 + **读回校验**（宿主 6290-6298 的 `lsOk` 纪律原样保留）
+			 *     ③ IndexedDB（`idbSave`，V9.2 起 await 等待落盘）  ← 宿主 6301 原样
+			 *     ④ Cookie 同步存储                                 ← 宿主 6303 原样
+			 *
+			 * 🔴 关键不变量（V9 修复点，**不可回归**）
+			 *   `safeDirectorKey` 对空 sessionId 必须返回固定串 `"director-main"`。
+			 *   历史上曾用 UUID 作 key 导致持久化全面失效（每次刷新 key 都变）。
+			 *
+			 * 🔴 兼容约束（R5）
+			 *   - localStorage 前缀 `dsh.director.store.`（见 `messages.js`）
+			 *   - Cookie key 前缀 `dsh_director_`，且需兼容旧固定 key `dsh_director_cookie`
+			 *
+			 * 相对宿主的两处**行为差异**（刻意为之，非疏漏）
+			 *   1. OPFS 是异步的 → 加载路径改为「安装期预读一次 + 同步读缓存」，
+			 *      使 `loadDirectorStore` 保持同步签名（宿主调用方依赖同步返回）。
+			 *   2. 因此**首次启动**若 OPFS 里已有数据，而预读尚未完成，加载会走 cookie/localStorage。
+			 *      预读在 `installBatch3()` 中 await（见 client-entry），故正常时序下不会发生。
+			 */
+			
+			const { DIRECTOR_STORE_PREFIX } = __m("store/messages.js");
+			const { idbSave, idbLoad } = __m("store/idb.js");
+			const { dshCookieSave, dshCookieLoad } = __m("store/cookie.js");
+			const { getCachedPayload, writePayload, getPersistState, DIRECTOR_DIR_NAME, DIRECTOR_STORE_FILENAME } = __m("store/file-adapter.js");
+			
+			/**
+			 * 总监默认配置（宿主中在 6224 / 6242 / 6266 / 6332 **重复出现 4 次**，此处提取为单一真源）。
+			 * ⚠️ 字段与默认值必须与宿主逐字一致，否则存量用户配置合并结果会漂移。
+			 */
+			const DIRECTOR_DEFAULT_CONFIG = {
+				autoForward: true,
+				localModel: { enabled: false, endpoint: "http://localhost:11434", model: "qwen2:7b" },
+				duties: {
+					languagePolish: { enabled: true, name: "语言规范整理" },
+					contextMemory: { enabled: true, name: "上下文记忆" },
+					executionLogic: { enabled: true, name: "执行逻辑分析" },
+					modelRouting: { enabled: false, name: "模型路由" },
+					returnReview: { enabled: true, name: "对话返回审核" }
+				}
+			};
+			
+			/**
+			 * 深克隆默认配置。
+			 * ⚠️ **必须克隆**：宿主在 6224/6242/6266/6332 处每次都是**新建对象字面量**，
+			 *    故各 store 的 `config.duties` / `config.localModel` 互不共享。
+			 *    提取为模块级常量后若直接引用，会导致多个 store 共享同一子对象
+			 *    （改 A 的 duties 会串改 B），属真实保真度缺陷。
+			 */
+			function cloneDirectorDefaultConfig() {
+				return JSON.parse(JSON.stringify(DIRECTOR_DEFAULT_CONFIG));
+			}
+			
+			/** 合并默认配置与已存配置（宿主 4 处的 `{...DEFAULT, ...(parsed.config||{})}` 语义） */
+			function mergeConfig(saved) {
+				return { ...cloneDirectorDefaultConfig(), ...(saved || {}) };
+			}
+			
+			/** 记日志到统一调试通道（scope 固定 "persist"，与宿主一致） */
+			function plog(msg, data) {
+				if (typeof window !== "undefined" && window.__dshDebug && typeof window.__dshDebug.log === "function") {
+					window.__dshDebug.log("persist", msg, data);
+				}
+			}
+			function pwarn(msg, data) {
+				if (typeof window !== "undefined" && window.__dshDebug && typeof window.__dshDebug.warn === "function") {
+					window.__dshDebug.warn("persist", msg, data);
+				}
+			}
+			
+			/* ── A7：key 派生 ─────────────────────────────────────────────── */
+			
+			const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+			
+			/**
+			 * 由 sessionId 派生稳定的存储 key 后缀（宿主 6201-6214 **逐字等价迁移**）。
+			 *   - 空/未传 → `"director-main"`（**V9 修复点，不可改**）
+			 *   - UUID     → `director-<前8位>`
+			 *   - 其他     → `director-<djb2-ish 32 位哈希的 base36 前8位>`
+			 * @param {string} [sessionId]
+			 * @returns {string}
+			 */
+			function safeDirectorKey(sessionId) {
+				if (!sessionId) return "director-main";
+				const sid = String(sessionId);
+				if (UUID_RE.test(sid)) return "director-" + sid.substring(0, 8);
+				let hash = 0;
+				for (let i = 0; i < sid.length; i++) {
+					hash = ((hash << 5) - hash) + sid.charCodeAt(i);
+					hash |= 0; // 保持 32 位有符号整数语义（与宿主一致）
+				}
+				return "director-" + Math.abs(hash).toString(36).substring(0, 8);
+			}
+			
+			/** localStorage / IDB 所用的完整 key */
+			function directorStorageKey(sessionId) {
+				return DIRECTOR_STORE_PREFIX + safeDirectorKey(sessionId);
+			}
+			
+			/** Cookie 所用的完整 key（V10；前缀 `dsh_director_` 不可改） */
+			function directorCookieKey(sessionId) {
+				return "dsh_director_" + safeDirectorKey(sessionId);
+			}
+			
+			/* ── A7：加载 ─────────────────────────────────────────────────── */
+			
+			/**
+			 * 同步加载总监 store（宿主 6215-6272 等价迁移，仅把死掉的文件读换成 OPFS 缓存读）。
+			 * @param {string} [sessionId]
+			 * @returns {{messages:Array, config:object}|null} 无数据时返回 null
+			 */
+			function loadDirectorStore(sessionId) {
+				const st = getPersistState();
+				try {
+					// ① OPFS 预读缓存（替代宿主 6218 的 directorFs.existsSync + readFileSync）
+					const cached = getCachedPayload();
+					if (cached) {
+						try {
+							const parsed = JSON.parse(cached);
+							plog("V9.3 load from file(OPFS): msgs=" + (parsed.messages?.length || 0)
+								+ " bytes=" + cached.length + " file=OPFS:" + DIRECTOR_DIR_NAME + "/" + DIRECTOR_STORE_FILENAME);
+							if (st) {
+								st.loadCount++;
+								st.lastLoadTime = Date.now();
+								st.savedMessages = parsed.messages?.length || 0;
+							}
+							return { messages: parsed.messages || [], config: mergeConfig(parsed.config) };
+						} catch (e) {
+							pwarn("V9.3 load from file(OPFS) failed: " + e.message + ", fallback to cookie/localStorage");
+						}
+					}
+			
+					// ② Cookie（V10：最可靠，同步持久化）
+					let cookieData = dshCookieLoad(directorCookieKey(sessionId));
+					// 兼容旧固定 key（宿主 6232-6238 原样）
+					if ((!cookieData || !cookieData.messages) && typeof window !== "undefined") {
+						const oldData = dshCookieLoad("dsh_director_cookie");
+						if (oldData && oldData.messages) {
+							cookieData = oldData;
+							plog("V10 load from old cookie key (compatibility)");
+						}
+					}
+					if (cookieData && cookieData.messages) {
+						plog("V10 load from cookie: msgs=" + cookieData.messages.length);
+						if (st) {
+							st.loadCount++;
+							st.lastLoadTime = Date.now();
+							st.savedMessages = cookieData.messages.length;
+						}
+						return { messages: cookieData.messages || [], config: mergeConfig(cookieData.config) };
+					}
+			
+					// ③ localStorage
+					if (typeof localStorage === "undefined") {
+						if (st) st.lastError = "load: localStorage unavailable";
+						return null;
+					}
+					const key = directorStorageKey(sessionId);
+					const raw = localStorage.getItem(key);
+					if (!raw) {
+						// V9.2：枚举所有 dsh.director* key 做诊断（宿主 6252-6258 原样）
+						let allKeys = "";
+						try {
+							for (let i = 0; i < localStorage.length; i++) {
+								const k = localStorage.key(i);
+								if (k && k.indexOf("dsh.director") === 0) {
+									allKeys += k + "(" + (localStorage.getItem(k) || "").length + "bytes) ";
+								}
+							}
+						} catch (e) {
+							allKeys = "enumerate failed: " + e.message;
+						}
+						plog("load: no data for key=" + key + " | all director keys: [" + (allKeys || "none") + "]");
+						if (st) {
+							st.loadCount++;
+							st.lastLoadTime = Date.now();
+						}
+						return null;
+					}
+					const parsed = JSON.parse(raw);
+					plog("load: key=" + key + " msgs=" + (parsed.messages?.length || 0) + " bytes=" + raw.length);
+					if (st) {
+						st.loadCount++;
+						st.lastLoadTime = Date.now();
+						st.savedMessages = parsed.messages?.length || 0;
+					}
+					return { messages: parsed.messages || [], config: mergeConfig(parsed.config) };
+				} catch (e) {
+					pwarn("load failed: " + e.message);
+					if (st) st.lastError = "load: " + e.message;
+					return null;
+				}
+			}
+			
+			/* ── A8：保存 ─────────────────────────────────────────────────── */
+			
+			/**
+			 * 保存总监 store（宿主 6274-6326 等价迁移；**异步**，宿主原本即 async）。
+			 * 四条写入路径全部执行，任一成功即视为成功（返回 `fileOk || lsOk || idbOk`，与宿主一致）。
+			 * @param {string} [sessionId]
+			 * @param {{messages:Array, config:object}} state
+			 * @returns {Promise<boolean>}
+			 */
+			async function saveDirectorStore(sessionId, state) {
+				const st = getPersistState();
+				try {
+					const key = directorStorageKey(sessionId);
+					const payload = JSON.stringify({ messages: state.messages, config: state.config });
+			
+					// ① OPFS（含写后读回校验，替代宿主 6280-6288）
+					let fileOk = false;
+					try {
+						fileOk = await writePayload(payload);
+						plog("V9.3 save to file(OPFS): " + (fileOk ? "OK" : "FAIL")
+							+ " msgs=" + state.messages.length + " bytes=" + payload.length);
+					} catch (e) {
+						pwarn("V9.3 save to file(OPFS) failed: " + e.message);
+					}
+			
+					// ② localStorage + 读回校验（宿主 6290-6298 的 lsOk 纪律原样保留）
+					let lsOk = false;
+					if (typeof localStorage !== "undefined") {
+						try {
+							localStorage.setItem(key, payload);
+							const verify = localStorage.getItem(key);
+							lsOk = (verify === payload);
+							plog("save-verify: localStorage " + (lsOk ? "OK" : "FAIL")
+								+ " key=" + key + " verifyLen=" + (verify ? verify.length : 0));
+						} catch (e) {
+							pwarn("localStorage save failed: " + e.message);
+						}
+					}
+			
+					// ③ IndexedDB（V9.2 起 await 确保真正落盘）
+					const idbOk = await idbSave(key, { messages: state.messages, config: state.config, savedAt: Date.now() });
+			
+					// ④ Cookie 同步存储（V10）
+					const cookieOk = dshCookieSave(directorCookieKey(sessionId), {
+						messages: state.messages,
+						config: state.config,
+						savedAt: Date.now()
+					});
+					plog("V10 save to cookie: " + (cookieOk ? "OK" : "FAIL") + " msgs=" + state.messages.length);
+			
+					// V9.2：保存后 dump localStorage（宿主 6306-6314 诊断逻辑原样）
+					let lsDump = "";
+					try {
+						for (let i = 0; i < localStorage.length; i++) {
+							const k = localStorage.key(i);
+							if (k && k.indexOf("dsh.director") === 0) {
+								lsDump += k + "(" + (localStorage.getItem(k) || "").length + "b) ";
+							}
+						}
+					} catch (e) {
+						lsDump = "dump failed: " + e.message;
+					}
+					plog("save: key=" + key + " msgs=" + state.messages.length + " bytes=" + payload.length
+						+ " fileOk=" + fileOk + " lsOk=" + lsOk + " idbOk=" + idbOk
+						+ " | localStorage dump: [" + (lsDump || "empty") + "]");
+			
+					if (st) {
+						st.saveCount++;
+						st.lastSaveTime = Date.now();
+						st.savedMessages = state.messages.length;
+					}
+					return fileOk || lsOk || idbOk;
+				} catch (e) {
+					pwarn("save failed: " + e.message);
+					if (st) st.lastError = "save: " + e.message;
+					return false;
+				}
+			}
+			
+			/** 供 A9 hydrate 使用的 IDB 读取（宿主 6356 的 `idbLoad(key)`） */
+			async function loadDirectorStoreFromIdb(sessionId) {
+				try {
+					return await idbLoad(directorStorageKey(sessionId));
+				} catch {
+					return null;
+				}
+			}
+			
+			exports.DIRECTOR_DEFAULT_CONFIG = DIRECTOR_DEFAULT_CONFIG;
+			exports.cloneDirectorDefaultConfig = cloneDirectorDefaultConfig;
+			exports.safeDirectorKey = safeDirectorKey;
+			exports.directorStorageKey = directorStorageKey;
+			exports.directorCookieKey = directorCookieKey;
+			exports.loadDirectorStore = loadDirectorStore;
+			exports.saveDirectorStore = saveDirectorStore;
+			exports.loadDirectorStoreFromIdb = loadDirectorStoreFromIdb;
+		};
+
+		// ── store/create-store.js ──
+		__defs["store/create-store.js"] = function (exports) {
+			/**
+			 * store/create-store.js — A9 `createDirectorStore` store 工厂
+			 *
+			 * 迁移源：client.js **6327 ~ 6403**（77 行）
+			 *   - 6327-6395 `createDirectorStore(sessionId)`：组装 state + dispatch + subscribe
+			 *   - 6396-6403 `directorStoreFactory(sessionId)`：按 `safeDirectorKey` 分桶复用（单例注册表）
+			 *
+			 * 另含与 A9 同区块、语义强耦合的两段（不拆走会让 store 失去退出前保存能力）：
+			 *   - 6408-6437 `beforeunload` 注册：退出前把有消息的 store 落盘
+			 *
+			 * ─────────────────────────────────────────────────────────────────────────
+			 * 设计要点
+			 * ─────────────────────────────────────────────────────────────────────────
+			 * 1. **`notify()` 每次都写盘**（宿主 6335-6338 原样）—— 任何状态变更都触发
+			 *    `saveDirectorStore`，这是宿主「永不丢消息」策略的核心，勿优化为 debounce。
+			 * 2. **`hydrate()` 的 IDB 合并防竞态**（宿主 6358-6362，V9.4-P1 修复）：
+			 *    IDB 异步返回期间用户可能已发新消息，故**只前插缺失消息、不整体覆盖**。
+			 *    该逻辑必须原样保留，否则会复现「刷新后消息回退」缺陷。
+			 * 3. **`addMessage` 的 id 生成用 `Math.random()`**（宿主 6378 原样）——
+			 *    属非确定性 RNG 的历史数据形态，勿改为确定性 RNG（会与存量 id 形态不一致）。
+			 * 4. **`reset()` 的 config 只留 `{autoForward:true}`**（宿主 6391 原样）——
+			 *    看似与 `DIRECTOR_DEFAULT_CONFIG` 不一致，但属既有行为，勿"顺手修正"。
+			 * 5. **配置对象必须深克隆**（见 `cloneDirectorDefaultConfig`），否则多个 store 会共享
+			 *    `config.duties` 同一引用。
+			 */
+			
+			const { directorStores } = __m("store/messages.js");
+			const { loadDirectorStore, saveDirectorStore, loadDirectorStoreFromIdb, safeDirectorKey, cloneDirectorDefaultConfig, directorStorageKey } = __m("store/persist.js");
+			const { writePayload } = __m("store/file-adapter.js");
+			
+			/** 记日志（scope 固定 "persist"，与宿主一致） */
+			function plog(msg, data) {
+				if (typeof window !== "undefined" && window.__dshDebug && typeof window.__dshDebug.log === "function") {
+					window.__dshDebug.log("persist", msg, data);
+				}
+			}
+			function pwarn(msg, data) {
+				if (typeof window !== "undefined" && window.__dshDebug && typeof window.__dshDebug.warn === "function") {
+					window.__dshDebug.warn("persist", msg, data);
+				}
+			}
+			
+			/**
+			 * 创建一个总监 store（宿主 6327-6395 等价迁移）。
+			 * @param {string} [sessionId]
+			 * @returns {object} store 实例
+			 */
+			function createDirectorStore(sessionId) {
+				const persisted = loadDirectorStore(sessionId);
+				let state = {
+					messages: persisted ? persisted.messages : [],
+					status: "idle",
+					config: persisted ? persisted.config : cloneDirectorDefaultConfig()
+				};
+			
+				const listeners = new Set();
+			
+				/** 状态变更 → 落盘 + 通知订阅者（宿主 6335-6338 原样） */
+				function notify() {
+					saveDirectorStore(sessionId, state);
+					for (const fn of listeners) fn(state);
+				}
+			
+				return {
+					sessionId,
+					getState: () => state,
+					subscribe: (fn) => {
+						listeners.add(fn);
+						return () => listeners.delete(fn);
+					},
+					/**
+					 * 重新加载（宿主 6346-6374）。
+					 * ① 同步：cookie/localStorage/OPFS 缓存
+					 * ② 异步：IndexedDB —— **按消息 key 集合 merge，只前插缺失项**（V9.4-P1 防竞态）
+					 */
+					hydrate: () => {
+						// ① 同步层快速初始值
+						const reloaded = loadDirectorStore(sessionId);
+						if (reloaded) {
+							state = { ...state, messages: reloaded.messages, config: reloaded.config };
+							notify();
+							plog("hydrate(sync): loaded " + state.messages.length + " messages for sessionId=" + sessionId);
+						}
+						// ② 异步层（IndexedDB，更可靠）
+						const key = directorStorageKey(sessionId);
+						loadDirectorStoreFromIdb(sessionId).then((idbData) => {
+							if (idbData && idbData.messages) {
+								// V9.4-P1: 防竞态 —— 只补充 idb 中存在而当前缺失的历史消息（前插），不覆盖现有消息
+								const msgKeyOf = (m) => m && (m.id || m.ts || m.timestamp);
+								const existingKeys = new Set(state.messages.map(msgKeyOf).filter(Boolean));
+								const missing = idbData.messages.filter((m) => {
+									const k = msgKeyOf(m);
+									return k && !existingKeys.has(k);
+								});
+								if (missing.length > 0) {
+									state = {
+										...state,
+										messages: [...missing, ...state.messages],
+										config: idbData.config || state.config
+									};
+									notify();
+									plog("hydrate(IndexedDB): merged " + missing.length
+										+ " missing messages (total=" + state.messages.length + ") for sessionId=" + sessionId);
+								} else {
+									plog("hydrate(IndexedDB): no missing messages, skipping. idbMsgs="
+										+ idbData.messages.length + " localMsgs=" + state.messages.length);
+								}
+							} else {
+								plog("hydrate(IndexedDB): no data for key=" + key);
+							}
+						});
+					},
+					/** 追加一条消息（自动补 id/ts；宿主 6375-6381 原样） */
+					addMessage: (msg) => {
+						state = {
+							...state,
+							messages: [...state.messages, {
+								id: `dm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+								ts: Date.now(),
+								...msg
+							}]
+						};
+						notify();
+					},
+					setStatus: (status) => {
+						state = { ...state, status };
+						notify();
+					},
+					setConfig: (patch) => {
+						state = { ...state, config: { ...state.config, ...patch } };
+						notify();
+					},
+					/** 重置（宿主 6390-6393 原样：config 仅留 autoForward） */
+					reset: () => {
+						state = { messages: [], status: "idle", config: { autoForward: true } };
+						notify();
+					}
+				};
+			}
+			
+			/**
+			 * 按 `safeDirectorKey(sessionId)` 分桶取（或建）store —— 进程内单例注册表
+			 * （宿主 6396-6403 等价迁移）。
+			 * @param {string} [sessionId]
+			 * @returns {object} store 实例
+			 */
+			function directorStoreFactory(sessionId) {
+				const mapKey = safeDirectorKey(sessionId);
+				if (!directorStores.has(mapKey)) {
+					plog("directorStoreFactory: create new store for key=" + mapKey + " (sessionId type=" + typeof sessionId + ")");
+					directorStores.set(mapKey, createDirectorStore(sessionId));
+				}
+				return directorStores.get(mapKey);
+			}
+			
+			/**
+			 * 注册 `beforeunload` 兜底保存（宿主 6408-6437 等价迁移）。
+			 * 幂等（`window.__directorBeforeUnloadRegistered` 守卫生效）。
+			 *
+			 * ⚠️ 与宿主的差异：OPFS 是异步 API，`beforeunload` 中无法 await。
+			 *    故此处对 OPFS 采取 **fire-and-forget**，而 localStorage 仍同步写（与宿主一致）。
+			 */
+			function installBeforeUnloadSave() {
+				if (typeof window === "undefined" || window.__directorBeforeUnloadRegistered) return false;
+				window.__directorBeforeUnloadRegistered = true;
+				window.addEventListener("beforeunload", () => {
+					try {
+						for (const [key, store] of directorStores.entries()) {
+							const state = store.getState();
+							if (state.messages.length === 0) continue;
+							const lsKey = key.startsWith("dsh.director.store.") ? key : "dsh.director.store." + key;
+							const payload = JSON.stringify({ messages: state.messages, config: state.config });
+			
+							// ① OPFS：异步不可 await，尽力而为
+							let fileDispatched = false;
+							try {
+								writePayload(payload).then(() => {}).catch(() => {});
+								fileDispatched = true;
+							} catch (e) { /* 忽略 */ }
+			
+							// ② localStorage：同步写入（与宿主一致）
+							try { localStorage.setItem(lsKey, payload); } catch (e) { /* 忽略 */ }
+			
+							// ③ 诊断 dump
+							let lsDump = "";
+							try {
+								for (let i = 0; i < localStorage.length; i++) {
+									const k = localStorage.key(i);
+									if (k && k.indexOf("dsh.director") === 0) {
+										lsDump += k + "(" + (localStorage.getItem(k) || "").length + "b) ";
+									}
+								}
+							} catch (e) { lsDump = "dump failed: " + e.message; }
+							plog("beforeunload save: key=" + lsKey + " msgs=" + state.messages.length
+								+ " fileDispatched=" + fileDispatched + " | localStorage dump: [" + (lsDump || "empty") + "]");
+						}
+					} catch (e) {
+						pwarn("beforeunload failed: " + e.message);
+					}
+				});
+				return true;
+			}
+			
+			/**
+			 * 查询 `beforeunload` 兜底保存的**最终注册态**（宿主或插件任一注册即为 true）。
+			 *
+			 * 为何需要：`installBeforeUnloadSave()` 的返回值语义是「**本次调用是否新注册**」，
+			 * 而宿主内联代码（client.js:6409）使用了**同一守卫名** `__directorBeforeUnloadRegistered`
+			 * 且先于插件执行。因此真机上「未新注册」= 幂等守卫按设计生效，**不代表能力缺失**。
+			 * 该函数提供「能力是否就绪」的判据，供验证脚本区分「假阴性」与「真缺失」。
+			 *
+			 * @returns {boolean}
+			 */
+			function isBeforeUnloadRegistered() {
+				return typeof window !== "undefined" && Boolean(window.__directorBeforeUnloadRegistered);
+			}
+			
+			exports.createDirectorStore = createDirectorStore;
+			exports.directorStoreFactory = directorStoreFactory;
+			exports.installBeforeUnloadSave = installBeforeUnloadSave;
+			exports.isBeforeUnloadRegistered = isBeforeUnloadRegistered;
+		};
+
+		// ── store/use-store.js ──
+		__defs["store/use-store.js"] = function (exports) {
+			/**
+			 * store/use-store.js — A10 `useDirectorStore` React hook 绑定
+			 *
+			 * 迁移源：client.js **6404 ~ 6407**（4 行）
+			 *
+			 * 宿主原实现（在同 realm 内、已实测可用）：
+			 *   ```js
+			 *   function useDirectorStore(store) {
+			 *     const subscribe = (0, react.useCallback)((fn) => store.subscribe(fn), [store]);
+			 *     return (0, react.useSyncExternalStore)(subscribe, store.getState, store.getState);
+			 *   }
+			 *   ```
+			 *
+			 * ─────────────────────────────────────────────────────────────────────────
+			 * 平台模块 external 契约（ADR-001）
+			 * ─────────────────────────────────────────────────────────────────────────
+			 * `react` **必须 external**，由 bundle factory 的 `require` 提供，严禁打进产物
+			 * （否则产生第二个 React 实例 → hooks 失效 / 崩溃）。
+			 *
+			 * 权威依据：`@deepseek-ai/dsh-client-web/lib/index.js` 的 `getStaticModules()`
+			 * （第 165 行）返回的平台单例表**明确包含** `"react": React`：
+			 *   react / react/jsx-runtime / react-dom / react-dom/client / @deepseek-ai/cordis /
+			 *   dsh-client-ui-slots / dsh-client-web-react / dsh-client-ui-primitives /
+			 *   dsh-client-ui-attachment / dsh-client-schema-form
+			 *
+			 * 本模块是插件中**首个使用平台模块**的模块，故也是 bundler「平台外置」能力的
+			 * 首个使用者（`build/build.mjs` 会把它改写为 `require("react")`，
+			 * 并在构建日志的「平台外置」行列出）。
+			 *
+			 * 说明：`useSyncExternalStore` 需要 React ≥ 18。宿主原内联代码在同一 realm 内
+			 * 一直使用它并正常工作，故此处等价迁移无版本风险。
+			 */
+			
+			const { useCallback, useSyncExternalStore } = require("react");
+			
+			/**
+			 * 把总监 store 绑成 React hook（宿主 6404-6407 等价迁移）。
+			 * @param {object} store `createDirectorStore` 产出的 store 实例
+			 * @returns {object} 当前 state（`store.getState()` 的返回值）
+			 */
+			function useDirectorStore(store) {
+				const subscribe = useCallback((fn) => store.subscribe(fn), [store]);
+				return useSyncExternalStore(subscribe, store.getState, store.getState);
+			}
+			
+			/**
+			 * 便捷变体：由 sessionId 直接取 store 并订阅（宿主无此形态，为本插件新增便利方法）。
+			 * ⚠️ 属**新增 API**，非迁移项；宿主侧调用点仍走 `useDirectorStore(store)`。
+			 * @param {(sessionId:string)=>object} factory 通常是 `directorStoreFactory`
+			 * @param {string} [sessionId]
+			 */
+			function useDirectorStoreBySession(factory, sessionId) {
+				const store = factory(sessionId);
+				return useDirectorStore(store);
+			}
+			
+			exports.useDirectorStore = useDirectorStore;
+			exports.useDirectorStoreBySession = useDirectorStoreBySession;
+		};
+
 		// ── client-entry.js ──
 		__defs["client-entry.js"] = function (exports) {
 			/**
@@ -1683,16 +2759,24 @@ window.__ModuleLoader__.load({
 			 *   ✅ V10 Cookie 分块存储      → store/cookie.js           （存储降级兜底层）
 			 *   ✅ IndexedDB 持久化主层     → store/idb.js              （6 store / v3）
 			 *
-			 * ── 待迁入（批次 3~6）───────────────────────────────────────
-			 *   ⬜ A6 文件通道    ⬜ A7~A10 持久化+store
+			 * ── 批次 3 持久化层（已迁入）──────────────────────────────────
+			 *   ✅ A6  文件通道适配器      → store/file-adapter.js      （client.js 6036~6214，按 T5 实测重建）
+			 *   ✅ A7  loadDirectorStore   → store/persist.js           （client.js 6215~6273）
+			 *   ✅ A8  saveDirectorStore   → store/persist.js           （client.js 6274~6326）
+			 *   ✅ A9  createDirectorStore → store/create-store.js      （client.js 6327~6403 + 6408~6437）
+			 *   ✅ A10 useDirectorStore    → store/use-store.js         （client.js 6404~6407，**首个平台模块消费者**）
+			 *
+			 * ── 待迁入（批次 4~6）───────────────────────────────────────
 			 *   ⬜ D1 directorProcess  ⬜ D2 审核
 			 *   ⬜ E1 DirectorFlow
 			 *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造
 			 *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
 			 *
 			 * ⚠️ 关键约束
-			 *   - 平台模块（react / cordis / web-react 等）**必须 external**，严禁打进产物（ADR-001）
+			 *   - 平台模块（react / cordis / web-react 等）**必须 external**，严禁打进产物（ADR-001）；
+			 *     构建期由 build/build.mjs 改写为 `require("<spec>")`，构建日志会列出「平台外置」清单
 			 *   - 加载顺序：debug → log-collector（后者依赖前者）→ layout / theme / config → docs-index
+			 *     → memory → branch → persist（依赖 debug）→ store 工厂
 			 */
 			
 			const { installDshDebug } = __m("util/debug.js");
@@ -1707,10 +2791,15 @@ window.__ModuleLoader__.load({
 			const { installMemoryApi } = __m("store/memory.js");
 			const { installBranchApi } = __m("store/branch.js");
 			const { directorDocsStore } = __m("store/docs.js");
+			// ── 批次 3 持久化层 ──
+			const { installPersistState, probeLegacyRequire, preloadStoreFile, bridgeDebugLogToFile, isFileChannelAvailable, isOpfsAvailable, isFsaAvailable, exportViaFsa, importViaFsa } = __m("store/file-adapter.js");
+			const { directorStoreFactory, installBeforeUnloadSave, createDirectorStore, isBeforeUnloadRegistered } = __m("store/create-store.js");
+			const { useDirectorStore } = __m("store/use-store.js");
+			const { safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG } = __m("store/persist.js");
 			
-			const PLUGIN_VERSION = "0.2.0-batch2";
+			const PLUGIN_VERSION = "0.3.0-batch3";
 			
-			/** 批次 1 安装器：装配零依赖基础层。返回已安装的能力清单（供宿主与调试读取） */
+			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
 				// 1. 日志基础设施（顺序敏感：debug 先于 log-collector）
 				installDshDebug();
@@ -1736,6 +2825,16 @@ window.__ModuleLoader__.load({
 				const memoryApi = installMemoryApi();
 				const branchApi = installBranchApi();
 			
+				// 6. 批次 3 持久化层（顺序敏感）
+				//    ⚠️ installPersistState 必须先于任何 plog（persist.js 会读它做统计）
+				//    ⚠️ bridgeDebugLogToFile 必须在 installDshDebug 之后（依赖 window.__dshDebug）
+				const persistState = installPersistState();
+				const legacyProbe = probeLegacyRequire();
+				const fileLogBridged = bridgeDebugLogToFile();
+				const beforeUnload = installBeforeUnloadSave();
+				// OPFS 预读：异步。loadDirectorStore 是同步函数，故靠「预读一次 + 同步读缓存」保持签名。
+				const preloadPromise = preloadStoreFile();
+			
 				const installed = {
 					debug: typeof window !== "undefined" ? Boolean(window.__dshDebug) : false,
 					v9Log: typeof window !== "undefined" ? Boolean(window.__dshV9Log) : false,
@@ -1748,19 +2847,37 @@ window.__ModuleLoader__.load({
 					memoryApi: memoryApi,
 					branchApi: branchApi,
 					docsStore: Boolean(directorDocsStore),
-					docsIndex: false // 异步，稍后就绪
+					docsIndex: false, // 异步，稍后就绪
+					// ── 批次 3 ──
+					persistState: Boolean(persistState),
+					storeFactory: typeof directorStoreFactory === "function",
+					hook: typeof useDirectorStore === "function",
+					beforeUnload: beforeUnload,
+					// 语义说明：beforeUnload = 「本次调用是否**新注册**」；
+					// beforeUnloadRegistered = 「能力是否**最终就绪**（宿主或插件任一注册）」。
+					// 真机上宿主内联代码（client.js:6409）先占同名守卫 → beforeUnload=false 属幂等守卫
+					// 按设计生效（假阴性），能力本身健全。验证脚本须用 beforeUnloadRegistered 判定。
+					beforeUnloadRegistered: isBeforeUnloadRegistered(),
+					fileLogBridged: fileLogBridged,
+					fileChannel: isFileChannelAvailable(),
+					opfs: isOpfsAvailable(),
+					fsa: isFsaAvailable(),
+					legacyRequire: legacyProbe.filter((p) => p.ok).map((p) => p.name), // 实测为空数组（T5）
+					opfsPreloaded: false // 异步，稍后就绪
 				};
 			
 				docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
+				preloadPromise.then((ok) => { installed.opfsPreloaded = Boolean(ok); });
 			
 				if (typeof window !== "undefined") {
 					window.__dshDirectorBatch1 = installed;
-					window.__dshDirectorBatch2 = installed; // 批次 2 别名：便于逐批次排查
+					window.__dshDirectorBatch2 = installed; // 批次 2 别名
+					window.__dshDirectorBatch3 = installed; // 批次 3 别名
 				}
 				return installed;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore };
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa };
 			
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
@@ -1768,6 +2885,17 @@ window.__ModuleLoader__.load({
 			exports.dshThemeStore = dshThemeStore;
 			exports.directorConfig = directorConfig;
 			exports.directorDocsStore = directorDocsStore;
+			exports.// ── 批次 3 ──
+	directorStoreFactory = // ── 批次 3 ──
+	directorStoreFactory;
+			exports.createDirectorStore = createDirectorStore;
+			exports.useDirectorStore = useDirectorStore;
+			exports.safeDirectorKey = safeDirectorKey;
+			exports.loadDirectorStore = loadDirectorStore;
+			exports.saveDirectorStore = saveDirectorStore;
+			exports.DIRECTOR_DEFAULT_CONFIG = DIRECTOR_DEFAULT_CONFIG;
+			exports.exportViaFsa = exportViaFsa;
+			exports.importViaFsa = importViaFsa;
 		};
 
 		// ── Harness client 插件契约导出 ──

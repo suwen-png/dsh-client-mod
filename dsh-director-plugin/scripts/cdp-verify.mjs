@@ -95,20 +95,52 @@ if (pages.length === 0) {
 	check("__DSH_BOOT__ 已注入", Array.isArray(bootIds), Array.isArray(bootIds) ? `${bootIds.length} entries` : String(bootRaw));
 	check(`boot 清单含 ${PLUGIN_PKG}`, Array.isArray(bootIds) && bootIds.includes(PLUGIN_PKG));
 
-	// ② 批次 1 全局契约
-	const contracts = ["__dshDebug", "__dshV9Log", "__dshDirectorBatch1", "__directorLayoutStore", "__dshTheme", "__directorConfig"];
+	// ② 批次 1~3 全局契约
+	const contracts = ["__dshDebug", "__dshV9Log", "__dshDirectorBatch1", "__directorLayoutStore", "__dshTheme", "__directorConfig", "__directorPersistState"];
 	for (const k of contracts) {
 		const v = await evaluate(`typeof window.${k}`);
 		check(`契约 window.${k}`, v !== "undefined", String(v));
 	}
 
-	// ③ installBatch1 返回结构
+	// ③ installBatch1 返回结构（含批次 3 字段）
 	const batch = await evaluate("window.__dshDirectorBatch1 ? JSON.stringify(window.__dshDirectorBatch1) : null");
 	console.log(`     __dshDirectorBatch1 = ${batch}`);
 	if (batch) {
 		let b = null;
 		try { b = JSON.parse(batch); } catch {}
-		check("installBatch1 各层均已装载", Boolean(b && b.debug && b.v9Log && b.layoutStore && b.themeStore && b.config));
+		check("批次 1+2 各层均已装载", Boolean(b && b.debug && b.v9Log && b.layoutStore && b.themeStore && b.config
+			&& b.messageStore && b.branchApi && b.docsStore));
+		// beforeUnload 判定口径：宿主内联代码用同名守卫且先执行，故「未新注册」属幂等守卫
+		// 按设计生效（假阴性）。能力就绪判据 = beforeUnload || beforeUnloadRegistered。
+		check("批次 3 持久化层已装载", Boolean(b && b.persistState && b.storeFactory && b.hook
+			&& (b.beforeUnload || b.beforeUnloadRegistered)),
+			b ? `persistState=${b.persistState} storeFactory=${b.storeFactory} hook=${b.hook} beforeUnload=${b.beforeUnload} beforeUnloadRegistered=${b.beforeUnloadRegistered}` : "");
+		check("legacyRequire 实测为空（T5）", Boolean(b && Array.isArray(b.legacyRequire) && b.legacyRequire.length === 0),
+			b ? `[${(b.legacyRequire || []).join(", ")}]` : "");
+		check("beforeunload 兜底保存已注册（宿主或插件）", Boolean(b && b.beforeUnloadRegistered === true),
+			b ? `guard=${b.beforeUnloadRegistered}` : "");
+		check("文件通道探测已定性（fileChannel/opfs/fsa 三字段存在）",
+			Boolean(b && typeof b.fileChannel === "boolean" && typeof b.opfs === "boolean" && typeof b.fsa === "boolean"),
+			b ? `fileChannel=${b.fileChannel} opfs=${b.opfs} fsa=${b.fsa}` : "");
+	}
+
+	// ④ 持久化通道真实能力（真机值，非桩）
+	const channels = await evaluate(`JSON.stringify({
+		opfs: typeof navigator.storage?.getDirectory === "function",
+		fsa: typeof window.showSaveFilePicker === "function" && typeof window.showOpenFilePicker === "function",
+		showDirectoryPicker: typeof window.showDirectoryPicker === "function",
+		dshDesktop: typeof window.dshDesktop,
+		dshDesktopWorkspace: typeof window.dshDesktop?.workspace?.pickDirectory,
+		legacyWindowRequire: typeof window.require
+	})`);
+	console.log(`     持久化通道 = ${channels}`);
+	if (channels) {
+		let c = null;
+		try { c = JSON.parse(channels); } catch {}
+		check("OPFS 可用（免手势持久层）", c?.opfs === true);
+		check("FSA 可用（showSaveFilePicker + showOpenFilePicker）", c?.fsa === true);
+		check("dshDesktop 桌面桥存在", c?.dshDesktop === "object");
+		check("legacy window.require 不可达（T5 反证）", c?.legacyWindowRequire === "undefined", String(c?.legacyWindowRequire));
 	}
 
 	// ④ docs 索引（A14 外置资源经插件加载）

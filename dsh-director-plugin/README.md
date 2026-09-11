@@ -9,16 +9,20 @@
 |:----:|:-----|:-----|
 | 1 | A14 剥离 / A3+D3 日志 / A11 布局 store / A12 主题 store / C1 布局探针 / C2 模型配置 | ✅ **已完成 2026-09-11** |
 | 2 | A1 消息 store / A2 记忆 CRUD / **A4 分支创建** / **A5 docs store** / V10 Cookie / IndexedDB 主层 | ✅ **已完成 2026-09-11** |
-| 3 | A6 文件通道 / A7~A10 持久化+store | 🟢 **前置已解除**（T5 实测完成，改建 FSA+OPFS 方案） |
-| 4 | D1 directorProcess / D2 审核 | ⬜ |
+| 3 | A6 文件通道 / **A7+A8 持久化读写** / **A9 createDirectorStore** / **A10 useDirectorStore** | ✅ **已完成 2026-09-11** |
+| 4 | D1 directorProcess / D2 审核 | ⬜ **依赖已就绪**（C2 + A9 均已落地） |
 | 5 | E1 DirectorFlow（E2 DirectorView ⛔ 已废弃） | ⬜ |
 | 6 | F3+F4 全局 API / F1/F2+G1/G4 宿主注入点改造 / F5 tab 注册 | ⬜ |
 
-**✅ 已真机装载**（2026-09-11）：插件已被 Harness 实际加载并运行 —— `__DSH_BOOT__` 42 entries 含本包，11 项全局契约全挂载，`__dshDocsIndex` **docCount=90**（A14 外置资源回填成功）。详见 `docs/01-插件迁移明细清单.md` §八。
+**✅ 已真机装载**（2026-09-11）：插件已被 Harness 实际加载并运行 —— `__DSH_BOOT__` 42 entries 含本包，**20 项全局契约全挂载**，`__dshDocsIndex` **docCount=90**（A14 外置资源回填成功）。详见 `docs/01-插件迁移明细清单.md` §八。
+
+**四层验证（批次 3 全绿）**：源码级 **66/66** ｜ bundle 级 **44/44** ｜ 安装链路级 **46/46** ｜ 真机级 **24/24**。产物 `lib/client.js` **134,346 B / 18 模块**。
 
 **批次 1 关键成果**：宿主 `client.js` **1,479,577 → 564,826 B（-914,751 B / -61.8%）** —— 单行 541KB 的 `DSH_DOCS_INDEX` 内联常量已外置为 `assets/docs-index.json`（含 docs/ 90 篇全文），改由插件运行时加载。
 
 **批次 2 关键成果**：数据层 6 模块落地，4 个宿主直接调用的全局契约（`__dshMemory` / `__dshCreateBranch` / `__dshSwitchMemoryTab` / `__dshShowToast`）全部原样保留；XSS 转义（V9.4-P1）回归防线；R5 持久化 key 兼容性 8 项逐一校验。
+
+**批次 3 关键成果**：持久化层 5 模块落地，**不端口宿主死代码**（T5 实测 legacy 三法全不可达）—— 改建 **FSA + OPFS + IndexedDB 三通道**；`useDirectorStore` 成为**插件首个平台模块消费者**，触发打包器「平台外置」能力扩展（产物内 `require("react")`，React 源码零打包，规避 ADR-001 双实例崩溃）。
 
 ## 目录结构
 
@@ -32,10 +36,10 @@ dsh-director-plugin/
 ├── scripts/
 │   ├── strip-a14.py          ← A14 剥离脚本（含 --dry-run）
 │   ├── restore-a14.py        ← A14 回滚（含 --check）
-│   ├── verify-batch1.mjs     ← 源码级验证（批次 1+2，66 项）
-│   ├── verify-bundle.mjs     ← bundle 端到端（__ModuleLoader__ 桩执行）
-│   ├── verify-install.mjs    ← ★ 安装链路离线验证（官方 loadProfile/ClientModuleRegistry，37 项）
-│   ├── cdp-verify.mjs        ← ★ 真机运行时核查（CDP，15 项）
+│   ├── verify-batch1.mjs     ← 源码级验证（批次 1+2+3 锚点，66 项）
+│   ├── verify-bundle.mjs     ← bundle 端到端（__ModuleLoader__ 桩执行，44 项）
+│   ├── verify-install.mjs    ← ★ 安装链路离线验证（官方 loadProfile/ClientModuleRegistry，46 项）
+│   ├── cdp-verify.mjs        ← ★ 真机运行时核查（CDP，24 项）
 │   ├── cdp-eval.mjs          ← ★ 渲染进程任意表达式求值（调试）
 │   └── run-r3-spike.mjs      ← ★ T5 文件通道可达性探测
 ├── src/

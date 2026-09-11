@@ -184,6 +184,19 @@ try {
 	win.location = win.location || { href: "http://localhost/", origin: "http://localhost" };
 	win.document = win.document || { createElement: () => ({}), head: { appendChild: () => {} }, querySelector: () => null };
 	win.CustomEvent = win.CustomEvent || class CustomEvent { constructor(t, i) { this.type = t; this.detail = i?.detail; } };
+	// 事件桩：批次 3 的 installBeforeUnloadSave() 会注册 window "beforeunload"
+	// （宿主 client.js:6409 同款行为），离线环境须补该浏览器全局。
+	const winListeners = new Map();
+	win.addEventListener = (type, fn) => {
+		if (!winListeners.has(type)) winListeners.set(type, []);
+		winListeners.get(type).push(fn);
+	};
+	win.removeEventListener = (type, fn) => {
+		const arr = winListeners.get(type) || [];
+		const i = arr.indexOf(fn);
+		if (i >= 0) arr.splice(i, 1);
+	};
+	win.dispatchEvent = () => true;
 
 	// 执行 bundle（顶层只调用 __ModuleLoader__.load）
 	new Function("window", "document", "URL", code)(win, win.document, win.URL);
@@ -193,9 +206,27 @@ try {
 		const rec = loaded[0];
 		check("bundle id 正确", rec.id === PLUGIN_PKG, rec.id);
 		check("bundle factory 为函数", typeof rec.factory === "function");
-		const requireStub = () => { throw new Error("本插件不应 require 平台模块"); };
+		// 平台模块桩：严格对齐官方 getStaticModules()（dsh-client-web/lib/index.js:165 的 10 项）
+		const platformStub = {
+			"react": { useCallback: () => {}, useSyncExternalStore: () => ({}) },
+			"react/jsx-runtime": {}, "react-dom": {}, "react-dom/client": {},
+			"@deepseek-ai/cordis": {},
+			"@deepseek-ai/dsh-client-ui-slots": {},
+			"@deepseek-ai/dsh-client-web-react": {},
+			"@deepseek-ai/dsh-client-ui-primitives": {},
+			"@deepseek-ai/dsh-client-ui-attachment": {},
+			"@deepseek-ai/dsh-client-schema-form": {}
+		};
+		const requireCalls = [];
+		const requireStub = (name) => {
+			requireCalls.push(name);
+			if (!(name in platformStub)) throw new Error(`require 请求了平台表外模块: ${name}`);
+			return platformStub[name];
+		};
 		const exportsObj = rec.factory(requireStub);
 		check("factory 执行成功", Boolean(exportsObj));
+		check("factory 仅 require 平台表内模块", requireCalls.every((n) => n in platformStub),
+			`请求: [${requireCalls.join(", ") || "无"}]`);
 		check("factory 导出 apply", typeof exportsObj?.apply === "function");
 
 		// factory（模块求值）阶段即挂载的契约：store/config 在构造时自挂 window
@@ -218,6 +249,36 @@ try {
 			check("离线降级：__dshDocsIndex 缺省不报错",
 				win.__dshDocsIndex === undefined || typeof win.__dshDocsIndex === "object",
 				win.__dshDocsIndex === undefined ? "未注入（预期，离线）" : "已注入");
+
+			// ── 批次 3（持久化层）──
+			const b3 = ["__directorPersistState", "__dshDirectorBatch3"];
+			const miss3 = b3.filter((k) => win[k] === undefined);
+			check("批次 3 全局契约已挂载", miss3.length === 0,
+				miss3.length ? "缺: " + miss3.join(", ") : `${b3.length} 项`);
+			const inst = win.__dshDirectorBatch3;
+			check("installed.persistState / storeFactory / hook",
+				Boolean(inst && inst.persistState && inst.storeFactory && inst.hook),
+				inst ? `persistState=${inst.persistState} storeFactory=${inst.storeFactory} hook=${inst.hook}` : "无");
+			check("legacyRequire 实测为空（T5 结论）",
+				Boolean(inst && Array.isArray(inst.legacyRequire) && inst.legacyRequire.length === 0),
+				inst ? `[${(inst.legacyRequire || []).join(", ")}]` : "无");
+			// beforeUnload 双语义：离线环境无宿主抢占同名守卫 → 新注册应为 true，
+			// 且「能力就绪」判据 beforeUnloadRegistered 必为 true。
+			check("installed.beforeUnload（离线新注册）",
+				Boolean(inst && inst.beforeUnload === true), inst ? String(inst.beforeUnload) : "无");
+			check("installed.beforeUnloadRegistered（能力就绪）",
+				Boolean(inst && inst.beforeUnloadRegistered === true), inst ? String(inst.beforeUnloadRegistered) : "无");
+			check("文件通道三字段已定性（fileChannel/opfs/fsa）",
+				Boolean(inst && typeof inst.fileChannel === "boolean" && typeof inst.opfs === "boolean" && typeof inst.fsa === "boolean"),
+				inst ? `fileChannel=${inst.fileChannel} opfs=${inst.opfs} fsa=${inst.fsa}` : "无");
+			check("beforeunload 监听器已注册到 window",
+				(winListeners.get("beforeunload") || []).length >= 1,
+				`beforeunload handler = ${(winListeners.get("beforeunload") || []).length}`);
+			// 🔴 关键不变量：空 sessionId → 固定 key（V9 修复点）
+			const entryMod = exportsObj.__entry;
+			check("safeDirectorKey(空) === 'director-main'",
+				entryMod?.safeDirectorKey && entryMod.safeDirectorKey() === "director-main",
+				entryMod?.safeDirectorKey ? entryMod.safeDirectorKey() : "无导出");
 		}
 	}
 } catch (error) {

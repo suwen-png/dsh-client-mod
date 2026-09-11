@@ -739,5 +739,43 @@ legacy 三法仅保留 `typeof` 探测留痕。**批次 3 前置解除。**
 **方法论**：插件 bundle 经 `<script src="/plugins/<id>/client.js">` 注入，与宿主内联代码
 **同属渲染进程主 realm** → 用 CDP 在页面默认执行上下文求值，结论可直接外推至插件代码。
 
-**批次进度**：1 ✅ · 2 ✅ · 3 🟢（前置已解除）· 4 ⬜ · 5 ⬜ · 6 ⬜
+**批次进度**：1 ✅ · 2 ✅ · 3 ✅ · 4 🟢（依赖已就绪）· 5 ⬜ · 6 ⬜
+
+
+### 14.13 ✅ 批次 3 持久化层落地 + 真机装载（2026-09-11 · 四层验证全绿）
+
+**五模块**（`src/store/`）：`file-adapter.js`（A6，按 T5 实测**重建**为 FSA+OPFS+IndexedDB 三通道，
+不端口死代码）/ `persist.js`（A7+A8）/ `create-store.js`（A9，含 store 工厂 + beforeunload）/
+`use-store.js`（A10，**插件首个平台模块消费者**）。产物 **134,346 B / 18 模块**。
+
+**四层验证（全部 IS_PASS = YES）**：源码级 `verify-batch1.mjs` **66/66** ·
+bundle 级 `verify-bundle.mjs` **44/44** · 安装链路级 `verify-install.mjs` **46/46** · 真机级 `cdp-verify.mjs` **24/24**。
+
+**真机 `__dshDirectorBatch1/2/3`（同一对象，20 字段）**：
+`persistState/storeFactory/hook/beforeUnloadRegistered/fileLogBridged/fileChannel/opfs/fsa` 全 true，
+`legacyRequire=[]`；`__dshDocsIndex` docCount=**90**。
+
+**🔴 两个「假阴性」判定口径（必记，否则每轮误报）**
+| 字段 | 真机值 | 语义 |
+|:--|:--|:--|
+| `beforeUnload` | `false` | 语义 = 「**本次调用是否新注册**」。宿主内联代码用**同一守卫名** `__directorBeforeUnloadRegistered`（宿主 `client.js:6409`）且**先于插件执行** → 幂等守卫按设计生效，**非能力缺失**。故新增 `isBeforeUnloadRegistered()` + 契约字段 `beforeUnloadRegistered`（真机 `true`）作为「能力就绪」判据 |
+| `opfsPreloaded` | `false` | 语义 = 「OPFS 预读**是否读到非空文件**」。首启无 `director-store.json` → 正常返回 false，走降级链 |
+
+**本轮修复的真实缺陷**
+1. **`isOpfsAvailable()` 短路返回 `undefined`**（`src/store/file-adapter.js`）：Node 21+ 内置 `navigator` 全局
+   但无 `navigator.storage`，`a && b && c` 短路返回中间值而非布尔 → 用 `Boolean()` 收口。真机恰好不暴露，
+   离线安装链路（`verify-install`）实测捕获。
+2. **深克隆保真**（`src/store/persist.js`）：宿主 4 处重复的默认配置字面量提取为模块级常量后，浅合并
+   会让多个 store **共享同一 `config.duties` 子对象**（改 A 串改 B）→ 新增 `cloneDirectorDefaultConfig()`。
+3. **打包器「平台模块外置」扩展**（`build/build.mjs`）：ESM 静态 import 改写为 `require("<spec>")`，
+   支持 4 种 import 形态（具名/别名/命名空间/默认）+ 裸 import；`void require` 仅在 `externals.size===0` 时输出。
+   首次消费方即 `react`（**React 源码零打包**，规避 ADR-001 双实例崩溃）。
+
+**离线验证桩两处缺陷（测试侧，非产品缺陷）**：`verify-install.mjs` 缺 `window.addEventListener` 桩 →
+补事件桩并新增「beforeunload 监听器已注册」断言。
+
+**演进铁律（新增）**：**幂等守卫 + 宿主/插件双份共存期**（批次 6 才退坡）下，凡是「宿主也做同一件事」的
+能力，插件侧返回值必然是「未新注册」——验证脚本**必须区分「本次是否执行」与「能力是否就绪」**，
+否则每轮稳定误报。
+
 
