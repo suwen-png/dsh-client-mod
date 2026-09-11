@@ -29,8 +29,11 @@
  *   ✅ A9  createDirectorStore → store/create-store.js      （client.js 6327~6403 + 6408~6437）
  *   ✅ A10 useDirectorStore    → store/use-store.js         （client.js 6404~6407，**首个平台模块消费者**）
  *
- * ── 待迁入（批次 4~6）───────────────────────────────────────
- *   ⬜ D1 directorProcess  ⬜ D2 审核
+ * ── 批次 4 逻辑层（已迁入）─────────────────────────────────────
+ *   ✅ D1 directorProcess      → logic/process.js            （client.js 6706~6818）
+ *   ✅ D2 directorReviewReturn → logic/review.js             （client.js 6820~6855，**保留不调用**）
+ *
+ * ── 待迁入（批次 5~6）───────────────────────────────────────
  *   ⬜ E1 DirectorFlow
  *   ⬜ F3+F4 全局 API  ⬜ F1/F2 + G1/G4 宿主注入点改造
  *   ⛔ E2 DirectorView — 已废弃（2026-09-08 P2 清理，墓志铭 client.js:8897）
@@ -69,8 +72,11 @@ import {
 import { directorStoreFactory, installBeforeUnloadSave, createDirectorStore, isBeforeUnloadRegistered } from "./store/create-store.js";
 import { useDirectorStore } from "./store/use-store.js";
 import { safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG } from "./store/persist.js";
+// ── 批次 4 逻辑层 ──
+import { directorProcess } from "./logic/process.js";
+import { directorReviewReturn } from "./logic/review.js";
 
-export const PLUGIN_VERSION = "0.3.0-batch3";
+export const PLUGIN_VERSION = "0.4.0-batch4";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -108,6 +114,17 @@ export function installBatch1(options = {}) {
 	// OPFS 预读：异步。loadDirectorStore 是同步函数，故靠「预读一次 + 同步读缓存」保持签名。
 	const preloadPromise = preloadStoreFile();
 
+	// 7. 批次 4 逻辑层（D1 核心处理 + D2 返回审核）
+	//    ⚠️ D2 属「**保留不调用**」能力（三重证据见 logic/review.js 文件头）——
+	//       此处**只挂全局契约、不自动调用**，确保不引入行为变更；
+	//       未来启用时由接线层（批次 6 或后续）显式调用。
+	//    ⚠️ D1 的宿主调用点（client.js:11763 `window.__directorSubmit`）属**批次 6** 接线范围，
+	//       本批次不改宿主，仅提供插件侧实现 + 契约（双份共存期）。
+	if (typeof window !== "undefined") {
+		window.__dshDirectorProcess = directorProcess;
+		window.__dshDirectorReviewReturn = directorReviewReturn;
+	}
+
 	const installed = {
 		debug: typeof window !== "undefined" ? Boolean(window.__dshDebug) : false,
 		v9Log: typeof window !== "undefined" ? Boolean(window.__dshV9Log) : false,
@@ -136,7 +153,12 @@ export function installBatch1(options = {}) {
 		opfs: isOpfsAvailable(),
 		fsa: isFsaAvailable(),
 		legacyRequire: legacyProbe.filter((p) => p.ok).map((p) => p.name), // 实测为空数组（T5）
-		opfsPreloaded: false // 异步，稍后就绪
+		opfsPreloaded: false, // 异步，稍后就绪
+		// ── 批次 4 逻辑层 ──
+		directorProcess: typeof directorProcess === "function",
+		directorReview: typeof directorReviewReturn === "function",
+		directorReviewWired: false, // 有意不接线（宿主决策：保留不调用）
+		directorProcessWired: false // 宿主调用点属批次 6 接线范围
 	};
 
 	docsIndexPromise.then((d) => { installed.docsIndex = Boolean(d); });
@@ -146,6 +168,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch1 = installed;
 		window.__dshDirectorBatch2 = installed; // 批次 2 别名
 		window.__dshDirectorBatch3 = installed; // 批次 3 别名
+		window.__dshDirectorBatch4 = installed; // 批次 4 别名
 	}
 	return installed;
 }
@@ -164,5 +187,8 @@ export {
 	saveDirectorStore,
 	DIRECTOR_DEFAULT_CONFIG,
 	exportViaFsa,
-	importViaFsa
+	importViaFsa,
+	// ── 批次 4 ──
+	directorProcess,
+	directorReviewReturn
 };

@@ -181,6 +181,41 @@ check("__directorCurrentView 读写点 ≥ 7", rdHits >= 7, `实测 ${rdHits} �
 const ftHits = (hostSrc.match(/window\.__directorFocusTarget/g) || []).length;
 check("__directorFocusTarget 读写点 ≥ 4", ftHits >= 4, `实测 ${ftHits} 次`);
 
+// ── 10. 批次 4 逻辑层（D1 核心处理 + D2 返回审核）──
+console.log("\n[10] 批次 4 逻辑层");
+const BATCH4 = [
+	["src/logic/process.js", "D1 directorProcess"],
+	["src/logic/review.js", "D2 directorReviewReturn"]
+];
+for (const [rel, desc] of BATCH4) {
+	const p = join(PLUGIN, rel);
+	check(`${desc} (${rel})`, existsSync(p), existsSync(p) ? statSync(p).size + " B" : "缺失");
+}
+
+const procSrc = existsSync(join(PLUGIN, "src/logic/process.js")) ? readFileSync(join(PLUGIN, "src/logic/process.js"), "utf8") : "";
+check("D1 导出 directorProcess", /export async function directorProcess/.test(procSrc), "export async function");
+check("D1 保留 V9.4-P1 并发锁", procSrc.includes("V9.4-P1: 并发锁"), "锁语义注释完整");
+check("D1 5 步链路完整", ["步骤1：语言规范整理", "步骤2：调用本地模型", "步骤3：上下文记忆分析", "步骤4：执行逻辑分析", "步骤5：自动转发"].every((s) => procSrc.includes(s)), "步骤 1~5 全命中");
+check("D1 依赖 5 项均已 import",
+	procSrc.includes('from "../config/model.js"') && procSrc.includes('from "../store/persist.js"') && procSrc.includes('from "../store/memory.js"'),
+	"model.js + persist.js + memory.js");
+check("D1 转发延迟 300ms 原样保留", procSrc.includes("setTimeout(() => onForward(parsed.instruction), 300)"), "setTimeout 300");
+check("D1 源区间标注 6706~6818", procSrc.includes("6706 ~ 6818"), "源行号已标注");
+
+const revSrc = existsSync(join(PLUGIN, "src/logic/review.js")) ? readFileSync(join(PLUGIN, "src/logic/review.js"), "utf8") : "";
+check("D2 导出 directorReviewReturn", /export async function directorReviewReturn/.test(revSrc), "export async function");
+check("D2 标注「保留不调用」", revSrc.includes("保留不调用"), "状态判定已标注（防误判为迁移遗漏）");
+check("D2 双分支完整（AI 审核 + 规则模板）", revSrc.includes("使用模型审核") && revSrc.includes("使用规则模板审核"), "两分支齐备");
+check("D2 规则模板 3 条启发式保留", ["内容过短，可能未完整回答", "包含待补充/占位内容", "代码块可能未正确闭合"].every((s) => revSrc.includes(s)), "3 条全命中");
+check("D2 基础分算法保留 5-issues（下限 1）", revSrc.includes("var score = 5 - issues.length") && revSrc.includes("if (score < 1) score = 1;"), "打分逻辑完整");
+
+// 🔴 D2 反证：插件侧零调用点（宿主决策「保留不调用」）
+const entrySrc = readFileSync(join(PLUGIN, "src/client-entry.js"), "utf8");
+const callHits = (entrySrc.match(/directorReviewReturn\s*\(/g) || []).length;
+check("D2 未接入自动装配链（零调用）", callHits === 0, `client-entry.js 中调用 ${callHits} 次`);
+check("D2 仅挂全局契约", entrySrc.includes("window.__dshDirectorReviewReturn = directorReviewReturn"), "契约已挂");
+check("D1 已挂全局契约", entrySrc.includes("window.__dshDirectorProcess = directorProcess"), "契约已挂");
+
 // ── 汇总（程序化求和）──
 const passed = results.filter((r) => r.pass).length;
 const failed = results.length - passed;

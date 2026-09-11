@@ -200,6 +200,7 @@ const CONTRACTS = [
 	"__dshCheckOllama", "__dshLayoutProbe",
 	"__dshMemory", "__dshCreateBranch", "__dshSwitchMemoryTab", "__dshShowToast",
 	"__directorPersistState", "__dshDirectorBatch3",
+	"__dshDirectorBatch4", "__dshDirectorProcess", "__dshDirectorReviewReturn",
 ];
 const w = windowStub;
 for (const k of CONTRACTS) {
@@ -263,6 +264,22 @@ try {
 	}
 } catch (e) { toastErr = e; }
 check("__dshShowToast 实际创建 #dsh-toast", toastOk, toastErr ? "异常: " + toastErr.message : toastOk ? "DOM 节点已创建" : "未创建");
+
+/* ── 6d. 批次 4 逻辑层契约 ─────────────────────────────────── */
+
+console.log("\n  ── 批次 4（逻辑层）契约 ──");
+check("installed.directorProcess", applied?.directorProcess === true, String(applied?.directorProcess));
+check("installed.directorReview", applied?.directorReview === true, String(applied?.directorReview));
+// 🔴 D2 有意不接线（宿主决策「保留不调用」）——断言该状态被**显式声明**，防未来误判
+check("installed.directorReviewWired === false（有意不接线）", applied?.directorReviewWired === false, String(applied?.directorReviewWired));
+check("installed.directorProcessWired === false（批次 6 接线）", applied?.directorProcessWired === false, String(applied?.directorProcessWired));
+check("window.__dshDirectorProcess 可调用", typeof windowStub.__dshDirectorProcess === "function", typeof windowStub.__dshDirectorProcess);
+check("window.__dshDirectorReviewReturn 可调用", typeof windowStub.__dshDirectorReviewReturn === "function", typeof windowStub.__dshDirectorReviewReturn);
+// 入口导出表包含批次 4 两项
+const entryExports = exportsObj?.__entry;
+check("__entry 导出批次 4 函数",
+	typeof entryExports?.directorProcess === "function" && typeof entryExports?.directorReviewReturn === "function",
+	`process=${typeof entryExports?.directorProcess} review=${typeof entryExports?.directorReviewReturn}`);
 
 /* ── 汇总 ─────────────────────────────────────────────────── */
 

@@ -95,8 +95,8 @@ if (pages.length === 0) {
 	check("__DSH_BOOT__ 已注入", Array.isArray(bootIds), Array.isArray(bootIds) ? `${bootIds.length} entries` : String(bootRaw));
 	check(`boot 清单含 ${PLUGIN_PKG}`, Array.isArray(bootIds) && bootIds.includes(PLUGIN_PKG));
 
-	// ② 批次 1~3 全局契约
-	const contracts = ["__dshDebug", "__dshV9Log", "__dshDirectorBatch1", "__directorLayoutStore", "__dshTheme", "__directorConfig", "__directorPersistState"];
+	// ② 批次 1~4 全局契约
+	const contracts = ["__dshDebug", "__dshV9Log", "__dshDirectorBatch1", "__directorLayoutStore", "__dshTheme", "__directorConfig", "__directorPersistState", "__dshDirectorBatch4", "__dshDirectorProcess", "__dshDirectorReviewReturn"];
 	for (const k of contracts) {
 		const v = await evaluate(`typeof window.${k}`);
 		check(`契约 window.${k}`, v !== "undefined", String(v));
@@ -122,6 +122,12 @@ if (pages.length === 0) {
 		check("文件通道探测已定性（fileChannel/opfs/fsa 三字段存在）",
 			Boolean(b && typeof b.fileChannel === "boolean" && typeof b.opfs === "boolean" && typeof b.fsa === "boolean"),
 			b ? `fileChannel=${b.fileChannel} opfs=${b.opfs} fsa=${b.fsa}` : "");
+		// ── 批次 4（逻辑层）──
+		check("批次 4 逻辑层已装载", Boolean(b && b.directorProcess === true && b.directorReview === true),
+			b ? `process=${b.directorProcess} review=${b.directorReview}` : "");
+		// 🔴 D2 宿主决策「保留不调用」—— 断言该状态被显式声明，防未来误判为迁移遗漏
+		check("D2 有意不接线（directorReviewWired === false）", Boolean(b && b.directorReviewWired === false),
+			b ? String(b.directorReviewWired) : "");
 	}
 
 	// ④ 持久化通道真实能力（真机值，非桩）
@@ -142,6 +148,27 @@ if (pages.length === 0) {
 		check("dshDesktop 桌面桥存在", c?.dshDesktop === "object");
 		check("legacy window.require 不可达（T5 反证）", c?.legacyWindowRequire === "undefined", String(c?.legacyWindowRequire));
 	}
+
+	// ④ 批次 4 真机可调用性（**实际调用**，非静态断言）
+	//    D1 并发锁分支：status=processing 时早退，不写盘、不触发转发 → 对真机数据零副作用
+	const lockRes = await evaluate(`(async () => {
+		try {
+			const store = { getState: () => ({ config: {}, status: "processing", messages: [] }), addMessage: () => {}, setStatus: () => {} };
+			await window.__dshDirectorProcess("cdp-probe", "verify", store, null, null);
+			return "ok-early-return";
+		} catch (e) { return "ERR: " + (e && e.message); }
+	})()`, true);
+	check("D1 真机并发锁分支可执行（processing 时早退）", lockRes === "ok-early-return", String(lockRes));
+
+	//    D2 早退分支：returnReview 未启用 → 首行即 return，零副作用
+	const revRes = await evaluate(`(async () => {
+		try {
+			const store = { getState: () => ({ config: {} }) };
+			await window.__dshDirectorReviewReturn("cdp-probe", "占位内容用于探测审核早退", store, null);
+			return "ok-early-return";
+		} catch (e) { return "ERR: " + (e && e.message); }
+	})()`, true);
+	check("D2 真机早退分支可执行（未启用则 return）", revRes === "ok-early-return", String(revRes));
 
 	// ④ docs 索引（A14 外置资源经插件加载）
 	const docCount = await evaluate("window.__dshDocsIndex ? (window.__dshDocsIndex.docCount || Object.keys(window.__dshDocsIndex.docs||{}).length) : -1");

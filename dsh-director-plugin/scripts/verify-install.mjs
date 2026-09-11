@@ -274,6 +274,37 @@ try {
 			check("beforeunload 监听器已注册到 window",
 				(winListeners.get("beforeunload") || []).length >= 1,
 				`beforeunload handler = ${(winListeners.get("beforeunload") || []).length}`);
+
+			// ── 批次 4（逻辑层）──
+			const b4 = ["__dshDirectorBatch4", "__dshDirectorProcess", "__dshDirectorReviewReturn"];
+			const miss4 = b4.filter((k) => win[k] === undefined);
+			check("批次 4 全局契约已挂载", miss4.length === 0,
+				miss4.length ? "缺: " + miss4.join(", ") : `${b4.length} 项`);
+			check("installed.directorProcess / directorReview",
+				Boolean(inst && inst.directorProcess === true && inst.directorReview === true),
+				inst ? `process=${inst.directorProcess} review=${inst.directorReview}` : "无");
+			check("D2 有意不接线（directorReviewWired === false）",
+				Boolean(inst && inst.directorReviewWired === false),
+				inst ? String(inst.directorReviewWired) : "无");
+			check("window.__dshDirectorProcess 为函数", typeof win.__dshDirectorProcess === "function",
+				typeof win.__dshDirectorProcess);
+			check("window.__dshDirectorReviewReturn 为函数", typeof win.__dshDirectorReviewReturn === "function",
+				typeof win.__dshDirectorReviewReturn);
+			// D1 契约可调用性抽查：并发锁分支（status=processing 时应早退且不抛错）
+			if (typeof win.__dshDirectorProcess === "function") {
+				let lockOk = false, lockErr = null;
+				try {
+					const fakeStore = {
+						getState: () => ({ config: {}, status: "processing", messages: [] }),
+						addMessage: () => {},
+						setStatus: () => {}
+					};
+					await win.__dshDirectorProcess("s1", "测试", fakeStore, null, null);
+					lockOk = true;
+				} catch (e) { lockErr = e; }
+				check("D1 并发锁分支可执行（processing 时早退）", lockOk,
+					lockErr ? "异常: " + lockErr.message : "早退无异常");
+			}
 			// 🔴 关键不变量：空 sessionId → 固定 key（V9 修复点）
 			const entryMod = exportsObj.__entry;
 			check("safeDirectorKey(空) === 'director-main'",
