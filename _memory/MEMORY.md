@@ -627,3 +627,30 @@
 - **真正的主线任务**：`T-PLUG-005` —— 按《插件迁移明细清单》（`dsh-director-plugin/docs/01`）把宿主体内的内联 director 实现迁移进插件包。
 - **宿主补丁链路**（`workspace/` → `apply.ps1`）始终可用，从未真正被阻断。
 - 待回写：`07-项目认知初始化报告 §十 P0-1~P0-3`、`03-待完成任务清单 T-COG-001`、`06-工作快照` 三处（**已同步修正**）。
+
+### 14.8 ✅ T-PLUG-005 批次 1 完成（2026-09-11）
+
+| 项 | 结果 |
+|:---|:-----|
+| **A14 剥离** | 宿主 `client.js` **1,479,577 → 564,826 B（-914,751 B / -61.8%）** |
+| 剥离对象 | 原第 6539 行单行常量 `DSH_DOCS_INDEX`（541,312 B，含 docs/ 90 篇全文） |
+| 新载体 | `dsh-director-plugin/assets/docs-index.json`（915,314 B，JSON 合法，tree 7 目录 / docs 90 篇） |
+| 回落保护 | 宿主 `typeof DSH_DOCS_INDEX !== "undefined"` 守卫保留 3 处 → 自动回落「索引未注入」，不报错 |
+| 已迁移模块 | A11 `store/layout.js` · A12 `store/theme.js` · D3 `util/debug.js` · A3 `util/log-collector.js` · C2 `config/model.js` · A13+A14 `store/docs-index-inject.js` |
+| 验证 | `node --check` 通过；`dsh-director-plugin/scripts/verify-batch1.mjs` **25/25**，退出码 0 |
+| **行号漂移** | 全体 **+3**（6539 单行 → 4 行注释）；总行 11,998 → **12,001**；清单 v3 已同步修正 11 处 |
+
+**关键契约（不可改名）**：`window.__dshDocsIndex` / `__dshDebug` / `__dshV9Log` / `__directorLayoutStore` / `__dshTheme` / `__directorConfig` / `__dshCheckOllama`。
+**持久化 key（R5，不可改名）**：`dsh.director.store.*` / `dsh.director.layout` / `director-main` / `dsh.director.config` / `dsh-v9-theme`。
+
+### 14.9 🔴 T-PLUG-005 批次 1 附带发现：G 区宿主注入点（清单原遗漏）
+
+E2 `DirectorView` 删除后，`DirectorFlow`（7085 止）与 `ConversationRoot` 之间存在**插件逻辑寄生宿主组件**：
+
+| 块 | 原行号 | 现行号 | 内容 |
+|:--|:--|:--|:--|
+| **G1** | 7105-7116 | **7108-7119** | `ChatView` 内两个 effect 强制写 `__directorCurrentView="chat"` + `layoutStore.setFocusTarget("chat")` |
+| **G4** | 9141-9146 | **9144-9149** | `V9.4-P1` view 实时同步：按 `activeViewId` 写 `__directorCurrentView` |
+
+**处理原则**：不需搬组件，改为「宿主调插件 `setView(id)`」（单向调用，符合 E8 约束）；插件未加载时保留原 window 写操作兜底。
+**新增风险**：R7（注入点寄生）· R8（清单行号必须 grep 实测再入表）。
