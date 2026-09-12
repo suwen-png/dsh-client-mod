@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）
+ * 引用：要求 5 · 要求 4
+ * 上游：bridge/chat-bridge.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, mount.js
+ * 下游：util/debug.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * bridge/split.js — 「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）
  *

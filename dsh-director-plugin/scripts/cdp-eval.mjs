@@ -40,15 +40,37 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 	pending.set(id, { res, rej });
 	ws.send(JSON.stringify({ id, method, params }));
 });
-await new Promise((r) => ws.addEventListener("open", r));
-await send("Runtime.enable");
 
-const out = await send("Runtime.evaluate", {
-	expression: expr,
-	returnByValue: true,
-	awaitPromise: true,
-	includeCommandLineAPI: true
+/* 🔴 CDP 调用必须有硬超时（本轮真实教训，已两次踩到）
+ *   渲染进程主线程卡死时，**浏览器进程仍然正常回 HTTP**（/json/list 有响应、能列出页面），
+ *   但 Runtime.evaluate 永不返回。此时若没有超时，本工具会一直挂着；被外层 shell 的
+ *   `timeout` 杀掉后表现为「**空输出 + exit 0**」——
+ *   读起来像"表达式写错了 / 没输出"，完全指不到"渲染进程已死"。
+ *   实测就是这么被误导过一次（对着一个写错的探针查了半天，其实探针没跑）。
+ *   ⇒ 任何"等待"都必须有硬超时；没有超时的等待等于**把挂死伪装成正在跑**。 */
+const CALL_TIMEOUT = Number(process.env.CDP_TIMEOUT_MS || 8000);
+const withTimeout = (p, label) => new Promise((res, rej) => {
+	const h = setTimeout(() => rej(new Error("CDP 调用超时 " + CALL_TIMEOUT + "ms：" + label + " —— 渲染进程可能已无响应（**不是表达式写错**）")), CALL_TIMEOUT);
+	if (h.unref) h.unref();
+	p.then((v) => { clearTimeout(h); res(v); }, (e) => { clearTimeout(h); rej(e); });
 });
+
+await new Promise((r) => ws.addEventListener("open", r));
+let out;
+try {
+	await withTimeout(send("Runtime.enable"), "Runtime.enable");
+	out = await withTimeout(send("Runtime.evaluate", {
+		expression: expr,
+		returnByValue: true,
+		awaitPromise: true,
+		includeCommandLineAPI: true
+	}), "Runtime.evaluate");
+} catch (e) {
+	console.error("❌ " + String((e && e.message) || e));
+	console.error("   自检：node scripts/cdp-eval.mjs \"1+1\" —— 若也失败，就是渲染进程无响应，需重启 Harness。");
+	try { ws.close(); } catch (e2) { /* 忽略 */ }
+	process.exit(2);
+}
 
 if (out.exceptionDetails) {
 	console.log("异常:", out.exceptionDetails.text);

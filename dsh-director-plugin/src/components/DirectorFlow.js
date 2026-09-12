@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：E1 小窗总监对话流组件
+ * 引用：批次 6
+ * 上游：client-entry.js
+ * 下游：store/create-store.js, store/use-store.js, util/debug.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * components/DirectorFlow.js — E1 小窗总监对话流组件
  *

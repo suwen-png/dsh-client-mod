@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：R3 风险验证（T5）
+ * 引用：—
+ * 上游：（无：插件入口层）
+ * 下游：（无）
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * spike-fs-probe.js — R3 风险验证（T5）
  *

@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：A7 + A8 总监 store 的加载与保存
+ * 引用：批次 3
+ * 上游：client-entry.js, logic/process.js, store/create-store.js
+ * 下游：store/messages.js, store/idb.js, store/cookie.js, store/file-adapter.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * store/persist.js — A7 + A8 总监 store 的加载与保存
  *

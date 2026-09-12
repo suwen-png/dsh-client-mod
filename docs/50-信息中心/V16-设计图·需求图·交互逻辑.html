@@ -1178,6 +1178,9 @@
           <tr><td class="mid"><b>"长什么样"</b></td><td>板块 A · 设计图</td><td>真控件、真尺寸、真文案。可据此直接比对实现，不用再猜虚线框是什么</td></tr>
           <tr><td class="mid"><b>"我提的 17 条落在哪"</b></td><td>板块 B · 需求图</td><td>每条需求 → 界面上具体哪个控件；没有落点 = 我没设计</td></tr>
           <tr><td class="mid"><b>"点一下会发生什么"</b></td><td>板块 C · 交互逻辑</td><td>三页签怎么切、分支怎么生到死、消息往哪流、四个输入框各归各的</td></tr>
+          <tr><td class="mid"><b>"设计图本身怎么做"</b></td><td>板块 D · 设计图工作室</td><td>总监页里的设计图插件：五区布局、18 类元素、七元组逻辑、标准框架 20 元素、底部修订对话、锚点契约</td></tr>
+          <tr><td class="mid"><b>"顶栏那几个按钮是干嘛的 / 我的图存在哪 / 怎么退回上一版"</b></td><td>板块 E · 版本与保存</td><td>顶栏四区逐格标注（真坐标）、保存按钮两态、<code>versions[]</code> 版本模型与脏判定、版本历史面板、窗口安全区取证。用户原话：「最上面这一列功能未实现」「关闭按钮和标准软件的关闭按钮重叠了」「也没有保存和不同版本的选择」</td></tr>
+          <tr><td class="mid"><b>"导图该有哪些元素 / 我提的元素齐了没"</b></td><td>板块 F · 思维导图元素库</td><td>18 条元素总账（14 已落 / 1 待办 / 3 明确不做，每条带取证）、节点四型、状态四态与「出错」为何不画、四类连线语义、工具条与右键菜单的可点性规则、真机 80 项 e2e 证据、✕ 与原生按钮「同位」的修正。用户原话：「按照可能用到的思维导图元素 完善思维导图」「思维导图的 X 和原软件也是一个位置」</td></tr>
         </tbody>
       </table>
     </div>
@@ -1189,9 +1192,15 @@
       <table>
         <thead><tr><th style="width:170px">事项</th><th style="width:96px">状态</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>#11 设计图标注模式并入本稿</td><td class="mid">未并入</td><td>已画在 V15.1 视图 13；本稿未重复画，避免两处真相源</td></tr>
-          <tr><td>V16 卫生四项校验</td><td class="mid">待跑</td><td>字号 ≥10.5 / 标签平衡 / LF 无 CRLF / 零反引号</td></tr>
-          <tr><td>台账登记 T-PLUG-017</td><td class="mid">待写</td><td>登记本稿落盘与结论；写后必须跑破表校验</td></tr>
+          <tr><td>思维导图元素库并入本稿</td><td class="ok">已并入</td><td>2026-09-12：作为<b>板块 F</b> 并入（18 条总账 + 真机 80 项 e2e）</td></tr>
+          <tr><td>单框控件 / 拖动 / 右侧对话 / 四维流转 / 个性化并入本稿</td><td class="ok">已并入</td><td>2026-09-12：作为<b>板块 G</b> 并入（七条原话 → 落点 + 真机 46 项 e2e ×3）</td></tr>
+          <tr><td>总监页背景与宿主统一并入本稿</td><td class="ok">已并入</td><td>2026-09-12：作为<b>板块 H</b> 并入（宿主令牌桥接 + 真机 53 项 e2e ×3，含「改宿主令牌 ⇒ 总监页跟着变」的正负对照）</td></tr>
+          <tr><td>台账登记 T-PLUG-019 / T-PLUG-020</td><td class="ok">已写</td><td>F = 元素库 18 条总账；G = 批次 11（真机 46/46 ×3 · 产物 879,837 B / 54 模块 / 绑定 450 = 450）</td></tr>
+          <tr><td>台账登记 T-PLUG-021</td><td class="ok">已写</td><td>H = 批次 12（总监页改用宿主 <code>--dsw-alias-*</code> 令牌 · 真机 53/53 ×3 · 产物 883,339 B / 绑定 450 = 450）</td></tr>
+          <tr><td>导图 E16 节点备注 / 标签</td><td class="mid">待办</td><td>需新增「用户可编辑注释」持久化模型；无需求依据且会引入第四份持久化 key ⇒ 本轮登记不实现（见板块 F1 的 E16）</td></tr>
+          <tr><td>#11 设计图标注模式并入本稿</td><td class="ok">已并入</td><td>2026-09-12：作为<b>板块 D</b> 并入（原画在 V15.1 视图 13），并升级为「可编辑 + 带逻辑 + 带专用对话」的工作室形态</td></tr>
+          <tr><td>V16 卫生四项校验</td><td class="ok">已跑</td><td>字号 ≥10.5 / 标签平衡 / LF 无 CRLF / 零反引号 —— 每次改动本稿后重跑</td></tr>
+          <tr><td>台账登记 T-PLUG-018</td><td class="ok">已写</td><td>设计图工作室实现 + 45 项真机逐交互验证 + 49 项离线纯函数测试</td></tr>
           <tr><td>docs/10 由"分屏"改"浮层"</td><td class="mid">待改</td><td>§4.1 / §4.4 / §4.6–4.8，并补 fork 血缘与三态</td></tr>
           <tr><td>docs/11 §三 选型作废 + 加反模式</td><td class="mid">待改</td><td>C 方案（覆盖层 + 分屏）已作废，改记 A/B 反模式</td></tr>
           <tr><td>split.js 由 padding 改为浮层挂载</td><td class="mid">待改</td><td>本稿所有画面都按"不占位"画，实现必须跟上</td></tr>
@@ -1200,10 +1209,1395 @@
     </div>
   </div>
 
+  <!-- ═══════════════════ 板块 D ═══════════════════ -->
+  <div class="blk d">
+    <div class="bh">
+      <span class="k" style="background:var(--ok)">D</span>
+      <h2>设计图工作室 —— 总监页里的「设计图」插件（2026-09-12 并入）</h2>
+      <span class="r">铺满全屏 · 可拖拽 · 左侧逻辑 · 底部专用对话</span>
+    </div>
+
+    <div class="note ok">
+      <b>为什么单开一块：</b>前三版设计稿的共同失败点是<b>图与逻辑分离</b> —— 画了一张图，逻辑写在另一份文档里，靠「请在右区第三栏加个按钮」这种文字对指；一旦改图，逻辑就跟不上。
+      板块 D 从根上换了个做法：<b>把逻辑绑在元素上</b>（选中即见、改图即改逻辑、导出即带逻辑）⇒ 设计图本身成为<b>可执行的规格</b>，而不是一张需要解读的图片。
+      本板块同时是<b>「标准设计图框架的映射」</b>：18 类元素 + 20 元素标准框架 + 七元组逻辑，构成本项目后续所有界面设计的统一底座。
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D0</span><h3>落点 —— 从总监页一键铺满</h3><span class="tag">按钮形式 · 零跳页</span></header>
+      <div class="bd">
+        <p style="font-size:11.5px;color:var(--fg3);margin-bottom:12px">
+          总监域浮动按钮组（右下角竖排）第三个按钮 <b>🖌 设计图</b> ⇒ 点击后<b>铺满全屏</b>（position:fixed / inset:0 / z-index 最高 / 1442×816 全贴合）。
+          与宿主三页签<b>互不干扰</b>：任何页签下都能唤起，关闭后回到原页面与滚动位置。
+        </p>
+        <table>
+          <thead><tr><th style="width:150px">元素</th><th style="width:210px">选择器</th><th>行为</th></tr></thead>
+          <tbody>
+            <tr><td><b>🖌 设计图</b></td><td><code style="font-size:11px">#dsh-design-studio-launcher</code></td><td>打开设计图工作室（全屏）</td></tr>
+            <tr><td><b>🧠 思维导图</b></td><td><code style="font-size:11px">#dsh-mindmap-launcher</code></td><td>打开分支导图</td></tr>
+            <tr><td><b>◆ 总监</b></td><td><code style="font-size:11px">#dsh-director-hierarchy-launcher</code></td><td>打开总监弹窗</td></tr>
+          </tbody>
+        </table>
+        <div class="cap">三键竖排、右对齐、贴浮在宿主输入区之上（自适应避让 composer）</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D1</span><h3>全屏工作室布局 —— 五区</h3><span class="tag">顶栏 / 工具栏 / 左栏 / 画布 / 底栏</span></header>
+      <div class="bd">
+        <div style="border:1px solid #2b2e34;border-radius:10px;overflow:hidden;background:#0f1013">
+          <div style="height:30px;display:flex;align-items:center;gap:7px;padding:0 0 0 10px;background:#17181c;border-bottom:1px solid #2b2e34;font-size:10.5px;color:#9aa0a6;overflow:hidden">
+            <span style="padding:1px 8px;border-radius:5px;background:#8957e5;color:#fff;font-weight:650">● 保存</span>
+            <span style="color:#3d4148">│</span>
+            <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">标准框架 · 三页签（20）▾</span>
+            <span style="color:#6b7076;white-space:nowrap">✎ 改名 · ＋ 新建图 · ⧉ 复制 · ↺ 重载框架 · 导出 · <b style="color:#f0877f">删除</b></span>
+            <span style="color:#3d4148">│</span>
+            <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">版本 0</span>
+            <span style="color:#3d4148">│</span>
+            <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">－</span><span>95%</span><span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">＋</span><span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">适应</span><span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">1:1</span>
+            <span style="margin-left:auto;color:#6b7076;white-space:nowrap">元素 20 · 逻辑缺口 0</span>
+            <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">✕</span>
+            <span title="原生窗口控件（最小化/最大化/关闭）—— 网页画不进去，但必须让位"
+                  style="width:74px;height:100%;flex:0 0 74px;border-left:1px dashed #6b2b28;background:repeating-linear-gradient(45deg,#1e1416 0 4px,#191114 4px 8px);display:flex;align-items:center;justify-content:center;font-size:10.5px;color:#c98d86;letter-spacing:.3px">原生</span>
+          </div>
+          <div style="padding:5px 10px;background:#1a1b20;border-bottom:1px solid #2b2e34;font-size:10.5px;display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+            <span style="color:#c9b6f7;font-weight:650">● 结构</span>
+            <span style="color:#6b7076">窗口│侧栏│页签环│分区│面板│画布</span>
+            <span style="color:#9fe3ef;font-weight:650;margin-left:6px">● 控件</span>
+            <span style="color:#6b7076">按钮│输入框│下拉│徽章│文本│图标按钮│列表│卡片│进度条</span>
+            <span style="color:#efd08a;font-weight:650;margin-left:6px">● 语义</span>
+            <span style="color:#6b7076">导图节点│连线│浮动按钮组</span>
+          </div>
+          <div style="display:flex;height:210px">
+            <div style="width:190px;border-right:1px solid #2b2e34;background:#141519;padding:8px;font-size:10.5px;color:#6b7076;overflow:hidden">
+              <div style="color:#c9b6f7;font-weight:650;margin-bottom:6px">D3 · 交互逻辑</div>
+              <div style="color:#9fe3ef;font-weight:650">⬜ 按钮 · 关闭</div>
+              <div style="color:#8b9199;margin:2px 0 6px">位置 1120,10 · 尺寸 84×28 · z0</div>
+              <div style="color:#c9b6f7">触发方式</div><div style="border:1px solid #3d4148;border-radius:4px;padding:2px 5px;margin:2px 0 5px;background:#1a1b20;color:#e8eaed">点击</div>
+              <div style="color:#c9b6f7">行为</div><div style="border:1px solid #3d4148;border-radius:4px;padding:2px 5px;margin:2px 0 5px;background:#1a1b20;color:#e8eaed">关闭工作室</div>
+              <div style="color:#c9b6f7">状态变化</div><div style="border:1px solid #3d4148;border-radius:4px;padding:2px 5px;margin:2px 0 5px;background:#1a1b20;color:#e8eaed">hover/active</div>
+              <div style="color:#6b7076">… 数据流向 / 退化路径 / 快捷键 / 对应代码</div>
+            </div>
+            <div style="flex:1;background:#0b0c0e;padding:14px;overflow:hidden">
+              <div style="position:relative;height:170px;border:1px solid #2a2d33;background-color:#15161a;background-image:repeating-linear-gradient(0deg,#24272e 0 1px,transparent 1px 20px),repeating-linear-gradient(90deg,#24272e 0 1px,transparent 1px 20px)">
+                <div style="position:absolute;left:8px;top:8px;right:8px;height:22px;border:1px solid rgba(137,87,229,.45);background:rgba(137,87,229,.08);color:#c9b6f7;font-size:10.5px;padding:3px 6px">▭▭ 页签环 · 总监/对话/轨迹</div>
+                <div style="position:absolute;left:8px;top:38px;width:120px;height:124px;border:1px solid rgba(137,87,229,.45);background:rgba(137,87,229,.08);color:#c9b6f7;font-size:10.5px;padding:3px 6px">▮ R2 项目总览</div>
+                <div style="position:absolute;left:136px;top:38px;right:8px;height:60px;border:1px solid rgba(137,87,229,.45);background:rgba(137,87,229,.08);color:#c9b6f7;font-size:10.5px;padding:3px 6px">▤ R3 智核体 / 技能 / 资源</div>
+                <div style="position:absolute;left:136px;top:104px;width:110px;height:22px;border:1px solid rgba(34,163,184,.45);background:rgba(34,163,184,.08);color:#9fe3ef;font-size:10.5px;padding:3px 6px">⬜ 控件（青）</div>
+                <div style="position:absolute;right:12px;top:104px;width:120px;height:34px;border:1px solid rgba(201,148,43,.45);background:rgba(201,148,43,.08);color:#efd08a;font-size:10.5px;padding:3px 6px">◍ 浮动按钮组（金）</div>
+              </div>
+            </div>
+          </div>
+          <div style="border-top:1px solid #2b2e34;background:#141519;padding:6px 10px;font-size:10.5px;color:#6b7076">
+            <div style="display:flex;gap:7px;align-items:center;margin-bottom:5px">
+              <span style="color:#e8eaed;font-weight:650">🖌 设计图修订对话</span>
+              <span style="padding:1px 7px;border-radius:4px;background:#1a1524;border:1px solid #4c3a6b;color:#c9a8ff">临时 · 只处理本图</span>
+              <span style="margin-left:auto">不与宿主会话、也不与总监对话共用（三向隔离）</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <span style="color:#9fc2ff">你：</span><span style="color:#c3c8ce">移动 R1 顶部栏 左 30</span>
+              <span style="padding:1px 7px;border-radius:4px;background:#241d10;border:1px solid #6b5320;color:#e0b341">待确认 1 项</span>
+              <span style="padding:1px 8px;border-radius:5px;background:#8957e5;color:#fff">应用到图</span>
+              <span style="padding:1px 8px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">不要</span>
+            </div>
+          </div>
+        </div>
+        <div class="cap">五区自上而下：顶栏（D1）· 工具栏（D2）· 左栏逻辑 + 画布（D3+D5）· 底栏对话（D6）。画布 1180 × 644 固定，打开时自动缩到容器放得下（上限 100%）<br>
+          顶栏内部再分<b>四区</b>（保存 │ 图管理 │ 版本 │ 视图 —— 见板块 E1），最右侧斜纹带是<b>让给原生窗口控件</b>的安全区（见板块 E5，真机 138px，本稿按比例示意）。</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D2</span><h3>元素类型库 —— 18 类 × 3 组</h3><span class="tag">按组配色 ⇒ 工具栏即图例</span></header>
+      <div class="bd">
+        <div class="note t">
+          <b>三色分组的用处：</b>标准框架一张图铺 20 个元素，若全是同一种颜色会<b>糊成一片</b>，沟通时只能读字指认（「那个…第三个方块」）。按组上色后可以直接说「<b>把青色那排按钮右移</b>」。组标题用同一套色 ⇒ 工具栏天然就是画布的图例，不需要另加图例行。
+        </div>
+        <table>
+          <thead><tr><th style="width:70px">组</th><th style="width:64px">色</th><th style="width:64px">数量</th><th>元素类型</th></tr></thead>
+          <tbody>
+            <tr><td class="mid" style="color:#c9b6f7">结构</td><td><span style="display:inline-block;width:34px;height:10px;border-radius:2px;background:#8957e5"></span></td><td class="mid">6</td><td>窗口 · 侧栏 · 页签环 · 分区 · 面板 · 画布</td></tr>
+            <tr><td class="mid" style="color:#9fe3ef">控件</td><td><span style="display:inline-block;width:34px;height:10px;border-radius:2px;background:#22a3b8"></span></td><td class="mid">9</td><td>按钮 · 输入框 · 下拉 · 徽章 · 文本 · 图标按钮 · 列表 · 卡片 · 进度条</td></tr>
+            <tr><td class="mid" style="color:#efd08a">语义</td><td><span style="display:inline-block;width:34px;height:10px;border-radius:2px;background:#c9942b"></span></td><td class="mid">3</td><td>导图节点 · 连线 · 浮动按钮组</td></tr>
+          </tbody>
+        </table>
+        <div class="cap">未知分组一律回落到「结构」色（永不 undefined 崩溃）；点类型按钮 ⇒ 画布落一个新元素并自动选中</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D3</span><h3>元素交互逻辑 —— 七元组</h3><span class="tag">逻辑绑在元素上 · 改图即改逻辑</span></header>
+      <div class="bd">
+        <p style="font-size:11.5px;color:var(--fg3);margin-bottom:12px">
+          点画布上任一元素 ⇒ 左栏显示它的七元组，<b>七栏均可直接编辑并即时落库</b>。另可改元素文案（这样在底部对话里能指着名字说，例如「移动 R1 顶部栏 左 30」）。
+        </p>
+        <table>
+          <thead><tr><th style="width:96px">字段</th><th style="width:150px">回答的问题</th><th>示例（按钮 · 关闭）</th></tr></thead>
+          <tbody>
+            <tr><td><b>触发方式</b></td><td>什么时候发生</td><td>点击（pointerdown / click）</td></tr>
+            <tr><td><b>行为</b></td><td>做什么</td><td>关闭设计图工作室，回到唤起前的页面</td></tr>
+            <tr><td><b>状态变化</b></td><td>有哪些态</td><td>hover / active / focus-visible / disabled 四态</td></tr>
+            <tr><td><b>数据流向</b></td><td>读写什么</td><td>由 onClick 决定；不直接读写 store</td></tr>
+            <tr><td><b>退化路径</b></td><td>失败怎么办</td><td>宿主版本差异导致 ctx.slots 不可用时，插件降级到浮层通道并记录原因，不静默失败</td></tr>
+            <tr><td><b>快捷键</b></td><td>键盘怎么走</td><td>Enter / Space（聚焦态）</td></tr>
+            <tr><td><b>对应代码</b></td><td>逻辑在哪个文件</td><td>src/components/DesignStudio.js</td></tr>
+          </tbody>
+        </table>
+        <div class="note warn" style="margin-top:12px">
+          <b>后两栏是改代码时的路标：</b>「退化路径」写<b>失败怎么办</b>，「对应代码」写<b>逻辑在哪个文件</b>。这两栏<b>不许留空</b> —— 空着等于把判断权丢给下一个读图的人。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D4</span><h3>标准框架 —— 20 个预置元素</h3><span class="tag">「标准设计图框架的映射」本体</span></header>
+      <div class="bd">
+        <p style="font-size:11.5px;color:var(--fg3);margin-bottom:12px">
+          顶栏「↺ 载入标准框架」一键把本项目当前界面（三页签 + 总监页 R1–R8）的骨架铺进画布：<b>20 个元素，全部自带完整七元组，逻辑缺口 0</b>。
+          这是后续所有界面设计的<b>统一底座</b>：改哪块就先载入框架、再在对话里说怎么改，改完的图本身就带着逻辑和代码指向。
+        </p>
+        <table>
+          <thead><tr><th style="width:110px">元素</th><th style="width:96px">类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>◍ 全局侧栏</td><td class="mid">侧栏</td><td>最左导航（会话 / 项目 / 设置）</td></tr>
+            <tr><td>▭▭ 页签环 · 总监/对话/轨迹</td><td class="mid">页签环</td><td>宿主 tab 环；插件以 order:-1 排在「对话」之前</td></tr>
+            <tr><td>▭ R1 顶部栏</td><td class="mid">分区</td><td>总监页首屏头图 + 面包屑 + 全局动作</td></tr>
+            <tr><td>▭ R2 项目总览 · 四徽标</td><td class="mid">分区</td><td>四枚状态徽标（分支 / 会话 / 任务 / 风险）</td></tr>
+            <tr><td>▭▯ R2.5 总监控制台</td><td class="mid">面板</td><td>五项职责 + 三级继承的配置入口</td></tr>
+            <tr><td>▭ R3 智核体 / 技能 / 资源</td><td class="mid">分区</td><td>能力清单与资源占用</td></tr>
+            <tr><td>▭ R4 项目导航（三 Tab）</td><td class="mid">分区</td><td>三页签在总监页内的导航映射</td></tr>
+            <tr><td>▭ R5 总监对话区</td><td class="mid">分区</td><td>总监与当前会话的独立对话流</td></tr>
+            <tr><td>▭ R6 记忆面板</td><td class="mid">分区</td><td>层级记忆（schema 白名单过滤）</td></tr>
+            <tr><td>▭ R7 详解 / 产物</td><td class="mid">分区</td><td>产物清单与验收结论</td></tr>
+            <tr><td>▭ R8 全局输入条</td><td class="mid">分区</td><td>总监域统一输入入口</td></tr>
+            <tr><td>▢ 层级记忆卡片</td><td class="mid">卡片</td><td>单条记忆的展示单元</td></tr>
+            <tr><td>◉ 分支徽章</td><td class="mid">徽章</td><td>分支血缘标识</td></tr>
+            <tr><td>▬ 输入框 / ▾ 下拉 / ⬜ 按钮 / ✕ 图标按钮</td><td class="mid">控件</td><td>交互四件套</td></tr>
+            <tr><td>▬▬ 进度条 / ☰ 列表 / T 文本</td><td class="mid">控件</td><td>信息展示三件套</td></tr>
+            <tr><td>● 分支节点 ×3（吸 / 子A / 子B）</td><td class="mid">导图节点</td><td>分支导图态的节点</td></tr>
+            <tr><td>— 连线</td><td class="mid">连线</td><td>节点之间的血缘线</td></tr>
+            <tr><td>◍ 浮动按钮组</td><td class="mid">浮动按钮组</td><td>右下角竖排三键（设计图 / 思维导图 / 总监）</td></tr>
+          </tbody>
+        </table>
+        <div class="cap">元素 id 形如 el-&lt;序号&gt;-&lt;类型缩写&gt;；标准框架元素带可读 label（如「R1 顶部栏」），支持在对话里用多词名指称</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D5</span><h3>元素操作与键盘契约</h3><span class="tag">拖拽 / 缩放 / 复制 / 删除 / 微移</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:150px">操作</th><th style="width:190px">手势 / 按键</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr><td><b>选择元素</b></td><td>单击</td><td>左栏切到该元素的七元组；点画布空白 = 取消选中</td></tr>
+            <tr><td><b>移动元素</b></td><td>按住拖拽</td><td>坐标按<b>模型像素</b>更新；缩放非 100% 时位移自动除以缩放系数（手感不背离）</td></tr>
+            <tr><td><b>缩放元素</b></td><td>拖右下把手</td><td>宽高更新（绝对值）</td></tr>
+            <tr><td><b>微移</b></td><td>方向键 / Shift+方向键</td><td>10 px / 1 px（精细档）</td></tr>
+            <tr><td><b>复制</b></td><td>Ctrl+D 或左栏「复制」</td><td>元素数 +1，副本略偏移</td></tr>
+            <tr><td><b>置顶</b></td><td>左栏「置顶」</td><td>层级 z 提到最高</td></tr>
+            <tr><td><b>删除</b></td><td>Delete / Backspace 或左栏「删除」</td><td>元素移除；若删的是选中项则清空选中</td></tr>
+            <tr><td><b>逐层退</b></td><td>Esc</td><td>第一层吃掉「待确认」→ 第二层清选中 → 第三层才关工作室（不会一闪就关窗）</td></tr>
+          </tbody>
+        </table>
+        <div class="note warn" style="margin-top:12px">
+          <b>坐标必须写进样式：</b>元素的 left / top / width / height 只有落在 style 里才生效；放到 DOM 属性上会被静默丢弃，表现为「拖拽、缩放、方向键四个交互全坏」，而<b>数据层其实完全正确</b>。判据：只要模型改了而屏幕位置不变，就先查样式有没有生效。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">D6</span><h3>底栏设计图修订对话 —— 只处理本图</h3><span class="tag">临时对话 · 三向隔离 · 破坏性动作过确认</span></header>
+      <div class="bd">
+        <p style="font-size:11.5px;color:var(--fg3);margin-bottom:12px">
+          底部对话<b>只作用于当前这张设计图</b>，<b>不写进宿主会话、也不写进总监对话</b>（三向隔离）。它把自然语言解析成结构化操作，<b>先进「待确认」区、由你点「应用到图」才落库</b> —— 与总监路由的闸门规则一致，破坏性动作不静默执行。
+        </p>
+        <table>
+          <thead><tr><th style="width:150px">说法</th><th style="width:96px">解析为</th><th>备注</th></tr></thead>
+          <tbody>
+            <tr><td>移动 R1 顶部栏 左 30</td><td class="mid">move</td><td><b>数字 = 像素</b>（不是格数）；左/右/上/下 四向</td></tr>
+            <tr><td>放大 卡片 20 / 缩小 ……</td><td class="mid">scale</td><td>缺省 20 px</td></tr>
+            <tr><td>删除 R6 记忆面板</td><td class="mid">remove</td><td>支持多词名</td></tr>
+            <tr><td>复制 按钮 / 置顶 ……</td><td class="mid">duplicate / reorder</td><td>—</td></tr>
+            <tr><td>改文案 关闭 为 退出</td><td class="mid">relabel</td><td>—</td></tr>
+            <tr><td>多条用「；」分隔</td><td class="mid">批量</td><td>顺序保持</td></tr>
+            <tr><td>指称不到元素</td><td class="mid">unresolved</td><td><b>明确回报「认不出这几段」</b>，不静默丢弃</td></tr>
+          </tbody>
+        </table>
+        <div class="note p" style="margin-top:12px">
+          <b>三向隔离的意义：</b>设计图的修订是「改图纸」，不是「跟 AI 聊天」。混进会话历史会污染上下文、也会让「这张图现在是什么样」变得无法回答。隔离后，每一次修订都留在<b>本图的对话流</b>里，带修订号（revision）可追。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">D7</span><h3>定位契约 —— 任何对话都能据此找到实现</h3><span class="tag">锚点不可改名</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:190px">锚点</th><th style="width:210px">含义</th><th>代码位置</th></tr></thead>
+          <tbody>
+            <tr><td>ds-root / ds-canvas / ds-el</td><td>工作室根 / 画布 / 元素</td><td rowspan="4">src/components/DesignStudio.js</td></tr>
+            <tr><td>ds-logic / ds-logic-&lt;key&gt;</td><td>左栏逻辑面板 / 七元组各字段</td></tr>
+            <tr><td>ds-thread / ds-input / ds-send</td><td>底栏修订对话（对话流 / 输入 / 发送）</td></tr>
+            <tr><td>ds-pending / ds-apply / ds-drop</td><td>待确认区（应用 / 丢弃）</td></tr>
+            <tr><td>ds-kinds / ds-add-&lt;kind&gt;</td><td>工具栏与 18 类按钮</td><td rowspan="2">src/components/DesignStudio.js + src/store/design-schema.js</td></tr>
+            <tr><td>ds-new / ds-frame / ds-zoom-* / ds-stats</td><td>新建 / 重载标准框架 / 缩放 / 统计条</td></tr>
+            <tr><td>ds-top</td><td><b>顶栏容器</b>（四区的父节点；安全区内边距落在这里）</td><td rowspan="3">src/components/DesignStudio.js</td></tr>
+            <tr><td>ds-save</td><td><b>保存</b>（按钮即状态：脏 =「● 保存」／净 =「✓ 已保存 vN」）</td></tr>
+            <tr><td>ds-rename / ds-docname / ds-doclist / ds-dup-doc / ds-export</td><td>改名（✎ → 输入框）/ 图选择器 / 复制 / 导出 JSON</td></tr>
+            <tr><td>ds-del-doc</td><td><b>删除图</b>（二次点击确认，2.5s 上膛）</td><td rowspan="4">src/components/DesignStudio.js</td></tr>
+            <tr><td>ds-ver-toggle / ds-ver-panel / ds-ver-close</td><td>版本角标 / 版本历史面板 / 面板关闭</td></tr>
+            <tr><td>ds-ver-row / ds-ver-restore / ds-ver-del / ds-ver-count / ds-ver-empty</td><td>版本行 / 回滚 / 删版本 / 计数「共 N / 30」/ 空态</td></tr>
+            <tr><td>ds-close</td><td>关闭工作室 ✕（<b>必须落在安全区左侧</b>）</td></tr>
+            <tr><td>VERSION_LIMIT / createVersion / matchVersion / isDirty / getVersionState / saveVersion / listVersions / restoreVersion / deleteVersion</td><td>版本模型与版本 API</td><td>src/store/design.js + src/store/design-schema.js</td></tr>
+            <tr><td>readInset / watchInset</td><td><b>窗口控件安全区</b>三级读取（WCO API → env() → 桌面兜底）</td><td>src/util/safe-area.js</td></tr>
+            <tr><td>VersionPanel</td><td>版本历史面板组件</td><td>src/components/VersionPanel.js</td></tr>
+            <tr><td>ELEMENT_KINDS · LOGIC_FIELDS</td><td>18 类元素与七元组定义</td><td>src/store/design-schema.js</td></tr>
+            <tr><td>buildStandardFrame / FRAME_SEEDS</td><td>标准框架 20 元素</td><td>src/store/design-schema.js</td></tr>
+            <tr><td>parseDesignCommand / applyOps</td><td>指令解析 / 批量应用</td><td>src/store/design.js</td></tr>
+            <tr><td>dsh.director.design</td><td>设计图主存（localStorage）</td><td>src/store/design.js</td></tr>
+            <tr><td>dsh-director-plugin-db v2 · directorDesigns</td><td>设计图冷备库（插件自有 IndexedDB）</td><td>src/store/plugin-db.js</td></tr>
+          </tbody>
+        </table>
+        <div class="cap">锚点是对外契约：可以改实现，不可以改锚点名 —— 改了所有验证脚本与文档映射一起失效</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ 板块 E ═══════════════════ -->
+  <div class="blk e">
+    <div class="bh">
+      <span class="k" style="background:var(--warn)">E</span>
+      <h2>保存 · 版本历史 · 窗口安全区 —— 顶栏补齐（2026-09-12 就地并入）</h2>
+      <span class="r">顶栏四区 · 按钮即状态 · versions[] 可命名可回滚 · ✕ 不再被原生按钮压住</span>
+    </div>
+
+    <div class="note warn">
+      <b>为什么单开一块：</b>板块 D 把工作室做出来了，但<b>顶栏那一列是不能用的</b> —— 用户指着截图原话说「最上面这一列功能未实现」。
+      本板块补的就是那条顶栏：它此前只有「新建图 / 缩放 / 关闭」，<b>没有保存、没有版本、没有改名复制导出</b>；
+      而且最右边的 <b>✕ 与操作系统的关闭按钮重叠</b>，点下去关的是整个软件而不是工作室。
+      三件事都不是"再来一版画面"，而是<b>把已经画好的那列控件接通</b>，故就地并入本稿，不新开文档。
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">E0</span><h3>用户原话 → 落点（三条，逐条可查）</h3><span class="tag">没有落点 = 我没做</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:34%">用户原话</th><th style="width:22%">落点</th><th>证据</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>「最上面这一列功能未实现」</td>
+              <td>顶栏四区全部接通（E1）</td>
+              <td><code>DesignStudio.js</code> 顶栏 JSX —— 保存 / 改名 / 新建 / 复制 / 重载框架 / 导出 / 删除 / 版本 / 缩放；<br>
+                  <code>onDeleteDoc</code> 此前<b>定义了但从未被调用</b>（死代码），本轮接线并加二次确认</td>
+            </tr>
+            <tr>
+              <td>「设计图的关闭按钮和标准软件的关闭按钮重叠了」</td>
+              <td>窗口控件安全区（E5）</td>
+              <td><code>util/safe-area.js</code> 三级读取 inset，顶栏 <code>paddingRight = inset + 10</code>；<br>
+                  真机取证 <code>{"w":1442,"inset":138,"boundary":1304,"closeRight":1294}</code></td>
+            </tr>
+            <tr>
+              <td>「也没有保存和不同版本的选择」</td>
+              <td>保存（E2）+ 版本模型（E3）+ 版本面板（E4）</td>
+              <td><code>design-schema.js</code> 版本快照段 + <code>design.js</code> 版本 API 八函数（9 个）；<br>
+                  离线 63/63 · 真机 66/66 全绿</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">E1</span><h3>顶栏四区高保真 —— 真尺寸 · 真文案 · 真顺序</h3><span class="tag">1442 视口下的实测 x 坐标</span></header>
+      <div class="bd">
+        <div style="border:1px solid #2b2e34;border-radius:10px;overflow:hidden;background:#0f1013">
+          <div style="height:41px;display:flex;align-items:center;gap:8px;padding:0 148px 0 10px;background:#17181c;font-size:11.5px;color:#c3c8ce;position:relative;overflow:hidden">
+            <span style="padding:3px 11px;border-radius:6px;background:#8957e5;color:#fff;font-weight:650">● 保存</span>
+            <span style="width:1px;height:20px;background:#35383f"></span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce">标准框架 · 三页签（20）▾</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">✎ 改名</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">＋ 新建图</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">⧉ 复制</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">↺ 重载框架</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">导出</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid rgba(248,81,73,.45);background:rgba(248,81,73,.14);color:#f0877f">删除</span>
+            <span style="width:1px;height:20px;background:#35383f"></span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">版本 0</span>
+            <span style="width:1px;height:20px;background:#35383f"></span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">－</span>
+            <span style="color:#6f757d">95%</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">＋</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">适应</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">1:1</span>
+            <span style="margin-left:auto;color:#6f757d;font-size:10.5px;white-space:nowrap">元素 20 · 逻辑缺口 0</span>
+            <span style="padding:3px 8px;border-radius:5px;border:1px solid #3d4148">✕</span>
+            <span style="position:absolute;right:0;top:0;height:100%;width:138px;border-left:1px dashed #6b2b28;background:repeating-linear-gradient(45deg,#1e1416 0 5px,#191114 5px 10px);display:flex;align-items:center;justify-content:center;font-size:10.5px;color:#c98d86;letter-spacing:.4px">原生 · 138px</span>
+          </div>
+          <div style="padding:6px 10px;background:#141519;font-size:10.5px;color:#6b7076;line-height:1.9">
+            <b style="color:#c9b6f7">① 保存</b> 10–106 ｜ <b style="color:#9fe3ef">② 图管理</b> 127–733 ｜ <b style="color:#efd08a">③ 版本</b> 754–828 ｜ <b style="color:#8ab4f8">④ 视图</b> 849–1069<br>
+            ⟶ 统计 1145–1255 · ✕ 1263–1294 ｜ <b>安全区边界 1304</b>（= 视口 1442 − inset 138）<br>
+            右侧斜纹带是<b>原生窗口控件</b>（最小化/最大化/关闭）—— 它画在网页之上，网页碰不到，只能让位（见 E5）<br>
+            <b style="color:#7ee787">逐格宽度全部锁死</b>（保存 96 · 图选择器 200 · 版本 74 · 缩放标签 40 · 统计 110）：内容变化时宽度不变。
+            若锁不住，每点一次按钮，它右边一整排就会被推走 —— 用户看到的是"按钮点了没反应 / 点不准"（见 E7）
+          </div>
+        </div>
+        <div class="cap">竖线分隔四区 —— 9 个同款按钮连成一排时，人眼分不出「哪几个是一伙的」。实测坐标来自真机 <code>getBoundingClientRect()</code> 回读，不是估算。<b>上面这条是示意（未按锁宽后的像素重绘），逐格宽度以本节坐标文字与 E7 为准。</b></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">E2</span><h3>保存 —— 按钮即状态</h3><span class="tag">不弹窗 · 不另开面板 · 状态就在按钮上</span></header>
+      <div class="bd">
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <div style="flex:1 1 300px;border:1px solid #2b2e34;border-radius:10px;background:#141519;padding:14px">
+            <div style="font-size:11px;color:#9aa0a6;margin-bottom:9px">脏 · 有未保存改动</div>
+            <span style="padding:4px 12px;border-radius:6px;background:#8957e5;color:#fff;font-weight:650;font-size:11.5px">● 保存</span>
+            <div style="font-size:10.5px;color:#6b7076;margin-top:9px">主色实心 —— 整条顶栏最需要被看见的东西</div>
+          </div>
+          <div style="flex:1 1 300px;border:1px solid #2b2e34;border-radius:10px;background:#141519;padding:14px">
+            <div style="font-size:11px;color:#9aa0a6;margin-bottom:9px">净 · 已保存</div>
+            <span style="padding:4px 12px;border-radius:6px;border:1px solid rgba(63,185,80,.45);background:rgba(63,185,80,.12);color:#7ee787;font-size:11.5px">✓ 已保存 v3</span>
+            <div style="font-size:10.5px;color:#6b7076;margin-top:9px">绿色描边 + <b>版本号</b>（告诉你这份内容对应哪一版）</div>
+          </div>
+        </div>
+        <div class="note p" style="margin-top:12px">
+          <b>为什么两态共用同一个按钮：</b>若做成「脏的时候才出现、保存完就消失」，它一出现就把右边的按钮整排推走 ——
+          而<b>删除图就在旁边</b>，推到鼠标底下的正好是删除。<br>
+          <b>为什么"版本号"不叫"修订记录"：</b>底栏原先那个 <code>revision N</code> 是<b>自动落盘代数</b>（拖一下元素就 +1，真机跑到 605），
+          把它显示成"版本号"会让用户以为存了 605 个版本。现在 revision 只留在 <code>title</code> 与 <code>data-revision</code> 里，
+          界面上的「版本 N」<b>专指用户显式保存的版本</b>。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">E3</span><h3>版本模型 —— 「版本」与「落盘代数」是两回事</h3><span class="tag">versions[] · 限流 30 · 回滚前自动存档</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:120px">字段</th><th style="width:150px">是什么</th><th>谁在写 · 什么时候</th></tr></thead>
+          <tbody>
+            <tr><td><code>revision</code></td><td>自动落盘代数（既有字段，契约冻结）</td><td><b>系统自动</b>：每次写库 +1。拖一下元素就 +1 ⇒ 不是版本号</td></tr>
+            <tr><td><code>versions[]</code></td><td>用户显式保存的版本（本轮新增）</td><td><b>只有点「保存」才写</b>。可命名、可写说明、可回滚、可删</td></tr>
+            <tr><td><code>versions[].elements</code></td><td>该版本的<b>深拷贝</b>元素快照</td><td><code>cloneElements()</code> = <code>JSON.parse(JSON.stringify())</code>。<br>
+                🔴 <b>必须真深拷贝</b>：浅拷贝会让后续拖拽<b>穿透改掉历史版本</b>（"回滚回去发现是现在的内容"）</td></tr>
+          </tbody>
+        </table>
+        <div class="note err" style="margin-top:12px">
+          <b>🔴 脏判定不能看"是否等于最后一版"（离线测试 C5 抓出的真缺陷）：</b><br>
+          「回滚」这个动作会<b>先把当前内容自动存档</b>（硬约束，防丢）⇒ 刚回滚完，"最后一版"恰好是那份自动存档 ⇒
+          若按"等于最后一版"判脏，界面会显示<b>「有未保存改动」</b> ⇒ 用户以为<b>回滚没生效</b>。<br>
+          <b>正确判据：</b><code>isDirty(doc) = 当前内容是否存在于<b>任一</b>版本</code>（<code>matchVersion(doc) === null</code>）。
+          判据修正后，按钮显示「✓ 已保存 v1」而不是「● 保存」—— 提示不骗人。
+        </div>
+        <table style="margin-top:12px">
+          <thead><tr><th style="width:210px">规则</th><th>值 / 行为</th></tr></thead>
+          <tbody>
+            <tr><td>版本上限</td><td><code>VERSION_LIMIT = 30</code>，超出按 FIFO 淘汰最旧，且<b>如实上报淘汰数</b>（不静默吞掉）</td></tr>
+            <tr><td>版本标签</td><td>缺省 <code>v1 / v2 / v3…</code>；说明自动取<b>底栏最近一条用户指令</b>（不用手打）</td></tr>
+            <tr><td>回滚</td><td>① 先把当前内容自动存一份 ② 应用目标版本 ③ revision +1 ④ 面板自动收起；<br>内容与最新版一致时<b>不重复存档</b></td></tr>
+            <tr><td>回滚后的待确认区</td><td><b>必须清空</b> —— 待确认项是基于旧内容的，回滚后作废</td></tr>
+            <tr><td>旧数据兼容</td><td>无 <code>versions</code> 字段的老图补<b>空数组</b>（<b>不伪造版本</b>）⇒ 顶栏诚实显示「未保存」</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">E4</span><h3>版本历史面板</h3><span class="tag">选任一个回到当时的样子</span></header>
+      <div class="bd">
+        <div style="max-width:400px;border:1px solid #2b2e34;border-radius:10px;background:#17181c;overflow:hidden">
+          <div style="padding:8px 11px;border-bottom:1px solid #26282e;display:flex;align-items:center;gap:8px;font-size:11.5px">
+            <b style="color:#e8eaed">历史版本</b>
+            <span style="color:#6b7076;font-size:10.5px">共 3 / 30 个</span>
+            <span style="margin-left:auto;padding:1px 8px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce;font-size:10.5px">关闭</span>
+          </div>
+          <div style="padding:5px 0">
+            <div style="display:flex;align-items:center;gap:7px;padding:7px 11px;font-size:11px;background:#1d1a24">
+              <b style="color:#c9a8ff">v3</b><span style="color:#c3c8ce">页面堆积问题修完</span>
+              <span style="margin-left:auto;color:#6b7076;font-size:10.5px">20 元素 · 09-12 14:02</span>
+              <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce;font-size:10.5px">回到这里</span>
+              <span style="padding:1px 7px;border-radius:5px;border:1px solid rgba(248,81,73,.35);color:#f0877f;font-size:10.5px">删除</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;padding:7px 11px;font-size:11px">
+              <b style="color:#c9a8ff">v2</b><span style="color:#c3c8ce">R1 顶部栏 左 30</span>
+              <span style="margin-left:auto;color:#6b7076;font-size:10.5px">21 元素 · 09-12 13:47</span>
+              <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce;font-size:10.5px">回到这里</span>
+              <span style="padding:1px 7px;border-radius:5px;border:1px solid rgba(248,81,73,.35);color:#f0877f;font-size:10.5px">删除</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;padding:7px 11px;font-size:11px">
+              <b style="color:#c9a8ff">v1</b><span style="color:#c3c8ce">载入标准框架</span>
+              <span style="margin-left:auto;color:#6b7076;font-size:10.5px">20 元素 · 09-12 13:40</span>
+              <span style="padding:1px 7px;border-radius:5px;border:1px solid #3d4148;color:#c3c8ce;font-size:10.5px">回到这里</span>
+              <span style="padding:1px 7px;border-radius:5px;border:1px solid rgba(248,81,73,.35);color:#f0877f;font-size:10.5px">删除</span>
+            </div>
+          </div>
+          <div style="padding:7px 11px;border-top:1px solid #26282e;font-size:10.5px;color:#6b7076">
+            回滚会<b>先自动存一份当前内容</b>，所以回滚本身不会丢东西
+          </div>
+        </div>
+        <div class="cap">面板右对齐时同样让开安全区（<code>right: inset + 8</code>）；「删版本」用<b>文字按钮</b>而不是图标 —— 图标按钮紧挨着「回到这里」，误点代价不可逆</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no t">E5</span><h3>窗口控件安全区 —— ✕ 与操作系统关闭按钮重叠的根治</h3><span class="tag">不是把 ✕ 挪几像素，是让整条顶栏让位</span></header>
+      <div class="bd">
+        <div class="note err">
+          <b>🔴 取证（真机实测，不是推断）：</b><code>navigator.windowControlsOverlay.getTitlebarAreaRect()</code> 返回
+          <code>{x:0, y:0, width:1304, height:44}</code>，视口 <code>1442</code> ⇒ <b>右侧 138px 不归网页管</b>。<br>
+          关键在于：原生窗口控件是<b>操作系统图层</b>，<b>永远绘制在网页之上，<code>z-index</code> 对它完全无效</b>。
+          所以「把 ✕ 的 z-index 调高」是死路 —— 那不是遮挡问题，是两块画布的问题。
+        </div>
+        <table>
+          <thead><tr><th style="width:150px">层级</th><th style="width:200px">读法</th><th>什么时候生效 / 返回什么</th></tr></thead>
+          <tbody>
+            <tr><td>① WCO API</td><td><code>getTitlebarAreaRect()</code></td><td>Electron 桌面端首选。inset = 视口宽 − width</td></tr>
+            <tr><td>② CSS 投影</td><td><code>env(titlebar-area-width)</code></td><td>API 不在时的兜底（同一份数据的 CSS 侧投影）</td></tr>
+            <tr><td>③ 桌面兜底</td><td><code>FALLBACK_INSET = 138</code></td><td>仅<b>确实运行在桌面壳里</b>时使用</td></tr>
+          </tbody>
+        </table>
+        <div class="note ok" style="margin-top:12px">
+          <b>两条"不凭空留白"的约束（否则是把一个 bug 换成另一个 bug）：</b><br>
+          ① <code>visible === false</code> ⇒ 返回 <b>0</b>（全屏时没有原生按钮，不需要让位）；<br>
+          ② <b>普通浏览器</b> ⇒ 返回 <b>0</b>（网页里凭空留 138px 空白会是新的视觉缺陷）。<br>
+          ⇒ 所以「安全区」只在<b>真的被占</b>的时候才存在。真机实测 <code>{"src":"wco","inset":138}</code>，普通浏览器下为 0。
+        </div>
+        <table style="margin-top:12px">
+          <thead><tr><th style="width:180px">落点</th><th>做法</th></tr></thead>
+          <tbody>
+            <tr><td>顶栏</td><td><code>paddingRight = max(10, inset + 10)</code> —— 所有内容排进安全区<b>左侧</b></td></tr>
+            <tr><td>工具栏</td><td>同样避让：原生控件高 44px &gt; 顶栏 40px，会向下溢出 4px，工具栏首行右端若正好有按钮就会被压</td></tr>
+            <tr><td>版本面板</td><td>右对齐时 <code>right: inset + 8</code></td></tr>
+            <tr><td>实时跟随</td><td><code>watchInset()</code> 监听 <code>resize</code> + <code>geometrychange</code>，<b>仅在值真变时</b>回调（避免每帧重渲染）</td></tr>
+          </tbody>
+        </table>
+        <div class="cap">验收断言（C15）不只测 ✕：C15.5 遍历顶栏<b>所有</b>可点元素，要求无一越界 —— 证明不是"只把 ✕ 挪了一下"</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">E6</span><h3>本板块带来的闸门与反证</h3><span class="tag">新闸门必须正负对照校准（台账规则 F）</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:230px">闸门</th><th style="width:110px">结果</th><th>正负对照 / 反证</th></tr></thead>
+          <tbody>
+            <tr><td><code>test-design-version.mjs</code>（新增）</td><td><b>63/63</b></td><td>A schema（含 A3 深拷贝）/ B 保存·脏判定·限流 / C 回滚（C4 回滚前自动存档、C5a–c 脏判定修正）/ D 图管理 / E 安全区（E1–E3 inset 非写死常数、E4–E5 不该留白时返回 0）/ F 正负对照 7 条</td></tr>
+            <tr><td><code>verify-design-studio.mjs</code> 追加 C14/C15</td><td><b>66/66</b></td><td>C15.2 专门防"平凡真"：若 inset 为 0，C15.3–C15.5 对任何元素都成立、等于没测 ⇒ 先要求"本环境确实存在原生覆盖层"</td></tr>
+            <tr><td><code>verify-design-studio.mjs</code> 再追加 <b>C16.0–C16.11</b>（连续点击可用性）</td><td><b>79/79</b></td><td>命中测试 + 顶栏零位移 + 极值文案宽度恒定；<b>两个正负对照</b>（C16.8 人为加宽 44px 必须报出位移 12 个 / C16.10 解除锁宽必须测出 54≠60）。<b>连跑 3 次全部 79/79</b></td></tr>
+            <tr><td><code>lint-undefined-symbols.mjs</code> 加 <code>--selftest</code></td><td><b>7/7</b></td><td>N1–N5 正常路径 / P1–P2 反向：注释里的假符号不得入表、副作用 import 不得吞掉下一条的符号</td></tr>
+            <tr><td><code>build/build.mjs</code> 三重加固</td><td>对账 <b>360 = 360</b></td><td>① 聚拢时<b>逐行剥注释</b> ② 无法识别的 import 项<b>抛错</b>（不再静默丢弃）③ <b>双路对账</b>（声明 vs 实际绑定，数量不等即抛）+ 产物 <code>vm.Script</code> 语法闸门</td></tr>
+          </tbody>
+        </table>
+        <div class="note err" style="margin-top:12px">
+          <b>🔴 本轮最重的一课 —— 注释参与语法解析：</b>构建器把多行 <code>import</code> 压成单行后，
+          <code>//</code> 注释<b>吃掉了行尾</b>：先是让解构未闭合（产物<b>语法非法</b>，Harness 直接报 <code>Failed to import loader entry</code>）；
+          修完第一层后变成<b>更隐蔽的一种</b> —— 产物<b>语法完全合法但静默少绑 5 个符号</b>（<code>VERSION_LIMIT is not defined</code>，dock/studio 全没挂上）。<br>
+          根因是行注释正则 <code>//[^\n]*</code> 在<b>单行</b>里没有 <code>\n</code> 可停，于是吃到字符串末尾。<br>
+          <b>正确做法：</b>① 跨行拼接<b>之前</b>逐行剥注释；② 双路对账是唯一能抓"静默少绑"的检查（语法闸门抓不到）；③
+          <b>注释一律不要写在 import 子句里</b>。同一个 bug 在同一文件里出现过<b>三次</b>（第三次是"对账参照物自己少 1 项"）。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">E7</span><h3>连续点击可用性 —— 顶栏「零位移」</h3><span class="tag">用户：「上面所有按钮的交互和实现是否测试 / 目前点击都不好用」</span></header>
+      <div class="bd">
+        <div class="note err">
+          <b>🔴 14 个按钮「全都有效果」，用户却说「都不好用」—— 差在哪？</b><br>
+          逐项点过去，每个按钮都点得到、都有反馈（保存变绿、版本面板弹开、图名可改、导出有提示）。
+          但用<b>真实鼠标事件</b>逐个点一遍时发现：<b>点完一个按钮，它右边的按钮会整体挪位</b>。<br>
+          而真人是<b>连续</b>操作的：点「保存」→ 文字从 <code>● 保存</code> 变 <code>✓ 已保存 v1</code>（长 27px）
+          → 右边 12 个按钮一起右移 27px → 手指落到下一个按钮的<b>原位置</b> ⇒ <b>点空</b>。<br>
+          于是嘴上说的是"按钮不好用"，实际发生的是<b>按钮跑了</b>。这两件事的修法完全不同。
+        </div>
+
+        <table>
+          <thead><tr><th>元素</th><th>内容变化</th><th>修复前宽度</th><th>位移</th><th>修法</th></tr></thead>
+          <tbody>
+            <tr><td>保存按钮</td><td><code>● 保存</code> ↔ <code>✓ 已保存 v3</code></td><td>57 ↔ 84</td><td><b>+27px</b></td><td><code>minWidth: 96</code>（≥ 最长的 <code>✓ 已保存 v30</code> = 90px）</td></tr>
+            <tr><td>图选择器</td><td><code>&lt;select&gt;</code> ↔ <code>&lt;input&gt;</code>（改名态）</td><td>146 ↔ 200</td><td><b>+54px</b></td><td>原为 <code>maxWidth:200</code>（自适应）⇒ 改 <code>width:200</code> 硬锁。注释当时写的是"同宽 200，提交后布局不跳"——<b>承诺与实现不符</b></td></tr>
+            <tr><td>缩放百分比</td><td><code>95%</code> ↔ <code>100%</code></td><td>26 ↔ 32</td><td><b>+6px</b></td><td><code>minWidth: 40</code> + 居中</td></tr>
+            <tr><td>版本按钮</td><td><code>版本 0</code> ↔ <code>版本 30</code></td><td>54 ↔ 60</td><td>+6px</td><td><code>minWidth: 74</code></td></tr>
+            <tr><td>删除按钮（上膛）</td><td><code>删除</code> ↔ <code>确认</code></td><td colspan="2">padding 差 1px×2 ⇒ <b>+2px</b></td><td>两态 padding 统一为 <code>0 10px</code></td></tr>
+            <tr><td>统计条</td><td><code>元素 20</code> ↔ <code>元素 120</code></td><td>—</td><td>向左膨胀</td><td><code>minWidth:110</code> + 右对齐（它不影响按钮，但文字会左右跳）</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <b>为什么旧 e2e 抓不到：</b>它对每个按钮都是<b>独立的</b>「现取坐标 → 点击 → 回读自己」——
+          单看每个按钮都能点到，所以全绿。真正的盲区是：<b>「点完 A 之后 B 跑到别处」从来没人断言</b>。
+          这与 E5/E6 是同一类失效：<b>断言覆盖不到的那部分，才是用户真正撞上的那部分。</b>
+        </div>
+
+        <table>
+          <thead><tr><th>断言</th><th>测什么</th><th>为什么必须单独有</th></tr></thead>
+          <tbody>
+            <tr><td>C16.1 / C16.11</td><td>命中测试：鼠标落点上的「栈顶」必须就是目标本身（顶栏，以及全工作室 33 个按钮）</td><td><code>el.click()</code> 不看遮挡 —— 元素被盖住也照样"通过"</td></tr>
+            <tr><td><b>C16.2</b></td><td>逐个真实点击，<b>其他按钮的 left 一个都不许变</b></td><td>这才是「按钮跑了 ⇒ 用户点空」的直接判据</td></tr>
+            <tr><td>C16.3 / C16.4</td><td>保存三态等宽 96；<code>&lt;select&gt;</code> 与 <code>&lt;input&gt;</code> 等宽 200</td><td>给出「锁住了」的直接数值证据</td></tr>
+            <tr><td>C16.5</td><td>导出必须能把数据交到手上（剪贴板成功 或 展开文本域）</td><td>曾固定在「复制失败：剪贴板不可用」⇒ 功能等于没有</td></tr>
+            <tr><td>C16.6 / C16.7</td><td>点删除后<b>按钮自身</b>变「确认」，2.5s 自动回退，且两态同宽</td><td>此前只有 toast 变、按钮毫无变化 ⇒ 用户以为按钮坏了</td></tr>
+            <tr><td>C16.9</td><td>文字会变的按钮，在<b>极值文案</b>下宽度恒定</td><td>「版本 1 → 版本 30」只在内容真变长时才暴露 ⇒ 一次验证里永远测不到</td></tr>
+            <tr><td><b>C16.8 / C16.10</b></td><td><b>正负对照</b>：人为加宽 44px ⇒ 位移检测器必须报出（实测 12 个）；解除锁宽 ⇒ 宽度检测器必须测出 54 ≠ 60</td><td>台账规则 F：新闸门不校准，「零位移」很可能是平凡真</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <b>顺手修掉的三处「点了像没点」：</b><br>
+          ① <b>导出</b> —— 真机实测 <code>复制失败：剪贴板不可用</code>：<code>navigator.clipboard</code> 在桌面壳的非安全上下文里<b>存在但会 reject</b>。
+          改为三级降级：<code>clipboard</code> → <code>execCommand("copy")</code> → 展开只读文本域供手动复制。<b>功能至少要能把数据交到用户手上。</b><br>
+          ② <b>「适应」</b> —— 它是 14 个按钮里唯一「点击后零变化」的一个：算出来正是当前值，<b>幂等而非故障</b>。
+          但幂等必须靠文案讲明白，否则与故障在用户眼里没有区别 ⇒ 加「已适应容器：95%（画布宽 1180px）」。<br>
+          ③ <b>删除</b> —— 上膛只弹一条 toast、按钮本身毫无变化 ⇒ 改为按钮变实心红「确认」（与「删除」同为 2 字且 padding 一致 ⇒ 零位移）。
+        </div>
+
+        <div class="note err">
+          <b>新闸门自己带来的问题：测试变得不可重复。</b>C16 会<b>真实点击</b>「保存 / 新建图 / 复制 / 重载框架」——
+          这些恰恰是必须测的高危动作（它们才是会改变布局的），于是每跑一次就留下新版本与新图。
+          连跑第三次时 C14 的「列出 1 个版本」「元素数恢复 20」<b>转红</b>（docCount 已累积到 9）。<br>
+          ⇒ 加 <b>C14.0b 前置</b>：先用数据层 <code>resetDesignStore()</code> 清空，再走<b>用户路径</b>点「＋ 新建图」建立起点。
+          只用数据层做<b>清理</b>、不用它<b>抄近路建立前置条件</b>（抄近路失败是静默的 —— 本会话已踩过一次，见 C14.0 注释）。<br>
+          修完<b>连跑 3 次全部 79/79</b>。测试必须可重复，否则「全绿」只说明第一次碰巧成立。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ 板块 F ═══════════════════ -->
+  <div class="blk f">
+    <div class="bh">
+      <span class="k" style="background:var(--pur)">F</span>
+      <h2>思维导图元素库 —— 分支导图态的元素总账（2026-09-12 就地并入）</h2>
+      <span class="r">18 条元素登记 ｜ 14 已落 · 1 待办 · 3 明确不做（附取证）｜ 关键族全部有真机 e2e</span>
+    </div>
+
+    <div class="note warn">
+      <b>为什么单开一块：</b>用户原话「按照可能用到的思维导图元素 完善思维导图」。
+      此前导图态<b>只有节点方块和一条直线</b> —— 设计稿 A4 画过的元素（状态点、曲线连线、悬浮工具条、右键菜单、折叠、缩放、搜索、小地图、图例）
+      <b>一个都没实现</b>。本板块先把「导图该有哪些元素」变成<b>可核算的总账</b>（F1），再逐族写明判据与取证（F2–F5），
+      给出真机证据（F6）与「✕ 与原生软件按钮同位」的修正（F7）。
+      <br><b>词汇表的落点是代码，不是这张图：</b>全部登记在 <code>src/store/mindmap-schema.js</code>（纯数据、零副作用、不碰持久化 key），
+      由 <code>scripts/test-mindmap-logic.mjs</code> 静态校验 18 条齐备 —— <b>图会过期，表不会</b>。
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">F0</span><h3>用户原话 → 落点（两条，逐条可查）</h3><span class="tag">没有落点 = 我没做</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:36%">用户原话</th><th style="width:20%">落点</th><th>证据</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>「按照可能用到的思维导图元素 完善思维导图」</td>
+              <td>元素库 18 条（F1）<br>节点四型（F2）· 状态四态（F3）· 连线语义（F4）· 工具条与菜单（F5）</td>
+              <td><code>store/mindmap-schema.js</code> 的 <code>MM_COVERAGE</code> + <code>NODE_KINDS</code> + <code>STATE_KINDS</code> + <code>EDGE_KINDS</code> + <code>CONTROL_KINDS</code>；<br>
+                  真机 <code>scripts/verify-mindmap.mjs</code> <b>80 项 / 0 失败 / 0 跳过</b>，<b>连跑 3 次全绿</b></td>
+            </tr>
+            <tr>
+              <td>「思维导图的 X 和原软件也是一个位置」<br><span style="color:var(--fg3);font-size:11px">（指导图右上角 ✕ 与操作系统的最小化 / 最大化 / 关闭 <b>重叠在同一处</b>）</span></td>
+              <td>窗口控件安全区避让（F7）</td>
+              <td>顶栏与工具条 <code>paddingRight = max(10, inset + 10)</code>；<br>
+                  e2e <b>C-M13a–f</b> 六条断言，含「防平凡真」前置（<code>inset &gt; 0</code> 才作数）与 ✕ 中心点命中测试</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F1</span><h3>元素总账 18 条 —— 已落 / 待办 / 明确不做，每条都带取证</h3><span class="tag">14 已落 · 1 待办 · 3 不做</span></header>
+      <div class="bd">
+        <div class="note">
+          <b>列全的意义在于「不做也要有名字」。</b>三条 <code>na</code> 不是漏画，是<b>取证后决定不画</b>：
+          没有数据源的元素画出来就是假元素，而没有接口的按钮点了只会弹 toast —— 这两件事用户都投诉过（「点了像没点」）。
+        </div>
+        <table>
+          <thead><tr><th style="width:6%">编号</th><th style="width:30%">元素</th><th style="width:9%">状态</th><th>取证 / 落点</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">E01</td><td>中心主题节点（🎯 主线标识）</td><td class="ok">已落</td><td><code>kindOfNode(depth=0)</code> → <code>topic</code>；e2e C-M3 / C-M4a</td></tr>
+            <tr><td class="mid">E02</td><td>主分支 / 子分支 / 叶子三型</td><td class="ok">已落</td><td><code>kindOfNode</code>；节点左边框色随型变化；e2e C-M4a–c 含「DOM 与数据层逐节点一致」</td></tr>
+            <tr><td class="mid">E03</td><td>状态点四态（宿主真值）</td><td class="ok">已落</td><td><code>stateOfRow</code> 读 <code>running / completed / pendingInteraction</code>；e2e C-M5a–c（颜色随状态变化 + title 写明判据与来源）</td></tr>
+            <tr><td class="mid">E04</td><td>节点徽标（fork 锚点 / 子数 / 待办 / 血缘 / 预设）</td><td class="ok">已落</td><td><code>marksOfRow</code> + <code>NODE_MARKS</code>，五条各自写明 <code>source</code>；取不到<b>不渲染</b>（不写「未知」占位）</td></tr>
+            <tr><td class="mid">E05</td><td>曲线连线（主干实线 / 分支虚线）</td><td class="ok">已落</td><td><code>edgePath</code> 三次贝塞尔；e2e C-M7b 断言 trunk 的 dash 为空</td></tr>
+            <tr><td class="mid">E06</td><td>选中链高亮（祖先路径）</td><td class="ok">已落</td><td><code>ancestorChain</code> 纯函数；e2e C-M7c–e（连线转 chain + 底栏同步 + 小地图同步）</td></tr>
+            <tr><td class="mid">E07</td><td>折叠 / 展开（单节点 + 全局）</td><td class="ok">已落</td><td><code>visibleRows</code> 纯函数；折叠后显示隐藏规模「+N」；e2e C-M8a–d / C-M9a–b</td></tr>
+            <tr><td class="mid">E08</td><td>悬浮工具条</td><td class="ok">已落</td><td><code>mm-hoverbar</code> 六动作；e2e C-M15a0（移开消失）+ C-M15a–c（移上出现，6 个动作，尺寸 &gt; 0）</td></tr>
+            <tr><td class="mid">E09</td><td>右键菜单（有接口才可点）</td><td class="ok">已落</td><td><code>mm-ctx-*</code>；e2e C-M14a–f，含「禁用项 title 写明缺什么接口」与「点禁用项无副作用」</td></tr>
+            <tr><td class="mid">E10</td><td>缩放组（－ 100% ＋ / 1:1 / 适应）</td><td class="ok">已落</td><td>e2e C-M10a–g；含「矩阵变换与 data-zoom 一致」（不是只改文案）</td></tr>
+            <tr><td class="mid">E11</td><td>搜索定位</td><td class="ok">已落</td><td>e2e C-M11a–d（命中计数 / 高亮 / 未命中淡出 / 清空后撤销）</td></tr>
+            <tr><td class="mid">E12</td><td>小地图 + 视野框</td><td class="ok">已落</td><td>e2e C-M12a–b（点击跳转 + 视野框不塌成一条线）</td></tr>
+            <tr><td class="mid">E13</td><td>状态图例（只列有据的态）</td><td class="ok">已落</td><td><code>supportedStates()</code> 驱动；e2e C-M6a 四态齐备 / <b>C-M6b 图例不含「出错」</b></td></tr>
+            <tr><td class="mid">E14</td><td>窗口控件安全区避让（✕ 不与原生按钮重叠）</td><td class="ok">已落</td><td><code>readInset / watchInset</code> 三级读取；e2e C-M13a–f（见 F7）</td></tr>
+            <tr><td class="mid">E15</td><td>「出错」状态点</td><td class="no">不做</td><td><b>无数据源</b>：宿主会话摘要没有错误字段。取证见 F3 —— 第四态改为「待审」，并对设计稿 A4 做<b>显式修正</b></td></tr>
+            <tr><td class="mid">E16</td><td>节点自由文本备注 / 标签</td><td class="mid">待办</td><td>需要一份<b>用户可编辑注释</b>的新持久化模型；本轮无需求依据，且会引入第四份持久化 key ⇒ 登记不做假实现</td></tr>
+            <tr><td class="mid">E17</td><td>合并回父 / 删除分支</td><td class="no">不做</td><td><b>无宿主接口</b>：<code>ctx.sessions</code> 仅暴露 create / fork / open / search / refresh，没有合并与删除 ⇒ 菜单里禁用并写明缺什么</td></tr>
+            <tr><td class="mid">E18</td><td>跨会话拖拽改血缘</td><td class="no">不做</td><td>血缘由宿主 fork 时固化（<code>meta.parentSession</code>），插件侧无接口可改 ⇒ 拖拽只能是视觉欺骗</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F2</span><h3>节点四型 —— 由树形位置推出，不新增需持久化的状态</h3><span class="tag">判据可复算</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:12%">型</th><th style="width:34%">判据（代码原文语义）</th><th>视觉</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">中心主题 🎯</td><td><code>depth === 0</code>（血缘树的根；无父，或父不在当前列表内）</td><td>最粗边 + 主题色描边；一棵树只有一个</td></tr>
+            <tr><td class="mid">主分支 ⑂</td><td><code>depth === 1</code> 且有子</td><td>紫色左边框（对应宿主 fork 第一跳）</td></tr>
+            <tr><td class="mid">子分支 └</td><td><code>depth &gt;= 2</code> 且有子</td><td>更深的分支色</td></tr>
+            <tr><td class="mid">叶子 •</td><td><code>childrenCount === 0</code></td><td>最浅色；<b>叶子 ≠ 已完成</b>（完成看状态点）</td></tr>
+          </tbody>
+        </table>
+        <div class="note t">
+          <b>判定顺序即优先级：先判叶子，再按深度。</b>否则「depth 1 的叶子」会被判成主分支 —— 这是一条纯函数测试守住的边界（<code>test-mindmap-logic.mjs</code> A 段）。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F3</span><h3>状态四态 + 「出错」为什么不画 —— 对设计稿 A4 的显式修正</h3><span class="tag">宿主真值优先，推断仅作降级</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:12%">态</th><th style="width:34%">判据（宿主字段）</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">执行中 ●</td><td><code>running === true</code></td><td>智能体正在产出</td></tr>
+            <tr><td class="mid">待审 ●</td><td>存在 <code>pendingInteraction</code></td><td><b>在等你点确认</b>（审批 / 方案确认 / 回答）</td></tr>
+            <tr><td class="mid">已收口 ●</td><td><code>completed === true</code></td><td>已跑完一轮（与「未读完成提醒」同源）</td></tr>
+            <tr><td class="mid">待命 ●</td><td>以上都不成立</td><td>「确实没在动」，<b>不是「状态未知」</b>（含 blank 新会话）</td></tr>
+          </tbody>
+        </table>
+        <div class="note err">
+          <b>「出错」态被拿掉，是取证结论而非取舍。</b>设计稿 A4 的图例画的是「空闲 / 运行中 / 已完成 / 出错」，但宿主摘要里<b>没有错误字段</b>：
+          可供读取的只有 <code>running / blank / completed / pendingInteraction / updatedAt / origin / agentPreset / parentId</code>，
+          而 <code>pendingInteraction</code> 的取值域实测<b>仅</b> <code>{"approval","question","plan-review"}</code>（<code>trackPending</code> 的全部调用点，无错误态）。
+          <br>⇒ 第四态改为<b>「待审」</b>，并把「出错」登记为 <code>supported:false</code> 且写明 <code>unsupportedReason</code>；
+          <b>这是对设计稿的修正，不是漏画</b> —— 写在这里，以免下一次又被「按图画」。
+        </div>
+        <div class="note warn">
+          <b>顺带修掉一个更隐蔽的错：旧版状态是「猜」出来的。</b>旧 <code>stateOf()</code> 按 <code>childrenCount / depth</code> 推（有子→待审、根→已收口），
+          文件头还断言「宿主摘要无执行中字段」—— <b>该前提是错的</b>，宿主一直有 <code>running</code> 与 <code>completed</code>。
+          猜出来的态在真机上<b>恒定不变</b>（与「现在有没有在跑」无关），等于一个不动的装饰。
+          现在改为<b>宿主真值优先</b>，只在整组字段缺失（localStorage 降级通道）时才回落推断，并把结果标 <code>stateSource:"inferred"</code> ——
+          e2e <b>C-M2e</b> 要求「全部行的状态源 = host，没有一行退回推断」，<b>C-M5c</b> 要求节点 title 说明判据与来源。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F4</span><h3>连线语义 —— 视觉区分必须有语义，否则配色只是装饰</h3><span class="tag">四类连线</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:14%">类型</th><th style="width:26%">画法</th><th>回答的问题</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">主干 trunk</td><td>实线 · 2px</td><td>「主线从哪分叉出来」——永久存在</td></tr>
+            <tr><td class="mid">分支 child</td><td>虚线 5 4</td><td>「分支再生分支」——可继续延伸</td></tr>
+            <tr><td class="mid">选中链 chain</td><td>加粗高亮 · 2.5px</td><td><b>「我在树里的哪一条上」</b>（祖先路径整体点亮）</td></tr>
+            <tr><td class="mid">折叠入口 ghost</td><td>点线 1 4</td><td>「下面还有，点开看」</td></tr>
+          </tbody>
+        </table>
+        <div class="note t">
+          路径用<b>三次贝塞尔</b>（<code>M x1,y1 C mx,y1 mx,y2 x2,y2</code>，mx 取两点中位）—— 直线在多层树里会与节点框穿插，看起来像「随便连的」。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F5</span><h3>悬浮工具条 与 右键菜单 —— 「有接口才给动作」落地</h3><span class="tag">假按钮比缺按钮更贵</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:22%">入口</th><th style="width:26%">动作</th><th>规则</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">悬浮工具条<br><code>mm-hoverbar</code></td><td>➕ fork ｜ 📂 打开 ｜ 📥 抓取到总监 ｜ 🎯 送审（六维）｜ 🗂 折叠 ｜ ⋯ 更多</td>
+                <td>工具条<b>故意放在不缩放的层</b>（画布是 <code>transform: scale(k)</code>）—— 否则缩小到 60% 时按钮会小到点不着</td></tr>
+            <tr><td class="mid">右键菜单<br><code>mm-ctxmenu</code></td><td>打开此对话 / fork / 抓取 / 送审 / 折叠 / 复制会话号 / 合并回父 / 删除分支</td>
+                <td><b>可点性由 <code>hostCapabilities()</code> 决定</b>：缺接口的项 <code>enabled:false</code> 且 <code>title</code> 写明缺什么；<br>e2e C-M14f 断言「点禁用项无任何副作用」</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>「合并回父 / 删除分支」两条特意留着并禁用，而不是删掉。</b>删掉的话用户只会以为「没做」；
+          留着并写明「宿主未暴露该接口」，用户才知道<b>边界在哪</b>。（本轮已按此规则实现：<code>merge:false, remove:false</code> 并在源码注释里取证。）
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F6</span><h3>真机证据 —— 80 项 / 0 失败 / 0 跳过，连跑 3 次</h3><span class="tag">全绿必须可重复</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:34%">分组</th><th style="width:10%">条目</th><th>关键断言（节选）</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">数据真实性</td><td class="mid">6</td><td>血缘通道 = <code>ctx.sessions</code>（<b>不是</b> localStorage 降级）；快照字段形状符合取证；全部行 <code>stateSource = host</code>；DOM 上标明数据源可被外部读到</td></tr>
+            <tr><td class="mid">元素齐备</td><td class="mid">14</td><td>顶栏 / 工具条 / 小地图 / 搜索 / 适应 / 缩放 / 折叠全部 / 新建分支 / 连线层 / 视野框 / 覆盖度徽标 <b>逐个存在</b></td></tr>
+            <tr><td class="mid">节点四型 × 状态四态</td><td class="mid">9</td><td>每个节点 <code>data-kind</code> 都在四型集合内；<b>DOM 与数据层逐节点一致（无漂移）</b>；状态点颜色随状态变化；图例不含「出错」</td></tr>
+            <tr><td class="mid">连线语义</td><td class="mid">5</td><td>主干 dash 为空；选中后连线转 chain；底栏与小地图同步</td></tr>
+            <tr><td class="mid">折叠 / 展开</td><td class="mid">6</td><td>折叠后节点数减少、打上 <code>data-collapsed=1</code>、显示「+N」、再点恢复；<b>「折叠全部」无事可做时也必须给出可见反馈</b></td></tr>
+            <tr><td class="mid">缩放组</td><td class="mid">7</td><td>1:1 归 100%；－ 后 90% 且 <code>data-zoom=0.9</code>；<b>矩阵变换与 data-zoom 一致（不是只改文案）</b>；＋ 与 － 互逆；「适应」有反馈文案</td></tr>
+            <tr><td class="mid">搜索</td><td class="mid">4</td><td>命中计数 ≥1；命中高亮（outline 非 none）；未命中淡出（opacity &lt; 0.9）；清空后撤销</td></tr>
+            <tr><td class="mid">小地图</td><td class="mid">2</td><td>点击后 <code>scrollLeft</code> 真变化；视野框尺寸 &gt; 0</td></tr>
+            <tr><td class="mid">窗口安全区</td><td class="mid">6</td><td>见 F7</td></tr>
+            <tr><td class="mid">右键菜单 / 悬浮工具条</td><td class="mid">11</td><td>菜单项 ≥5；有接口的可点、无接口的禁用且写明原因；工具条「先证明会走，再证明会来」</td></tr>
+            <tr><td class="mid">Esc 逐层退 / toast</td><td class="mid">5</td><td>第一层只关菜单（导图仍开）；第二层才关导图；toast 2.4s 自动消失（<b>且必须先证明它出现过</b>）</td></tr>
+            <tr><td class="mid">底栏路由 / 关闭</td><td class="mid">5</td><td>输入 → 路由卡（建议 + 置信度 + 四个去向按钮 + 取消收起）；✕ 关闭后 DOM 移除</td></tr>
+          </tbody>
+        </table>
+        <div class="note err">
+          <b>同一份脚本连续三次全绿才算数。</b>本轮第一次跑出来的不是「功能坏了」，而是<b>脚本自己信不过</b> —— 详见 F8 的两条测试陷阱。
+          单跑一次通过只能说明「第一次碰巧成立」；这是本项目已经吃过一次的教训（板块 E 的 C16 连跑第三次转红）。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">F7</span><h3>✕ 与原生软件按钮「同位」的修正 —— 真机 138px 取证</h3><span class="tag">用户原话：与标准软件的关闭按钮重叠了</span></header>
+      <div class="bd">
+        <div class="note warn">
+          <b>为什么不能靠 z-index 解决：</b>那一排最小化 / 最大化 / 关闭是 <b>操作系统图层的窗口控件覆盖层</b>（Windows caption area），
+          由 Electron 通过 <code>navigator.windowControlsOverlay</code> 暴露，<b>永远画在网页之上</b>。
+          网页侧任何 z-index 都压不过它 —— 唯一正确的做法是<b>让位</b>。
+        </div>
+        <table>
+          <thead><tr><th style="width:34%">做法</th><th>真机实测（1442 × 816）</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">读安全区 inset</td><td><code>getTitlebarAreaRect()</code> → <b>inset = 138px</b>（<code>util/safe-area.js</code> 三级读取 + 监听变化）</td></tr>
+            <tr><td class="mid">顶栏让位</td><td><code>paddingRight = max(10, inset + 10) = 148px</code>；✕ 右边界 ≤ 安全区边界 1304</td></tr>
+            <tr><td class="mid">工具条也让位</td><td>原生控件高 44px &gt; 工具条高度，不避让会<b>向下溢出</b>压到工具条右侧按钮</td></tr>
+          </tbody>
+        </table>
+        <table>
+          <thead><tr><th style="width:12%">断言</th><th>内容（e2e 实测，全绿）</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">C-M13a</td><td><b>防「平凡真」前置</b>：本环境确实存在原生覆盖层且 <code>inset &gt; 0</code> —— 否则「不重叠」对谁都成立，等于没测</td></tr>
+            <tr><td class="mid">C-M13b</td><td>顶栏 <code>paddingRight &gt; inset</code></td></tr>
+            <tr><td class="mid">C-M13c</td><td>工具条 <code>paddingRight &gt; inset</code></td></tr>
+            <tr><td class="mid">C-M13d</td><td>✕ 的右边界 ≤ 安全区边界（<b>不与三个原生按钮重叠</b>）</td></tr>
+            <tr><td class="mid">C-M13e</td><td>✕ 仍在可视区内且可点（宽 &gt; 0，左边界 &gt; 0）—— 避让不能把按钮挤出屏幕</td></tr>
+            <tr><td class="mid">C-M13f</td><td>✕ 中心点 <code>elementFromPoint</code> 命中它自己（<b>没有被任何层压住</b>）</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">F8</span><h3>本轮修掉的真根因 与 两个「看起来像产品坏了」的测试陷阱</h3><span class="tag">值得记住的失败模式</span></header>
+      <div class="bd">
+        <div class="note err">
+          <b>根因一：插件没声明 <code>sessions</code>，于是导图永远静默降级。</b><br>
+          cordis 的 <code>ctx.&lt;service&gt;</code> 是 Proxy 陷阱：<b>未在 <code>inject</code> 里声明的服务，读一下就直接抛错</b>
+          （<code>cannot get property "sessions" without inject</code>）。而外层恰好有一个 <code>try/catch</code> 把它咽了下去 ⇒
+          导图不动声色地退化成「按工作区分组的平铺树」，<b>一直没人发现</b>。<br>
+          ⇒ 三处一起修：产物 <code>inject</code> 补 <code>"sessions"</code>；读取改两级兜底（<code>ctx.sessions</code> → <code>ctx.get("sessions")</code>）；
+          逐级把原因写进 <code>diag</code> 并显示在 UI 上 —— <b>降级可以，但不能无声</b>。
+        </div>
+        <div class="note err">
+          <b>根因二：订阅时序反了，首次打开是空树。</b><br>
+          <code>refreshBranchTree()</code> 走 ctx 通道时是<b>同步</b>通知（没有 await），而组件写的是「先 refresh 再 subscribe」⇒
+          通知落在订阅之前，此后永远停在初始快照。（现象：节点 0 个、<code>data-source=none</code>，但刷新按钮一按就好 —— 极难定位。）<br>
+          ⇒ 改为 <code>subscribe → setSnap(当前快照) → refresh</code>，并在源码里留下原因注释。
+          <b>纪律：订阅类 API 一律先订阅再触发事件，不要赌「事件一定是异步的」。</b>
+        </div>
+        <div class="note warn">
+          <b>测试陷阱一：真实鼠标事件打在了视口外。</b>分段跑 e2e 时，第 8 段点小地图会把画布 <code>scrollLeft</code> 滚走（约 950px），
+          之后仍按「DOM 里第一个节点」量几何，得到的是 <b>x = -934</b> 这种视口外坐标；
+          CDP 的 <code>Input.dispatchMouseEvent</code> 是<b>真实</b>鼠标事件，打在视口外等于什么都没点 ⇒
+          菜单不弹、工具条不出。<b>现象极像两个功能坏了</b>，实际是取坐标的方式不成立。<br>
+          ⇒ 新增 <code>focusVisibleNode()</code>：先把画布滚回原点，再挑一个<b>确证在视口内且 <code>elementFromPoint</code> 命中自己</b>的节点。
+          凡是「用真实几何驱动真实鼠标」的段落，都必须先过这一层。
+        </div>
+        <div class="note warn">
+          <b>测试陷阱二：无条件按 Esc 把整张导图关了，于是四段全红。</b><br>
+          Esc 是<b>逐层退</b>：有菜单时只关菜单，<b>没菜单时它关闭整张导图</b>（源码取证：<code>if (menu) setMenu(null) else onClose()</code>）——
+          这是设计，不是 bug。上一版为了「先把菜单关掉」无条件按 Esc，结果把导图层关了 ⇒
+          第 12 / 13 段全在量一个<b>已卸载的 DOM</b>，报出来的却是「toast 没出现 / 输入框不存在」这种完全误导的结论。<br>
+          ⇒ 只在菜单确实开着时才按 Esc；并新增 <code>state(tag)</code> 现场勘察行，每段开头打印「页面当时到底还在不在」——
+          <b>没有这一行，就会去改四个本来没坏的模块。</b>
+        </div>
+        <div class="note">
+          <b>附带发现：一条「永远为真」的假断言。</b>「折叠全部」那组原先写的是 <code>allCollapsed &gt;= 0</code> ——
+          计数不可能为负，所以这条断言<b>无论产品多坏都会通过</b>；后面还跟着一个跳过分支，等于整段什么都没验。
+          同类问题在 toast 那组也有（<b>toast 从没出现过时，「它已消失」平凡为真</b>）。
+          两处均已改成「先证明前提、再断言结果」：无事可做时<b>必须给出可见反馈</b>，toast 必须先证明它出现过。
+        </div>
+        <div class="note ok">
+          <b>顺带修好一条被「静默红掉」的文档级闸门：<code>verify-bundle.mjs</code> 从 12/57 恢复到 63/63。</b><br>
+          真因不是插件坏了，而是<b>测试桩有两份、彼此漂移</b>：<code>verify-bundle.mjs</code> 自己写了一份极简 React 桩，与共享桩
+          <code>_platform-stub-impl.mjs</code> 长期不同步，缺了 <code>Component</code>。
+          而产物里有 <code>class SafeLayer extends react.Component</code>（单层错误边界）⇒
+          factory 直接抛 <code>Class extends value undefined is not a constructor or null</code> ⇒
+          <b>其后 44 项断言全部级联失败</b>（<code>__entry 导出批次 5</code>、<code>window.__dshDirectorBatch5</code> …），
+          报告读起来像「插件整个坏了」。真机一直正常（同轮真机 e2e 80/80 绿）。<br>
+          ⇒ 改为统一引用共享桩，并把这条教训写进桩文件头：<b>桩这类测试基础设施也只能有一份，重复即漂移。</b>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ 板块 G ═══════════════════ -->
+  <div class="blk f">
+    <div class="bh">
+      <span class="k" style="background:var(--acc)">G</span>
+      <h2>单框控件 · 自由拖动 · 右侧对话 · 用原生对话框 · 四维流转（2026-09-12 第三轮就地并入）</h2>
+      <span class="r">5 组诉求 ｜ 6 小节 ｜ 每条带真机证据 ｜ 一条"改了但没渲染"的 CSS 坑一并记下</span>
+    </div>
+
+    <div class="note warn">
+      <b>为什么单开一块：</b>本轮用户给的是一串<b>互不相干但都具体</b>的修改（板块 F 只覆盖了"导图元素齐不齐"），
+      其中三条各自都有一种"看起来做了其实没做"的失败形态：
+      <br>· <b>「单个框没有展开和折叠的选项」</b> —— 真实缺口是<b>无子节点的框上什么都没画</b>（有子的框只有一个 12px、颜色 <code>#8b9199</code> 的小三角，与徽标同行被标题挤到几乎看不见）。只给"有子的框"加按钮 = 用户俯视整张图仍然觉得"没有选项" ⇒ 本板块口径是<b>每个框都有</b>，不可用也要<b>显示并写明原因</b>。
+      <br>· <b>「框不能动需要可以移动」</b> —— 单纯让方块能拖会带来一个更隐蔽的问题：<b>连线脱节</b>。若连线端点写死了指数坐标，拖完方块线还留在原地 ⇒ 看起来"框飘了"。判据必须是<b>拖完连线的起点跟着走</b>（G2）。
+      <br>· <b>「质感加上」</b> —— 本轮真踩到一个 <b>CSS 层</b>的坑：纹理靠 <code>background-image</code> 实现，而四个界面的根节点此前都写的是 <code>background</code> <b>简写</b>，简写会把 <code>background-image</code> 一并重置 ⇒ 面板里点「网格 / 点阵 / 玻璃」<b>看起来完全没反应</b>。纯函数测试测不到，故在 G6 留了精确的反证断言。
+      <br><b>落点是代码，不是这张图：</b>个性化在 <code>src/store/personalize.js</code>，四维流转在 <code>src/logic/flow.js</code>，
+      由 <code>scripts/test-personalize.mjs</code>（离线 81 项）与 <code>scripts/verify-flow.mjs</code>（真机）共同看住。
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">G0</span><h3>用户原话 → 落点（五条，逐条可查）</h3><span class="tag">没有落点 = 我没做</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:38%">用户原话</th><th style="width:22%">落点</th><th>证据</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>「思维导图的单个框没有展开和折叠的选项」</td>
+              <td>单框控件行（G1）</td>
+              <td><code>store/mindmap-schema.js</code> 的 <code>NODE_CONTROLS</code>（5 项）+
+                  <code>controlsOfRow(row, caps)</code>；离线 G1–G8 八条，含<b>正负对照</b>（同一份数据：有子=可点 / 无子=禁用但仍渲染）</td>
+            </tr>
+            <tr>
+              <td>「思维导图的框不能动需要可以移动」</td>
+              <td>自由拖动（G2）</td>
+              <td><code>logic/mindmap-render.js</code> 的 <code>applyNodePos</code> / <code>draggedPos</code>；离线 G9–G16 八条；
+                  真机 C8–C11 四条（<b>真实鼠标拖动</b> 150×96 像素，含"连线起点跟着变"与"自动布局归位"）</td>
+            </tr>
+            <tr>
+              <td>「点击框在右侧展开对话，对话的最上面是现在正在做的事情」</td>
+              <td>右侧对话面板（G3）</td>
+              <td><code>components/NodeDetailPanel.js</code> 三段固定顺序；真机 C12–C16 五条，其中 C13 用<b>文档顺序</b>断言
+                  <code>nd-now</code> 是面板里的<b>第一个</b>区块（不是"存在就行"）</td>
+            </tr>
+            <tr>
+              <td>「不要这个对话框，用原本的对话框」「点到哪里往哪里输入和沟通」</td>
+              <td>删自建输入框 + 焦点条（G4）</td>
+              <td><code>components/DirectorPage.js</code> 的 R8：<b>零</b> input/textarea；真机 A3–A7 五条，
+                  含「点⌨后 <code>document.activeElement</code> 真的落到原生 composer」</td>
+            </tr>
+            <tr>
+              <td>「打通总监和正常对话还有思维导图还有设计图之间的关联」「保证同一个消息能在上面几个维度进行流转」「点击左侧切进去就是和当前对话有关的流转信息」</td>
+              <td>四维流转与跟随（G5）</td>
+              <td><code>logic/flow.js</code> 的 <code>makeFlow</code> / <code>hopFlow</code> / <code>currentTaskOf</code> / <code>flowsOf</code>；
+                  离线 B1–B41 四十一条；真机 D5–D8</td>
+            </tr>
+            <tr>
+              <td>「总监 tap 页面，还有三个插件页面 文字背景，全部找审美重新审核一下质感加上，同时都在右上角加自定义个性化设定」</td>
+              <td>四处同一面板 + 质感（G6）</td>
+              <td><code>store/personalize.js</code> + <code>components/PersonalizePanel.js</code>；
+                  离线 A1–A25 与 <b>源码级一致性</b> C1–C14（四处 import 同一组件、同一 <code>scope</code>、同一质感类、<b>同一份持久化 key</b>）；
+                  真机 B1–B10 + C17 + D2–D4</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G1</span><h3>单框控件 —— 每个框都有一行，不可用也写明原因</h3><span class="tag">5 项 · 由数据算出，不由组件各自 if</span></header>
+      <div class="bd">
+        <p>控件行的成员、可用条件、以及禁用时显示什么，全部登记在 <code>NODE_CONTROLS</code>，
+        由 <code>controlsOfRow(row, caps)</code> 按<b>行数据 + 宿主能力</b>算出结果，<code>MindMap.js</code> 照着渲染：</p>
+        <table>
+          <thead><tr><th style="width:12%">控件</th><th style="width:18%">图标</th><th style="width:26%">可用条件</th><th>禁用时显示什么 / 为什么</th></tr></thead>
+          <tbody>
+            <tr><td class="mid"><b>折叠展开</b></td><td><code>▾</code> / <code>▸</code>（折叠态换符号）</td><td><code>childrenCount &gt; 0</code></td><td>「该框下没有子会话 ⇒ 无可折叠内容（<b>不是坏了</b>）」—— 这句话必须原样出现，否则用户会把"没内容可折"读成"按钮坏了"</td></tr>
+            <tr><td class="mid"><b>展开对话</b></td><td><code>💬</code></td><td><b>总是可用</b></td><td>—（数据来自插件侧流转 + 宿主快照，不依赖宿主写接口）</td></tr>
+            <tr><td class="mid"><b>从此分支</b></td><td><code>✚</code></td><td>宿主 <code>sessions.fork</code></td><td>「宿主 sessions 服务未暴露 fork（取证：SessionRuntime 成员表）」</td></tr>
+            <tr><td class="mid"><b>打开原生对话</b></td><td><code>📂</code></td><td>宿主 <code>sessions.open</code></td><td>「宿主 sessions 服务未暴露 open」</td></tr>
+            <tr><td class="mid"><b>拖动移动</b></td><td><code>✥</code></td><td><b>总是可用</b></td><td>—（<b>只移动画面位置，不改 <code>parentSession</code></b>；血缘由宿主固化，插件侧无接口可改 —— 这一条写进了 <code>NODE_CONTROLS.move.why</code>，防止后来者误以为能改血缘）</td></tr>
+          </tbody>
+        </table>
+        <div class="note ok">
+          <b>口径修正（本轮新增的一条纪律）：</b>图标符号表只有一份 —— 折叠/展开两个符号由
+          <code>controlsOfRow</code> 一并透出（<code>icon</code> / <code>alt</code>），组件不再自己写死 <code>"▸"/"▾"</code>。
+          离线断言 G7 专门看这条：<b>符号分叉了就是两份真相源，以后改图标必然改漏一处。</b>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G2</span><h3>自由拖动 —— 只动画面位置，连线必须跟着走</h3><span class="tag">拖动 ≠ 改血缘</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:22%">环节</th><th style="width:30%">做法</th><th>为什么这么做</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">位移判定</td><td>位移 &lt; <code>DRAG_SLOP = 4px</code> 仍算"点击"</td><td>否则<b>轻点一下框</b>（想开右侧对话）会被判成拖动，面板一闪就没了</td></tr>
+            <tr><td class="mid">落盘时机</td><td><b>松手才写</b> <code>layout.mmPos</code></td><td>每帧写 localStorage 会在拖动过程里持续触发订阅 → 整树重渲染 → 手感粘滞</td></tr>
+            <tr><td class="mid">存储内容</td><td><b>只存被拖过的节点</b>（<code>mmPos: {sid: {x,y}}</code>）</td><td>不新增持久化 key；没拖过的节点零记录，自动布局仍是唯一真相源</td></tr>
+            <tr><td class="mid">坐标换算</td><td>屏幕位移 ÷ 缩放；结果夹紧在 <code>[0, w]×[0, h]</code></td><td>缩放态下按屏幕像素存会把框存到画布外；<b>夹紧防丢框</b>（离线 G15/G16 覆盖负位移、超界、<code>zoom = 0</code>）</td></tr>
+            <tr><td class="mid">归位</td><td>工具条 <code>▦ 自动布局</code> + 右键菜单「归位（回自动布局）」</td><td>拖动是<b>可逆</b>的：有去必须有回，否则用户拖乱一次就只能清数据</td></tr>
+            <tr><td class="mid">连线</td><td><code>edgePathFor(a, b, …)</code> 两端<b>从行的真实坐标算</b></td><td>🔴 <b>这是"框能移动"能不能成立的关键</b> —— 端点若写死指数坐标，拖动后线脱节。真机 C10 用 <code>mm-edges</code> 里 <code>path</code> 的 <code>d</code> 前后不同来证明</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>布局尺寸一并放大：</b><code>LAYOUT</code> 从 <code>200×56 / dx244 / dy76</code> 调到
+          <code>224×72 / dx272 / dy96</code> —— 原来的框高 56px 塞不下"标题 + 元信息 + 控件行"三层，
+          控件行会被裁掉（看起来又变成"没有选项"）。离线 G20 钉住这个下限。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G3</span><h3>右侧对话面板 —— 三段固定顺序，「现在在做的事」在最上面</h3><span class="tag">顺序是契约，不是排版偏好</span></header>
+      <div class="bd">
+        <p>点框上的 <code>💬</code> 在导图右侧展开 <code>#dsh-node-detail</code>，内容分三段，<b>顺序不可调</b>：</p>
+        <table>
+          <thead><tr><th style="width:14%">段</th><th style="width:24%">元素</th><th>内容与判据</th></tr></thead>
+          <tbody>
+            <tr><td class="mid"><b>① 现在在做的事</b></td><td><code>nd-now</code><br><code>nd-now-title</code> / <code>nd-now-detail</code></td><td>带 <code>data-source</code>（结论来自哪里）与 <code>data-tone</code>（warn / run / done / info / idle）。<br>用户原话要求它"在对话的<b>最上面</b>" ⇒ 真机 C13 用 <code>compareDocumentPosition</code> 式的<b>子节点顺序</b>断言它是第一个区块</td></tr>
+            <tr><td class="mid"><b>② 跨维流转时间线</b></td><td><code>nd-flow-item</code><br>内含四维足迹点 <code>nd-trail</code></td><td>该会话的流转按<b>最后活动时间</b>升序（见 G5 的 <code>lastTouchOf</code>）；无记录时显示 <code>nd-flow-empty</code> 而不是空白</td></tr>
+            <tr><td class="mid"><b>③ 输入条</b></td><td><code>nd-input</code> / <code>nd-send</code> / <code>nd-route</code></td><td>发送 = 登记一条 <code>origin = mindmap</code> 的流转 → 非当前会话则先打开它 → 再落到该会话的原生 composer</td></tr>
+          </tbody>
+        </table>
+        <div class="note warn">
+          <b>非当前会话必须自曝其短：</b>面板底部有一行 <code>nd-caveat</code>，明确写出
+          <b>"原生内容读不到"</b>。原因：原生对话正文属宿主渲染树，插件侧只能读到<b>我们登记过的流转</b>与宿主快照字段；
+          若把"只有流转、没有正文"渲染成一片空白，用户会认为面板坏了。
+          <b>读不到就说读不到</b>（与板块 F 的 <code>source</code> 纪律同一条）。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G4</span><h3>用原本的对话框 —— 删掉自建输入条，改成「焦点条」</h3><span class="tag">点到哪里往哪里输入</span></header>
+      <div class="bd">
+        <div class="note warn">
+          <b>删掉的是什么、凭什么敢删：</b>用户原话「总监 tap 页面，下面你加了一个对话框。不要这个对话框，用原本的对话框」。
+          删之前先做了取证 —— 在<b>总监 tab 激活时</b>读取真机 DOM：
+          <code>textarea[placeholder="给智能体发消息"]</code> <b>存在且可见</b>（<code>778×28</code>），
+          发送按钮也在（当前 disabled 属正常：输入框为空）。
+          <b>也就是说"原生对话框"在总监 tab 下物理上就是可用的</b>，自建那份纯属多余，删掉不会丢功能。
+        </div>
+        <p>R8 从"输入条"改为"焦点条"，五个动作各有明确语义（每个都能单独失败、单独看证据）：</p>
+        <table>
+          <thead><tr><th style="width:16%">键</th><th style="width:26%">做什么</th><th>为什么需要它 / 判据</th></tr></thead>
+          <tbody>
+            <tr><td class="mid"><code>目标：总监</code></td><td>把提交目标切到总监</td><td>与「对话」互斥，<code>data-on</code> 标出当前目标；同时会把焦点移到原生框</td></tr>
+            <tr><td class="mid"><code>目标：对话</code></td><td>把提交目标切到对话</td><td>同上</td></tr>
+            <tr><td class="mid"><code>⌨ 聚焦原生对话框</code></td><td>把焦点送到宿主原生输入框</td><td>🔴 真机 A6 断言 <code>document.activeElement.tagName === "TEXTAREA"</code> —— <b>这条是"点到哪里往哪里输入"唯一的可判定形式</b>（只看按钮点了没反应等于没验）</td></tr>
+            <tr><td class="mid"><code>📥 登记为流转</code></td><td>读原生框当前文本，登记为一条流转</td><td>空内容<b>不登记</b>（真机 A7 正负对照，防"空流转把真记录冲掉"）</td></tr>
+            <tr><td class="mid"><code>交给总监整理</code></td><td>读原生框文本 → 交总监 → 写回</td><td>原"发送"能力的保留路径（因为没有自建输入框了，文本来源改为<b>读原生框</b>）</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>为什么不做成"直接在原生框上挂按钮"：</b>那是宿主渲染树里的节点，插件侧只能读值与聚焦，
+          <b>不能往里插自己的 DOM</b>（一旦宿主改版就会连环崩）。所以插件的表达方式是
+          "把焦点送过去 + 在旁边提供动作" —— 这也是 A5 那条"原生框必须仍在且可见"要长期看着的原因。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G5</span><h3>四维流转 —— 同一条消息在总监 / 对话 / 导图 / 设计图之间走</h3><span class="tag">顺序取用户原话顺序</span></header>
+      <div class="bd">
+        <p>数据模型只有一条，四个维度是它的<b>足迹</b>（<code>trail</code>），不是四份副本：</p>
+        <table>
+          <thead><tr><th style="width:22%">字段</th><th style="width:26%">含义</th><th>关键纪律</th></tr></thead>
+          <tbody>
+            <tr><td class="mid"><code>flowId</code></td><td>稳定短 id（FNV 双哈希）</td><td><b>不用 <code>Math.random</code></b>（项目纪律：禁用非确定性随机 —— 随机 id 会让"同一条消息"在两次读取中变成两条）</td></tr>
+            <tr><td class="mid"><code>origin</code></td><td>从哪一维发起</td><td>🔴 <b><code>hopFlow</code> 绝不改它</b>（离线 B8）。改了就等于"走完一圈忘了从哪来"，用户看到的轨迹是错的</td></tr>
+            <tr><td class="mid"><code>trail[]</code></td><td>走过哪几维、各在何时、谁触发的</td><td>只<b>追加</b>，<code>hopFlow</code> 是纯函数（返回新对象，便于前后对比）</td></tr>
+            <tr><td class="mid"><code>sessionId</code></td><td>属哪个会话；<code>null</code> = 全域</td><td>全域条目<b>不污染</b>具体会话列表（离线 B27）；查全域时单独用 <code>__global__</code> 收纳，避免与真会话 id 撞</td></tr>
+            <tr><td class="mid"><code>at</code></td><td><b>登记时刻</b>（不再变）</td><td>与 <code>lastTouchOf()</code> 分开：后者 = 登记时刻与全部足迹时刻取最大。<br>🔴 这是本轮闸门 B28 暴露的<b>真实语义缺口</b> —— 原先排序用 <code>at</code>，于是一条昨天登记、今天才被推进到设计图的流转会被排到"更晚登记但早已僵住"的条目<b>之后</b>，而用户最关心的恰恰是<b>最近有动静的那条</b> ⇒ 排序与"现在在做的事"的时间戳都改用 <code>lastTouchOf</code></td></tr>
+            <tr><td class="mid"><code>status</code></td><td>open / routed / blocked / done</td><td>四态<b>都有中文标签</b>（界面上不出现英文枚举）</td></tr>
+          </tbody>
+        </table>
+        <p><b>「现在在做的事」五级优先级</b>（先宿主真值，后我们自己记的；每一级都带 <code>source</code>）：</p>
+        <table>
+          <thead><tr><th style="width:10%">级</th><th style="width:26%">判据</th><th style="width:26%"><code>source</code></th><th>文案</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">①</td><td>宿主 <code>pendingInteraction</code></td><td><code>host.pendingInteraction</code></td><td>「待你确认 —— 等待批准 / 等待回答 / 等待方案评审」（tone=warn）</td></tr>
+            <tr><td class="mid">②</td><td>宿主 <code>running</code></td><td><code>host.running</code></td><td>「正在执行」（tone=run）</td></tr>
+            <tr><td class="mid">③</td><td>最新流转</td><td><code>flow.trail</code></td><td>那句话本身 + 「流转 N 条 · 总监 → 对话 → 思维导图」</td></tr>
+            <tr><td class="mid">④</td><td>总监消息（独立数据元）</td><td><code>plugin-db</code></td><td>最后一条总监消息 + 类型 + 时间</td></tr>
+            <tr><td class="mid">⑤</td><td>什么都没有</td><td><code>host.idle</code> / <code>none</code></td><td>「待命 · 尚无流转」；连会话都没选时改说「点左侧会话或导图里的任一个框」（<b>给出下一步动作</b>）</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>跟随左侧会话：</b>宿主左侧栏点击<b>不通知插件</b>（无事件通道，实测侧栏容器 <code>nav.RWZidW_crumbs</code> 只暴露 2 个可点项）。
+          ⇒ 插件侧只能<b>轮询</b> <code>ctx.sessions.list.getSnapshot().current</code>（<code>branch-tree.js</code> 的
+          <code>watchCurrentSession(cb, 800ms)</code>：首个订阅者启表、末个停表、<code>unref()</code>、<b>首次立即回调一次</b>）。
+          切过去之后，总监页 R5 与导图右侧面板的流转列表都按 <code>activeSessionId</code> 过滤 —— 真机 D7 用
+          "切到另一个会话 ⇒ 该会话的列表为空（而不是继续显示上一条）"来证明它<b>真的换了</b>。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G6</span><h3>四处同一份个性化 —— 以及一个"改了但没渲染"的 CSS 坑</h3><span class="tag">改一次，四处都变</span></header>
+      <div class="bd">
+        <p>四个界面（总监页 / 总监弹窗 / 设计图工作室 / 分支导图）右上角是<b>同一个组件、同一批选项、同一份持久化</b>：</p>
+        <table>
+          <thead><tr><th style="width:20%">界面</th><th style="width:16%"><code>scope</code></th><th style="width:22%">入口 testid</th><th>离线一致性断言</th></tr></thead>
+          <tbody>
+            <tr><td>总监页（tab）</td><td><code>总监页</code></td><td><code>dp-personalize</code></td><td rowspan="4">C1 四处 import 同一组件 · C2 四处真的渲染（防"import 了不用"的死代码）· C3 四个 <code>scope</code> 互不相同 · C4 四处都带质感类 · <b>C5/C6 四处根节点的背景必须是 <code>backgroundColor</code> 长写</b></td></tr>
+            <tr><td>总监弹窗</td><td><code>总监弹窗</code></td><td><code>d-personalize</code></td></tr>
+            <tr><td>设计图工作室</td><td><code>设计图</code></td><td><code>ds-personalize</code></td></tr>
+            <tr><td>分支导图</td><td><code>分支导图</code></td><td><code>mm-personalize</code></td></tr>
+          </tbody>
+        </table>
+        <div class="note warn">
+          <b>🔴 本轮最重要的一条坑：<code>background</code> 简写会重置 <code>background-image</code>。</b><br>
+          「质感」三档（网格 / 点阵 / 玻璃）是用 <code>.dp-textured</code> 的 <code>background-image</code> 实现的。
+          而四个界面的根节点此前都写的是 <code>background: …</code> <b>简写</b> ——简写会把 <code>background-image</code>
+          一起重置为 <code>none</code>，且<b>内联样式的优先级高于类规则</b> ⇒ 类上那条纹理规则<b>永远不生效</b>。<br>
+          现象：用户在面板里点「网格 / 点阵 / 玻璃」，<b>界面上什么都没变</b>，但 <code>html[data-dp-texture]</code> 明明变了
+          —— 用"属性变没变"去验会得到"通过"，只有去问 <code>getComputedStyle(el).backgroundImage</code> 才现形。<br>
+          <b>⇒ 修法：四个根节点一律 <code>backgroundColor</code>（长写）。</b>
+          并留下两道断言：离线 C5/C6（按<b>样式块</b>精确取文本，不许全文件搜 —— 第一版全文件搜命中了
+          <code>MindMap.body</code>、<code>NodeDetailPanel</code>、<code>DirectorHierarchy.root</code>
+          三处"身上没有 <code>.dp-textured</code>、用简写完全无害"的元素，属<b>过度宽泛的负断言误杀</b>），
+          真机 B8 / D4（直接读 <code>computed backgroundImage</code>）。
+        </div>
+        <p><b>可个性化的项目与 CSS 变量</b>（变量一律 <code>--dp-*</code>；色值走变量、纹理走注入样式表）：</p>
+        <table>
+          <thead><tr><th style="width:16%">项</th><th style="width:20%">档位</th><th>变量 / 机制</th></tr></thead>
+          <tbody>
+            <tr><td class="mid">主色</td><td>原生蓝 / 总监紫 / 青 / 琥珀</td><td><code>--dp-ac</code> · <code>--dp-ac-soft</code>（0.16）· <code>--dp-ac-line</code>（0.45）</td></tr>
+            <tr><td class="mid">强调色</td><td>紫 / 绿 / 红 / 青</td><td><code>--dp-ac2</code> · <code>--dp-ac2-soft</code> · <code>--dp-ac2-line</code></td></tr>
+            <tr><td class="mid">质感</td><td>纯色 / 网格(22px) / 点阵(16px) / 玻璃</td><td><code>html[data-dp-texture]</code> 命中 <code>.dp-textured</code> 的 <code>background-image</code>（<b>伪元素 / background-image 写不进 inline style，所以必须走注入样式表</b>）</td></tr>
+            <tr><td class="mid">密度</td><td>紧凑 0.9 / 标准 1 / 宽松 1.15</td><td><code>--dp-density</code>（消费方式 <code>calc(9px * var(--dp-density, 1))</code>）</td></tr>
+            <tr><td class="mid">字号</td><td>小 0.94 / 中 1 / 大 1.08</td><td><code>--dp-font</code>；🔴 <b>根节点不许写死 <code>fontSize</code></b>，否则会掐断继承（离线 C7 专门看这条）</td></tr>
+            <tr><td class="mid">圆角</td><td>直角 4 / 圆角 8 / 大圆角 14</td><td><code>--dp-radius</code> · <code>--dp-radius-sm</code> = r−3（下界 ≥ 2px）· <code>--dp-radius-lg</code> = r+4</td></tr>
+            <tr><td class="mid">导图连线</td><td>曲线 / 折线</td><td><code>html[data-dp-edge]</code> → <code>edgePathFor(…, style)</code> 走贝塞尔或直角折线</td></tr>
+            <tr><td class="mid">显示与动效</td><td>动效 / 小地图 / 状态图例</td><td><code>html[data-dp-motion="0"]</code> 用 <code>!important</code> 停掉全部动画与过渡</td></tr>
+          </tbody>
+        </table>
+        <div class="note ok">
+          <b>清洗与兜底：</b>任何外来对象（旧 localStorage、手改值）都过 <code>normalizePersonalize()</code> <b>逐字段校验</b>：
+          非法色值回落主色、<code>density: 99</code> 回落 <code>1</code>、未知质感回落 <code>grid</code>。
+          <code>pHexSoft()</code> 解析失败回落主色蓝 —— <b>绝不产出 <code>NaN</code></b>（离线 A5–A9）。
+          「恢复默认」按钮必须存在：<b>用户改乱了要能一键回去</b>。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no">G7</span><h3>本板块的证据栈（离线 + 真机）</h3><span class="tag">每一条诉求都有可复跑的命令</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:30%">闸门</th><th style="width:14%">规模</th><th>看住什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>scripts/test-mindmap-logic.mjs</code></td><td class="mid"><b>91 项</b></td><td>板块 F 原有 69 项 + 本轮 G1–G22 二十二项（单框控件正负对照 / 拖动纯函数与夹紧 / 连线跟随 / 布局下限）</td></tr>
+            <tr><td><code>scripts/test-personalize.mjs</code>（本轮新增）</td><td class="mid"><b>81 项</b></td><td>A1–A25 个性化纯函数与 store 行为（含脏数据清洗、订阅退订、改色立刻生效）；B1–B41 四维流转（含 <code>origin</code> 不被覆盖、<code>lastTouchOf</code> 语义、五级优先级正负对照、上限丢弃策略）；C1–C14 <b>四处一致性</b>（源码级）</td></tr>
+            <tr><td><code>scripts/verify-bundle.mjs</code></td><td class="mid"><b>80 项</b></td><td>产物自证：批次 11 契约 + 🔴 <b>真的往 <code>:root</code> 写了 <code>--dp-*</code> 与 <code>html[data-dp-*]</code>、真的把样式表注入 <code>head</code></b>（为此给测试桩补上了 <code>documentElement</code> —— 原先没有它，<code>applyPersonalize()</code> 会在写变量处抛错并被自身 try 吞掉，等于"个性化到底有没有写进 DOM"在产物层完全测不到）</td></tr>
+            <tr><td><code>scripts/verify-flow.mjs</code>（本轮新增）</td><td class="mid"><b>46 项</b><br>连跑 3 次全绿</td><td>A 总监页与原生对话框（A1–A7）· B 右上角个性化（B1–B10）· C 导图单框控件与拖动（C1–C18）· D 设计图与流转跟随（D1–D9，含<b>真实点左侧切到另一个会话</b>这条对照）· E 页面级零错误 + <b>E2 CDP 健康度</b> —— <b>全程 <code>Input.dispatchMouseEvent</code> 真实鼠标 + 点击前命中测试；坐标现取现用</b><br>证据：<code>logs/verify-flow-8.log</code> / <code>-9.log</code> / <code>-10.log</code>（均 <b>46 通过 / 0 失败 / 0 跳过</b>）</td></tr>
+          </tbody>
+        </table>
+        <div class="note warn">
+          <b>真机脚本把渲染进程挂死过两次（都值得记一笔）。</b><br>
+          <b>第一次（静默挂死）</b>：浏览器进程还回 HTTP（<code>/json/list</code> 正常），但 <code>Runtime.evaluate</code>
+          <b>永不返回</b>，脚本静默跑了 <b>8 分 47 秒、一个断言都没输出</b>，进程内存涨到 3.1GB。<br>
+          <b>第二次（超时抛穿、结果全丢）</b>：第 7 次跑在拖动那一步 <code>Input.dispatchMouseEvent</code> 挂满 8s 后抛错，
+          而派发函数当时<b>没有兜底</b> ⇒ 异常直接抛穿顶层 await、进程终止 ⇒ <b>已经跑出来的 45 条断言结果全部丢失</b>，
+          只剩一个堆栈。<br>
+          <b>⇒ 两条纪律</b>：① <b>任何"等待"都必须有硬超时</b> —— 没有超时的等待等于<b>把挂死伪装成正在跑</b>；
+          ② <b>超时一律记账、绝不抛穿</b> —— 所有指针/键盘派发统一记进 <code>cdpTimeouts</code>，
+          收尾由 <b>E2「零超时」</b>断言，非零即判 <code>INVALID</code>（渲染进程无响应 ≠ 产品失败）并置退出码 2。
+          另把拖动步间留 18ms：8 个指针事件零间隔连发比真人"拖"硬得多，第二次挂死正是在这条路径上。<br>
+          <b>副产品</b>：全程落盘日志 + 逐条结论，不再有"卡在哪一步"这种无从下手的状态。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ 板块 H ═══════════════════ -->
+  <div class="blk f">
+    <div class="bh">
+      <span class="k" style="background:var(--acc)">H</span>
+      <h2>总监页背景采用原软件的背景 —— 风格统一（2026-09-12 第四轮就地并入）</h2>
+      <span class="r">1 条诉求 ｜ 6 小节 ｜ 判据是「同一个令牌」而不是「看起来像」 ｜ 附一次「断言把宿主改坏」的事故</span>
+    </div>
+
+    <div class="note warn">
+      <b>用户原话：</b>「总监tap页面的背景采用原软件的背景 保持风格统一」<br>
+      <b>改前的事实（真机回读，不是推测）</b>：宿主界面是<b>半透明玻璃 + 云猫背景图</b>
+      （<code>body</code> 的 <code>background</code> = 横向渐变 + <code>cloud-cat-background.webp</code>，底色 <code>rgb(7, 17, 29)</code>），
+      左侧栏、右侧留白、顶栏都透出这张图；而<b>总监页是一整块死黑 <code>rgb(11, 12, 14)</code></b>，
+      把背景图整片盖住 ⇒ 视觉上与宿主<b>完全割裂</b>。<br>
+      <b>为什么不能「调一个像的色」</b>：宿主换主题（亮色 / 暗色）、换背景图、调玻璃透明度时，
+      手抄的色值<b>不会跟着变</b>，过一阵又会「不统一」。所以本板块的判据是<b>两边读同一个 CSS 变量</b>
+      （<code>--dsw-alias-bg-base</code>），并用正负对照证明它 —— 不是肉眼看「像不像」。
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">H0</span><h3>宿主背景的构成（真机回读）</h3><span class="tag">改别人的样式前先读清楚它</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:27%">层</th><th style="width:31%">真机实值</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>body</code> 背景图</td><td class="mid"><code>linear-gradient(90deg, ...) , url(cloud-cat-background.webp)</code></td>
+                <td>云猫背景图，底色 <code>rgb(7, 17, 29)</code> —— 这就是用户说的「原软件的背景」</td></tr>
+            <tr><td><code>--dsw-alias-bg-base</code></td><td class="mid"><code>rgba(246, 250, 255, 0.40)</code></td>
+                <td><b>定义在 <code>body</code> 上（不在 <code>:root</code>，见 H2）</b>；半透明，背景图透过它显出来</td></tr>
+            <tr><td><code>--dsw-alias-bg-layer-1 / 2 / 3</code></td><td class="mid"><code>0.72 / 0.86 / 纯白</code></td>
+                <td>卡片层次，越「上层」越实；切到暗色主题时同名令牌自动变深色档</td></tr>
+            <tr><td><code>--dsw-alias-label-primary</code></td><td class="mid"><code>#1d2739</code></td>
+                <td>主文字色 —— 亮色主题下是深色（这也印证宿主当前处于亮色态）</td></tr>
+            <tr><td>原生页签容器 <code>.RWZidW_root</code></td><td class="mid"><code>background: var(--dsw-alias-bg-base)</code></td>
+                <td><b>这就是「标准答案」</b>：总监页要与它同值 —— 「风格统一」落到可断言的一句话</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">H1</span><h3>令牌映射：总监页的每个表面都改读宿主令牌</h3><span class="tag">一处改动覆盖全页</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:26%">插件令牌（原）</th><th style="width:34%">改为读宿主令牌</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>--dp-bg-0</code></td><td><code>--dsw-alias-bg-base</code></td><td>根节点底色 / 凹陷面（输入框、凹槽）</td></tr>
+            <tr><td><code>--dp-bg-1</code></td><td><code>--dsw-alias-bg-layer-1</code></td><td>分区卡片（R2.5 / R4 / R5 等）</td></tr>
+            <tr><td><code>--dp-bg-2</code></td><td><code>--dsw-alias-bg-layer-2</code></td><td>上层卡片 / 按钮底</td></tr>
+            <tr><td><code>--dp-line</code> / <code>--dp-line-soft</code></td><td><code>--dsw-alias-border-l2</code> / <code>l1</code></td><td>描边 / 弱分隔</td></tr>
+            <tr><td><code>--dp-t1 / t2 / t3</code></td><td><code>label-primary / secondary / tertiary</code></td><td>主 / 次 / 弱文字</td></tr>
+            <tr><td><code>--dp-shadow</code> / <code>--dp-shadow-sm</code></td><td><code>--dsw-shadow-lv2</code> / <code>lv1</code></td><td>面板阴影（暗底重阴影在白玻璃上会发脏）</td></tr>
+            <tr><td><code>--dp-tex</code> / <code>--dp-tex-strong</code></td><td>插件侧定义（浅色底深蓝灰 / 深色底白）</td>
+                <td>个性化纹理色 —— <b>浅色底上的白色纹理等于不可见</b>，选了「网格」像没选（H3 的 F7）</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>为什么一处改动就够：</b>总监页此前已经把颜色都收敛到 <code>var(--dp-*, fallback)</code>
+          （<code>--dp-line</code> 用了 20 处、<code>--dp-t3</code> 14 处、<code>--dp-bg-2</code> 6 处），
+          硬编码只有 3 处且都是语义色 / 白字按钮。于是<b>只需在总监页根节点上重定义这些令牌</b>，
+          整页就跟着宿主走。作用域刻意<b>只限总监页根节点</b>：思维导图 / 设计图工作室 / 总监弹窗是浮层，
+          仍走原来的深色底（浮层浮在宿主之上，让背景图透进浮层反而会割裂浮层自身）。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">H2</span><h3>🔴 静默失效坑：<code>var()</code> 在「定义处」求值，不在「使用处」</h3><span class="tag">错了不会报错，只会不生效</span></header>
+      <div class="bd">
+        <div class="note warn">
+          <b>现象：</b>把桥接写成 <code>:root{--dp-bg-0:var(--dsw-alias-bg-base)}</code> —— <b>背景完全没有跟随宿主，却没有任何报错</b>，读属性一切正常。<br>
+          <b>原因：</b>CSS 自定义属性里的 <code>var()</code> 是在<b>定义它的那个元素上</b>求值的，不是在「引用它的元素」上求值。
+          而宿主的 <code>--dsw-alias-*</code> 定义在 <code>body</code> 上 —— <b>真机回读 <code>documentElement</code> 上该变量是空串</b>（不是继承得到的值）。
+          于是 <code>:root</code>（即 <code>html</code>）上求值失败、<b>静默</b>落到 fallback。<br>
+          <b>正确做法：</b>桥接必须挂在<b>能继承到宿主令牌</b>的元素上 —— 本插件挂在总监页根节点
+          <code>[data-testid="dp-root"]</code>（它就在 <code>body</code> 内）。<br>
+          <b>看住它的方式：</b>离线闸门 C15 / C16 是一对正反断言 —— <b>必须有宿主令牌桥接</b>，且
+          <b>不许写在 <code>:root</code> 上</b>；产物桩执行闸门再验一次「产物内样式表真的带这块桥接」。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">H3</span><h3>真机断言 F1–F7（真实鼠标 · 真实 computed 值）</h3><span class="tag">53 项 × 连跑 3 次全绿</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:9%">编号</th><th style="width:47%">断言</th><th>实测结果</th></tr></thead>
+          <tbody>
+            <tr><td>F1</td><td>总监页已挂载（后续断言的前提）</td><td class="ok">true</td></tr>
+            <tr><td>F2</td><td>🔴 总监页背景计算值 <b>等于</b> 宿主原生页签 <code>.RWZidW_root</code>（同源同值）</td>
+                <td class="ok">两侧都是 <code>rgba(246, 250, 255, 0.4)</code></td></tr>
+            <tr><td>F3</td><td>🔴 反证：不再是旧的死黑 <code>rgb(11, 12, 14)</code>（防「本来就相等」这种平凡真）</td>
+                <td class="ok">是玻璃色，不是黑</td></tr>
+            <tr><td>F4</td><td>🔴 六个令牌逐个等于宿主令牌（背景 / 卡片 / 卡片2 / 边框 / 主文字 / 次文字）</td><td class="ok">六项全等</td></tr>
+            <tr><td>F5</td><td>🔴 <b>正负对照</b>：临时改宿主令牌 ⇒ 总监页背景<b>立刻跟着变</b>；恢复后<b>回到原值</b></td>
+                <td class="ok"><code>before = after = 玻璃色</code>，<code>during = rgb(10, 20, 30)</code></td></tr>
+            <tr><td>F6</td><td>🔴 无「深色漏网」：客观亮度扫描（亮色宿主下不得存在 L&lt;0.35 且面积 &gt;24×12 的表面）</td>
+                <td class="ok">扫描 130 个元素 · 深色 0 个</td></tr>
+            <tr><td>F7</td><td>🔴 纹理色随主题走（切网格档 ⇒ 真有规则，且纹理色是深蓝灰 <code>rgba(29,39,57,.055)</code> 而非白色）</td>
+                <td class="ok">见左侧实测值</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>F5 是这一板块的核心证据。</b>只验「两边当前相等」是不够的 —— <b>抄一份同色的色值也能相等</b>。
+          把宿主令牌改掉、总监页<b>同步跟着变</b>，才证明二者读的是同一个变量。
+          F6 则是防「改了一半」：有的卡片跟随了、有的还是深色，肉眼容易漏，所以用<b>客观亮度扫描</b>代替肉眼。
+          <br>宿主为暗色主题时 F6 记为<b>跳过</b>（暗色宿主下深色本来就是对的），判据用宿主自己的开关
+          <code>body[data-ds-dark-theme]</code>，不靠色值猜。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">H4</span><h3>🔴 事故：断言把宿主改坏了（已修 · 代价已付）</h3><span class="tag">改别人的状态，就要能让人家完全回到原状</span></header>
+      <div class="bd">
+        <div class="note warn">
+          为了做 F5 的正负对照，脚本要临时修改 <code>body</code> 上的 <code>--dsw-alias-bg-base</code>。
+          第一版收尾用 <code>removeProperty</code> <b>一刀切</b>恢复 —— 但宿主<b>自己在 <code>body</code> 的内联 style 上设了</b>这个变量
+          （毛玻璃底）。<code>removeProperty</code> 把<b>宿主自己的内联值也删掉了</b> ⇒ 值回落到 CSS 规则里的
+          <code>--dsw-static-neutral-bluish-00</code>（纯白）⇒ <b>宿主整个界面的毛玻璃背景被永久改坏</b>：
+          实测 <code>after = rgb(255, 255, 255)</code>，而 <code>before = rgba(246, 250, 255, 0.4)</code>。<br>
+          <b>恢复办法：</b>重载宿主页面，让它自己重设 —— 回读证实 <code>inline = rgba(246, 250, 255, 0.40)</code>，
+          这也反过来<b>确证了那个内联值确实是宿主设的</b>。<br>
+          <b>⇒ 纪律：动别人的状态之前先读原值，恢复时按「原来是怎么设的」还原</b>（原本有内联值就<b>写回原值</b>，
+          原本没有才 <code>removeProperty</code>）。并且「能完全复原」必须是断言的一部分 —— 所以 F5 现在还断言
+          <code>after === before</code>，把「无副作用」也钉住了。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">H5</span><h3>证据栈（四道闸门）</h3><span class="tag">离线看源码 · 桩执行看产物 · 真机看实际渲染</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:38%">闸门</th><th style="width:12%">类型</th><th>看住什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>scripts/test-personalize.mjs</code></td><td class="mid">离线 · 源码</td>
+                <td>C15 有桥接且引用 ≥6 个宿主令牌 / <b>C16 反证不许写在 <code>:root</code></b> / C17 四个映射方向 / C18 纹理色变量化</td></tr>
+            <tr><td><code>scripts/verify-bundle.mjs</code></td><td class="mid">离线 · 产物</td>
+                <td><code>installed.uiTheme</code> 六项契约 + 产物内样式表<b>真的</b>带桥接（+ 同两条反证）</td></tr>
+            <tr><td><code>scripts/verify-flow.mjs</code> F 段</td><td class="mid">真机 · e2e</td>
+                <td>F1–F7：真实鼠标 + 真实 <code>getComputedStyle</code>，含<b>正负对照</b>与亮度扫描</td></tr>
+            <tr><td><code>scripts/cdp-shot.mjs</code></td><td class="mid">真机 · 视觉</td>
+                <td>观感类改动只能靠看图 —— 改前 / 改后两张截图对照（改前整块死黑，改后浅色玻璃）</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ 板块 I ═══════════════════ -->
+  <div class="blk b">
+    <div class="bh">
+      <span class="k" style="background:var(--acc)">I</span>
+      <h2>浮动入口（三颗药丸）· 以及「审核测试自身」（2026-09-12 第五 / 第六轮就地并入）</h2>
+      <span class="r">几何与点击穿透 · 配色随主题 · 定位跟随 ｜ 外加闸门自身的三类失效</span>
+    </div>
+
+    <div class="note warn">
+      <b>为什么单开一块：</b>把总监页背景从<b>整块死黑</b>改成<b>宿主浅色玻璃</b>之后，
+      浮动入口三个缺陷<b>同时暴露</b> —— 黑底上浅色字本来够看、黑底上透明容器吃点击也看不出来、
+      浮动组漂在黑色中部也不显眼。<b>改背景必须重做视觉审核</b>，这一块就是那次重审的账。
+      <br>本块最后一节（I4）记的是<b>闸门自身</b>的三类失效：它们全都伪装成"产品坏了"，
+      而真凶都在测试脚本里 —— <b>闸门报「偶发红」时，先怀疑闸门</b>。
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">I1</span><h3>几何与点击穿透 —— 容器 98×103，药丸 81 / 98 / 63，空隙<b>不许吃事件</b></h3><span class="tag">真机回读</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:24%">量的是什么</th><th style="width:20%">真机值</th><th>契约</th></tr></thead>
+          <tbody>
+            <tr><td>浮动组容器 <code>dsh-director-floatdock</code></td><td><code>98 × 103</code></td>
+                <td><b><code>pointer-events: none</code></b> —— 透明盒子的空隙默认照样吃鼠标事件</td></tr>
+            <tr><td>三颗药丸（思维导图 / 总监 / 设计图）</td><td>宽 <code>81 / 98 / 63</code>，竖排间距 <code>6</code></td>
+                <td><b><code>pointer-events: auto</code></b> —— 药丸自己必须仍可点（<code>none</code> 用过头会把入口弄废）</td></tr>
+            <tr><td>被吃掉的按钮（改前）</td><td><code>dp-send</code> <code>89 × 24</code> 中被吃 <b><code>88 × 19</code></b></td>
+                <td>改前 <code>elementFromPoint(1340, 670)</code> 最上层 = <code>d-floatdock</code> ⇒ 页面自己的按钮<b>静默点不动</b></td></tr>
+            <tr><td>横向占位 <code>FLOAT_DOCK_RESERVE</code></td><td><code>108</code></td>
+                <td>由 <code>FloatDock.js</code> <b>单一真相源</b>导出，<code>DirectorPage</code> 的 R6 / R8 消费 —— <b>光穿透不够</b>，「交给总监整理」在<b>视觉上</b>仍被压住</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>判据分三条，不许合并</b>（第一版混在一起，把 3 处药丸本体误报成"遮挡"）：
+          ① 浮动层矩形内布 <b>5 × 5 网格采样</b>，命中<b>容器</b>一次都不许有；
+          ② 与浮动层相交的<b>带文字的叶子节点</b>计数 = 0（有子节点的布局盒自动排除，不用手写白名单）；
+          ③ 正负对照：三颗药丸<b>自己</b>必须仍可点。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">I2</span><h3>配色 —— 字色走宿主令牌，不是"抄一个浅色"</h3><span class="tag">随主题自动翻转</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:30%">药丸</th><th style="width:26%">改前硬编码色</th><th>改前实测对比度</th></tr></thead>
+          <tbody>
+            <tr><td>思维导图</td><td><code>#7fe3e8</code></td><td><code>1.35 : 1</code></td></tr>
+            <tr><td>总监</td><td><code>#9fc2ff</code></td><td><code>1.63 : 1</code></td></tr>
+            <tr><td>设计图</td><td><code>#b794f6</code></td><td><code>2.21 : 1</code></td></tr>
+          </tbody>
+        </table>
+        <div class="note warn">
+          WCAG AA 正文线是 <code>4.5 : 1</code> —— 三条全部不达标，浅底上<b>几乎不可读</b>（放大截图确认）。
+          <b>改法：</b>字色改用宿主主文字令牌 <code>--dsw-alias-label-primary</code>（亮色主题得深字、暗色得浅字，<b>自动跟随</b>）；
+          强调色只保留在<b>边框 + 淡底</b>上，三颗按钮的身份没丢。实测改后字色 <code>rgb(29, 39, 57)</code>、三颗全等。
+          <br><b>⚠ 陷阱：</b>本组件挂在 <code>dsh-director-dialog-host</code>（body 级图层），<b>不在</b> <code>dp-root</code> 内
+          （实测 <code>closest('[data-testid=dp-root]') === null</code>）⇒ 读不到桥接出来的 <code>--dp-*</code>，
+          <b>必须直接用宿主 <code>--dsw-alias-*</code></b>。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">I3</span><h3>定位 —— 它读的是 composer 的<b>当前位置</b>，不是"上次量到的位置"</h3><span class="tag">含跟随性正负对照</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:26%">会话形态</th><th style="width:30%">composer 真机矩形</th><th>浮动组应有的位置</th></tr></thead>
+          <tbody>
+            <tr><td>空会话（居中大输入区）</td><td><code>[280, 287, 1154, 242]</code></td><td>贴其上方 —— 期望 <code>bottom = 137.6</code></td></tr>
+            <tr><td>有消息（落到底部）</td><td><code>[280, 690, 1154, 126]</code></td><td>仍然贴其上方 —— 与产品<b>同一条公式</b>算出的期望差 ≤ 2px</td></tr>
+            <tr><td>改前的错误状态</td><td>—</td><td>漂到页面中部 <code>bottom = 540.8</code>（y = 172），压住 R2.5 / R2</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>根因：</b>composer 换位置这一变<b>既没有 <code>resize</code> 事件、也不改变根元素盒尺寸</b>，
+          所以只监听 <code>resize</code>（外加 3 个固定定时器）<b>永远接不到</b> ⇒ 存下的 <code>bottom</code> 永久过期。
+          <b>改法：</b>加 <b>500ms 轮询</b>，只在值真的变了才 <code>setState</code>（开销是一次 <code>getBoundingClientRect()</code>）。
+          <br><b>判据踩过两次坑：</b>① 第一版写成"浮动组要贴在 composer 上方" —— 这个判据在"居中"和"靠底"两种形态下<b>都成立</b>，
+          抓不到"用旧几何"这个真问题 ⇒ 改成<b>与当前几何一致</b>（同公式算期望、差 ≤ 2px，状态无关）；
+          ② 又加一组<b>跟随性正负对照</b>：把 composer 挪 <code>translateY(-150px)</code> ⇒ 浮动组必须跟着挪
+          ⇒ <b>照原样恢复</b>并断言回到原值（实测 <code>137.6 → 287.6 → 137.6</code>，transform 已复原）。
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">I4</span><h3>审核<b>测试自身</b> —— 闸门的四类失效：跨运行污染 / 静态前提 / 平凡真 / 测量口径</h3><span class="tag">产品源码零改动</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:22%">失效类型</th><th style="width:40%">现象与真因</th><th>修法</th></tr></thead>
+          <tbody>
+            <tr><td><b>跨运行污染</b></td>
+                <td>工作室 e2e 的 C13「Esc 逐层退」<b>时绿时红</b>（r1 绿 / r2 r3 红）。真凶在<b>同一脚本的另一段</b>：
+                    C16.2「逐个真实点击顶栏每个按钮」点开了 <code>ds-personalize</code>（<b>开合按钮</b>）却没人关它，
+                    该面板在 <code>window</code> 捕获阶段 <code>stopPropagation()</code> <b>把 Esc 吃掉</b>；
+                    面板还留到运行结束（脚本<b>不重载页面</b>）⇒ 下一次运行连带红</td>
+                <td>关闭逻辑抽成<b>一处真相源</b>（<code>closeFloatLayers()</code>）；"逐个点击"的循环每轮<b>当场还原</b>并<b>单独断言还原成功</b>；收尾做<b>环境复原</b>并断言 ⇒ <b>让每次运行的起点等价</b></td></tr>
+            <tr><td><b>静态前提</b></td>
+                <td>折叠段<b>偶发红</b>，载荷 <code>{before: 11, after: 13}</code> —— 第一次点击后节点数<b>反而变多</b>：
+                    探针挑节点时<b>只看"可折叠"、不看"当前是否已展开"</b>，挑到一个已折叠的 ⇒ 那一击其实是"展开"</td>
+                <td>① 先把折叠状态<b>归一到全展开</b>并断言；② 探针只从 <code>data-collapsed !== "1"</code> 里挑；
+                    ③ 加<b>正负对照</b>：人为折一个 ⇒ 必须 &gt; 0 ⇒ 归一 ⇒ 必须回 0（否则第①步是空真）</td></tr>
+            <tr><td><b>平凡真</b></td>
+                <td>① 断言「个性化吃掉 Esc 后待确认<b>没动</b>」—— 当 Esc 通道<b>整体失效</b>时它<b>照样绿</b>（"没动"有两个原因，判据分不出）；
+                    ② 导图声称覆盖「个性化 → 菜单 → 右侧面板 → 导图」四层，却<b>从不打开个性化面板</b> ⇒ 那一层恒为 <code>false</code></td>
+                <td>① 配<b>正对照</b>：同一状态下（个性化未开）按一次 Esc，待确认<b>必须</b>被吃掉，证明通道是通的；
+                    ② 在序列之前用<b>真实按钮</b>把面板真的打开并断言已打开</td></tr>
+            <tr><td><b>测量口径</b></td>
+                <td>把判据从 <code>allCollapsed &gt; 0</code> 收紧成"<b>精确等于</b>目标集合"后<b>稳定红</b>：
+                    <code>{allCollapsed: 2, collapsibleNonRoot: 1}</code>。真因是 <code>data-collapsed</code> <b>一个语义标在两个元素上</b>
+                    （节点本体 <code>MindMap.js:676</code> + 框内折叠控件 <code>:733</code>）⇒ 数出来是 2 倍。<b>产品没漏折</b></td>
+                <td>计数钉死到 <code>[data-testid="mm-node"][data-collapsed="1"]</code>。凡"按个数对账"，<b>先钉死量的是哪一类元素</b>。
+                    <br>⚠ 注意这条是<b>收紧判据才暴露的</b> —— 松判据（<code>&gt; 0</code>）对口径错误<b>完全无感</b></td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <b>新增的两条"测试可信度"机制（可移植到任何 e2e）：</b>
+          <br>· <b>点击落点自检</b>：每次点击前读 <code>elementsFromPoint</code> 的栈顶，必须落在目标子树内 ⇒
+          把"静默打偏"变成<b>点名</b>（本轮 44 次点击 / 0 次打偏，也是靠它排除了"打偏"这个嫌疑方向）。
+          <br>· <b>环境复原</b>：跑完把工作室与三类浮层关回去<b>并断言</b> —— 比"重跑到绿"可靠。
+          <br>· <b>幂等性证据</b>：三次连跑的载荷<b>逐字一致</b>（关键断言的 JSON 完全相同）。
+        </div>
+        <table>
+          <thead><tr><th style="width:34%">闸门</th><th style="width:16%">结果</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>verify-design-studio.mjs</code></td><td class="ok">90 / 90 ×3</td><td>含 Esc <b>四层栈</b> 8 条 + 测试可信度 2 条；载荷逐字一致</td></tr>
+            <tr><td><code>verify-mindmap.mjs</code></td><td class="ok">86 / 86 ×3</td><td>折叠段含归零前置 / 正负对照 / 精确对账</td></tr>
+            <tr><td><code>verify-flow.mjs</code></td><td class="ok">57 / 57 ×3</td><td>F8–F11：不吃点击 · 配色随主题 · 位置不漂 · 跟随性正负对照</td></tr>
+            <tr><td>构建 <code>lib/client.js</code></td><td class="ok">890,104 B</td><td>54 模块 · 452 = 452（171 import）—— 本轮<b>逐字节不变</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="foot">
     V16 · 设计图 + 需求图 + 交互逻辑 ｜ 单文件自包含 · 零外链 · 零反引号<br>
-    配套阅读：V13（结构基线 R1–R8）· V15.1（画面与交互审核 16+13 项）· V12（八视图素材）· V14.1（形态作废，三处内容已回收）<br>
-    取证来源：dsh-client-ui-conversation / dsh-client-runtime / dsh-session 宿主源码 + 真机 DOM 实测（1442 × 816，1:1.22 折算为 1180 × 644）
+    板块 A 高保真 · B 需求图 · C 交互逻辑 · <b>D 设计图工作室</b> · <b>E 保存 / 版本 / 窗口安全区 / E7 连续点击可用性</b> · <b>F 思维导图元素库（18 条总账）</b> · <b>G 单框控件 / 框可拖动 / 右侧对话 / 四维流转 / 四处个性化与质感</b> · <b>I 浮动入口（几何 / 点击穿透 / 配色 / 定位）+ 审核测试自身</b> · <b>H 总监页背景与宿主统一（令牌桥接 + 正负对照）</b>（D、E、F、G、H 均为 2026-09-12 就地并入，不新开文档）<br>
+    配套阅读：V13（结构基线 R1–R8）· V15.1（画面与交互审核 16+13 项）· V12（八视图素材）· V14.1（形态作废，三处内容已回收）· <code>docs/00-统筹入口/10-当前基线-落死锚点-V16.md</code>（现状唯一权威）<br>
+    取证来源：dsh-client-ui-conversation / dsh-client-runtime / dsh-session 宿主源码 + 真机 DOM 实测（1442 × 816，1:1.22 折算为 1180 × 644）<br>
+    🔴 本稿的坐标、尺寸、文案均为<b>真机回读</b>（<code>getBoundingClientRect</code> / <code>getComputedStyle</code> / <code>windowControlsOverlay</code>），不是估算值 —— 改实现前请先重跑一次回读
   </div>
 </div>
 </div>

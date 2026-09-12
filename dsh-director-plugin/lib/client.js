@@ -22,6 +22,14 @@ window.__ModuleLoader__.load({
 
 		// ── util/debug.js ──
 		__defs["util/debug.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：D3 DSH 统一调试日志工具（**A3+D3 合并后的权威实现**）
+			 * 引用：—
+			 * 上游：bridge/chat-bridge.js, bridge/nav-hook.js, bridge/split.js, client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorFlow.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/FloatDock.js, components/MindMap.js, logic/director-run.js, logic/summarize.js, logic/sync.js, mount.js, store/duty-config.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * util/debug.js — D3 DSH 统一调试日志工具（**A3+D3 合并后的权威实现**）
 			 *
@@ -183,6 +191,14 @@ window.__ModuleLoader__.load({
 
 		// ── util/log-collector.js ──
 		__defs["util/log-collector.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A3 专用 Log 收集器
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * util/log-collector.js — A3 专用 Log 收集器
 			 *
@@ -248,8 +264,101 @@ window.__ModuleLoader__.load({
 			exports.installV9Log = installV9Log;
 		};
 
+		// ── util/no-drag.js ──
+		__defs["util/no-drag.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 E8（Windows 标题栏拖拽带穿透：可交互元素必须 no-drag）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * 桌面壳「窗口拖拽带」穿透 —— 把可交互元素从 OS caption area 里救出来
+			 *
+			 * ── 这份文件在整体里的位置 ───────────────────────────────────────────────
+			 *   由 `client-entry.js` 在 boot 时调用一次（幂等）。
+			 *   解决的问题**只存在于桌面壳**，浏览器里完全不复现。
+			 *
+			 * 🔴 现象（用户连续反馈三次的那件事）
+			 *   设计图工作室铺满整个窗口 ⇒ 顶栏（CSS y ≈ 7~33）整条落在
+			 *   **Windows 的 caption area**（本机 `navigator.windowControlsOverlay
+			 *   .getTitlebarAreaRect().height` = 44）里。
+			 *   鼠标落在该带内，系统返回 `HTCAPTION`，消息被当作**拖动窗口**处理，
+			 *   **渲染进程永远收不到** —— 保存/改名/新建图/复制/重载框架/导出/删除/
+			 *   版本/缩放 全部点不动，**连 mousemove 都进不来**。
+			 *
+			 * 🔴 为什么此前所有闸门都是绿的（2026-09-12 实测）
+			 *   · CDP `Input.dispatchMouseEvent` **直接注入渲染进程**，绕过窗口消息循环
+			 *     ⇒ 它看不见这个拦截，反而一路报绿；
+			 *   · `document.elementsFromPoint()` 只会说"没遮挡"（DOM 层确实没遮挡）。
+			 *   ⇒ 静态闸门 / 离线单测 / CDP e2e **原理上**都测不到这一类故障。
+			 *   ⇒ 唯一判据是 **OS 级真实鼠标**：`python scripts/_osm.py click <物理x> <物理y>`。
+			 *
+			 * 🔴 修复依据（宿主自己早就踩过）
+			 *   宿主样式表里有 `.Y4b3va_topbar => drag` 与
+			 *   `.Y4b3va_topbar button => no-drag` 成对出现 ——
+			 *   **拖拽区里的可交互元素必须显式 no-drag**，否则永远点不到。
+			 *
+			 * 设计取舍：**只给可交互元素加 no-drag，容器保持默认**。
+			 *   这样顶栏的空白处仍然可以拖动窗口（符合"标题栏"的直觉），
+			 *   而不是把整个铺满的工作室变成一块拖不动的死板。
+			 */
+			const STYLE_ID = "dsh-no-drag-style";
+			
+			/** 选择器：插件自有容器（id 以 `dsh-` 开头）内的所有可交互元素 */
+			const NO_DRAG_SELECTOR = [
+				'[id^="dsh-"] button',
+				'[id^="dsh-"] input',
+				'[id^="dsh-"] select',
+				'[id^="dsh-"] textarea',
+				'[id^="dsh-"] a',
+				'[id^="dsh-"] [role="button"]'
+			].join(",");
+			
+			/** 规则正文（普通字符串 —— 构建器对模板字符串有反引号限制，这里刻意不用） */
+			const NO_DRAG_RULE =
+				NO_DRAG_SELECTOR + "{-webkit-app-region:no-drag !important;}";
+			
+			/**
+			 * 注入（或刷新）no-drag 样式。幂等：重复调用只更新同一个 style 节点。
+			 * @returns {boolean} 是否注入成功（无 document 时返回 false，浏览器里也安全）
+			 */
+			function installNoDrag() {
+				try {
+					if (typeof document === "undefined" || !document) return false;
+					let el = document.getElementById(STYLE_ID);
+					if (!el) {
+						el = document.createElement("style");
+						el.id = STYLE_ID;
+						el.setAttribute("data-dsh-purpose", "no-drag:escape-window-caption-area");
+						(document.head || document.documentElement).appendChild(el);
+					}
+					if (el.textContent !== NO_DRAG_RULE) el.textContent = NO_DRAG_RULE;
+					return true;
+				} catch (e) {
+					return false;
+				}
+			}
+			
+			__defaults["util/no-drag.js"] = installNoDrag;
+			
+			exports.NO_DRAG_SELECTOR = NO_DRAG_SELECTOR;
+			exports.NO_DRAG_RULE = NO_DRAG_RULE;
+			exports.installNoDrag = installNoDrag;
+		};
+
 		// ── store/layout.js ──
 		__defs["store/layout.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A11 布局 store（弹窗三态扩展版）
+			 * 引用：T-PLUG-015
+			 * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/layout.js — A11 布局 store（弹窗三态扩展版）
 			 *
@@ -334,7 +443,24 @@ window.__ModuleLoader__.load({
 				dialogOpen: false,
 				dialogCollapsed: false,
 				activeNodeId: null,
-				leftTab: LEFT_TAB.DIRECTOR
+				leftTab: LEFT_TAB.DIRECTOR,
+				// ── 本轮新增（设计图工作室 · T-PLUG-018）──
+				//  📐 设计图是**全屏覆盖层**（用户：「点击铺满全屏」），与弹窗三态无关，
+				//     故单开一个布尔。打开时弹窗前端的浮层会让位（避免两层浮层叠着打架）。
+				designStudioOpen: false,
+				// 分支导图（血缘树）覆盖层。与设计图同为全屏层，但内容不同：
+				//   导图 = 真实会话的分支血缘（消费 sessions.fork 写入的 meta.parentSession）
+				//   设计图 = 手工编辑的界面稿（元素 + 交互逻辑）
+				mindmapOpen: false,
+				// 浮动按钮组里「思维导图」在前、「总监」在后（用户明确要求顺序）
+				floatDockOpen: true,
+				/* ── 本轮新增：导图节点的**用户摆放位置**（用户：思维导图的框不能动 需要可以移动）──
+				 * 🔴 放这里而不是新开一个持久化 key：本 store 的语义就是"在哪"（宽度/折叠/焦点），
+				 *    节点坐标同属"在哪"。再开第四个 key 只会让"复位"变成半复位。
+				 * 🔴 只存**用户拖过的**节点（未拖过的走自动布局）⇒ 数据量最小、自动布局改动仍能生效。
+				 *    形如 { "<sessionId>": { x, y } }
+				 */
+				mmPos: {}
 			});
 			
 			function createDirectorLayoutStore() {
@@ -411,7 +537,40 @@ window.__ModuleLoader__.load({
 						notify();
 					},
 					/** 全部复位（调试/测试用） */
-					resetLayout: () => { state = { ...DEFAULTS }; notify(); }
+					resetLayout: () => { state = { ...DEFAULTS }; notify(); },
+			
+					/* ── 本轮新增：设计图工作室（T-PLUG-018）──────────────── */
+					/** 打开/关闭设计图工作室（全屏覆盖层；**不依赖 dialogOpen**） */
+					setDesignStudio: (v) => { state = { ...state, designStudioOpen: Boolean(v) }; notify(); },
+					toggleDesignStudio: () => { state = { ...state, designStudioOpen: !state.designStudioOpen }; notify(); },
+					/** 浮动按钮组显隐 */
+					setFloatDock: (v) => { state = { ...state, floatDockOpen: Boolean(v) }; notify(); },
+			
+					/* ── 本轮新增：分支导图覆盖层 ─────────────────────────── */
+					setMindmap: (v) => { state = { ...state, mindmapOpen: Boolean(v) }; notify(); },
+					toggleMindmap: () => { state = { ...state, mindmapOpen: !state.mindmapOpen }; notify(); },
+					/** 记录用户把某个框拖到哪（**只改画面位置，不改血缘**） */
+					setNodePos: (sessionId, pos) => {
+						if (!sessionId || !pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false;
+						state = { ...state, mmPos: { ...state.mmPos, [String(sessionId)]: { x: Math.round(pos.x), y: Math.round(pos.y) } } };
+						notify();
+						return true;
+					},
+					/** 单个框归位（回到自动布局） */
+					clearNodePos: (sessionId) => {
+						if (!state.mmPos || !(String(sessionId) in state.mmPos)) return false;
+						const next = { ...state.mmPos };
+						delete next[String(sessionId)];
+						state = { ...state, mmPos: next };
+						notify();
+						return true;
+					},
+					/** 全部归位（"自动布局"按钮） */
+					resetNodePos: () => {
+						state = { ...state, mmPos: {} };
+						notify();
+						return true;
+					}
 				};
 			}
 			
@@ -433,6 +592,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/theme.js ──
 		__defs["store/theme.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A12 V9-Design D-01 主题变量体系
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/theme.js — A12 V9-Design D-01 主题变量体系
 			 *
@@ -512,6 +679,14 @@ window.__ModuleLoader__.load({
 
 		// ── config/model.js ──
 		__defs["config/model.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：C2 配置与本地模型
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorWorkbench.js, logic/director-run.js, logic/process.js, logic/review.js, logic/summarize.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * config/model.js — C2 配置与本地模型
 			 *
@@ -646,6 +821,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/docs-index-inject.js ──
 		__defs["store/docs-index-inject.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A13 + A14 DSH_DOCS_INDEX 注入壳（**剥离改造版**）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/docs-index-inject.js — A13 + A14 DSH_DOCS_INDEX 注入壳（**剥离改造版**）
 			 *
@@ -758,6 +941,14 @@ window.__ModuleLoader__.load({
 
 		// ── dev/layout-probe.js ──
 		__defs["dev/layout-probe.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：C1 V9-Design 布局探针
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * dev/layout-probe.js — C1 V9-Design 布局探针
 			 *
@@ -876,6 +1067,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/messages.js ──
 		__defs["store/messages.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A1 总监消息 store（内存层）
+			 * 引用：批次 3
+			 * 上游：client-entry.js, store/create-store.js, store/persist.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C（消息投递时序）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/messages.js — A1 总监消息 store（内存层）
 			 *
@@ -933,6 +1132,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/idb.js ──
 		__defs["store/idb.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：IndexedDB 持久化层（主要机制）
+			 * 引用：—
+			 * 上游：logic/discover.js, logic/sync.js, store/branch.js, store/docs.js, store/hierarchy.js, store/memory.js, store/persist.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/idb.js — IndexedDB 持久化层（主要机制）
 			 *
@@ -1166,6 +1373,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/memory.js ──
 		__defs["store/memory.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A2 V9 记忆体系 CRUD
+			 * 引用：—
+			 * 上游：client-entry.js, logic/process.js, store/branch.js
+			 * 下游：store/idb.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/memory.js — A2 V9 记忆体系 CRUD
 			 *
@@ -1285,6 +1500,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/branch.js ──
 		__defs["store/branch.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A4 分支创建与记忆面板交互
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：store/idb.js, store/memory.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C（分支生命周期）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/branch.js — A4 分支创建与记忆面板交互
 			 *
@@ -1567,6 +1790,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/docs.js ──
 		__defs["store/docs.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A5 总监文档 store（V8）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：store/idb.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/docs.js — A5 总监文档 store（V8）
 			 *
@@ -1774,6 +2005,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/file-adapter.js ──
 		__defs["store/file-adapter.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A6 持久化探测 + 文件通道适配器
+			 * 引用：批次 1
+			 * 上游：client-entry.js, store/create-store.js, store/persist.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/file-adapter.js — A6 持久化探测 + 文件通道适配器
 			 *
@@ -2159,6 +2398,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/cookie.js ──
 		__defs["store/cookie.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：V10 Cookie 同步存储（分块）
+			 * 引用：—
+			 * 上游：store/persist.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/cookie.js — V10 Cookie 同步存储（分块）
 			 *
@@ -2255,6 +2502,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/persist.js ──
 		__defs["store/persist.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A7 + A8 总监 store 的加载与保存
+			 * 引用：批次 3
+			 * 上游：client-entry.js, logic/process.js, store/create-store.js
+			 * 下游：store/messages.js, store/idb.js, store/cookie.js, store/file-adapter.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/persist.js — A7 + A8 总监 store 的加载与保存
 			 *
@@ -2564,6 +2819,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/create-store.js ──
 		__defs["store/create-store.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A9 `createDirectorStore` store 工厂
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js
+			 * 下游：store/messages.js, store/persist.js, store/file-adapter.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/create-store.js — A9 `createDirectorStore` store 工厂
 			 *
@@ -2789,6 +3052,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/use-store.js ──
 		__defs["store/use-store.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：A10 `useDirectorStore` React hook 绑定
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/use-store.js — A10 `useDirectorStore` React hook 绑定
 			 *
@@ -2851,6 +3122,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/process.js ──
 		__defs["logic/process.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：D1 总监对话核心处理函数
+			 * 引用：批次 6
+			 * 上游：client-entry.js
+			 * 下游：config/model.js, store/persist.js, store/memory.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/process.js — D1 总监对话核心处理函数
 			 *
@@ -3013,6 +3292,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/review.js ──
 		__defs["logic/review.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：D2 对话返回审核（**保留能力，当前无调用点**）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：config/model.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/review.js — D2 对话返回审核（**保留能力，当前无调用点**）
 			 *
@@ -3092,6 +3379,14 @@ window.__ModuleLoader__.load({
 
 		// ── components/DirectorFlow.js ──
 		__defs["components/DirectorFlow.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：E1 小窗总监对话流组件
+			 * 引用：批次 6
+			 * 上游：client-entry.js
+			 * 下游：store/create-store.js, store/use-store.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * components/DirectorFlow.js — E1 小窗总监对话流组件
 			 *
@@ -3270,6 +3565,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/plugin-db.js ──
 		__defs["store/plugin-db.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：插件**自有**数据元层（独立数据库）
+			 * 引用：V16 诉求 7（落死：数据不丢） · 要求 1 · 17 号文 §2.2 · 17 号文 §2.3 · 17 号文 §1 · T-PLUG-009
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, logic/routing.js, store/design.js, store/hierarchy.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D7（锚点契约 · 设计图冷备库）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/plugin-db.js — 插件**自有**数据元层（独立数据库）
 			 *
@@ -3320,16 +3623,23 @@ window.__ModuleLoader__.load({
 			
 			/** 插件自有数据库（**与宿主库无关**，不参与其版本协商） */
 			const PLUGIN_DB_NAME = "dsh-director-plugin-db";
-			const PLUGIN_DB_VERSION = 1;
+			/**
+			 * 🔴 v1 → v2（2026-09-12）：新增 `directorDesigns`（设计图冷备，T-PLUG-018）。
+			 *    仅动**本库**版本，宿主 `dsh-director-db` v3 的协商互不可见（IDB 版本协商只在同名库内发生）。
+			 *    `onupgradeneeded` 是**幂等加法**（遍历 PDB_ALL_STORES 只补缺失的 store）⇒ 老库平滑升级。
+			 */
+			const PLUGIN_DB_VERSION = 2;
 			
-			/** 6 个 store（对齐 17 号文 §2.2 原始设计的 6 类记忆） */
+			/** 7 个 store（原 6 类记忆 + 设计图冷备） */
 			const PDB = Object.freeze({
 				NODES: "directorNodes",
 				CONVERSATIONS: "directorConversations",
 				PLANS: "directorPlans",
 				REVIEWS: "directorReviews",
 				DECISIONS: "directorDecisions",
-				TODOS: "directorTodos"
+				TODOS: "directorTodos",
+				/** 设计图快照冷备（localStorage 的兜底恢复源，不是主存） */
+				DESIGNS: "directorDesigns"
 			});
 			
 			/**
@@ -3342,7 +3652,9 @@ window.__ModuleLoader__.load({
 				[PDB.PLANS]: { keyPath: "planId", indexes: { nodeId: "nodeId" } },
 				[PDB.REVIEWS]: { keyPath: "reviewId", indexes: { nodeId: "nodeId", targetId: "targetId" } },
 				[PDB.DECISIONS]: { keyPath: "decisionId", indexes: { nodeId: "nodeId" } },
-				[PDB.TODOS]: { keyPath: "todoId", indexes: { nodeId: "nodeId" } }
+				[PDB.TODOS]: { keyPath: "todoId", indexes: { nodeId: "nodeId" } },
+				// 设计图冷备：单条快照记录（graph 内聚，无需索引）
+				[PDB.DESIGNS]: { keyPath: "designId", indexes: {} }
 			});
 			
 			/** 全部 store 名（校验用） */
@@ -3592,6 +3904,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/hierarchy.js ──
 		__defs["store/hierarchy.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：多层级总监结构（对话级 / 文件夹级 / 全局级）
+			 * 引用：要求 1 · 17 号文 §2.1 · T-PLUG-009
+			 * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/summarize.js, logic/sync.js, store/duty-config.js
+			 * 下游：store/idb.js, store/plugin-db.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/hierarchy.js — 多层级总监结构（对话级 / 文件夹级 / 全局级）
 			 *
@@ -3993,6 +4313,14 @@ window.__ModuleLoader__.load({
 
 		// ── util/bus.js ──
 		__defs["util/bus.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：层级数据变更事件总线（极简，零依赖）
+			 * 引用：—
+			 * 上游：components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, logic/summarize.js, logic/sync.js, mount.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * util/bus.js — 层级数据变更事件总线（极简，零依赖）
 			 *
@@ -4041,6 +4369,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/summarize.js ──
 		__defs["logic/summarize.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：分层总结 + 分梯度调用
+			 * 引用：03 号文 §4.3 · 17 号文 §1
+			 * 上游：client-entry.js, components/DirectorHierarchy.js
+			 * 下游：config/model.js, store/hierarchy.js, util/debug.js, util/bus.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/summarize.js — 分层总结 + 分梯度调用
 			 *
@@ -4254,6 +4590,14 @@ window.__ModuleLoader__.load({
 
 		// ── bridge/split.js ──
 		__defs["bridge/split.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）
+			 * 引用：要求 5 · 要求 4
+			 * 上游：bridge/chat-bridge.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, mount.js
+			 * 下游：util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * bridge/split.js — 「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）
 			 *
@@ -4573,6 +4917,14 @@ window.__ModuleLoader__.load({
 
 		// ── bridge/chat-bridge.js ──
 		__defs["bridge/chat-bridge.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）
+			 * 引用：要求 5 · 要求 3
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, mount.js
+			 * 下游：bridge/split.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * bridge/chat-bridge.js — 「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）
 			 *
@@ -4815,6 +5167,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/routing.js ──
 		__defs["logic/routing.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：智能路由（要求 8）＋ 六维审核（要求 3）
+			 * 引用：要求 8 · 要求 3 · 17 号文 §1
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js
+			 * 下游：store/plugin-db.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C（输入路由决策树）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/routing.js — 智能路由（要求 8）＋ 六维审核（要求 3）
 			 *
@@ -5205,6 +5565,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/duties.js ──
 		__defs["logic/duties.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监职责配置定义（03号文 §3.1「执行逻辑项」）
+			 * 引用：03 号文 §3.1
+			 * 上游：components/DirectorWorkbench.js, logic/director-run.js, store/duty-config.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/duties.js — 总监职责配置定义（03号文 §3.1「执行逻辑项」）
 			 *
@@ -5325,6 +5693,14 @@ window.__ModuleLoader__.load({
 
 		// ── store/duty-config.js ──
 		__defs["store/duty-config.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：职责三级继承（03号文 §3.2「继承制」）
+			 * 引用：03 号文 §3.2
+			 * 上游：client-entry.js, components/DirectorWorkbench.js
+			 * 下游：store/hierarchy.js, logic/duties.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * store/duty-config.js — 职责三级继承（03号文 §3.2「继承制」）
 			 *
@@ -5471,6 +5847,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/director-run.js ──
 		__defs["logic/director-run.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
+			 * 引用：03 号文 §1.2
+			 * 上游：client-entry.js, components/DirectorWorkbench.js
+			 * 下游：logic/duties.js, config/model.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/director-run.js — 总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
 			 *
@@ -5816,6 +6200,14 @@ window.__ModuleLoader__.load({
 
 		// ── components/DirectorWorkbench.js ──
 		__defs["components/DirectorWorkbench.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监工作台（方案 E · 文档 06 §五）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js
+			 * 下游：logic/duties.js, store/duty-config.js, logic/director-run.js, store/create-store.js, store/use-store.js, store/hierarchy.js, config/model.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * components/DirectorWorkbench.js — 总监工作台（方案 E · 文档 06 §五）
 			 *
@@ -6065,6 +6457,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/discover.js ──
 		__defs["logic/discover.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：真实会话 / 文件夹（workspace）数据源发现层
+			 * 引用：—
+			 * 上游：client-entry.js, logic/branch-tree.js, logic/sync.js
+			 * 下游：store/idb.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/discover.js — 真实会话 / 文件夹（workspace）数据源发现层
 			 *
@@ -6264,6 +6664,14 @@ window.__ModuleLoader__.load({
 
 		// ── logic/sync.js ──
 		__defs["logic/sync.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：自动同步：让**每一个**对话 / 文件夹都拥有总监
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorHierarchy.js
+			 * 下游：store/hierarchy.js, logic/discover.js, store/idb.js, util/debug.js, util/bus.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * logic/sync.js — 自动同步：让**每一个**对话 / 文件夹都拥有总监
 			 *
@@ -6486,6 +6894,14 @@ window.__ModuleLoader__.load({
 
 		// ── components/DirectorHierarchy.js ──
 		__defs["components/DirectorHierarchy.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：多层级总监面板（方案 C：层级树 + 主内容区）
+			 * 引用：03 号文 §1.3 · 17 号文 §2.1 · 17 号文 §1 · 03 号文 §4.3
+			 * 上游：client-entry.js, components/DirectorDialog.js
+			 * 下游：store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * components/DirectorHierarchy.js — 多层级总监面板（方案 C：层级树 + 主内容区）
 			 *
@@ -6855,8 +7271,739 @@ window.__ModuleLoader__.load({
 			exports.DirectorHierarchy = DirectorHierarchy;
 		};
 
+		// ── store/personalize.js ──
+		__defs["store/personalize.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：个性化设定（右上角「⚙ 个性化」的单一真相源）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorPage.js, components/MindMap.js, components/PersonalizePanel.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * store/personalize.js — 个性化设定（右上角「⚙ 个性化」的单一真相源）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  需求原文（用户）：「目前总监 tap 页面，还有三个插件页面 文字背景，全部找审美重新
+			 *   审核一下质感加上，同时都在右上角加自定义个性化设定」
+			 *
+			 *  ⇒ 落地口径：
+			 *     ① **一处定义**（本文件）→ 四个界面（总监页 / 总监弹窗 / 设计图工作室 / 分支导图）
+			 *        全部消费同一批 CSS 变量与同一份样式表，**不各自写色值**；
+			 *     ② 四处的右上角都放同一个 `PersonalizePanel`（components/PersonalizePanel.js）；
+			 *     ③ 改动**即时生效**：设定写入 `:root` 的 CSS 变量 + `<html data-dp-*>` 属性，
+			 *        React 组件用 `style={{ borderRadius: "var(--dp-radius)" }}` 消费 ⇒ 无需重渲染整棵树。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 为什么用「CSS 变量 + 注入样式表」而不是「props 传样式」
+			 * ══════════════════════════════════════════════════════════════════
+			 *  质感（网格 / 点阵 / 玻璃）需要 `background-image` + `backdrop-filter` + 伪元素，
+			 *  这些**用 inline style 写不出来或写不干净**（伪元素 inline 无法表达）。
+			 *  故：色值/尺寸走 CSS 变量（inline 可消费），纹理走注入样式表里的
+			 *  `html[data-dp-texture="..."] .dp-textured { ... }` 规则（class 可消费）。
+			 *  两层配合 ⇒ 换质感只改一个属性，四个界面同时变。
+			 *
+			 * ⚠️ 持久化 key `dsh.director.personalize`（本项目独有，与布局 key 分开：
+			 *    布局是"在哪"，个性化是"长什么样"，混在一起会让"复位布局"顺手改掉配色）。
+			 *
+			 * ⚠️ 本文件**不 import react**（纯数据 + DOM 副作用）⇒ 离线单测可直接 import。
+			 */
+			
+			const PERSONALIZE_KEY = "dsh.director.personalize";
+			
+			/** 样式表节点 id（幂等注入；重跑只改内容不叠加节点） */
+			const PERSONALIZE_STYLE_ID = "dsh-personalize-css";
+			
+			/** 默认设定（= 设计稿的默认观感；改动这里等于改默认观感） */
+			const P_DEFAULTS = Object.freeze({
+				accent: "#2f6feb",
+				accent2: "#8957e5",
+				density: 1,
+				fontScale: 1,
+				radius: 8,
+				texture: "grid",
+				motion: true,
+				edge: "curve",
+				minimap: true,
+				legend: true
+			});
+			
+			/** 主色（4 档，全部取宿主暗色系里"能当强调色"的） */
+			const P_ACCENTS = Object.freeze([
+				{ key: "#2f6feb", label: "原生蓝", desc: "与 Harness 原生主色一致（默认）" },
+				{ key: "#8957e5", label: "总监紫", desc: "与总监徽章同色" },
+				{ key: "#39c5cf", label: "青", desc: "冷色，适合长时间看" },
+				{ key: "#d29922", label: "琥珀", desc: "暖色，醒目" }
+			]);
+			
+			/** 强调色（用于"建议/待审"类徽章，与主色成对） */
+			const P_ACCENT2 = Object.freeze([
+				{ key: "#8957e5", label: "紫" },
+				{ key: "#3fb950", label: "绿" },
+				{ key: "#e5534b", label: "红" },
+				{ key: "#39c5cf", label: "青" }
+			]);
+			
+			/** 密度（行高 / 间距的整体乘数） */
+			const P_DENSITY = Object.freeze([
+				{ key: 0.9, label: "紧凑", desc: "同屏多 20% 信息" },
+				{ key: 1, label: "标准", desc: "设计稿基线" },
+				{ key: 1.15, label: "宽松", desc: "更好读，更少信息" }
+			]);
+			
+			/** 字号（整体缩放） */
+			const P_FONT = Object.freeze([
+				{ key: 0.94, label: "小" },
+				{ key: 1, label: "中" },
+				{ key: 1.08, label: "大" }
+			]);
+			
+			/** 圆角 */
+			const P_RADIUS = Object.freeze([
+				{ key: 4, label: "直角", desc: "工程感" },
+				{ key: 8, label: "圆角", desc: "设计稿基线" },
+				{ key: 14, label: "大圆角", desc: "柔和" }
+			]);
+			
+			/** 质感 —— 这是用户点名要的「质感」。每档写明"看起来是什么样"，不写空话。 */
+			const P_TEXTURES = Object.freeze([
+				{ key: "solid", label: "纯色", desc: "无纹理 · 最省电 · 文字对比度最高" },
+				{ key: "grid", label: "网格", desc: "22px 细网格 · 工程图纸感（默认）" },
+				{ key: "dots", label: "点阵", desc: "16px 点阵 · 更轻，不抢视线" },
+				{ key: "glass", label: "玻璃", desc: "半透明 + 背景模糊 · 层叠感（低端机会掉帧）" }
+			]);
+			
+			/** 连线样式（导图） */
+			const P_EDGE = Object.freeze([
+				{ key: "curve", label: "曲线", desc: "三次贝塞尔，思维导图惯例" },
+				{ key: "elbow", label: "折线", desc: "直角折线，更工程化" }
+			]);
+			
+			/** 十六进制 → rgba（解析失败回落主色蓝，绝不产出 NaN） */
+			function pHexSoft(hex, alpha) {
+				try {
+					const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+					if (!m) return "rgba(47,111,235," + alpha + ")";
+					const n = parseInt(m[1], 16);
+					return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + alpha + ")";
+				} catch (e) { return "rgba(47,111,235," + alpha + ")"; }
+			}
+			
+			/** 数值夹紧（防脏数据把界面搞崩） */
+			function clampNum(v, lo, hi, dflt) {
+				const n = Number(v);
+				if (!Number.isFinite(n)) return dflt;
+				return Math.max(lo, Math.min(hi, n));
+			}
+			
+			/**
+			 * 清洗设定：任何外来对象 → 合法设定（**逐字段校验**，不整体信任）。
+			 * localStorage 里的旧数据 / 手改过的值都必须过大门口。
+			 * @param {object} raw
+			 * @returns {object} 完整设定
+			 */
+			function normalizePersonalize(raw) {
+				const r = raw && typeof raw === "object" ? raw : {};
+				const pick = (list, v, dflt) => {
+					const keys = list.map((o) => o.key);
+					return keys.indexOf(v) >= 0 ? v : dflt;
+				};
+				const hexOk = (v) => /^#[0-9a-f]{6}$/i.test(String(v || ""));
+				return {
+					accent: hexOk(r.accent) ? String(r.accent).toLowerCase() : P_DEFAULTS.accent,
+					accent2: hexOk(r.accent2) ? String(r.accent2).toLowerCase() : P_DEFAULTS.accent2,
+					density: pick(P_DENSITY, r.density, P_DEFAULTS.density),
+					fontScale: pick(P_FONT, r.fontScale, P_DEFAULTS.fontScale),
+					radius: pick(P_RADIUS, r.radius, P_DEFAULTS.radius),
+					texture: pick(P_TEXTURES, r.texture, P_DEFAULTS.texture),
+					edge: pick(P_EDGE, r.edge, P_DEFAULTS.edge),
+					motion: r.motion === undefined ? P_DEFAULTS.motion : Boolean(r.motion),
+					minimap: r.minimap === undefined ? P_DEFAULTS.minimap : Boolean(r.minimap),
+					legend: r.legend === undefined ? P_DEFAULTS.legend : Boolean(r.legend)
+				};
+			}
+			
+			/**
+			 * 设定 → CSS 变量表（**纯函数**，可离线断言）。
+			 * 变量名一律 `--dp-*`（dp = director personalize）。
+			 * @param {object} p
+			 * @returns {Record<string,string>}
+			 */
+			function pVarsFor(p) {
+				const s = normalizePersonalize(p);
+				const r = clampNum(s.radius, 0, 24, P_DEFAULTS.radius);
+				return {
+					"--dp-ac": s.accent,
+					"--dp-ac-soft": pHexSoft(s.accent, 0.16),
+					"--dp-ac-line": pHexSoft(s.accent, 0.45),
+					"--dp-ac2": s.accent2,
+					"--dp-ac2-soft": pHexSoft(s.accent2, 0.16),
+					"--dp-ac2-line": pHexSoft(s.accent2, 0.45),
+					"--dp-density": String(s.density),
+					"--dp-font": String(s.fontScale),
+					"--dp-radius": r + "px",
+					"--dp-radius-sm": Math.max(2, r - 3) + "px",
+					"--dp-radius-lg": (r + 4) + "px",
+					"--dp-motion": s.motion ? "1" : "0"
+				};
+			}
+			
+			/**
+			 * 注入样式表文本（**纯函数**，可离线断言"质感档位都真有规则"）。
+			 * 四类规则：
+			 *   ① `.dp-*` 原子类（表面 / 卡片 / 按钮 / 徽章 / 分隔线）
+			 *   ② `[data-testid="dp-root"]` 总监页令牌桥接 —— 底色/文字/边框全部改用宿主
+			 *      `--dsw-alias-*` 令牌，使总监页与原生页签**同源同值**（宿主换主题/换背景图自动跟随）
+			 *   ③ `html[data-dp-texture=...]` 纹理覆盖（纹理色走 `--dp-tex*`，随主题深浅切换）
+			 *   ④ 动效开关（`html[data-dp-motion="0"]` 时停掉全部动画与过渡）
+			 * ⚠️ 文本里**不使用反引号**（避免与下游打包工具链的模板字面量互相干扰）。
+			 */
+			function pCssText() {
+				const L = [];
+				L.push("/* dsh-personalize-css —— 由 store/personalize.js 注入，勿手改 */");
+				L.push(":root{--dp-bg-0:#0b0c0e;--dp-bg-1:#141519;--dp-bg-2:#1c1e23;--dp-line:#31343a;--dp-line-soft:rgba(255,255,255,.08);--dp-t1:#e8eaed;--dp-t2:#c3c8ce;--dp-t3:#8b9199;--dp-shadow:0 10px 30px rgba(0,0,0,.45);--dp-shadow-sm:0 4px 14px rgba(0,0,0,.32);--dp-tex:rgba(255,255,255,.035);--dp-tex-strong:rgba(255,255,255,.07);}");
+				// ① 表面层次：三个层级必须是"看起来递进"的，不是同一个色加边框
+				L.push(".dp-surface{background:var(--dp-bg-1);border:1px solid var(--dp-line);border-radius:var(--dp-radius);}");
+				L.push(".dp-surface-2{background:var(--dp-bg-2);border:1px solid var(--dp-line);border-radius:var(--dp-radius);box-shadow:var(--dp-shadow-sm);}");
+				L.push(".dp-sunken{background:var(--dp-bg-0);border:1px solid var(--dp-line-soft);border-radius:var(--dp-radius);}");
+				L.push(".dp-card{background:var(--dp-bg-2);border:1px solid var(--dp-line);border-radius:var(--dp-radius);padding:calc(7px * var(--dp-density)) calc(9px * var(--dp-density));}");
+				L.push(".dp-chip{font-size:calc(10.5px * var(--dp-font));padding:2px calc(7px * var(--dp-density));border-radius:var(--dp-radius-sm);background:var(--dp-ac-soft);border:1px solid var(--dp-ac-line);color:var(--dp-ac);white-space:nowrap;}");
+				L.push(".dp-chip-2{background:var(--dp-ac2-soft);border-color:var(--dp-ac2-line);color:var(--dp-ac2);}");
+				L.push(".dp-btn{height:calc(24px * var(--dp-density));padding:0 calc(9px * var(--dp-density));border-radius:var(--dp-radius-sm);cursor:pointer;font-size:calc(11.5px * var(--dp-font));white-space:nowrap;border:1px solid var(--dp-line);background:var(--dp-bg-2);color:var(--dp-t2);font-family:inherit;display:inline-flex;align-items:center;gap:4px;}");
+				L.push(".dp-btn:hover{border-color:var(--dp-ac-line);color:var(--dp-t1);background:var(--dp-ac-soft);}");
+				L.push(".dp-btn:active{transform:translateY(1px);}");
+				L.push(".dp-btn-pri{background:var(--dp-ac);border-color:var(--dp-ac);color:#fff;}");
+				L.push(".dp-btn-pri:hover{filter:brightness(1.1);color:#fff;}");
+				L.push(".dp-btn[disabled],.dp-btn[aria-disabled=true]{opacity:.45;cursor:not-allowed;}");
+				L.push(".dp-sep{height:1px;background:var(--dp-line);border:0;margin:calc(4px * var(--dp-density)) 0;}");
+				L.push(".dp-title{font-size:calc(11px * var(--dp-font));font-weight:650;color:var(--dp-t2);}");
+				L.push(".dp-muted{font-size:calc(10.5px * var(--dp-font));color:var(--dp-t3);}");
+				L.push(".dp-input{box-sizing:border-box;border-radius:var(--dp-radius-sm);border:1px solid var(--dp-line);background:var(--dp-bg-0);color:var(--dp-t1);font-family:inherit;font-size:calc(11.5px * var(--dp-font));padding:0 calc(9px * var(--dp-density));}");
+				L.push(".dp-input:focus{outline:none;border-color:var(--dp-ac);box-shadow:0 0 0 2px var(--dp-ac-soft);}");
+				L.push(".dp-scroll::-webkit-scrollbar{width:8px;height:8px;}");
+				L.push(".dp-scroll::-webkit-scrollbar-thumb{background:var(--dp-line);border-radius:4px;}");
+				L.push(".dp-scroll::-webkit-scrollbar-thumb:hover{background:var(--dp-ac-line);}");
+				L.push(".dp-pulse{animation:dp-pulse 1.6s ease-in-out infinite;}");
+				L.push("@keyframes dp-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--dp-ac-soft);}50%{opacity:.65;box-shadow:0 0 0 4px var(--dp-ac-soft);}}");
+				L.push(".dp-rise{animation:dp-rise .18s ease-out;}");
+				L.push("@keyframes dp-rise{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}");
+				//
+				// ② 总监页跟随宿主主题（背景 / 文字 / 边框 / 阴影）
+				//
+				//  🔴 坑（静默失效）：CSS 自定义属性里的 var() 是在**定义它的那个元素上**求值的，
+				//     不是在使用处。宿主把 `--dsw-alias-*` 定义在 `body` 上（**不在** html/:root，
+				//     实测 documentElement 上取到空串），所以下面必须挂在**能继承到宿主令牌**的
+				//     元素上 —— dp-root 就在 body 内。
+				//     若图省事写成 `:root{--dp-bg-0:var(--dsw-alias-bg-base)}`，会在 html 上求值失败
+				//     并**静默**落到 fallback：背景不跟随宿主，却没有任何报错、属性读起来也正常。
+				//  作用域刻意只限 dp-root：思维导图 / 设计图工作室 / 总监弹窗是浮层，仍走 :root 的
+				//     深色底（宿主背景图不参与浮层，避免"浮层被背景图割裂"）。
+				L.push('[data-testid="dp-root"]{'
+					+ "--dp-bg-0:var(--dsw-alias-bg-base, #0b0c0e);"
+					+ "--dp-bg-1:var(--dsw-alias-bg-layer-1, #141519);"
+					+ "--dp-bg-2:var(--dsw-alias-bg-layer-2, #1c1e23);"
+					+ "--dp-line:var(--dsw-alias-border-l2, #31343a);"
+					+ "--dp-line-soft:var(--dsw-alias-border-l1, rgba(255,255,255,.08));"
+					+ "--dp-t1:var(--dsw-alias-label-primary, #e8eaed);"
+					+ "--dp-t2:var(--dsw-alias-label-secondary, #c3c8ce);"
+					+ "--dp-t3:var(--dsw-alias-label-tertiary, #8b9199);"
+					+ "--dp-shadow:var(--dsw-shadow-lv2, 0 10px 30px rgba(0,0,0,.45));"
+					+ "--dp-shadow-sm:var(--dsw-shadow-lv1, 0 4px 14px rgba(0,0,0,.32));"
+					// 纹理色：浅色底上用蓝灰（白色纹理在白玻璃上等于不可见）
+					+ "--dp-tex:rgba(29,39,57,.055);"
+					+ "--dp-tex-strong:rgba(29,39,57,.10);"
+					+ "}");
+				// ③ 纹理（.dp-textured 只提供背景，不覆盖已有 background-color 的层次）
+				L.push(".dp-textured{background-image:none;}");
+				L.push('html[data-dp-texture="grid"] .dp-textured{background-image:linear-gradient(var(--dp-tex) 1px,transparent 1px),linear-gradient(90deg,var(--dp-tex) 1px,transparent 1px);background-size:22px 22px;}');
+				L.push('html[data-dp-texture="dots"] .dp-textured{background-image:radial-gradient(var(--dp-tex-strong) 1px,transparent 1px);background-size:16px 16px;}');
+				L.push('html[data-dp-texture="glass"] .dp-textured{background-image:linear-gradient(135deg,var(--dp-tex-strong),transparent 40%);backdrop-filter:blur(10px);}');
+				// ④ 动效开关
+				L.push('html[data-dp-motion="0"] .dp-anim,html[data-dp-motion="0"] .dp-pulse,html[data-dp-motion="0"] .dp-rise{animation:none !important;transition:none !important;}');
+				return L.join("\n");
+			}
+			
+			/** 把设定写到 DOM（`:root` 变量 + `html[data-dp-*]` + 样式表）。SSR / 测试环境下静默跳过。 */
+			function applyPersonalize(p) {
+				if (typeof document === "undefined") return false;
+				const s = normalizePersonalize(p);
+				try {
+					const root = document.documentElement;
+					// 样式表（幂等：同一 id 只替换内容）
+					let style = document.getElementById(PERSONALIZE_STYLE_ID);
+					if (!style) {
+						style = document.createElement("style");
+						style.id = PERSONALIZE_STYLE_ID;
+						(document.head || root).appendChild(style);
+					}
+					const css = pCssText();
+					if (style.textContent !== css) style.textContent = css;
+					// 变量
+					const vars = pVarsFor(s);
+					for (const k of Object.keys(vars)) root.style.setProperty(k, vars[k]);
+					// 纹理 / 动效 / 连线（给 CSS 选择器用；同时给 e2e 提供稳定的读点）
+					root.setAttribute("data-dp-texture", s.texture);
+					root.setAttribute("data-dp-motion", s.motion ? "1" : "0");
+					root.setAttribute("data-dp-edge", s.edge);
+					root.setAttribute("data-dp-font", String(s.fontScale));
+					root.setAttribute("data-dp-density", String(s.density));
+					// 让"未接入 CSS 类"的老节点也能吃到字号缩放
+					root.style.fontSize = (12.5 * s.fontScale) + "px";
+					return true;
+				} catch (e) { return false; }
+			}
+			
+			/** 读持久化（解析失败回落默认；不抛） */
+			function loadPersonalize() {
+				try {
+					const raw = typeof localStorage !== "undefined" ? localStorage.getItem(PERSONALIZE_KEY) : null;
+					if (raw) return normalizePersonalize(JSON.parse(raw));
+				} catch (e) { /* 隐私模式 / 脏数据 */ }
+				return { ...P_DEFAULTS };
+			}
+			
+			/** 写持久化（失败静默：个性化丢失不影响功能） */
+			function savePersonalize(p) {
+				try {
+					if (typeof localStorage !== "undefined") localStorage.setItem(PERSONALIZE_KEY, JSON.stringify(normalizePersonalize(p)));
+					return true;
+				} catch (e) { return false; }
+			}
+			
+			/** 单例 store（订阅者 = 需要按设定显隐的组件，如小地图 / 图例） */
+			const personalizeStore = (function () {
+				let state = loadPersonalize();
+				const listeners = new Set();
+				function emit() { for (const fn of listeners) { try { fn(state); } catch (e) { /* 单个订阅者异常不影响其他 */ } } }
+				applyPersonalize(state);
+				return {
+					getState: () => state,
+					subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+					/** 改一项（未知键忽略，保证 store 不会被写脏） */
+					set: (key, value) => {
+						if (!(key in P_DEFAULTS)) return false;
+						state = normalizePersonalize({ ...state, [key]: value });
+						savePersonalize(state);
+						applyPersonalize(state);
+						emit();
+						return true;
+					},
+					patch: (obj) => {
+						state = normalizePersonalize({ ...state, ...(obj || {}) });
+						savePersonalize(state);
+						applyPersonalize(state);
+						emit();
+						return true;
+					},
+					reset: () => {
+						state = { ...P_DEFAULTS };
+						savePersonalize(state);
+						applyPersonalize(state);
+						emit();
+						return true;
+					}
+				};
+			})();
+			
+			/** 全局契约（调试 / e2e 用） */
+			function installPersonalizeApi() {
+				const api = {
+					PERSONALIZE_KEY, PERSONALIZE_STYLE_ID, P_DEFAULTS,
+					P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE,
+					normalizePersonalize, pVarsFor, pCssText, applyPersonalize,
+					loadPersonalize, savePersonalize, store: personalizeStore
+				};
+				if (typeof window !== "undefined") window.__dshPersonalize = api;
+				return api;
+			}
+			
+			exports.PERSONALIZE_KEY = PERSONALIZE_KEY;
+			exports.PERSONALIZE_STYLE_ID = PERSONALIZE_STYLE_ID;
+			exports.P_DEFAULTS = P_DEFAULTS;
+			exports.P_ACCENTS = P_ACCENTS;
+			exports.P_ACCENT2 = P_ACCENT2;
+			exports.P_DENSITY = P_DENSITY;
+			exports.P_FONT = P_FONT;
+			exports.P_RADIUS = P_RADIUS;
+			exports.P_TEXTURES = P_TEXTURES;
+			exports.P_EDGE = P_EDGE;
+			exports.pHexSoft = pHexSoft;
+			exports.normalizePersonalize = normalizePersonalize;
+			exports.pVarsFor = pVarsFor;
+			exports.pCssText = pCssText;
+			exports.applyPersonalize = applyPersonalize;
+			exports.loadPersonalize = loadPersonalize;
+			exports.savePersonalize = savePersonalize;
+			exports.personalizeStore = personalizeStore;
+			exports.installPersonalizeApi = installPersonalizeApi;
+		};
+
+		// ── components/PersonalizePanel.js ──
+		__defs["components/PersonalizePanel.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：右上角「⚙ 个性化」面板（四个界面共用一个组件）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js
+			 * 下游：store/personalize.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/PersonalizePanel.js — 右上角「⚙ 个性化」面板（四个界面共用一个组件）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  需求原文（用户）：「目前总监 tap 页面，还有三个插件页面 文字背景，全部找审美
+			 *   重新审核一下质感加上，同时都在右上角加自定义个性化设定」
+			 *
+			 *  ⇒ 落地口径：四处（总监页 / 总监弹窗 / 设计图工作室 / 分支导图）**右上角是同一个
+			 *    组件、同一批选项、同一份持久化**。这样"改一次，四处都变"是可验证的；
+			 *    若各写一份，迟早出现"设计图里改了但导图没变"。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 三条实现纪律
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **必须避让窗口控件安全区**：本面板贴右上角，而 Windows 的最小化/最大化/关闭是
+			 *     **操作系统图层**（z-index 无效，实测 138px）。所以面板的 `right` 由传进来的
+			 *     `inset` 决定 —— 与 MindMap 顶栏同一套口径（util/safe-area.js）。
+			 *  ② **每个选项都要说清"改了什么"**：`title` 写明效果，不写空话（本项目纪律：
+			 *     用户反复投诉"点了不知道有没有生效"）。
+			 *  ③ **即时生效 + 可一键复位**：改完立刻写 CSS 变量（无需确认）；"恢复默认"必须存在，
+			 *     否则用户改乱了回不去（这是上一轮版本面板吃过的教训）。
+			 *
+			 * ⚠️ 构建约束：react / react/jsx-runtime 为平台冻结模块（ADR-001），构建期外置。
+			 */
+			
+			const react = require("react");
+			const { personalizeStore, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DEFAULTS } = __m("store/personalize.js");
+			
+			const h = react.createElement;
+			const PERSONALIZE_PANEL_ID = "dsh-personalize-panel";
+			
+			const S = {
+				wrap: (right, top) => ({
+					position: "fixed", right, top, zIndex: 2147483300, width: 296, maxHeight: "calc(100vh - " + (top + 16) + "px)",
+					overflowY: "auto", display: "flex", flexDirection: "column", gap: 0,
+					background: "var(--dp-bg-1, #141519)", border: "1px solid var(--dp-line, #31343a)",
+					borderRadius: "var(--dp-radius-lg, 12px)", boxShadow: "var(--dp-shadow, 0 10px 30px rgba(0,0,0,.45))",
+					color: "var(--dp-t1, #e8eaed)", fontSize: "calc(12px * var(--dp-font, 1))", padding: 10
+				}),
+				hd: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 },
+				ttl: { fontWeight: 650, fontSize: "calc(12.5px * var(--dp-font, 1))" },
+				sec: { marginBottom: 9 },
+				secT: { fontSize: "calc(10.5px * var(--dp-font, 1))", color: "var(--dp-t3, #8b9199)", letterSpacing: ".4px", marginBottom: 4, display: "flex", alignItems: "center", gap: 5 },
+				row: { display: "flex", flexWrap: "wrap", gap: 5 },
+				opt: (on, big) => ({
+					display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer",
+					padding: big ? "4px 8px" : "3px 7px", borderRadius: "var(--dp-radius-sm, 5px)",
+					fontSize: "calc(11px * var(--dp-font, 1))",
+					border: "1px solid " + (on ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
+					background: on ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "var(--dp-bg-2, #1c1e23)",
+					color: on ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)",
+					fontWeight: on ? 600 : 400, whiteSpace: "nowrap"
+				}),
+				swatch: (on, hex) => ({
+					width: 26, height: 20, borderRadius: "var(--dp-radius-sm, 5px)", background: hex, cursor: "pointer",
+					border: on ? "2px solid var(--dp-t1, #e8eaed)" : "1px solid var(--dp-line, #31343a)", boxSizing: "border-box"
+				}),
+				toggle: (on) => ({
+					display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
+					padding: "3px 8px", borderRadius: "var(--dp-radius-sm, 5px)",
+					fontSize: "calc(11px * var(--dp-font, 1))",
+					border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #1c1e23)",
+					color: on ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)"
+				}),
+				foot: { display: "flex", alignItems: "center", gap: 6, marginTop: 4, paddingTop: 8, borderTop: "1px solid var(--dp-line, #31343a)" }
+			};
+			
+			function Section({ title, hint, children }) {
+				return h("div", { style: S.sec }, [
+					h("div", { key: "t", style: S.secT }, [h("span", { key: "l" }, title), hint ? h("span", { key: "h", style: { opacity: 0.75 } }, hint) : null]),
+					h("div", { key: "b", style: S.row }, children)
+				]);
+			}
+			
+			/**
+			 * 个性化面板。
+			 * @param {object} props
+			 * @param {boolean} props.open
+			 * @param {() => void} props.onClose
+			 * @param {number} [props.inset] 右侧原生窗口控件覆盖宽度（默认 0，来自 util/safe-area）
+			 * @param {number} [props.top] 面板上边距（默认 44，避开各界面自己的顶栏）
+			 * @param {string} [props.scope] 调用方名称（显示在标题右侧，e2e 用来确认"四处同一个面板"）
+			 */
+			function PersonalizePanel(props = {}) {
+				const { open, onClose, inset = 0, top = 44, scope = "" } = props;
+				const p = react.useSyncExternalStore(
+					(fn) => personalizeStore.subscribe(fn),
+					() => personalizeStore.getState(),
+					() => personalizeStore.getState()
+				);
+			
+				/* Esc 关闭 —— 与导图/工作室的"逐层退"一致：本面板在最上层，先关它 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose && onClose(); } };
+					window.addEventListener("keydown", onKey, true);
+					return () => window.removeEventListener("keydown", onKey, true);
+				}, [open, onClose]);
+			
+				if (!open) return null;
+			
+				const set = (k, v) => personalizeStore.set(k, v);
+				const swatchRow = (list, cur, key) => list.map((o) => h("div", {
+					key: o.key, "data-testid": "pp-" + key + "-" + String(o.key).replace("#", ""), "data-on": String(o.key) === String(cur) ? "1" : "0",
+					style: S.swatch(String(o.key) === String(cur), o.key), title: o.label + (o.desc ? " —— " + o.desc : ""),
+					"data-label": o.label,
+					onClick: () => set(key, o.key)
+				}));
+				const optionRow = (list, cur, key) => list.map((o) => h("div", {
+					key: String(o.key), "data-testid": "pp-" + key + "-" + String(o.key), "data-on": String(o.key) === String(cur) ? "1" : "0",
+					style: S.opt(String(o.key) === String(cur)), title: o.desc || o.label,
+					onClick: () => set(key, o.key)
+				}, o.label));
+			
+				return h("div", {
+					id: PERSONALIZE_PANEL_ID, style: S.wrap(Math.max(10, inset + 10), top),
+					"data-testid": "pp-panel", "data-scope": scope, "data-inset": inset, role: "dialog", "aria-label": "个性化设定"
+				}, [
+					/* 标题栏 */
+					h("div", { key: "hd", style: S.hd }, [
+						h("span", { key: "i" }, "⚙"),
+						h("span", { key: "t", style: S.ttl }, "个性化设定"),
+						h("span", { key: "s", style: { ...S.secT, marginBottom: 0 } }, scope ? "· " + scope : ""),
+						h("button", {
+							key: "x", style: { ...S.opt(false) }, "data-testid": "pp-close", "aria-label": "关闭个性化设定",
+							title: "关闭（Esc 亦可）", onClick: () => onClose && onClose()
+						}, "✕")
+					]),
+			
+					h(Section, {
+						key: "ac", title: "主色", hint: "按钮 / 徽章 / 连线高亮",
+						children: swatchRow(P_ACCENTS, p.accent, "accent")
+					}),
+					h(Section, {
+						key: "ac2", title: "强调色", hint: "「待审 / 建议」类徽章",
+						children: swatchRow(P_ACCENT2, p.accent2, "accent2")
+					}),
+					h(Section, {
+						key: "tx", title: "质感", hint: "背景纹理 —— 这一项就是用户说的「文字背景」",
+						children: optionRow(P_TEXTURES, p.texture, "texture")
+					}),
+					h(Section, {
+						key: "dn", title: "密度", hint: "行高与间距的整体乘数",
+						children: optionRow(P_DENSITY, p.density, "density")
+					}),
+					h(Section, {
+						key: "ft", title: "字号",
+						children: optionRow(P_FONT, p.fontScale, "fontScale")
+					}),
+					h(Section, {
+						key: "rd", title: "圆角",
+						children: optionRow(P_RADIUS, p.radius, "radius")
+					}),
+					h(Section, {
+						key: "eg", title: "导图连线", hint: "只影响分支导图",
+						children: optionRow(P_EDGE, p.edge, "edge")
+					}),
+			
+					/* 开关组 */
+					h("div", { key: "tg", style: S.sec }, [
+						h("div", { key: "t", style: S.secT }, "显示与动效"),
+						h("div", { key: "b", style: S.row }, [
+							h("div", {
+								key: "mo", "data-testid": "pp-motion", "data-on": p.motion ? "1" : "0", style: S.toggle(p.motion),
+								title: "关掉后所有动画与过渡停止（低端机 / 录屏时有用）",
+								onClick: () => set("motion", !p.motion)
+							}, [h("span", { key: "i" }, p.motion ? "◉" : "○"), h("span", { key: "l" }, "动效")]),
+							h("div", {
+								key: "mm", "data-testid": "pp-minimap", "data-on": p.minimap ? "1" : "0", style: S.toggle(p.minimap),
+								title: "分支导图右下角的小地图（省屏时可关）",
+								onClick: () => set("minimap", !p.minimap)
+							}, [h("span", { key: "i" }, p.minimap ? "◉" : "○"), h("span", { key: "l" }, "小地图")]),
+							h("div", {
+								key: "lg", "data-testid": "pp-legend", "data-on": p.legend ? "1" : "0", style: S.toggle(p.legend),
+								title: "分支导图工具条右侧的状态图例",
+								onClick: () => set("legend", !p.legend)
+							}, [h("span", { key: "i" }, p.legend ? "◉" : "○"), h("span", { key: "l" }, "状态图例")])
+						])
+					]),
+			
+					/* 底部：说明 + 复位 */
+					h("div", { key: "ft", style: S.foot }, [
+						h("span", {
+							key: "n", style: { ...S.secT, marginBottom: 0, flex: 1 },
+							"data-testid": "pp-summary"
+						}, "四处共用 · " + p.texture + " / " + Math.round(p.density * 100) + "% / r" + p.radius),
+						h("button", {
+							key: "r", style: S.opt(false), "data-testid": "pp-reset",
+							title: "恢复默认：" + P_DEFAULTS.texture + " / r" + P_DEFAULTS.radius + " / " + P_DEFAULTS.accent,
+							onClick: () => personalizeStore.reset()
+						}, "恢复默认")
+					])
+				]);
+			}
+			
+			__defaults["components/PersonalizePanel.js"] = PersonalizePanel;
+			
+			exports.PERSONALIZE_PANEL_ID = PERSONALIZE_PANEL_ID;
+			exports.PersonalizePanel = PersonalizePanel;
+		};
+
+		// ── util/safe-area.js ──
+		__defs["util/safe-area.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：窗口控件安全区（Windows 原生标题栏按钮的避让计算）
+			 * 引用：2026-09-12 诉求 9（关闭按钮与标准软件关闭按钮重叠）
+			 * 上游：components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 E5（窗口控件安全区三级读取）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * util/safe-area.js — 窗口控件安全区（Windows 原生标题栏按钮的避让计算）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html  【板块 D1 · 顶栏】
+			 *  被谁用   components/DesignStudio.js（全屏工作室顶栏 padding-right）
+			 *  解决什么 用户报「设计图的关闭按钮和标准软件的关闭按钮重叠了」
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么它必须存在（真机取证，不是猜的）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  Harness 桌面端是**自绘标题栏 + 原生窗口控件覆盖层**。实测（1536×816 视口）：
+			 *
+			 *      navigator.windowControlsOverlay.visible = true
+			 *      getTitlebarAreaRect() = { x:0, y:0, w:1399, h:44 }
+			 *      ⇒ 右侧 1536 - 1399 = 137px 被**最小化/最大化/关闭**三个按钮独占
+			 *
+			 *  这个覆盖层是**原生图层，永远绘制在网页内容之上**（z-index 无效）。
+			 *  而工作室是 `position:fixed; inset:0` 的全屏层，顶栏内容直排到右边距 10px
+			 *  ⇒ 关掉按钮 `✕`（实测位于 x=1495，距右仅 41px）**必然被压住**，
+			 *     连状态文字「修订记录 2」也被压掉一截。
+			 *
+			 *  ⇒ 结论：**不是"把 ✕ 左移几像素"能解决的**，那是把 137px 的洞挪个位置。
+			 *     正确做法是让顶栏知道"右边这一条不归我"，把内容整体收进安全区。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  三级读取（从准到糙，逐级降级；都不命中时**返回 0 而不是瞎留白**）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   ① Window Controls Overlay API —— 权威值，且能监听 `geometrychange`
+			 *   ② CSS `env(titlebar-area-width)` —— 同一数据的 CSS 侧投影
+			 *   ③ 桌面平台兜底常量 —— 仅当"确认是桌面壳"但前两级都读不到时启用
+			 *
+			 *  ⚠️ 为什么普通浏览器里要返回 0：浏览器没有原生窗口控件覆盖层，
+			 *     若也返回 138，工作室右侧会凭空多出一条空白 —— 那是把 bug 换成另一个 bug。
+			 */
+			
+			/** Windows 三个窗口按钮的实测总宽（46×3）。只在确认桌面壳、且 API 全失效时用。 */
+			const FALLBACK_INSET = 138;
+			
+			/** 是否运行在桌面壳里（判断依据是 URL 参数与 UA，二者取或） */
+			function isDesktopShell() {
+				try {
+					if (typeof location !== "undefined" && /dsh-desktop-platform=/.test(String(location.search || ""))) return true;
+					if (typeof navigator !== "undefined" && /Electron/i.test(String(navigator.userAgent || ""))) return true;
+				} catch (e) { /* 无 location/navigator（离线测试）→ 视为非桌面 */ }
+				return false;
+			}
+			
+			/**
+			 * 读取"右侧不可用宽度"（px）。
+			 * @param {object} [win] 可注入的 window（离线测试用；缺省用全局）
+			 * @returns {number} 0 = 无窗口控件覆盖（浏览器 / 已隐藏）；>0 = 需要避让的像素
+			 */
+			function readInset(win) {
+				const w = win || (typeof window !== "undefined" ? window : null);
+				const d = w && w.document ? w.document : (typeof document !== "undefined" ? document : null);
+			
+				/* ① 权威 API。注意 `visible=false` 时**必须返回 0** ——
+				 *    有些平台 API 存在但覆盖层被隐藏（如 macOS 的交通灯），此时不占宽度。 */
+				try {
+					const wco = w && w.navigator ? w.navigator.windowControlsOverlay : null;
+					if (wco) {
+						if (wco.visible === false) return 0;
+						if (typeof wco.getTitlebarAreaRect === "function") {
+							const r = wco.getTitlebarAreaRect();
+							if (r && r.width > 0 && w.innerWidth > 0) {
+								return Math.max(0, Math.round(w.innerWidth - r.width));
+							}
+						}
+					}
+				} catch (e) { /* 继续降级 */ }
+			
+				/* ② CSS env() 投影。`-1px` 作为 fallback ⇒ 不支持时量到负数，天然识别"不支持"。 */
+				try {
+					if (d && d.body) {
+						const probe = d.createElement("div");
+						probe.style.cssText = "position:fixed;top:0;left:0;height:1px;visibility:hidden;pointer-events:none;width:env(titlebar-area-width, -1px)";
+						d.body.appendChild(probe);
+						const pw = probe.getBoundingClientRect().width;
+						probe.remove();
+						if (pw > 0 && w.innerWidth > 0) return Math.max(0, Math.round(w.innerWidth - pw));
+					}
+				} catch (e) { /* 继续降级 */ }
+			
+				/* ③ 桌面兜底 —— 宁可多留 138px，也不要让按钮压在原生控件下面（前者是空间浪费，后者是功能失效） */
+				return isDesktopShell() ? FALLBACK_INSET : 0;
+			}
+			
+			/**
+			 * 监听安全区变化（窗口缩放 / 最大化 / 全屏切换都会改它）。
+			 * @param {(inset:number)=>void} onChange 仅在**值真的变了**时回调（避免 resize 风暴里反复 setState）
+			 * @param {object} [win]
+			 * @returns {()=>void} 取消监听
+			 */
+			function watchInset(onChange, win) {
+				const w = win || (typeof window !== "undefined" ? window : null);
+				if (!w || typeof onChange !== "function") return () => { /* noop */ };
+			
+				let last = -1;
+				const emit = () => {
+					const v = readInset(w);
+					if (v !== last) { last = v; onChange(v); }
+				};
+			
+				emit();
+				w.addEventListener("resize", emit);
+				// WCO 专属事件：最大化/退出全屏时**不一定**触发 window.resize，必须单独挂
+				let wco = null;
+				try {
+					wco = w.navigator ? w.navigator.windowControlsOverlay : null;
+					if (wco && typeof wco.addEventListener === "function") wco.addEventListener("geometrychange", emit);
+				} catch (e) { wco = null; }
+			
+				// 布局late后才定下来的情形（首帧 innerWidth 为 0 等），补测一次
+				const t = setTimeout(emit, 350);
+			
+				return () => {
+					try { w.removeEventListener("resize", emit); } catch (e) { /* noop */ }
+					try { if (wco && typeof wco.removeEventListener === "function") wco.removeEventListener("geometrychange", emit); } catch (e) { /* noop */ }
+					clearTimeout(t);
+				};
+			}
+			
+			exports.FALLBACK_INSET = FALLBACK_INSET;
+			exports.readInset = readInset;
+			exports.watchInset = watchInset;
+		};
+
 		// ── components/DirectorDialog.js ──
 		__defs["components/DirectorDialog.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
+			 * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
+			 * 上游：client-entry.js, mount.js
+			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, components/PersonalizePanel.js, util/safe-area.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * components/DirectorDialog.js — 总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
 			 *
@@ -6897,6 +8044,11 @@ window.__ModuleLoader__.load({
 			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
 			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
 			const { dshLog } = __m("util/debug.js");
+			/* 右上角「⚙ 个性化」—— 与总监页 / 设计图 / 导图**共用同一个组件与同一份持久化**。
+			 * 需求原文：「…同时都在右上角加自定义个性化设定」。 */
+			const { PersonalizePanel } = __m("components/PersonalizePanel.js");
+			/* 原生窗口控件安全区：本弹窗是全屏 fixed 层，右上角面板必须避让（实测 138px，z-index 无效）。 */
+			const { readInset } = __m("util/safe-area.js");
 			
 			const DIALOG_ID = "dsh-director-dialog";
 			const CHIP_ID = "dsh-director-chip";
@@ -6947,9 +8099,12 @@ window.__ModuleLoader__.load({
 				hole: { position: "absolute", pointerEvents: "none", borderRadius: 8 },
 				panel: {
 					position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column",
-					background: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
-					border: "1px solid rgba(137,87,229,.42)", borderRadius: 10, overflow: "hidden",
-					boxShadow: "0 24px 70px rgba(0,0,0,.62)", fontFamily: "inherit", fontSize: 12.5
+					/* 🔴 `backgroundColor` 长写（非 `background` 简写）：简写会把 `background-image` 重置，
+					 *    使 `.dp-textured` 的三档纹理（个性化「质感」）静默失效。四处已统一修正。 */
+					backgroundColor: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
+					border: "1px solid var(--dp-ac2-line, rgba(137,87,229,.42))", borderRadius: "var(--dp-radius-lg, 10px)", overflow: "hidden",
+					boxShadow: "var(--dp-shadow, 0 24px 70px rgba(0,0,0,.62))", fontFamily: "inherit",
+					fontSize: "calc(12.5px * var(--dp-font, 1))"
 				},
 				head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1c1e22)" },
 				headTitle: { fontWeight: 620, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
@@ -7162,6 +8317,9 @@ window.__ModuleLoader__.load({
 				const [toast, setToast] = react.useState("");
 				const [dragW, setDragW] = react.useState(null);
 				const [unread, setUnread] = react.useState(0);
+				/* 右上角「⚙ 个性化」开合 —— 与其他三处同一个面板组件。
+				 * 🔴 必须排在下方 `if (!open) return null` 之前（React Hooks 规则；本组件已踩过这个坑）。 */
+				const [pOpen, setPOpen] = react.useState(false);
 				const panelRef = react.useRef(null);
 				const dragRef = react.useRef(null);
 				const convRef = react.useRef({ count: 0, lastText: "" });
@@ -7265,7 +8423,12 @@ window.__ModuleLoader__.load({
 				react.useEffect(() => {
 					if (!open) return undefined;
 					const onKey = (e) => {
-						if (e.key === "Escape") { directorLayoutStore.setDialogOpen(false); return; }
+						if (e.key === "Escape") {
+							/* 个性化面板在最上层 ⇒ Esc 先关它（面板自身 window-capture 已 stopPropagation，
+							 * 正常走不到这里；留一层是防"按 Esc 把整个总监弹窗关掉"）。 */
+							if (pOpen) { setPOpen(false); return; }
+							directorLayoutStore.setDialogOpen(false); return;
+						}
 						if (e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
 							e.preventDefault();
 							if (e.key === "1") directorLayoutStore.toggleDirectorCollapsed();
@@ -7275,7 +8438,7 @@ window.__ModuleLoader__.load({
 					};
 					document.addEventListener("keydown", onKey);
 					return () => document.removeEventListener("keydown", onKey);
-				}, [open]);
+				}, [open, pOpen]);
 			
 				/* ── 拖拽中缝 ── */
 				const dragWRef = react.useRef(null);
@@ -7440,6 +8603,9 @@ window.__ModuleLoader__.load({
 							}, [
 								h("button", { key: "r", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.toggleChatCollapsed(); } }, "⇥"),
 								h("button", { key: "z", style: S.btn, title: "复位栏宽", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.resetPanelWidths(); } }, "▢"),
+								/* 个性化：折叠左栏后此处是**唯一**入口，故与右栏同一组按钮并列（不是"右上角"布局，
+								 * 但面板本体仍是 `position:fixed` 贴右上角，见文件末尾 PersonalizePanel）。 */
+								h("button", { key: "p", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); setPOpen((v) => !v); } }, "⚙"),
 								h("button", { key: "m", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogCollapsed(true); } }, "–"),
 								h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
 							])
@@ -7450,7 +8616,9 @@ window.__ModuleLoader__.load({
 							//    后者是全插件「树行」的唯一选择器（`components/DirectorHierarchy.js` TreeItem），
 							//    面板若占用同名属性，`[data-node-id]` 的首个命中会变成面板本身，
 							//    使既有逐交互脚本「点第一行 → 选中态迁移」失效（2026-09-12 真机实测踩中）。
-							role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId
+							role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId,
+							/* 质感类（三档纹理由 store/personalize.js 注入的样式表按 html[data-dp-texture] 命中） */
+							className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
 						}, [
 							/* mhead：R1 顶部栏 + 层级切换器（I5）*/
 							h("div", { key: "h", style: S.head }, [
@@ -7467,6 +8635,10 @@ window.__ModuleLoader__.load({
 									h("button", { key: "2", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: () => directorLayoutStore.toggleChatCollapsed() }, "⇥"),
 									h("button", { key: "3", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: () => directorLayoutStore.setDialogCollapsed(true) }, "–"),
 									h("button", { key: "4", style: S.btn, title: "复位栏宽（双击中缝同效）", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: () => directorLayoutStore.resetPanelWidths() }, "▢"),
+									/* 右上角个性化（需求原文：「同时都在右上角加自定义个性化设定」）。
+									 * 本按钮在 `btns`（marginLeft:auto ⇒ 贴面板右上角），展开的面板本体
+									 * 由文件末尾的 PersonalizePanel 以 fixed 定位贴整个窗口右上角。 */
+									h("button", { key: "6", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: () => setPOpen((v) => !v) }, "⚙"),
 									h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
 								])
 							]),
@@ -7539,7 +8711,14 @@ window.__ModuleLoader__.load({
 							position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10,
 							color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
 						}
-					}, "● 与「对话 tab」同源（同一渲染节点）")) : null
+					}, "● 与「对话 tab」同源（同一渲染节点）")) : null,
+			
+					/* 个性化面板 —— 贴整个窗口右上角（`position:fixed`），由 `inset` 避让原生窗口控件。
+					 * 放在 dialog 图层内（zIndex 由 PersonalizePanel 自己抬到 2147483300 ⇒ 高于本层 2147483000 档）。 */
+					h(PersonalizePanel, {
+						key: "pp", open: pOpen, onClose: () => setPOpen(false),
+						inset: readInset(), top: 46, scope: "总监弹窗"
+					})
 				]);
 			}
 			
@@ -7572,8 +8751,5643 @@ window.__ModuleLoader__.load({
 			exports.getLastDragSnap = getLastDragSnap;
 		};
 
+		// ── store/design-schema.js ──
+		__defs["store/design-schema.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「标准设计图框架」的数据映射（设计图插件的原子层）
+			 * 引用：V16 诉求 6（标准设计图框架的映射）+ 2026-09-12 诉求 10（不同版本的选择） · T-PLUG-018
+			 * 上游：components/DesignStudio.js, store/design.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D2 · D4（18 类元素 + 标准框架 20 元素）· E3（版本快照模型）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * store/design-schema.js — 「标准设计图框架」的数据映射（设计图插件的原子层）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html  【板块 D】设计图工作室
+			 *   ├─ D1 全屏工作室布局      → components/DesignStudio.js
+			 *   ├─ D2 元素类型库（18 类）  → 本文件 ELEMENT_KINDS
+			 *   ├─ D3 元素交互逻辑面板     → 本文件 LOGIC_FIELDS + components/DesignStudio.js 左侧栏
+			 *   └─ D4 标准框架模板        → 本文件 STANDARD_FRAMES
+			 *  业务不变量  docs/10-总监与对话架构总纲.md §四
+			 *  总台账      docs/00-统筹入口/03-待完成任务清单.md  T-PLUG-018
+			 *
+			 *  需求原文（用户）：「做一个标准设计图框架的映射 也就是在总监页面单独加一个设计图的插件吧，
+			 *  按钮形式 点击铺满全屏，允许调整修改拖拽增加元素，最下面对话保留，这个对话处理设计图的修订
+			 *  属于新开的临时对话 只处理设计图，然后每一个元素可以点击 点击在左侧显示交互逻辑」
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么要有"标准框架模板"（而不是让用户从白纸开始拖）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这一版项目的痛点不是"能不能画"，而是**沟通**：每次改设计都要用文字描述"右区第三栏"，
+			 *  三版改下来各说各话（用户原话："三次改版，改出来三版本完全不一样的"）。
+			 *  ⇒ 标准框架把「三页签 + 两弹窗 + 导图态」这一套**布局约定**固化成可加载的模板：
+			 *     加载后每个元素**自带名字与交互逻辑**，后续所有讨论都能指着同一个 id 说话。
+			 *  ⇒ 这就是"映射"的含义：**设计图 → 具名元素 → 可寻址**。
+			 *
+			 *  🔴 与 R5 冻结项的关系：本文件纯数据，不碰任何持久化 key、不碰宿主库。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、元素类型库（标准设计图的 18 个原子）
+			 *     `w/h` 是默认尺寸（px，按 V16 的 1:1.22 折算视口 1180×644）；
+			 *     `logic` 是该类型**默认携带**的交互逻辑骨架（可被实例覆盖）。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 元素类型（单一真相源；UI 工具栏顺序即此对象键序） */
+			const ELEMENT_KINDS = Object.freeze({
+				// ── 结构类（大块）──
+				window: { label: "窗口", icon: "▣", group: "结构", w: 1180, h: 644, logic: {
+					trigger: "应用启动（Electron 主窗口创建）",
+					action: "装载宿主 React 根，承载全部页面",
+					state: "未挂载 → 已挂载（根节点 #root）",
+					data: "读 dsh.workspace.view.v5；写 dsh.sessions.current",
+					fallback: "宿主版本差异致 slot 不可用时，插件降级为自挂 DOM 通道（浮动按钮组）仍可用",
+					shortcut: "—",
+					code: "src/mount.js mountHierarchy"
+				} },
+				sidebar: { label: "侧栏", icon: "▮", group: "结构", w: 230, h: 644, logic: {
+					trigger: "点击会话行 / 文件夹行",
+					action: "切换当前会话；点文件夹则进入该层级总监",
+					state: "未选中 → 选中（高亮当前行）",
+					data: "写 dsh.sessions.current；读 dsh.workspace.view.v5 展开态",
+					fallback: "会话不存在 → 回落全局总管；侧栏收起时入口移入浮动按钮组，不留死路",
+					shortcut: "Ctrl+K 搜索会话",
+					code: "src/bridge/nav-hook.js（捕获阶段 pointerdown + 三级名称匹配）"
+				} },
+				tabring: { label: "页签环", icon: "▭▭", group: "结构", w: 420, h: 30, logic: {
+					trigger: "点击页签 / Alt+1·2·3",
+					action: "在 总监 / 对话 / 轨迹 之间切换视图",
+					state: "active 从旧 id → 新 id；仅当 tab 数 > 1 时才渲染",
+					data: "读 ctx.slots entries(\"conversation.view\")；写宿主 activeView",
+					fallback: "slot 不可用时注册失败并返回 {registered:false,reason}，浮层通道保底，不静默消失",
+					shortcut: "Alt+1 总监 / Alt+2 对话 / Alt+3 轨迹",
+					code: "src/client-entry.js installDirectorView（order:-1 排最前）"
+				} },
+				region: { label: "分区", icon: "▤", group: "结构", w: 360, h: 120, logic: {
+					trigger: "—（被动容器）",
+					action: "R1–R8 分区容器，只负责布局与分区标题",
+					state: "无独立状态，随上游数据重渲染",
+					data: "只读上游 props（总监层级 / 统计值）",
+					fallback: "数据为空时渲染占位文案而不是留白（如 R5「尚无总监消息」）",
+					shortcut: "—",
+					code: "src/components/DirectorPage.js sectionR1…sectionR8"
+				} },
+				panel: { label: "面板", icon: "▯", group: "结构", w: 200, h: 160, logic: {
+					trigger: "拖中缝（分隔条）",
+					action: "调整面板宽度",
+					state: "width 变化，钳制 180–55%×视口；过窄自动吸附折叠",
+					data: "写 dsh.director.layout（directorPanelWidth / chatPanelWidth）",
+					fallback: "视口过小时吸附为折叠态并提供展开按钮，避免面板被压成 0 宽不可达",
+					shortcut: "—",
+					code: "src/store/layout.js clampPanelWidth"
+				} },
+				canvas: { label: "画布", icon: "▦", group: "结构", w: 480, h: 280, logic: {
+					trigger: "滚轮缩放 / 拖拽空白平移 / 点空白",
+					action: "缩放与平移画布；点空白取消选中",
+					state: "zoom 10%–400%；selected 置空",
+					data: "只读设计图 doc.elements",
+					fallback: "无图时显示引导文案并自动铺一张标准框架，不留空白画布",
+					shortcut: "Ctrl+0 适应 100%",
+					code: "src/components/DesignStudio.js（canvasWrap / grid）"
+				} },
+			
+				// ── 控件类 ──
+				button: { label: "按钮", icon: "⬜", group: "控件", w: 84, h: 28, logic: {
+					trigger: "点击 / Enter / Space",
+					action: "执行绑定的 onClick",
+					state: "hover / active / focus-visible / disabled 四态",
+					data: "由 onClick 决定；不直接读写 store",
+					fallback: "disabled 时保留 title 说明原因，不静默变灰无解释",
+					shortcut: "Enter / Space（聚焦态）",
+					code: "src/components/DesignStudio.js 各 S.btn"
+				} },
+				input: { label: "输入框", icon: "▬", group: "控件", w: 240, h: 28, logic: {
+					trigger: "Enter 提交 / 点击发送",
+					action: "按**目标徽章**决定提交去向（总监 or 对话 / 或设计图修订）",
+					state: "draft 有值 → 提交后清空；无图或无目标时 disabled",
+					data: "总监消息走 plugin-db/directorConversations；设计图修订走 dsh.director.design（三向隔离）",
+					fallback: "解析不出目标时进「待确认 / 未识别」区并回显，绝不静默丢弃用户输入",
+					shortcut: "Enter 提交 / Shift+Enter 换行",
+					code: "src/components/DirectorPage.js R8 + src/components/DesignStudio.js ds-input"
+				} },
+				select: { label: "下拉", icon: "▾", group: "控件", w: 140, h: 24, logic: {
+					trigger: "选择选项",
+					action: "切换层级 / 模型 / 设计图文档",
+					state: "value 变化触发上层重渲染",
+					data: "写 dsh.director.config（模型）/ layout（层级）/ 设计图 activeDocId",
+					fallback: "选项为空时保留占位项而不是抛错；自动化赋值必须走 HTMLSelectElement.prototype，否则 Illegal invocation",
+					shortcut: "↑↓ 切换选项",
+					code: "src/components/DirectorPage.js R3 + src/components/DesignStudio.js ds-doclist"
+				} },
+				badge: { label: "徽章", icon: "◉", group: "控件", w: 56, h: 20, logic: {
+					trigger: "—（随状态被动更新）",
+					action: "标示当前提交目标（总监 / 对话）",
+					state: "目标切换时文案与配色同步",
+					data: "读 layout.focusTarget",
+					fallback: "目标未定时显示「未指定」并要求先选，不默认投递给任何一方",
+					shortcut: "—",
+					code: "src/components/DirectorPage.js dp-focus"
+				} },
+				text: { label: "文本", icon: "T", group: "控件", w: 140, h: 18, logic: {
+					trigger: "—",
+					action: "静态说明文字",
+					state: "无独立状态",
+					data: "只读常量或上游 props",
+					fallback: "文案缺失时回落为「—」，不留空白",
+					shortcut: "—",
+					code: "各组件 S.muted"
+				} },
+				icon: { label: "图标按钮", icon: "✕", group: "控件", w: 24, h: 22, logic: {
+					trigger: "点击",
+					action: "折叠 / 最小化 / 关闭",
+					state: "展开 ↔ 折叠（↔ 关闭）",
+					data: "写 dsh.director.layout（collapsed / open 标志）",
+					fallback: "折叠态下必须有可达替代入口（曾整块消失，真机暴露）；Esc 可关闭最上层",
+					shortcut: "Esc",
+					code: "src/components/DirectorDialog.js rail 控制簇"
+				} },
+				list: { label: "列表", icon: "☰", group: "控件", w: 180, h: 140, logic: {
+					trigger: "点击行",
+					action: "选中该项并联动左右面板内容",
+					state: "选中行高亮",
+					data: "读上游数据，写选中 id",
+					fallback: "列表为空时渲染空态说明，不显示空白框",
+					shortcut: "↑↓ 移动选中",
+					code: "src/components/DirectorHierarchy.js"
+				} },
+				card: { label: "卡片", icon: "▢", group: "控件", w: 200, h: 96, logic: {
+					trigger: "点击卡片体",
+					action: "展开详情 / 切换层级",
+					state: "收起 ↔ 展开",
+					data: "读汇总指标；写选中的层级 id",
+					fallback: "指标缺失显示「—」而不是 NaN / undefined",
+					shortcut: "—",
+					code: "src/components/DirectorPage.js S.blk"
+				} },
+				progress: { label: "进度条", icon: "▬▬", group: "控件", w: 160, h: 8, logic: {
+					trigger: "—（随数据被动更新）",
+					action: "展示完成率（待办 / 覆盖度）",
+					state: "宽度随百分比变化",
+					data: "读 todos / auditCoverage 汇总",
+					fallback: "分母为 0 时显示 0% 而不是 NaN%",
+					shortcut: "—",
+					code: "src/components/DirectorPage.js"
+				} },
+			
+				// ── 语义类（总监专有）──
+				node: { label: "导图节点", icon: "●", group: "语义", w: 130, h: 44, logic: {
+					trigger: "左键点选 / 拖拽 / 方向键微移",
+					action: "选中 → 左侧逻辑面板显示该分支的交互逻辑",
+					state: "常态 / hover / 选中 / 执行中 四态",
+					data: "血缘来自 sessions.fork 写入的 meta.parentSession（只消费，不新建模型）",
+					fallback: "摘要无血缘字段时退化为分组树并**显式标注「无血缘」**，不假装是分支树",
+					shortcut: "方向键微移 / Shift+方向键 1px",
+					code: "src/logic/branch-tree.js"
+				} },
+				edge: { label: "连线", icon: "—", group: "语义", w: 80, h: 2, logic: {
+					trigger: "—（随节点位置实时重算）",
+					action: "绘制父子血缘连线",
+					state: "随节点移动 / 折叠实时重算",
+					data: "读 flattenLineage() 已有的 children 映射 + depth 缩进",
+					fallback: "检测到环时**断边并标记 cycles**，不无限递归",
+					shortcut: "—",
+					code: "src/logic/branch-tree.js"
+				} },
+				overline: { label: "浮动按钮组", icon: "◍", group: "语义", w: 150, h: 34, logic: {
+					trigger: "点击",
+					action: "打开对应全屏能力（设计图 / 思维导图 / 总监）",
+					state: "目标层 open 标志翻转（designStudioOpen / mindmapOpen / dialogOpen）",
+					data: "写 dsh.director.layout",
+					fallback: "某层渲染异常被 SafeLayer 隔离，只损失该层并显示可重试角标；顺序「🧠导图」在「◆总监」之前（用户明确要求）",
+					shortcut: "Esc 关闭最上层",
+					code: "src/components/FloatDock.js"
+				} }
+			});
+			
+			/** 全部类型 key（校验 / 遍历用） */
+			const ELEMENT_KIND_KEYS = Object.freeze(Object.keys(ELEMENT_KINDS));
+			
+			/** 按 group 分组（工具栏渲染用） */
+			function kindsByGroup() {
+				const out = {};
+				for (const k of ELEMENT_KIND_KEYS) {
+					const g = ELEMENT_KINDS[k].group;
+					(out[g] = out[g] || []).push(k);
+				}
+				return out;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、交互逻辑字段（点击元素 → 左侧面板显示的就是这 7 个）
+			 *     字段是**固定七元组**：不设自由文本，否则又退化成"各写各的"。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const LOGIC_FIELDS = Object.freeze([
+				{ key: "trigger", label: "触发方式", hint: "鼠标 / 键盘 / 事件，写清具体按键或事件名" },
+				{ key: "action", label: "行为", hint: "点下去发生什么（一句话，可核验）" },
+				{ key: "state", label: "状态变化", hint: "前后状态，如「展开 → 缩起」" },
+				{ key: "data", label: "数据流向", hint: "读哪个 store，写哪个 store" },
+				{ key: "fallback", label: "退化路径", hint: "失败 / 空数据 / 无权时怎么办（**不许留空**）" },
+				{ key: "shortcut", label: "快捷键", hint: "与该动作等价的键盘路径" },
+				{ key: "code", label: "对应代码", hint: "实现该逻辑的文件 —— 这条是给改代码的人看的" }
+			]);
+			
+			/** 逻辑七元组的空骨架 */
+			function emptyLogic() {
+				const o = {};
+				for (const f of LOGIC_FIELDS) o[f.key] = "";
+				return o;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、元素实例：创建 / 归一化 / 校验
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 画布坐标与尺寸的下限（防负数与零面积元素） */
+			const MIN_SIZE = 8;
+			/** 画布逻辑尺寸（V16 折算视口；设计图与真机 1:1.22） */
+			const CANVAS_W = 1180;
+			const CANVAS_H = 644;
+			
+			let seq = 0;
+			/** 稳定可读 id（便于在对话里指称："把 el-3 的按钮右移 20"） */
+			function nextElementId(kind) {
+				seq += 1;
+				return "el-" + seq + "-" + String(kind || "x").slice(0, 3);
+			}
+			/** 重置序号（加载模板后调用，避免 id 与已有元素撞车） */
+			function syncSeqFrom(elements) {
+				let max = 0;
+				for (const e of elements || []) {
+					const m = /^el-(\d+)-/.exec(String(e && e.id));
+					if (m) max = Math.max(max, Number(m[1]));
+				}
+				seq = Math.max(seq, max);
+			}
+			
+			const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+			const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+			
+			/**
+			 * 创建一个元素实例。
+			 * @param {string} kind ELEMENT_KINDS 的 key
+			 * @param {object} [patch] 覆盖字段（x/y/w/h/label/logic/props）
+			 * @returns {object|null} 未知 kind 返回 null（调用方须判空）
+			 */
+			function createElement(kind, patch = {}) {
+				const spec = ELEMENT_KINDS[kind];
+				if (!spec) return null;
+				const p = patch || {};
+				const el = {
+					id: p.id || nextElementId(kind),
+					kind,
+					x: Math.round(clamp(num(p.x, 0), 0, CANVAS_W)),
+					y: Math.round(clamp(num(p.y, 0), 0, CANVAS_H)),
+					w: Math.round(clamp(num(p.w, spec.w), MIN_SIZE, CANVAS_W)),
+					h: Math.round(clamp(num(p.h, spec.h), MIN_SIZE, CANVAS_H)),
+					z: Math.round(num(p.z, 1)),
+					label: String(p.label == null ? spec.label : p.label),
+					props: { ...(p.props || {}) },
+					// 逻辑骨架来自类型默认值，再用实例覆盖 —— 保证「每个元素都有逻辑可显示」
+					logic: { ...emptyLogic(), ...(spec.logic || {}), ...(p.logic || {}) }
+				};
+				return el;
+			}
+			
+			/** 归一化（加载模板 / 从库读回时用；保证字段齐全，缺的补默认） */
+			function normalizeElement(raw) {
+				if (!raw || !raw.kind || !ELEMENT_KINDS[raw.kind]) return null;
+				return createElement(raw.kind, raw);
+			}
+			
+			/** 元素是否可渲染（只校验会影响绘制的字段） */
+			function isRenderable(el) {
+				return Boolean(el && el.id && ELEMENT_KINDS[el.kind]
+					&& Number.isFinite(el.x) && Number.isFinite(el.y)
+					&& el.w >= MIN_SIZE && el.h >= MIN_SIZE);
+			}
+			
+			/** 命中测试：坐标 → 最上层元素（z 大者优先） */
+			function hitTest(elements, x, y) {
+				const list = (elements || []).filter(isRenderable);
+				let best = null;
+				for (const el of list) {
+					if (x >= el.x && x <= el.x + el.w && y >= el.y && y <= el.y + el.h) {
+						if (!best || el.z >= best.z) best = el;
+					}
+				}
+				return best;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、标准框架模板 —— 「三页签 + 两弹窗 + 导图态」
+			 *     一键铺设：所有元素自带 label 与逻辑，后续讨论可指着 id 说话。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 模板定义：`seed` 是 createElement 的 patch 列表。
+			 * 🔴 坐标与 V16 板块 A 的高保真画面**逐块对应**，改画面时同步改这里。
+			 */
+			const FRAME_SEEDS = [
+				// 窗口 + 侧栏
+				{ kind: "window", label: "Harness 主窗口", x: 0, y: 0, w: 1180, h: 644, z: 0 },
+				{ kind: "sidebar", label: "侧栏 · 会话树", x: 0, y: 0, w: 230, h: 644, z: 1 },
+				// 页签环
+				{ kind: "tabring", label: "页签环 · 总监/对话/轨迹", x: 240, y: 6, w: 440, h: 28, z: 3 },
+				// R1 顶栏
+				{ kind: "region", label: "R1 顶部栏", x: 240, y: 40, w: 930, h: 34, z: 2 },
+				// R2 总览四卡
+				{ kind: "card", label: "R2 项目总览 · 四指标", x: 240, y: 80, w: 930, h: 76, z: 2 },
+				// R2.5 控制台
+				{ kind: "region", label: "R2.5 总监控制台", x: 240, y: 162, w: 930, h: 56, z: 2 },
+				// R3 资源行
+				{ kind: "region", label: "R3 智能体 / 技能 / 资源", x: 240, y: 224, w: 930, h: 34, z: 2 },
+				// 三栏 R4 / R5 / R7
+				{ kind: "panel", label: "R4 项目导航（三 Tab）", x: 240, y: 264, w: 200, h: 240, z: 2 },
+				{ kind: "panel", label: "R5 总监对话区", x: 447, y: 264, w: 520, h: 240, z: 2 },
+				{ kind: "panel", label: "R7 详情 / 产出物", x: 974, y: 264, w: 196, h: 240, z: 2 },
+				// R6 记忆 + R8 输入
+				{ kind: "region", label: "R6 记忆面板", x: 240, y: 510, w: 930, h: 62, z: 2 },
+				{ kind: "input", label: "R8 全局输入条", x: 240, y: 578, w: 850, h: 30, z: 3 },
+				{ kind: "badge", label: "目标徽章 · 总监/对话", x: 240, y: 612, w: 96, h: 20, z: 3 },
+				// 右侧对话弹窗（浮层三态）
+				{ kind: "panel", label: "右侧「对话」弹窗", x: 858, y: 40, w: 312, h: 604, z: 6 },
+				// 浮动按钮组（导图在总监之前）
+				{ kind: "overline", label: "浮动组 · 🧠思维导图 / ◆总监", x: 900, y: 590, w: 170, h: 34, z: 8 },
+				// 导图态（覆盖层）
+				{ kind: "canvas", label: "导图态 · 分支血缘画布", x: 60, y: 80, w: 1060, h: 440, z: 10 },
+				{ kind: "node", label: "分支节点 · 根", x: 180, y: 180, w: 130, h: 44, z: 11 },
+				{ kind: "node", label: "分支节点 · 子 A", x: 400, y: 140, w: 130, h: 44, z: 11 },
+				{ kind: "node", label: "分支节点 · 子 B", x: 400, y: 240, w: 130, h: 44, z: 11 },
+				{ kind: "edge", label: "血缘连线", x: 310, y: 200, w: 90, h: 2, z: 10 }
+			];
+			
+			/** 预置的标准框架（key → {label, desc, seed}） */
+			const STANDARD_FRAMES = Object.freeze({
+				threeTab: {
+					label: "三页签标准框架",
+					desc: "总监 / 对话 / 轨迹 三页签 + 右侧弹窗 + 导图态 —— 对齐 V16 板块 A",
+					seed: FRAME_SEEDS
+				}
+			});
+			
+			/**
+			 * 生成标准框架的元素数组。
+			 * @param {string} [key] 模板 key，默认 threeTab
+			 * @returns {Array<object>} 元素数组（已归一化、id 已重编，可直接落库）
+			 */
+			function buildStandardFrame(key = "threeTab") {
+				const frame = STANDARD_FRAMES[key] || STANDARD_FRAMES.threeTab;
+				return (frame.seed || []).map((s) => {
+					const el = createElement(s.kind, s);
+					// 模板里的 id 必须重编：同一模板可加载多次（多份设计图），id 不能撞
+					if (el) el.id = nextElementId(s.kind);
+					return el;
+				}).filter(Boolean);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、设计图文档（一整份可编辑稿）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 文档 schema 版本（结构变更时 +1，读取端据此迁移） */
+			const DESIGN_DOC_SCHEMA = 1;
+			
+			/** 文档序号（**确定性**：不用 Math.random —— 随机 id 会让测试无法断言） */
+			let docSeq = 0;
+			function nextDocId() {
+				docSeq += 1;
+				return "dd_" + Date.now().toString(36) + "_" + docSeq;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 六、版本快照（2026-09-12 新增 · 用户需求「也没有保存 和不同版本的选择」）
+			 *
+			 * 🔴 为什么 `revision` 不够 —— 这是本模块存在的唯一理由：
+			 *   `revision` 是**每次落盘就 +1** 的自动代数（拖一下 +1、按一次方向键 +1），
+			 *   真机上看到的数字是 **605**。它能证明"存过 605 次"，却**回答不了用户真正会问的那句话**：
+			 *   「回到我刚才那个布局」—— 因为 605 次里**没有任何一次被标记为"这一版要留着"**。
+			 *   屏幕上是 605 个点，没有一个是"版本"。所以另立一套语义：`versions[]`。
+			 *
+			 * 三条设计取舍（均记录理由，便于日后推翻时知道推翻的是什么）：
+			 *   ① **内嵌在 doc 里**，不另开 localStorage 键 / 不另开 IDB store。
+			 *      版本必须与图**同生共死**：删除图时版本一起走。独立存储极易留孤儿版本，且回滚要多一次异步等待。
+			 *   ② **只快照 elements，不含 title**。标题是"图的身份"，内容是"图的样子"。
+			 *      回滚语义定为「**内容**回到那一刻」；若连标题一起回滚，用户重命名后再回滚会觉得图被换掉了。
+			 *   ③ **限流 VERSION_LIMIT**。每版是一份完整 elements 深拷贝（20 元素 ≈ 4KB），
+			 *      无上限会吃满 localStorage 5MB 配额 —— 而配额满的失败是**静默**的（persist 的 catch 吞掉）。
+			 *
+			 * ⚠️ 与 R5 冻结契约的关系：`dsh.director.design` 是**本插件自有键**（不在 R5 冻结清单内），
+			 *    故可自由增字段；但 `docId/title/elements/thread/revision` 五个既有字段**一律不动名、不动义**，
+			 *    保证「已落死基线」读得懂本版本写的数据，反之亦然。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 每个设计图最多保留的版本数（超出淘汰最旧的；不做"归档"，理由：归档=隐藏的孤儿数据） */
+			const VERSION_LIMIT = 30;
+			
+			/**
+			 * 深拷贝元素。
+			 * 🔴 **必须真深拷贝**：版本与工作副本一旦共享引用，之后拖拽工作副本的元素
+			 *    （`moveElement` 返回新 doc 但内部元素对象可能被复用）就会**穿透改掉历史版本**，
+			 *    表现是"回滚到 v3 却是最新的样子" —— 这类共享引用 bug 不报错、只出错。
+			 */
+			function cloneElements(els) {
+				return JSON.parse(JSON.stringify(els || []));
+			}
+			
+			/** 版本序号（确定性策略同 docSeq） */
+			let verSeq = 0;
+			function nextVersionId() {
+				verSeq += 1;
+				return "dv_" + Date.now().toString(36) + "_" + verSeq;
+			}
+			
+			/**
+			 * 生成一份版本快照。
+			 * @param {object} doc 源文档（工作副本）
+			 * @param {{note?:string,label?:string,vid?:string}} [patch]
+			 *   `note` 建议写"这一版改了什么" —— 它决定日后能不能指着版本说话（"回到'底栏加高'那版"）。
+			 */
+			function createVersion(doc, patch = {}) {
+				const p = patch || {};
+				const n = ((doc && doc.versions) || []).length + 1;
+				const els = cloneElements((doc && doc.elements) || []);
+				return {
+					vid: p.vid || nextVersionId(),
+					label: String(p.label || ("v" + n)),
+					note: String(p.note || "").slice(0, 200),
+					savedAt: Date.now(),
+					revision: Number((doc && doc.revision) || 0),
+					count: els.length,
+					elements: els
+				};
+			}
+			
+			/**
+			 * 归一化读回的版本（坏版本剔除）。
+			 * 注意：`normalizeElement` 会**保留传入的 id**（`createElement` 里 `p.id || nextElementId()`），
+			 * 故版本内元素 id 与工作副本一致 ⇒ 回滚后选中态、对话里的 id 指称仍然对得上。
+			 */
+			function normalizeVersion(raw, i) {
+				if (!raw || !raw.vid) return null;
+				const els = (raw.elements || []).map(normalizeElement).filter(Boolean);
+				return {
+					vid: raw.vid,
+					label: String(raw.label || ("v" + ((i || 0) + 1))),
+					note: String(raw.note || ""),
+					savedAt: raw.savedAt || Date.now(),
+					revision: Number(raw.revision || 0),
+					count: els.length,
+					elements: els
+				};
+			}
+			
+			/** 版本摘要（不含 elements —— UI 列表与"选择版本"用，避免大对象外泄） */
+			function versionSummary(v) {
+				if (!v) return null;
+				return { vid: v.vid, label: v.label, note: v.note, savedAt: v.savedAt, count: v.count, revision: v.revision };
+			}
+			
+			/**
+			 * 新建一份设计图文档。
+			 * @param {object} [patch] { title, frameKey, elements, thread, versions }
+			 */
+			function createDesignDoc(patch = {}) {
+				const p = patch || {};
+				const elements = p.elements ? p.elements.map(normalizeElement).filter(Boolean) : buildStandardFrame(p.frameKey);
+				syncSeqFrom(elements);
+				const now = Date.now();
+				return {
+					docId: p.docId || nextDocId(),
+					schema: DESIGN_DOC_SCHEMA,
+					title: String(p.title || "未命名设计图"),
+					frameKey: p.frameKey || "threeTab",
+					elements,
+					// 设计图专用临时对话（只处理设计图修订）—— 与总监对话、宿主会话**三向隔离**
+					thread: Array.isArray(p.thread) ? p.thread : [],
+					/* 版本快照：新建图**无版本**（= 还没保存过）⇒ 顶栏显示"未保存"而不是"v0" */
+					versions: Array.isArray(p.versions) ? p.versions.map(normalizeVersion).filter(Boolean) : [],
+					createdAt: p.createdAt || now,
+					updatedAt: now,
+					revision: Number(p.revision || 0) + 1
+				};
+			}
+			
+			/** 归一化读回的文档（缺字段补默认，坏元素剔除） */
+			function normalizeDoc(raw) {
+				if (!raw || !raw.docId) return null;
+				const elements = (raw.elements || []).map(normalizeElement).filter(Boolean);
+				syncSeqFrom(elements);
+				return {
+					docId: raw.docId,
+					schema: DESIGN_DOC_SCHEMA,
+					title: String(raw.title || "未命名设计图"),
+					frameKey: raw.frameKey || "threeTab",
+					elements,
+					thread: Array.isArray(raw.thread) ? raw.thread : [],
+					/* 🔴 旧数据兼容（必须有）：基线冻结前落库的 doc 没有 versions 字段，
+					 *    此处补空数组而不是补一个"自动版本" —— 补出来的版本会让用户以为曾经保存过。
+					 *    代价是首次升级时所有图显示"未保存"，属**正确**的诚实显示。 */
+					versions: (raw.versions || []).map(normalizeVersion).filter(Boolean),
+					createdAt: raw.createdAt || Date.now(),
+					updatedAt: raw.updatedAt || Date.now(),
+					revision: Number(raw.revision || 0)
+				};
+			}
+			
+			/** 文档统计（左侧面板与状态栏显示用） */
+			function docStats(doc) {
+				const els = (doc && doc.elements) || [];
+				const byKind = {};
+				for (const e of els) byKind[e.kind] = (byKind[e.kind] || 0) + 1;
+				const missingLogic = els.filter((e) => !e.logic || !e.logic.action).length;
+				return { total: els.length, byKind, missingLogic, thread: ((doc && doc.thread) || []).length };
+			}
+			
+			exports.ELEMENT_KINDS = ELEMENT_KINDS;
+			exports.ELEMENT_KIND_KEYS = ELEMENT_KIND_KEYS;
+			exports.kindsByGroup = kindsByGroup;
+			exports.LOGIC_FIELDS = LOGIC_FIELDS;
+			exports.emptyLogic = emptyLogic;
+			exports.MIN_SIZE = MIN_SIZE;
+			exports.CANVAS_W = CANVAS_W;
+			exports.CANVAS_H = CANVAS_H;
+			exports.nextElementId = nextElementId;
+			exports.syncSeqFrom = syncSeqFrom;
+			exports.createElement = createElement;
+			exports.normalizeElement = normalizeElement;
+			exports.isRenderable = isRenderable;
+			exports.hitTest = hitTest;
+			exports.STANDARD_FRAMES = STANDARD_FRAMES;
+			exports.buildStandardFrame = buildStandardFrame;
+			exports.DESIGN_DOC_SCHEMA = DESIGN_DOC_SCHEMA;
+			exports.nextDocId = nextDocId;
+			exports.VERSION_LIMIT = VERSION_LIMIT;
+			exports.cloneElements = cloneElements;
+			exports.nextVersionId = nextVersionId;
+			exports.createVersion = createVersion;
+			exports.normalizeVersion = normalizeVersion;
+			exports.versionSummary = versionSummary;
+			exports.createDesignDoc = createDesignDoc;
+			exports.normalizeDoc = normalizeDoc;
+			exports.docStats = docStats;
+		};
+
+		// ── store/design.js ──
+		__defs["store/design.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）
+			 * 引用：V16 诉求 2 · 5（逻辑全实现 + 指令过确认闸门）+ 2026-09-12 诉求 10（保存与版本） · 要求 1
+			 * 上游：client-entry.js, components/DesignStudio.js, mount.js
+			 * 下游：store/design-schema.js, store/plugin-db.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D5 · D6（元素操作 + 指令解析）· E3（版本 API）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * store/design.js — 设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html  【板块 D】
+			 *   ├─ D1 全屏工作室布局     → components/DesignStudio.js
+			 *   ├─ D2/D4 元素原子与模板   → store/design-schema.js
+			 *   ├─ D5 元素操作（本文件）   → add/update/move/resize/remove/duplicate/reorder
+			 *   └─ D6 设计图专用对话（本文件 thread）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  三条隔离（用户要求「属于新开的临时对话 只处理设计图」）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   ① **不与宿主会话共用**：设计图 thread 存在本文件自己的 key，
+			 *      既不写宿主的 session store，也不调 `sendToChat`。
+			 *   ② **不与总监对话共用**：总监消息在 `plugin-db/directorConversations`，
+			 *      设计图 thread 在 `dsh.director.design`。两者互不可见。
+			 *   ③ **一图一线程**：每份设计图文档自带 `thread`，删图即删线
+			 *      （临时对话的字面含义：它只服务于这一份图）。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  持久化：localStorage 主 + plugin-db 备份（双写）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   为什么不是只用 IDB：
+			 *     设计图数据量小（几十元素 ≈ 20KB），而 IDB 是**异步**的 —— 拖拽过程中每帧都
+			 *     落库会产生竞态。localStorage 同步写可保证「拖完即存」。
+			 *   为什么还要 IDB：
+			 *     符合要求 1「独立数据元」，且 IDB 容量不受 5MB 限制，便于后续存大图。
+			 *   读取以 localStorage 为准（同步、必定最新）；IDB 为冷备。
+			 *
+			 *  🔴 R5 冻结项：本文件**不碰** `dsh.director.store.*` / `dsh.director.layout` /
+			 *     `director-main` / `dsh.director.config` / `dsh-director-db` / cookie 前缀。
+			 *     `dsh.director.design` 是**新增键**（冻结清单之外），安全。
+			 *
+			 * 错误处理：所有持久化 API catch 后返回安全缺省，不向上抛（与 store/idb.js 一致）。
+			 */
+			
+			const { ELEMENT_KINDS, createElement, normalizeElement, isRenderable, createDesignDoc, normalizeDoc, docStats, buildStandardFrame, CANVAS_W, CANVAS_H, MIN_SIZE, createVersion, versionSummary, cloneElements, VERSION_LIMIT, syncSeqFrom } = __m("store/design-schema.js");
+			// 冷备通道（兑现文件头「localStorage 主 + plugin-db 备份（双写）」的承诺）
+			const { pPut, pGet, PDB } = __m("store/plugin-db.js");
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 存储键与内存态
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** localStorage 键（新增键，不在 R5 冻结清单内） */
+			const DESIGN_KEY = "dsh.director.design";
+			/** 设计图专用对话的角色（区别于总监的 user/director） */
+			const DESIGN_ROLE = Object.freeze({ USER: "user", STUDIO: "studio" });
+			
+			let state = { docs: [], activeDocId: null, loaded: false };
+			
+			/** 冷备快照在 `directorDesigns` 里的固定主键（整图集一条，读写都简单） */
+			const BACKUP_ID = "snapshot";
+			
+			/**
+			 * 落盘 —— **双写**（兑现文件头承诺）
+			 *   主：localStorage（同步、拖完即存、必定最新）
+			 *   冷备：plugin-db/directorDesigns（异步、失败不影响主流程、容量不受 5MB 限制）
+			 *
+			 * 🔴 为什么必须真的写 IDB（2026-09-12 教训）：
+			 *   文件头原本已写「双写」，但 `persist()` 只写了 localStorage —— **注释与代码背离**。
+			 *   而真机实测：Harness 每次启动的本地 HTTP 端口会变（2606 → 28931 → 32196），
+			 *   localStorage 又是**按 origin（含端口）分区**的 ⇒ 主存有丢失风险。
+			 *   故冷备不是"以后可能有用"，而是**当前就有实际价值的兜底**。
+			 */
+			function persist() {
+				try {
+					if (typeof localStorage !== "undefined") {
+						localStorage.setItem(DESIGN_KEY, JSON.stringify({ docs: state.docs, activeDocId: state.activeDocId }));
+					}
+				} catch (e) { /* 隐私模式 / 配额满：不影响内存态 */ }
+				try {
+					// 不 await：拖拽路径上不能引入异步抖动；失败静默（冷备允许落后）
+					pPut(PDB.DESIGNS, {
+						designId: BACKUP_ID,
+						docs: state.docs,
+						activeDocId: state.activeDocId,
+						savedAt: Date.now()
+					});
+				} catch (e) { /* IDB 不可用：降级为仅 localStorage */ }
+			}
+			
+			let backupTried = false;
+			/**
+			 * 冷备恢复 —— **仅当主存为空时**执行一次。
+			 * 触发时机：`installDesignApi()`（插件装载早期），异步补齐并 notify。
+			 * @returns {Promise<{restored:number, savedAt:number}|null>}
+			 */
+			function hydrateDesignBackup() {
+				if (backupTried) return Promise.resolve(null);
+				backupTried = true;
+				try {
+					load();
+					if (typeof localStorage !== "undefined" && localStorage.getItem(DESIGN_KEY)) return Promise.resolve(null); // 主存有数据，无需恢复
+					if (state.docs.length) return Promise.resolve(null);
+				} catch (e) { return Promise.resolve(null); }
+				return pGet(PDB.DESIGNS, BACKUP_ID).then((rec) => {
+					if (!rec || !(rec.docs || []).length) return null;
+					const docs = (rec.docs || []).map(normalizeDoc).filter(Boolean);
+					if (!docs.length) return null;
+					state = { docs, activeDocId: rec.activeDocId || (docs[0] && docs[0].docId) || null, loaded: true };
+					persist();   // 回灌主存，下一轮不必再走冷备
+					notify();
+					return { restored: docs.length, savedAt: rec.savedAt || null };
+				}).catch(() => null);
+			}
+			function load() {
+				if (state.loaded) return;
+				state.loaded = true;
+				try {
+					const raw = typeof localStorage !== "undefined" ? localStorage.getItem(DESIGN_KEY) : null;
+					if (!raw) return;
+					const parsed = JSON.parse(raw);
+					const docs = (parsed && parsed.docs ? parsed.docs : []).map(normalizeDoc).filter(Boolean);
+					state = { docs, activeDocId: parsed.activeDocId || (docs[0] && docs[0].docId) || null, loaded: true };
+				} catch (e) { /* 解析失败 → 空库，不抛 */ }
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 订阅（React 侧 useSyncExternalStore 可用；也供真机测试观察变更）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const listeners = new Set();
+			let version = 0;
+			function notify() {
+				version += 1;
+				for (const fn of listeners) { try { fn(state, version); } catch (e) { /* 单订阅者异常不影响其他 */ } }
+			}
+			function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+			function getVersion() { return version; }
+			function getState() { load(); return state; }
+			function getActiveDoc() {
+				load();
+				return state.docs.find((d) => d.docId === state.activeDocId) || null;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 文档 CRUD
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 列出全部设计图（摘要，不含 elements，避免大对象外泄） */
+			function listDocs() {
+				load();
+				return state.docs.map((d) => ({
+					docId: d.docId, title: d.title, revision: d.revision,
+					count: (d.elements || []).length, updatedAt: d.updatedAt
+				}));
+			}
+			
+			function getDoc(docId) {
+				load();
+				return state.docs.find((d) => d.docId === docId) || null;
+			}
+			
+			/** 新建设计图（默认铺标准框架），并设为当前图 */
+			function newDoc(patch = {}) {
+				load();
+				const doc = createDesignDoc(patch);
+				state = { docs: state.docs.concat([doc]), activeDocId: doc.docId, loaded: true };
+				persist();
+				notify();
+				return doc;
+			}
+			
+			/**
+			 * 写回一份文档到库 —— **统一出口**（替换 + persist + notify）。
+			 * 🔴 抽出来的理由：`saveDoc` 与版本 API（saveVersion / restoreVersion / renameDoc / deleteVersion）
+			 *    做的是同一件事。若各写一遍，就有 5 处可能漏 `persist()` 或漏 `notify()` ——
+			 *    而**漏 notify 的表现是"数据存了但界面不动"**，最难查（数据是对的，看起来像 UI bug）。
+			 *    此处只做"替换 + 双写 + 广播"，不含任何业务判断。
+			 */
+			function putDoc(next) {
+				if (!next || !next.docId) return null;
+				load();
+				const i = state.docs.findIndex((d) => d.docId === next.docId);
+				const docs = i >= 0
+					? state.docs.slice(0, i).concat([next], state.docs.slice(i + 1))
+					: state.docs.concat([next]);
+				state = { ...state, docs };
+				persist();
+				notify();
+				return next;
+			}
+			
+			/** 保存（整体替换该图，revision +1） */
+			function saveDoc(doc) {
+				if (!doc || !doc.docId) return null;
+				load();
+				const next = { ...doc, updatedAt: Date.now(), revision: Number(doc.revision || 0) + 1 };
+				const i = state.docs.findIndex((d) => d.docId === doc.docId);
+				const docs = i >= 0 ? state.docs.slice(0, i).concat([next], state.docs.slice(i + 1)) : state.docs.concat([next]);
+				state = { ...state, docs };
+				persist();
+				notify();
+				return next;
+			}
+			
+			function deleteDoc(docId) {
+				load();
+				const docs = state.docs.filter((d) => d.docId !== docId);
+				const activeDocId = state.activeDocId === docId ? ((docs[0] && docs[0].docId) || null) : state.activeDocId;
+				state = { docs, activeDocId, loaded: true };
+				persist();
+				notify();
+				return true;
+			}
+			
+			function setActiveDoc(docId) {
+				load();
+				state = { ...state, activeDocId: docId || null };
+				persist();
+				notify();
+				return state.activeDocId;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 版本快照 API（2026-09-12 新增 · 用户需求「也没有保存 和不同版本的选择」）
+			 *
+			 *   语义分工（这是本组函数存在的理由）：
+			 *     `revision`  —— **自动落盘代数**，每次写库 +1（拖拽也 +1）。证明"存过"，不证明"留过"。
+			 *     `versions[]`—— **用户显式保存的版本**。只在点【保存】时生成，可命名、可回滚。
+			 *   所以顶栏显示的不是 revision，而是"未保存 / 已保存 v3"。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** logic 七元组做稳定序列化（键排序）—— 否则 `{a,b}` 与 `{b,a}` 会被误判为"有改动" */
+			function stableLogic(l) {
+				const o = l || {};
+				return Object.keys(o).sort().map((k) => k + "=" + String(o[k] == null ? "" : o[k])).join("\u0001");
+			}
+			
+			/**
+			 * 逐元素比对两份 elements 是否等价（id/几何/标签/逻辑）。
+			 * 只比**会影响图的样子**的字段：props 不参与（它是预留扩展位，未接线，比它会造成假"脏"）。
+			 */
+			function sameElements(a, b) {
+				const A = a || [], B = b || [];
+				if (A.length !== B.length) return false;
+				for (let i = 0; i < A.length; i++) {
+					const x = A[i], y = B[i];
+					if (!x || !y) return false;
+					if (x.id !== y.id || x.kind !== y.kind) return false;
+					if (x.x !== y.x || x.y !== y.y || x.w !== y.w || x.h !== y.h || x.z !== y.z) return false;
+					if (String(x.label) !== String(y.label)) return false;
+					if (stableLogic(x.logic) !== stableLogic(y.logic)) return false;
+				}
+				return true;
+			}
+			
+			/**
+			 * 找出「内容与当前工作副本一致」的版本（**从新到旧**找，命中即返回）；没有则 null。
+			 * 它是脏判定的真正基准 —— 见 isDirty 的说明。
+			 */
+			function matchVersion(doc) {
+				if (!doc) return null;
+				const vs = doc.versions || [];
+				const els = doc.elements || [];
+				for (let i = vs.length - 1; i >= 0; i--) {
+					if (sameElements(vs[i].elements, els)) return vs[i];
+				}
+				return null;
+			}
+			
+			/**
+			 * 当前工作副本是否有**未保存改动**。
+			 *
+			 * 🔴 判据是「当前内容是否**已经存在于某个版本里**」，而**不是**"是否等于最后一版"。
+			 *    反例是离线测试 C5 抓出来的（真机必现）：
+			 *      回滚到 v1 时，store 会先把回滚前的内容自动存成 v2（保护用户刚做的东西）⇒
+			 *      "最新版本"变成了 v2，而当前内容等于 v1
+			 *      ⇒ 用"等于最后一版"判 ⇒ 刚回滚完的界面被标成「有未保存改动」。
+			 *      用户看到的是：**内容明明回去了，顶栏却说没存** ⇒ 会怀疑回滚没生效，再点一次。
+			 *      这属于「状态提示骗人」，比不提示更糟。
+			 *    改成"是否存在于任一个版本里"后：
+			 *      · 回滚完 ⇒ 内容 = v1 ⇒ 干净（正确）
+			 *      · 刚保存 ⇒ 内容 = 刚存的那版 ⇒ 干净（正确）
+			 *      · 拖了一下 ⇒ 没有任何版本等于它 ⇒ 脏（正确）
+			 *    代价是 O(版本数 × 元素数)（上限 30×20=600 次字段比较），每帧可忽略。
+			 *
+			 * 从未保存过（versions 为空）：有元素就算"未保存"，空图算"干净"（空图没什么可保存的）。
+			 */
+			function isDirty(doc) {
+				if (!doc) return false;
+				const vs = doc.versions || [];
+				if (!vs.length) return ((doc.elements || []).length > 0);
+				return matchVersion(doc) === null;
+			}
+			
+			/** 顶栏状态一屏取（避免组件里自己拼三处逻辑，出现"角标说 3、按钮说 v2"这类不一致） */
+			function getVersionState(doc) {
+				if (!doc) return { dirty: false, count: 0, last: null, match: null, label: "无图" };
+				const vs = doc.versions || [];
+				const last = vs.length ? versionSummary(vs[vs.length - 1]) : null;
+				const m = matchVersion(doc);
+				const dirty = vs.length ? (m === null) : ((doc.elements || []).length > 0);
+				return {
+					dirty, count: vs.length, last,
+					match: m ? versionSummary(m) : null,
+					label: !vs.length ? "未保存" : (dirty ? "未保存改动" : "已保存 " + versionSummary(m).label)
+				};
+			}
+			
+			/**
+			 * 保存一个版本（用户点【保存】时调用）。
+			 * @param {object} doc 当前工作副本
+			 * @param {string} [note] 版本说明（建议写"改了什么"，日后靠它指称）
+			 * @returns {{doc:object, version:object, dropped:number}|null}
+			 */
+			function saveVersion(doc, note = "") {
+				if (!doc || !doc.docId) return null;
+				load();
+				const v = createVersion(doc, { note });
+				let vs = (doc.versions || []).concat([v]);
+				/* 限流：超上限淘汰最旧。**不静默** —— 返回 dropped 让 UI 能提示"已淘汰最早的 1 个版本"。 */
+				const dropped = Math.max(0, vs.length - VERSION_LIMIT);
+				if (dropped) vs = vs.slice(dropped);
+				const next = { ...doc, versions: vs, updatedAt: Date.now() };
+				putDoc(next);
+				return { doc: next, version: versionSummary(v), dropped };
+			}
+			
+			/** 列出某图的版本摘要（**新的在前** —— 列表第一项就是"最近保存的"） */
+			function listVersions(docId) {
+				load();
+				const d = state.docs.find((x) => x.docId === docId);
+				if (!d) return [];
+				return (d.versions || []).map(versionSummary).reverse();
+			}
+			
+			/**
+			 * 回滚到指定版本 —— **回滚前自动存档**。
+			 *
+			 * 🔴 「回滚前自动存档」是硬约束，不是可选优化：
+			 *    回滚会覆盖工作副本；若不先存档，用户花十分钟拖的布局会被一次误点**不可逆地清掉**。
+			 *    这与 e2e C 系列断言（回滚后元素恢复）不冲突：存档只**追加**版本，不改回滚目标内容。
+			 *
+			 * @returns {{doc:object, from:object, autoSaved:boolean}|null} 目标版本不存在时返回 null
+			 */
+			function restoreVersion(docId, vid) {
+				load();
+				const d = state.docs.find((x) => x.docId === docId);
+				if (!d) return null;
+				const v = (d.versions || []).find((x) => x.vid === vid);
+				if (!v) return null;
+				let vs = (d.versions || []).slice();
+				let autoSaved = false;
+				// 当前状态与最新版本不同才存（相同则存档等于刷一个重复版本）
+				if (!sameElements((vs[vs.length - 1] || {}).elements, d.elements)) {
+					vs = vs.concat([createVersion(d, { note: "回滚前自动存档" })]);
+					if (vs.length > VERSION_LIMIT) vs = vs.slice(vs.length - VERSION_LIMIT);
+					autoSaved = true;
+				}
+				const elements = cloneElements(v.elements);
+				syncSeqFrom(elements);   // 版本元素 id 与工作副本同源，此处仅为护栏
+				const next = {
+					...d, elements, versions: vs, updatedAt: Date.now(),
+					revision: Number(d.revision || 0) + 1   // 回滚也是一次内容变更，revision 照常 +1
+				};
+				putDoc(next);
+				return { doc: next, from: versionSummary(v), autoSaved };
+			}
+			
+			/** 删除单个版本（删到 0 个属合法：等于回到"未保存"） */
+			function deleteVersion(docId, vid) {
+				load();
+				const d = state.docs.find((x) => x.docId === docId);
+				if (!d) return null;
+				const vs = (d.versions || []).filter((x) => x.vid !== vid);
+				if (vs.length === (d.versions || []).length) return null;   // 没找到，不算成功
+				const next = { ...d, versions: vs, updatedAt: Date.now() };
+				putDoc(next);
+				return next;
+			}
+			
+			/** 重命名设计图（标题是"身份"不参与版本快照 ⇒ 回滚不会把名字带走） */
+			function renameDoc(docId, title) {
+				load();
+				const d = state.docs.find((x) => x.docId === docId);
+				if (!d) return null;
+				const t = String(title == null ? "" : title).trim();
+				if (!t) return null;   // 空名拒绝（而不是静默改成"未命名"——空名是用户手滑）
+				const next = { ...d, title: t.slice(0, 60), updatedAt: Date.now() };
+				putDoc(next);
+				return next;
+			}
+			
+			/**
+			 * 复制设计图。
+			 * **不带版本历史**：副本是"从现在开始"的新图，继承历史版本会让版本号来源含混
+			 * （副本里出现"回滚前自动存档"这种属于原图的记录）。
+			 */
+			function duplicateDoc(docId) {
+				load();
+				const d = state.docs.find((x) => x.docId === docId);
+				if (!d) return null;
+				const copy = createDesignDoc({
+					title: d.title + " · 副本",
+					frameKey: d.frameKey,
+					elements: cloneElements(d.elements),
+					thread: []
+				});
+				state = { docs: state.docs.concat([copy]), activeDocId: copy.docId, loaded: true };
+				persist();
+				notify();
+				return copy;
+			}
+			
+			/** 整体重置（仅测试/调试；不碰宿主任何数据） */
+			function resetDesignStore() {
+				state = { docs: [], activeDocId: null, loaded: true };
+				persist();
+				notify();
+				return true;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 元素操作 —— 全部是**纯函数**（入参 doc 不被修改，返回新 doc）
+			 *   纯函数便于 vitest 直接断言，无需渲染 React，也无需 DOM。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 把 doc 的 elements 换掉并返回新 doc（不落库；由调用方决定何时 saveDoc） */
+			function withElements(doc, elements) {
+				if (!doc) return null;
+				return { ...doc, elements: elements.filter(Boolean), updatedAt: Date.now() };
+			}
+			
+			const clampTo = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+			
+			/**
+			 * 增加元素（用户要求「允许…增加元素」）。
+			 * @param {object} doc
+			 * @param {string} kind ELEMENT_KINDS key
+			 * @param {{x?:number,y?:number}} [at] 落点；缺省放在画布中上部并做层叠偏移
+			 */
+			function addElement(doc, kind, at = {}) {
+				if (!doc) return null;
+				const n = (doc.elements || []).length;
+				const el = createElement(kind, {
+					x: at.x != null ? at.x : 40 + (n % 12) * 18,
+					y: at.y != null ? at.y : 40 + (n % 12) * 16,
+					z: maxZ(doc) + 1
+				});
+				if (!el) return null;
+				return withElements(doc, (doc.elements || []).concat([el]));
+			}
+			
+			/** 更新元素字段（label / props / logic 等） */
+			function updateElement(doc, id, patch) {
+				if (!doc) return null;
+				return withElements(doc, (doc.elements || []).map((e) => (e.id === id ? { ...e, ...patch, props: { ...e.props, ...(patch.props || {}) }, logic: { ...e.logic, ...(patch.logic || {}) } } : e)));
+			}
+			
+			/** 移动（拖拽）—— 边界钳制，不允许拖出画布外丢失 */
+			function moveElement(doc, id, x, y) {
+				if (!doc) return null;
+				return withElements(doc, (doc.elements || []).map((e) => {
+					if (e.id !== id) return e;
+					return { ...e, x: Math.round(clampTo(x, 0, CANVAS_W - MIN_SIZE)), y: Math.round(clampTo(y, 0, CANVAS_H - MIN_SIZE)) };
+				}));
+			}
+			
+			/** 平移（拖拽增量的语义化包装；Δ 由指针位移算出） */
+			function nudgeElement(doc, id, dx, dy) {
+				const el = (doc && doc.elements || []).find((e) => e.id === id);
+				if (!el) return doc;
+				return moveElement(doc, id, el.x + dx, el.y + dy);
+			}
+			
+			/** 改尺寸（拖右下角手柄） */
+			function resizeElement(doc, id, w, h) {
+				if (!doc) return null;
+				return withElements(doc, (doc.elements || []).map((e) => (e.id === id
+					? { ...e, w: Math.round(clampTo(w, MIN_SIZE, CANVAS_W)), h: Math.round(clampTo(h, MIN_SIZE, CANVAS_H)) }
+					: e)));
+			}
+			
+			/** 删除元素 */
+			function removeElement(doc, id) {
+				if (!doc) return null;
+				return withElements(doc, (doc.elements || []).filter((e) => e.id !== id));
+			}
+			
+			/** 复制元素（原位右下偏移 16px，便于看见） */
+			function duplicateElement(doc, id) {
+				const el = (doc && doc.elements || []).find((e) => e.id === id);
+				if (!el) return doc;
+				const copy = createElement(el.kind, { ...el, id: undefined, x: el.x + 16, y: el.y + 16, z: maxZ(doc) + 1 });
+				return withElements(doc, (doc.elements || []).concat([copy]));
+			}
+			
+			/** 改层级（置顶 / 置底） */
+			function reorderElement(doc, id, where) {
+				if (!doc) return null;
+				const els = doc.elements || [];
+				const top = Math.max(1, ...els.map((e) => e.z || 1));
+				return withElements(doc, els.map((e) => (e.id === id ? { ...e, z: where === "bottom" ? 0 : top + 1 } : e)));
+			}
+			
+			/** 批量设置交互逻辑（左侧面板的「编辑」写入点） */
+			function updateLogic(doc, id, patch) {
+				const el = (doc && doc.elements || []).find((e) => e.id === id);
+				if (!el) return doc;
+				return updateElement(doc, id, { logic: { ...(el.logic || {}), ...(patch || {}) } });
+			}
+			
+			function maxZ(doc) {
+				const els = (doc && doc.elements) || [];
+				return els.length ? Math.max(...els.map((e) => Number(e.z) || 1)) : 0;
+			}
+			
+			/** 可渲染元素（按 z 升序，供画布绘制） */
+			function visibleElements(doc) {
+				return ((doc && doc.elements) || []).filter(isRenderable).sort((a, b) => (a.z || 0) - (b.z || 0));
+			}
+			
+			/** 重新加载标准框架（丢弃现元素；调用方负责确认） */
+			function loadStandardFrame(doc, frameKey = "threeTab") {
+				if (!doc) return null;
+				return withElements({ ...doc, frameKey }, buildStandardFrame(frameKey));
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 设计图专用临时对话（**只处理设计图**）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 追加一条线程消息。消息是**纯记录**：本函数不调用任何模型、不写宿主会话。
+			 * 真正的"处理"由上层（DesignStudio）决定 —— 它只能产生对**本图元素**的操作。
+			 * @param {object} doc
+			 * @param {{role?:string,text:string,ops?:Array}} msg
+			 */
+			function appendThread(doc, msg) {
+				if (!doc || !msg) return doc;
+				const rec = {
+					id: "tm_" + Date.now().toString(36) + "_" + ((doc.thread || []).length + 1),
+					role: msg.role === DESIGN_ROLE.USER ? DESIGN_ROLE.USER : DESIGN_ROLE.STUDIO,
+					text: String(msg.text == null ? "" : msg.text),
+					ops: Array.isArray(msg.ops) ? msg.ops : [],
+					at: Date.now()
+				};
+				return { ...doc, thread: (doc.thread || []).concat([rec]), updatedAt: Date.now() };
+			}
+			
+			/**
+			 * 把一句设计图修订指令翻译成**元素操作**（本地规则，不依赖模型）。
+			 *
+			 * ⚠️ 设计取舍：这里刻意只做**可解释的规则解析**（引用元素 id/标签 + 动词）。
+			 *    理由：设计图修订必须是**确定性**的 —— 模型幻觉一个不存在的元素会让图变坏，
+			 *    而"指哪改哪"正是这个功能存在的意义。模型只在需要生成**新元素建议**时参与。
+			 *
+			 * 支持指令（可组合）：
+			 *   移动 <元素> 左/右/上/下 [N]      删除 <元素>
+			 *   放大/缩小 <元素> [N]             置顶 <元素>
+			 *   复制 <元素>                      改文案 <元素> 为 <文本>
+			 * @param {object} doc
+			 * @param {string} text
+			 * @returns {{ops:Array<{op:string,target:string,args:object}>, unresolved:string[]}}
+			 */
+			function parseDesignCommand(doc, text) {
+				const els = (doc && doc.elements) || [];
+				const raw = String(text || "").trim();
+				const ops = [];
+				const unresolved = [];
+				if (!raw) return { ops, unresolved };
+			
+				/**
+				 * 元素指称：id 精确 → label 精确 → label 包含。
+				 * 🔴 必须剥掉中英文引号（2026-09-12）：用户很自然会写「移动「R1 顶部栏」左 30」，
+				 *    若把引号算进名字里就永远找不到元素。
+				 */
+				const find = (token) => {
+					let t = String(token == null ? "" : token).trim();
+					t = t.replace(/^[「『"'[\s]+/, "").replace(/[」』"'\]]+$/, "").trim();
+					if (!t) return null;
+					return els.find((e) => e.id === t)
+						|| els.find((e) => String(e.label || "") === t)
+						|| els.find((e) => String(e.label || "").includes(t))
+						|| null;
+				};
+			
+				/* 🔴 指令数字的单位 = **像素**（2026-09-12 修正 · 真机暴露）
+				 *   原实现：`const STEP = 20; const n = Number(m[3] || 1) * STEP;`
+				 *   ⇒ 用户说「移动 R1 顶部栏 左 30」，实际位移 30×20 = **600px**，
+				 *     超出画布左边界后被 `moveElement` clamp 到 0 ⇒ 表现为"元素整个贴到最左边没了"，
+				 *     且**没有任何报错**。真机上被 e2e 的位移断言（期望 30）抓出。
+				 *   修正原则：**数字的含义必须与直觉、以及与同族交互一致** ——
+				 *     方向键微移 10px、拖拽按 px、几何字段 x/y/w/h 全是 px
+				 *     ⇒ 指令里的数字也必须就是 px，不能悄悄乘一个魔法系数。
+				 */
+				const DEFAULT_NUDGE_PX = 10;   // 省略数字时的默认一档（与方向键同量纲）
+				const asPx = (raw, dflt) => {
+					const v = Number(raw);
+					return Number.isFinite(v) && v > 0 ? v : dflt;
+				};
+				const DIR = { 左: [-1, 0], 右: [1, 0], 上: [0, -1], 下: [0, 1] };
+			
+				/* 🔴 名字必须支持**多词**（2026-09-12 实测缺陷）：
+				 *   原用 `([^\s，,]+)` 取名字 ⇒ 名字里一旦有空格就截断，
+				 *   而标准框架的 label 恰恰全是多词（「R1 顶部栏」「R6 记忆面板」「右侧「对话」弹窗」）
+				 *   ⇒ **用户最想指称的那批元素全都指称不到**，报"认不出"。
+				 *   修正：改用惰性 `(.+?)` 吃到分隔词为止（`$` 或方向字 / 「为」）。
+				 *   move 的方向字需要 lookahead `(?=\s|\d|$)`，否则 label 里含方向字的元素会误切
+				 *   （如「右侧「对话」弹窗」里的"右"后面跟着"侧"，不是一个方向的写法）。
+				 *   两种写法都支持：「移动 R1 顶部栏 左 30」/「移动「R1 顶部栏」左 30」。 */
+				const patterns = [
+					{ op: "move", re: /移动\s*(.+?)\s*([左右上下])(?=\s|\d|$)\s*(\d+)?/ },
+					{ op: "remove", re: /删除\s*(.+)$/ },
+					{ op: "scale", re: /(放大|缩小)\s*(.+?)\s*(\d+)?$/ },
+					{ op: "reorder", re: /置顶\s*(.+)$/ },
+					{ op: "duplicate", re: /复制\s*(.+)$/ },
+					{ op: "relabel", re: /改文案\s*(.+?)\s*为\s*(.+)$/ }
+				];
+			
+				for (const seg of raw.split(/[；;\n]/).map((s) => s.trim()).filter(Boolean)) {
+					let hit = false;
+					for (const p of patterns) {
+						const m = p.re.exec(seg);
+						if (!m) continue;
+						hit = true;
+						if (p.op === "move") {
+							const el = find(m[1]);
+							if (!el) { unresolved.push(m[1]); break; }
+							const [sx, sy] = DIR[m[2]] || [1, 0];
+							const n = asPx(m[3], DEFAULT_NUDGE_PX);   // 数字即像素
+							ops.push({ op: "move", target: el.id, args: { dx: sx * n, dy: sy * n } });
+						} else if (p.op === "scale") {
+							const el = find(m[2]);
+							if (!el) { unresolved.push(m[2]); break; }
+							const n = asPx(m[3], 20);                 // 数字即像素（省略时 20px）
+							const sign = m[1] === "放大" ? 1 : -1;
+							ops.push({ op: "resize", target: el.id, args: { w: el.w + sign * n, h: el.h + sign * n } });
+						} else if (p.op === "reorder") {
+							const el = find(m[1]);
+							if (!el) { unresolved.push(m[1]); break; }
+							ops.push({ op: "reorder", target: el.id, args: { where: "top" } });
+						} else if (p.op === "relabel") {
+							const el = find(m[1]);
+							if (!el) { unresolved.push(m[1]); break; }
+							ops.push({ op: "relabel", target: el.id, args: { label: String(m[2]).trim() } });
+						} else {
+							const el = find(m[1]);
+							if (!el) { unresolved.push(m[1]); break; }
+							ops.push({ op: p.op, target: el.id, args: {} });
+						}
+						break;
+					}
+					if (!hit) unresolved.push(seg);
+				}
+				return { ops, unresolved };
+			}
+			
+			/** 应用一组操作（来自 parseDesignCommand 或手工构造）—— **单次遍历，幂等安全** */
+			function applyOps(doc, ops) {
+				let d = doc;
+				for (const o of ops || []) {
+					if (!o || !o.target) continue;
+					if (o.op === "move") d = nudgeElement(d, o.target, o.args.dx || 0, o.args.dy || 0);
+					else if (o.op === "resize") d = resizeElement(d, o.target, o.args.w, o.args.h);
+					else if (o.op === "remove") d = removeElement(d, o.target);
+					else if (o.op === "duplicate") d = duplicateElement(d, o.target);
+					else if (o.op === "reorder") d = reorderElement(d, o.target, o.args.where || "top");
+					else if (o.op === "relabel") d = updateElement(d, o.target, { label: o.args.label });
+				}
+				return d;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 全局契约（调试 / 验证脚本用；不可改名）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			function installDesignApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshDesign = {
+					DESIGN_KEY, DESIGN_ROLE, ELEMENT_KINDS, CANVAS_W, CANVAS_H,
+					getState, getActiveDoc, subscribe, getVersion,
+					listDocs, getDoc, newDoc, saveDoc, deleteDoc, setActiveDoc, resetDesignStore,
+					addElement, updateElement, moveElement, nudgeElement, resizeElement,
+					removeElement, duplicateElement, reorderElement, updateLogic, visibleElements,
+					loadStandardFrame, appendThread, parseDesignCommand, applyOps,
+					docStats, buildStandardFrame,
+					/* 版本快照（2026-09-12）：保存 / 版本列表 / 回滚 / 删版本 / 重命名 / 复制图 / 脏判定 */
+					saveVersion, listVersions, restoreVersion, deleteVersion,
+					renameDoc, duplicateDoc, isDirty, getVersionState, matchVersion, sameElements, VERSION_LIMIT,
+					hydrateDesignBackup   // 冷备恢复（装载期调用；仅主存为空时生效）
+				};
+				// 装载即尝试冷备恢复：主存为空（换端口 / 清缓存）时把设计图找回来
+				try { hydrateDesignBackup(); } catch (e) { /* 冷备失败不影响主流程 */ }
+				return window.__dshDesign;
+			}
+			
+			exports.DESIGN_KEY = DESIGN_KEY;
+			exports.DESIGN_ROLE = DESIGN_ROLE;
+			exports.hydrateDesignBackup = hydrateDesignBackup;
+			exports.subscribe = subscribe;
+			exports.getVersion = getVersion;
+			exports.getState = getState;
+			exports.getActiveDoc = getActiveDoc;
+			exports.listDocs = listDocs;
+			exports.getDoc = getDoc;
+			exports.newDoc = newDoc;
+			exports.saveDoc = saveDoc;
+			exports.deleteDoc = deleteDoc;
+			exports.setActiveDoc = setActiveDoc;
+			exports.sameElements = sameElements;
+			exports.matchVersion = matchVersion;
+			exports.isDirty = isDirty;
+			exports.getVersionState = getVersionState;
+			exports.saveVersion = saveVersion;
+			exports.listVersions = listVersions;
+			exports.restoreVersion = restoreVersion;
+			exports.deleteVersion = deleteVersion;
+			exports.renameDoc = renameDoc;
+			exports.duplicateDoc = duplicateDoc;
+			exports.resetDesignStore = resetDesignStore;
+			exports.addElement = addElement;
+			exports.updateElement = updateElement;
+			exports.moveElement = moveElement;
+			exports.nudgeElement = nudgeElement;
+			exports.resizeElement = resizeElement;
+			exports.removeElement = removeElement;
+			exports.duplicateElement = duplicateElement;
+			exports.reorderElement = reorderElement;
+			exports.updateLogic = updateLogic;
+			exports.visibleElements = visibleElements;
+			exports.loadStandardFrame = loadStandardFrame;
+			exports.appendThread = appendThread;
+			exports.parseDesignCommand = parseDesignCommand;
+			exports.applyOps = applyOps;
+			exports.installDesignApi = installDesignApi;
+		};
+
+		// ── components/VersionPanel.js ──
+		__defs["components/VersionPanel.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：版本历史面板（"不同版本的选择"）
+			 * 引用：2026-09-12 诉求 10（不同版本的选择）
+			 * 上游：components/DesignStudio.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 E4（版本历史面板）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/VersionPanel.js — 版本历史面板（"不同版本的选择"）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html  【板块 E · 版本与保存】
+			 *  上游     components/DesignStudio.js（顶栏「版本 ▾」按钮拉起本面板）
+			 *  下游     store/design.js  listVersions / restoreVersion / deleteVersion
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  它解决什么（用户原话）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  「也没有保存 和不同版本的选择」
+			 *
+			 *  关键区分（这也是设计图能"指着说"的前提）：
+			 *    自动落盘代数 revision ≠ 用户保存的版本。
+			 *    revision 是 605 这种数字（拖一下就 +1），它答不了「回到刚才那个布局」。
+			 *    本面板列的是**用户显式保存过的**版本，每条带**说明文本** ——
+			 *    于是沟通可以变成「回到『底栏加高』那版」，而不是「回到第 3 个」。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  两条安全设计
+			 * ══════════════════════════════════════════════════════════════════
+			 *   ① 回滚是**破坏性**操作：面板顶部常显提示"回滚会先把当前样子自动存一份"，
+			 *      且 store 层 `restoreVersion` 真的会存（不是文案）。用户看得见才有信心点。
+			 *   ② 删除版本用**文字按钮**而非图标 ✕ —— 它与「回到此版」在同一行，
+			 *      图标按钮容易被误点成回滚（两者都会改变列表，但后果差一个量级）。
+			 */
+			
+			const react = require("react");
+			
+			const h = react.createElement;
+			
+			/* ── 局部样式（与 DesignStudio 同一套 design token；不跨文件共享 S，避免耦合） ── */
+			const V = {
+				panel: {
+					position: "absolute", top: 44, zIndex: 10, width: 340, maxHeight: "58vh",
+					display: "flex", flexDirection: "column",
+					background: "var(--dsw-alias-bg-base, #17181c)", color: "var(--dsw-alias-label-primary, #e8eaed)",
+					border: "1px solid var(--dsw-alias-border-l2, #3d4148)", borderRadius: 8,
+					boxShadow: "0 14px 40px rgba(0,0,0,.55)", overflow: "hidden", fontSize: 11.5
+				},
+				head: { display: "flex", alignItems: "center", gap: 7, padding: "8px 10px", borderBottom: "1px solid #26282e" },
+				body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 6, display: "flex", flexDirection: "column", gap: 4 },
+				foot: { padding: "7px 10px", borderTop: "1px solid #26282e", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.5 },
+				row: {
+					display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6,
+					border: "1px solid transparent", background: "rgba(255,255,255,.03)"
+				},
+				tag: {
+					fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "1px 6px", borderRadius: 4,
+					background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.45)", color: "#b794f6", whiteSpace: "nowrap"
+				},
+				note: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+				meta: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #6f757d)", whiteSpace: "nowrap" },
+				btn: {
+					height: 24, padding: "0 8px", borderRadius: 5, cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+					border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-base, #212429)",
+					color: "var(--dsw-alias-label-secondary, #c3c8ce)"
+				},
+				btnDel: {
+					height: 24, padding: "0 7px", borderRadius: 5, cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+					border: "1px solid rgba(248,81,73,.4)", background: "rgba(248,81,73,.12)", color: "#f0877f"
+				},
+				empty: { padding: "18px 12px", textAlign: "center", color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.7 }
+			};
+			
+			/** 版本时间显示：同一天只显时分，跨天补月-日（列表里最常看的是"刚才那版"，时分最有用） */
+			function fmtTime(ts) {
+				if (!ts) return "—";
+				try {
+					const d = new Date(ts);
+					const now = new Date();
+					const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+					const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+					if (sameDay) return hm;
+					return (d.getMonth() + 1) + "-" + d.getDate() + " " + hm;
+				} catch (e) { return "—"; }
+			}
+			
+			/**
+			 * @param {object}   props
+			 * @param {object}   props.doc        当前设计图
+			 * @param {Array}    props.versions   版本摘要列表（**新的在前**，来自 listVersions）
+			 * @param {boolean}  props.open
+			 * @param {number}   props.inset      窗口控件安全区宽度（面板右对齐时要躲开原生按钮）
+			 * @param {Function} props.onClose
+			 * @param {Function} props.onRestore  (vid) => void
+			 * @param {Function} props.onDelete   (vid) => void
+			 * @param {number}   [props.limit]    版本上限（提示用）
+			 */
+			function VersionPanel({ doc, versions, open, inset, onClose, onRestore, onDelete, limit }) {
+				if (!open) return null;
+			
+				const list = Array.isArray(versions) ? versions : [];
+				const cap = Number(limit || 30);
+				const rightPx = Math.max(10, Number(inset || 0) + 8);
+			
+				return h("div", {
+					style: { ...V.panel, right: rightPx },
+					"data-testid": "ds-ver-panel", role: "dialog", "aria-label": "版本历史"
+				}, [
+					h("div", { key: "hd", style: V.head }, [
+						h("span", { key: "t", style: { fontWeight: 650 } }, "🕘 版本历史"),
+						h("span", { key: "c", style: V.meta, "data-testid": "ds-ver-count" }, "共 " + list.length + " / " + cap + " 个"),
+						h("button", {
+							key: "x", style: { ...V.btn, marginLeft: "auto" }, "data-testid": "ds-ver-close",
+							"aria-label": "关闭版本历史", onClick: onClose
+						}, "✕")
+					]),
+			
+					list.length
+						? h("div", { key: "bd", style: V.body, "data-testid": "ds-ver-list" },
+							list.map((v) => h("div", { key: v.vid, style: V.row, "data-testid": "ds-ver-row", "data-vid": v.vid }, [
+								h("span", { key: "l", style: V.tag }, v.label),
+								h("span", { key: "n", style: V.note, title: v.note || "（未写说明）" }, v.note || "（未写说明）"),
+								h("span", { key: "m", style: V.meta }, v.count + " 元素 · " + fmtTime(v.savedAt)),
+								h("button", {
+									key: "r", style: V.btn, "data-testid": "ds-ver-restore", "data-vid": v.vid,
+									title: "把图的内容换成这一版（当前样子会先自动存一份）",
+									onClick: () => onRestore && onRestore(v.vid)
+								}, "回到此版"),
+								h("button", {
+									key: "d", style: V.btnDel, "data-testid": "ds-ver-del", "data-vid": v.vid,
+									title: "删除这个版本记录（不影响当前图的内容）",
+									onClick: () => onDelete && onDelete(v.vid)
+								}, "删除")
+							])))
+						: h("div", { key: "em", style: V.empty, "data-testid": "ds-ver-empty" }, [
+							h("div", { key: "a" }, "还没有保存过版本"),
+							h("div", { key: "b", style: { marginTop: 4 } }, "顶栏点【保存】会把当前这张图存成一个版本，")
+						]),
+			
+					h("div", { key: "ft", style: V.foot },
+						"回滚会把图的内容换成所选版本；当前样子会**先自动存一份**（说明写「回滚前自动存档」），不会丢。")
+				]);
+			}
+			
+			exports.VersionPanel = VersionPanel;
+		};
+
+		// ── components/DesignStudio.js ──
+		__defs["components/DesignStudio.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）
+			 * 引用：V16 诉求 2 · 3 · 5（全屏工作室 / 审美 / 设计图插件）+ 2026-09-12 诉求 8（顶栏功能未实现）· 11（审美完善）
+			 * 上游：client-entry.js, mount.js
+			 * 下游：store/design-schema.js, store/design.js, util/debug.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D1–D6（设计图工作室五区）· E1–E2（顶栏四区 / 保存两态）· E5（顶栏避让）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/DesignStudio.js — 设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html  【板块 D】
+			 *   ├─ D1 全屏工作室布局   → 本文件 DesignStudio（顶栏 / 工具栏 / 左栏 / 画布 / 底栏）
+			 *   ├─ D2 元素类型库       → store/design-schema.js ELEMENT_KINDS（18 类）
+			 *   ├─ D3 元素交互逻辑面板 → 本文件 LogicPanel（七元组，可编辑）
+			 *   ├─ D4 标准框架模板     → store/design-schema.js STANDARD_FRAMES
+			 *   ├─ D5 元素操作         → store/design.js（纯函数：增删改移缩）
+			 *   └─ D6 设计图专用对话   → 本文件 ThreadBar（**只处理设计图**，不碰宿主会话）
+			 *
+			 *  需求原文（用户）：「在总监页面单独加一个设计图的插件吧，按钮形式 点击铺满全屏，
+			 *  允许调整修改拖拽增加元素，最下面对话保留，这个对话处理设计图的修订 属于新开的临时对话
+			 *  只处理设计图，然后每一个元素可以点击 点击在左侧显示交互逻辑」
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  五块区域与需求的一一对应（改布局时按此表定位）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   ┌──────────── 顶栏 TopBar ────────────┐  D1  ：文档切换 / 载入标准框架 / 适应屏幕 / 关闭
+			 *   ├──── 工具栏 KindBar ─────────────────┤  D2  ：点类型 → 增加元素
+			 *   ├─ 左栏 ┬────────── 画布 ─────────────┤  D3  ：选中元素的交互逻辑（七元组，可改）
+			 *   │Logic │   Canvas（拖拽 / 缩放 / 选择）│  D5  ：元素操作
+			 *   ├───────┴─────────────────────────────┤
+			 *   └──── 底栏 ThreadBar（设计图专用对话）─┘  D6  ：只处理本图修订
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么"左侧显示交互逻辑"是这个功能的重点（而不是附属）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  前面三版设计稿的共同失败点是：**图与逻辑分离**。画了一张图，逻辑写在另一份文档里，
+			 *  两边靠"请在右区第三栏加个按钮"这种文字对指 —— 一旦改图，逻辑就跟不上。
+			 *  ⇒ 本组件把逻辑**绑在元素上**：选中即见、改图即改逻辑、导出即带逻辑。
+			 *  ⇒ 于是设计图本身成为**可执行的规格**，而不是一张需要解读的图片。
+			 *
+			 * ⚠️ 构建约束：`react` / `react/jsx-runtime` 为平台冻结模块（ADR-001），构建期外置。
+			 *    本文件用 `react.createElement`（h）形态，不使用 JSX。
+			 */
+			
+			const react = require("react");
+			const { ELEMENT_KINDS, LOGIC_FIELDS, CANVAS_W, CANVAS_H, kindsByGroup, docStats, VERSION_LIMIT } = __m("store/design-schema.js");
+			const { getActiveDoc, getState, subscribe, newDoc, saveDoc, deleteDoc, setActiveDoc, listDocs, addElement, moveElement, resizeElement, removeElement, duplicateElement, reorderElement, updateElement, updateLogic, visibleElements, loadStandardFrame, appendThread, parseDesignCommand, applyOps, DESIGN_ROLE, saveVersion, listVersions, restoreVersion, deleteVersion, renameDoc, duplicateDoc, getVersionState } = __m("store/design.js");
+			const { dshLog } = __m("util/debug.js");
+			/* 窗口控件安全区 —— 根治「设计图的关闭按钮和标准软件的关闭按钮重叠了」。
+			 * 详见 util/safe-area.js 头注（含真机取证的 137px 数字）。 */
+			const { readInset, watchInset } = __m("util/safe-area.js");
+			const { VersionPanel } = __m("components/VersionPanel.js");
+			/* 右上角「⚙ 个性化」—— 与总监页 / 总监弹窗 / 分支导图**共用同一个组件、同一份持久化**。
+			 * 用户原文：「…还有三个插件页面 文字背景，全部找审美重新审核一下质感加上，
+			 * 同时都在右上角加自定义个性化设定」⇒ 四处必须真的一致，各写一份迟早漂移。 */
+			const { PersonalizePanel } = __m("components/PersonalizePanel.js");
+			
+			const h = react.createElement;
+			
+			/** 工作室根节点 id（真机逐交互脚本的入口锚点，不可改名） */
+			const STUDIO_ID = "dsh-design-studio";
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 分组色板（D2 审美调优 · 2026-09-12）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么需要它：标准框架一张图铺 20 个元素，原先**全是同一个紫色**
+			 *  ⇒ 画布上糊成一片，沟通时只能读字指认（"那个…第三个方块"）。
+			 *  按 `ELEMENT_KINDS[kind].group` 三色区分后，可以直接说「把青色那排按钮右移」。
+			 *
+			 *  三个字段的用法（`el()` 里用字符串拼接消费，故 `rgb` 存**不带 alpha 的前缀**）：
+			 *    base —— 选中态的实色边框（纯色，不用拼）
+			 *    rgb  —— `"rgba(r,g,b,"` 前缀：拼 `.45)` / `.22)` / `.08)` / `.8)` 得到不同透明度
+			 *    text —— 块内文字色（比 base 亮，保证 10.5px 小字在深底上可读）
+			 *
+			 *  ⚠️ 改这里必须同步 `kglabel` 的取色（工具栏组标题用同一套色 ⇒ 天然图例，
+			 *     否则用户看到画布有青色却找不到青色按钮从哪来）。
+			 * ══════════════════════════════════════════════════════════════════ */
+			const GROUP_COLOR = {
+				"结构": { base: "#8957e5", rgb: "rgba(137,87,229,", text: "#c9b6f7" }, // 紫 —— 骨架（窗口/侧栏/分区/面板/画布）
+				"控件": { base: "#22a3b8", rgb: "rgba(34,163,184,", text: "#9fe3ef" }, // 青 —— 可点可输入（按钮/输入框/列表/卡片…）
+				"语义": { base: "#c9942b", rgb: "rgba(201,148,43,", text: "#efd08a" }  // 金 —— 表达含义（导图节点/连线/浮动按钮组）
+			};
+			/** 取分组色（未知分组回落到「结构」，保证永不 undefined 崩溃） */
+			const gc = (group) => GROUP_COLOR[group] || GROUP_COLOR["结构"];
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 样式（D1）—— 全部走 Harness 主题变量并给 fallback
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const S = {
+				// 铺满全屏：fixed + inset 0 + 最高层级。用户要求「点击铺满全屏」。
+				root: {
+					position: "fixed", inset: 0, zIndex: 2147483200, display: "flex", flexDirection: "column",
+					/* 🔴 `background` **简写**会把 `background-image` 一起重置为 none ⇒ 个性化面板里选的
+					 *    三档纹理（靠 `.dp-textured` 类的 background-image 上色）**一条都显示不出来**，
+					 *    用户在面板里点「网格 / 点阵 / 玻璃」看到的是"点了没反应"。
+					 *    ⇒ 必须写 `backgroundColor`（长写），让它与类上的 background-image **共存**。
+					 *    同一坑在 MindMap / DirectorPage / DirectorDialog 上各有一处，一并修正。 */
+					backgroundColor: "var(--dsw-alias-bg-base, #0f1013)",
+					color: "var(--dsw-alias-label-primary, #e8eaed)",
+					fontFamily: "inherit", fontSize: "calc(12.5px * var(--dp-font, 1))"
+				},
+				top: {
+					display: "flex", alignItems: "center", gap: 8, height: 40, flex: "0 0 40px",
+					padding: "0 10px", borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)",
+					background: "var(--dsw-alias-bg-sunken, #17181c)"
+				},
+				topTitle: { fontWeight: 650, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" },
+				// 工具栏（D2）：图元按组排布，点击即在画布落一个新元素
+				kindBar: {
+					display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", padding: "5px 10px",
+					borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1a1b20)", flex: "0 0 auto"
+				},
+				kgroup: { display: "flex", alignItems: "center", gap: 3, paddingRight: 8, marginRight: 4, borderRight: "1px solid #26282e" },
+				kglabel: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", marginRight: 2 },
+				kbtn: {
+					display: "inline-flex", alignItems: "center", gap: 4, height: 24, padding: "0 8px", cursor: "pointer",
+					border: "1px solid var(--dsw-alias-border-l2, #3d4148)", borderRadius: 5, fontSize: 11,
+					background: "var(--dsw-alias-bg-base, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", whiteSpace: "nowrap"
+				},
+				// 中段：左栏 + 画布
+				mid: { flex: 1, minHeight: 0, display: "flex" },
+				left: {
+					width: 268, flex: "0 0 268px", borderRight: "1px solid var(--dsw-alias-border-l2, #31343a)",
+					background: "var(--dsw-alias-bg-sunken, #141519)", display: "flex", flexDirection: "column", minHeight: 0
+				},
+				leftHead: { padding: "8px 10px 6px", borderBottom: "1px solid #26282e", display: "flex", alignItems: "center", gap: 6 },
+				leftBody: { flex: 1, minHeight: 0, overflowY: "auto", padding: 10, display: "flex", flexDirection: "column", gap: 9 },
+				lbl: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", letterSpacing: ".3px" },
+				field: { display: "flex", flexDirection: "column", gap: 3 },
+				fieldLabel: { fontSize: 11, color: "#b794f6", display: "flex", alignItems: "center", gap: 5 },
+				fieldHint: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #6f757d)", lineHeight: 1.45 },
+				fieldInput: {
+					width: "100%", boxSizing: "border-box", minHeight: 26, borderRadius: 5, padding: "4px 7px", fontSize: 11.5,
+					border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-base, #1a1b20)",
+					color: "var(--dsw-alias-label-primary, #e8eaed)", fontFamily: "inherit", resize: "vertical"
+				},
+				// 画布区（D5）
+				canvasWrap: { flex: 1, minWidth: 0, position: "relative", overflow: "auto", background: "#0b0c0e" },
+				/* 画布底 —— 🔴 网格修复（2026-09-12 审美审核 · 截图取证）：
+				 *   原写法 `background: "linear-gradient(#15161a,#15161a), repeating-linear-gradient(…)"`
+				 *   是**多层背景简写**，CSS 里**第一层在最上面** —— 而那层是**不透明的 #15161a**
+				 *   ⇒ 后面的两条网格渐变层被完全遮死，画布成了一块没有任何刻度的纯色板。
+				 *   （名字叫 grid、也确实写了网格代码，但**肉眼永远看不见**，属"看起来做了其实没做"。）
+				 *   修正：底色改用 `backgroundColor`（不占层），网格用 `backgroundImage` 排在最上；
+				 *   同时把线色从 #1d1f24 提到 #24272e，让 20px 刻度在深底上真的看得见 —— 
+				 *   对齐元素时靠的就是这条刻度。 */
+				grid: {
+					position: "relative", width: CANVAS_W, height: CANVAS_H, margin: "18px auto",
+					backgroundColor: "#15161a",
+					backgroundImage: "repeating-linear-gradient(0deg, #24272e 0 1px, transparent 1px 20px), repeating-linear-gradient(90deg, #24272e 0 1px, transparent 1px 20px)",
+					border: "1px solid #2a2d33", boxShadow: "0 10px 40px rgba(0,0,0,.5)"
+				},
+				/* 🔴 分组配色（2026-09-12 审美调优）：
+				 *   原先所有元素都是同一种紫色 ⇒ 画布上 20 个块**糊成一片**，看不出哪些是骨架、
+				 *   哪些是可点的控件、哪些是语义物件，沟通时只能靠读字。
+				 *   改为按 ELEMENT_KINDS[kind].group 三色区分（见上方 GROUP_COLOR）：
+				 *     结构=紫 / 控件=青 / 语义=金 —— 一眼分组，可以直接说"青色那排按钮"。
+				 *   同时 `kind` 参数此前是**传了但没用**（死参数），这里让它真正参与配色。 */
+				el: (sel, kind) => {
+					const g = gc((ELEMENT_KINDS[kind] || {}).group);
+					return {
+						position: "absolute", boxSizing: "border-box", cursor: "move", overflow: "hidden",
+						border: "1px solid " + (sel ? g.base : g.rgb + ".45)"),
+						background: sel ? g.rgb + ".22)" : g.rgb + ".08)",
+						color: g.text, borderRadius: 4, padding: "3px 6px", fontSize: 10.5,
+						outline: sel ? "2px solid " + g.rgb + ".8)" : "none",
+						display: "flex", alignItems: "flex-start", gap: 4, userSelect: "none"
+					};
+				},
+				/* 缩放柄：颜色跟随所属元素分组（选中态用），保证缩放手和块是同一族的视觉 */
+				elHandle: (kind) => {
+					const g = gc((ELEMENT_KINDS[kind] || {}).group);
+					return {
+						position: "absolute", right: -1, bottom: -1, width: 10, height: 10, cursor: "nwse-resize",
+						background: g.base, borderRadius: "6px 0 3px 0", border: "1px solid #0f1013"
+					};
+				},
+				// 底栏（D6）
+				bottom: {
+					flex: "0 0 auto", borderTop: "1px solid var(--dsw-alias-border-l2, #31343a)",
+					background: "var(--dsw-alias-bg-sunken, #141519)", display: "flex", flexDirection: "column",
+					minHeight: 96, maxHeight: 260
+				},
+				threadHead: { display: "flex", alignItems: "center", gap: 7, padding: "6px 10px", borderBottom: "1px solid #26282e", fontSize: 11 },
+				threadBody: { flex: 1, minHeight: 0, overflowY: "auto", padding: "7px 10px", display: "flex", flexDirection: "column", gap: 5 },
+				tmsg: (role) => ({
+					display: "flex", gap: 6, fontSize: 11.5, lineHeight: 1.55,
+					color: role === DESIGN_ROLE.USER ? "#9fc2ff" : "var(--dsw-alias-label-secondary, #c3c8ce)"
+				}),
+				threadFoot: { display: "flex", gap: 6, alignItems: "center", padding: "7px 10px", borderTop: "1px solid #26282e" },
+				input: {
+					flex: 1, minWidth: 0, height: 28, borderRadius: 6, padding: "0 9px", fontSize: 11.5, boxSizing: "border-box",
+					border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-base, #1a1b20)",
+					color: "var(--dsw-alias-label-primary, #e8eaed)"
+				},
+				btn: {
+					height: 26, padding: "0 10px", borderRadius: 6, cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap",
+					border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-base, #212429)",
+					color: "var(--dsw-alias-label-secondary, #c3c8ce)"
+				},
+				btnPri: { height: 28, padding: "0 12px", borderRadius: "var(--dp-radius-sm, 6px)", cursor: "pointer", fontSize: "calc(11.5px * var(--dp-font, 1))", border: "1px solid var(--dp-ac2, #8957e5)", background: "var(--dp-ac2, #8957e5)", color: "#fff", whiteSpace: "nowrap" },
+				btnDanger: { height: 26, padding: "0 10px", borderRadius: "var(--dp-radius-sm, 6px)", cursor: "pointer", fontSize: "calc(11.5px * var(--dp-font, 1))", border: "1px solid rgba(248,81,73,.45)", background: "rgba(248,81,73,.14)", color: "#f0877f", whiteSpace: "nowrap" },
+				/* 徽章色 = 强调色。`--dp-ac2-soft/-line` 的默认值就是 `rgba(137,87,229,.16/.45)`
+				 * ⇒ 与原先硬写的 `rgba(137,87,229,.16/.4)` 肉眼无差，但从此跟着个性化走。 */
+				chip: { fontSize: "calc(10.5px * var(--dp-font, 1))", padding: "2px 7px", borderRadius: "var(--dp-radius-sm, 4px)", background: "var(--dp-ac2-soft, rgba(137,87,229,.16))", border: "1px solid var(--dp-ac2-line, rgba(137,87,229,.4))", color: "#b794f6" },
+				/* ── 顶栏四区专用（2026-09-12 顶栏重构）── */
+				/** 分区竖线：顶栏从左到右有 4 组动作（身份 / 图管理 / 版本 / 视图），
+				 *  没有分隔线时 9 个同款按钮连成一排，看不出"哪几个是一伙的"。 */
+				sep: { width: 1, height: 20, background: "var(--dsw-alias-border-l2, #35383f)", margin: "0 2px", flex: "0 0 1px" },
+				/** 保存按钮 · 有未保存改动：主色实心 + 前置实心点（最需要被看见的状态） */
+				btnSave: {
+					height: 26, minWidth: 96, boxSizing: "border-box", textAlign: "center",
+					padding: "0 11px", borderRadius: 6, cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap",
+					border: "1px solid #8957e5", background: "#8957e5", color: "#fff", fontWeight: 650
+				},
+				/** 保存按钮 · 已保存：与脏态**同宽同高，仅换色**。
+				 *  🔴 `minWidth: 96` 不是审美偏好，是**点击可用性**（用户报「点击都不好用」的元凶之一）：
+				 *    第一版只做了"两态共用同一按钮"（避免脏时才出现、把邻居挤走），却**没锁宽度**。
+				 *    真机实测：「● 保存」57px / 「✓ 已保存 v3」84px，差 **27px**
+				 *    ⇒ 点一下保存，右边 12 个按钮整体横移 27px；用户接着点下一个必然点空，
+				 *      主观感受就是"按钮点了没反应 / 点不准"。
+				 *    96px ≥ 最长的「✓ 已保存 v30」(90px) ⇒ 两态恒为 96px，零位移。
+				 *    判据（可复跑）：scripts/cdp-mouse.mjs sweep ds-top 必须报"顶栏位移 0 个"。 */
+				btnSaved: {
+					height: 26, minWidth: 96, boxSizing: "border-box", textAlign: "center",
+					padding: "0 11px", borderRadius: 6, cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap",
+					border: "1px solid rgba(63,185,80,.45)", background: "rgba(63,185,80,.12)", color: "#7ee787"
+				},
+				/** 删除按钮 · 已上膛（第一次点击后 2.5s 内的窗口）：实心红即"这一下真的会删"。
+				 *  文字从「删除」换成「确认」—— **同为 2 字且 padding 与 btnDanger 完全一致(0 10px)**。
+				 *  🔴 第一版这里写的是 `0 11px`（照抄了普通 btn），真机 sweep 实测上膛瞬间
+				 *     后面 8 个按钮右移 **2px**、泄压时再左移 2px ⇒ 正是这 1px×2 的 padding 差。
+				 *     这类"差 1-2px"的跳位最阴：肉眼几乎看不出，但用户伸手去点下一个按钮时就是差那么一点。
+				 *  既给了肉眼可见的反馈（此前只有 toast，按钮本身毫无变化，用户以为按钮坏了），
+				 *  又保证上膛/泄压两个方向都零位移。 */
+				btnDangerArmed: {
+					height: 26, padding: "0 10px", borderRadius: 6, cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap",
+					border: "1px solid #f85149", background: "#f85149", color: "#fff", fontWeight: 650
+				},
+				/** 重命名输入框：占位与它替换掉的 <select> 同宽，避免提交后布局跳动 */
+				nameInput: {
+					width: 200, height: 26, boxSizing: "border-box", padding: "0 8px", fontSize: 11.5, borderRadius: 5,
+					border: "1px solid #8957e5", background: "#212429", color: "#e8eaed"
+				},
+				/** 导出兜底浮层：位于右下、避开顶栏安全区与底栏对话区 */
+				exportWrap: {
+					position: "fixed", right: 20, bottom: 104, width: 460, maxHeight: 340, zIndex: 2147483300,
+					background: "#17181c", border: "1px solid #3d4148", borderRadius: 8, padding: 10,
+					display: "flex", flexDirection: "column", gap: 8, boxShadow: "0 10px 30px rgba(0,0,0,.55)"
+				},
+				exportHead: { fontSize: 11, color: "#9aa0a6", lineHeight: 1.5 },
+				exportArea: {
+					flex: 1, minHeight: 190, resize: "none", fontSize: 11, lineHeight: 1.5, boxSizing: "border-box",
+					background: "#0f1013", color: "#c3c8ce", border: "1px solid #2b2e34", borderRadius: 5, padding: 8,
+					fontFamily: "ui-monospace, Menlo, Consolas, monospace"
+				},
+				muted: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #6f757d)", lineHeight: 1.55 }
+			};
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * D3 · 左侧交互逻辑面板 —— 显示并**可编辑**选中元素的七元组
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			function LogicPanel({ doc, selected, onLogicChange, onRelabel, onDelete, onDuplicate, onReorder }) {
+				// 🔴 **必须同时判 doc**（2026-09-12 真机事故 · 单点故障复盘）：
+				//    设计图「打开态」是**持久化**的（layout.designStudioOpen），而文档是在
+				//    `useEffect` 里**首帧渲染之后**才创建的 ⇒ 重启后必有一次「open=true 且 doc=null」
+				//    的渲染。原写法 `selected && (doc.elements||[])` 只判了 selected（此时为 null）
+				//    就短路，看似安全，但空分支里 `doc.title` 没有任何保护 ⇒ TypeError
+				//    ⇒ 无 error boundary，React 卸载整个 Shell 根 ⇒ **浮动按钮组 / 弹窗 / 工作室全灭**，
+				//    且因 open 标志已持久化，**每次重启都会再次复现**（自锁死）。
+				//    ⇒ 修正：doc 为空时走"尚无设计图"分支，不触碰任何 doc 字段。
+				const el = doc && selected ? (doc.elements || []).find((e) => e.id === selected) : null;
+				if (!el) {
+					return h("div", { style: S.leftBody, "data-testid": "ds-logic-empty" }, [
+						h("div", { key: "t", style: S.lbl }, "D3 · 元素交互逻辑"),
+						h("div", { key: "m", style: S.muted },
+							"点画布上的任一元素 → 这里显示它绑定的交互逻辑（触发 / 行为 / 状态 / 数据 / 退化 / 快捷键 / 对应代码）。"),
+						h("div", { key: "s", style: { ...S.muted, marginTop: 4 } },
+							"逻辑直接绑在元素上，改图即改逻辑 —— 这样设计图本身就是可执行的规格，不用另开文档对指。"),
+						h("div", { key: "c", style: { ...S.muted, marginTop: 6 } },
+							doc ? ("当前图：" + doc.title + " · 元素 " + (doc.elements || []).length + " 个")
+								: "尚无设计图 —— 点「＋ 新建图」或「↺ 载入标准框架」开始。")
+					]);
+				}
+				const spec = ELEMENT_KINDS[el.kind] || { label: el.kind };
+				const g = gc(spec.group); // 左栏标题与画布块同色 ⇒ 选中谁一眼对得上
+				return h("div", { style: S.leftBody, "data-testid": "ds-logic", "data-el-id": el.id }, [
+					h("div", { key: "h", style: { ...S.lbl, color: g.text } },
+						"D3 · 交互逻辑 · " + el.id + " · " + (spec.group || "未分组")),
+					// 元素标识（可改文案 —— 这样在对话里能指着名字说）
+					h("div", { key: "id", style: S.field }, [
+						h("div", { key: "l", style: { ...S.fieldLabel, color: g.text } }, [h("span", { key: "i" }, spec.icon || "▫"), h("span", { key: "t" }, "元素 · " + spec.label)]),
+						h("input", {
+							key: "in", style: S.fieldInput, value: el.label, "data-testid": "ds-el-label",
+							onChange: (e) => onRelabel(e.target.value)
+						}),
+						h("div", { key: "geo", style: S.fieldHint }, "位置 " + el.x + "," + el.y + " · 尺寸 " + el.w + "×" + el.h + " · 层级 z" + el.z)
+					]),
+					// 七元组逐个可编辑
+					...LOGIC_FIELDS.map((f) => h("div", { key: f.key, style: S.field, "data-logic-field": f.key }, [
+						h("div", { key: "l", style: S.fieldLabel }, f.label),
+						h("textarea", {
+							key: "in", style: { ...S.fieldInput, minHeight: 30 }, value: (el.logic && el.logic[f.key]) || "",
+							placeholder: f.hint, "data-testid": "ds-logic-" + f.key, rows: f.key === "action" ? 2 : 1,
+							onChange: (e) => onLogicChange(f.key, e.target.value)
+						})
+					])),
+					// 元素级动作
+					h("div", { key: "ops", style: { display: "flex", gap: 5, flexWrap: "wrap", marginTop: 2 } }, [
+						h("button", { key: "d", style: S.btn, "data-testid": "ds-dup", onClick: onDuplicate }, "复制"),
+						h("button", { key: "t", style: S.btn, "data-testid": "ds-top", onClick: () => onReorder("top") }, "置顶"),
+						h("button", { key: "x", style: S.btnDanger, "data-testid": "ds-del", onClick: onDelete }, "删除")
+					]),
+					h("div", { key: "note", style: S.muted }, "⚠「退化路径」与「对应代码」两栏是改代码时的路标：前者写「失败怎么办」，后者写「逻辑在哪个文件」。")
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * D6 · 底部设计图专用临时对话 —— 只处理本图修订
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			function ThreadBar({ doc, onCommit, onApply, onDiscard, pending, draft, setDraft }) {
+				// 🔴 同 LogicPanel：doc 可能为 null（首帧早于 useMemo/useEffect 建图）⇒ 一律走局部安全值
+				const thread = (doc && doc.thread) || [];
+				const hasDoc = Boolean(doc);
+				return h("div", { style: S.bottom, "data-testid": "ds-thread" }, [
+					h("div", { key: "hd", style: S.threadHead }, [
+						h("span", { key: "i" }, "🖌"),
+						h("span", { key: "t", style: { fontWeight: 650 } }, "设计图修订对话"),
+						h("span", { key: "c", style: S.chip }, "临时 · 只处理本图"),
+						h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" } },
+							"不与宿主会话、也不与总监对话共用（三向隔离）")
+					]),
+					h("div", { key: "bd", style: { ...S.threadBody, flex: "0 1 auto", maxHeight: 104 } }, thread.length
+						? (thread.slice(-20)).map((m) => h("div", { key: m.id, style: S.tmsg(m.role), "data-thread-id": m.id }, [
+							h("span", { key: "b", style: { flex: "0 0 auto", color: m.role === DESIGN_ROLE.USER ? "#9fc2ff" : "#b794f6" } },
+								m.role === DESIGN_ROLE.USER ? "你：" : "工作室："),
+							h("span", { key: "t" }, m.text),
+							m.ops && m.ops.length ? h("span", { key: "o", style: { ...S.muted, marginLeft: 4 } }, "（" + m.ops.length + " 项操作）") : null
+						]))
+						: h("div", { key: "e", style: S.muted, "data-testid": "ds-thread-empty" },
+							"在这里说你想怎么改这张图，例如「移动 R1 顶部栏 下 20；删除 R6 记忆面板」。只对本图生效。")),
+					// 待确认操作（不静默改图 —— 与总监路由的闸门规则一致，破坏性动作必须过确认）
+					pending && pending.ops.length ? h("div", {
+						key: "pd", style: { padding: "0 10px 6px", display: "flex", gap: 6, alignItems: "center", flex: "0 0 auto" }, "data-testid": "ds-pending"
+					}, [
+						h("span", { key: "c", style: { ...S.chip, borderColor: "rgba(210,153,34,.45)", background: "rgba(210,153,34,.12)", color: "#e0b341" } },
+							"待确认 " + pending.ops.length + " 项"),
+						h("span", { key: "t", style: S.muted, flex: 1 },
+							pending.ops.map((o) => o.op + " → " + o.target).join("；")),
+						/* 🔴 `ds-apply` 必须绑 `onApply`（= onApplyPending），**不能绑 onCommit**（2026-09-12 真机事故）：
+						 *   原写法 `onClick: onCommit` ⇒ 点「应用到图」实际又走了一遍 `onSubmitThread`，
+						 *   而该函数开头就是 `if (!text || !doc) return`，此时 draft 已被上一次发送清空
+						 *   ⇒ **静默什么都不做**（无报错、无提示、待确认区还在）——最难查的一类缺陷。
+						 *   之所以一直没暴露：另有 `ds-apply-fab` 走的是正确的 onApplyPending，掩盖了本按钮。
+						 *   教训：**同一语义的两个入口必须绑同一个 handler**，否则测试只覆盖其一就会漏。 */
+						h("button", { key: "ok", style: S.btnPri, "data-testid": "ds-apply", onClick: onApply }, "应用到图"),
+						h("button", { key: "no", style: S.btn, "data-testid": "ds-drop", onClick: onDiscard }, "不要")
+					]) : null,
+					h("div", { key: "ft", style: S.threadFoot }, [
+						h("input", {
+							key: "in", style: S.input, "data-testid": "ds-input", value: draft,
+							disabled: !hasDoc,
+							placeholder: hasDoc
+								? "说怎么改（引用元素名或 id；**数字=像素**，如「移动 R1 顶部栏 左 30」；多条用「；」分隔）…"
+								: "尚无设计图 —— 先新建或载入标准框架",
+							onChange: (e) => setDraft(e.target.value),
+							onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onCommit(); } }
+						}),
+						h("button", { key: "s", style: S.btnPri, "data-testid": "ds-send", onClick: onCommit, disabled: !hasDoc }, "↑")
+					])
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * D1 · 主组件
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			function DesignStudio({ open, onClose }) {
+				const st = react.useSyncExternalStore(
+					(fn) => subscribe(fn),
+					() => getState(),
+					() => getState()
+				);
+				const doc = react.useMemo(
+					() => (st.docs || []).find((d) => d.docId === st.activeDocId) || null,
+					[st]
+				);
+				const [selected, setSelected] = react.useState(null);
+				const [draft, setDraft] = react.useState("");
+				const [pending, setPending] = react.useState(null);
+				const [toast, setToast] = react.useState("");
+				const [scale, setScale] = react.useState(1);
+				/* 版本面板开合 · 顶栏右侧安全区宽度 · 重命名输入态（null = 不在重命名） */
+				const [verOpen, setVerOpen] = react.useState(false);
+				/* 初值直接取一次真值（而不是 0 再等 effect 回调）—— 否则首帧 ✕ 会先出现在被压的位置再跳开 */
+				const [inset, setInset] = react.useState(() => readInset());
+				const [nameDraft, setNameDraft] = react.useState(null);
+				/* 导出兜底：剪贴板被系统拒绝时，把 JSON 摆在这里让用户自己复制（见 onExportJson 三级降级） */
+				const [exportText, setExportText] = react.useState(null);
+				/* 右上角「⚙ 个性化」开合。🔴 与上面几条同样**必须排在 early return 之前**（React Hooks 规则）。 */
+				const [pOpen, setPOpen] = react.useState(false);
+				const dragRef = react.useRef(null);
+				const gridRef = react.useRef(null);
+				const wrapRef = react.useRef(null);
+			
+				/* 窗口控件安全区 —— 全屏工作室（fixed inset:0）必须躲开 Windows 原生窗口按钮。
+				 * 实测：视口 1536 时右侧 137px 被原生层独占，且 z-index 对它无效 ⇒ 只能避让。
+				 * watchInset 只在**值真的变化**时回调（resize 风暴里不会反复 setState）。 */
+				react.useEffect(() => watchInset(setInset), []);
+			
+				/* 版本列表（顶栏角标 + 版本面板共用同一份，避免"角标说 3、面板列 2"）。
+				 *
+				 * 🔴 必须放在下方 `if (!open) return null;` 的**之前** —— React Hooks 规则：
+				 *    所有 hook 必须无条件、且每次渲染按相同顺序调用。
+				 *    本轮踩过这个坑：最初把 useMemo 写在 early return 之后 ⇒
+				 *    `open` 由 false 变 true 的那一次渲染，hook 数量从 N 变成 N+1
+				 *    ⇒ React 抛 "Rendered more hooks than during the previous render"
+				 *    ⇒ DesignStudio 整层崩溃（被 SafeLayer 拦下、显示错误角标，工作室完全打不开）
+				 *    ⇒ 真机 e2e 从 C2.1「工作室已挂载」起 54 项全红。
+				 *    判据：**凡是 `if (!x) return` 出现在组件里，其后就不要再有任何 hook。** */
+				const versions = react.useMemo(() => (doc ? listVersions(doc.docId) : []), [doc]);
+			
+				/* 首次打开且无图 ⇒ 自动铺一张标准框架（用户不必先"新建"） */
+				react.useEffect(() => {
+					if (!open) return;
+					if (!(getState().docs || []).length) {
+						newDoc({ title: "标准框架 · 三页签", frameKey: "threeTab" });
+					}
+				}, [open]);
+			
+				/* toast 自动消失（2.2s）。
+				 * 🔴 原实现只在 onClick 里清 ⇒ **提示永不消失**，会一直压在画布上；
+				 *    且位置在底栏之上（见下方 toast 样式注释），遮住输入框 ⇒ 必须自动走。 */
+				react.useEffect(() => {
+					if (!toast) return undefined;
+					const t = setTimeout(() => setToast(""), 2200);
+					return () => clearTimeout(t);
+				}, [toast]);
+			
+				/* 打开时自动「适应容器」（等价于点一次「适应」）。
+				 * 为什么需要：标准框架是 1180×644 的固定画布，而可视区宽约 800–1100px
+				 * ⇒ 100% 打开必然右侧被裁、要用户自己发现右下角还有内容。
+				 * 自动缩到刚好放得下（上限 1，不放大），用户仍可手动 ± / 适应 覆盖。
+				 * 容器尺寸首帧可能还是 0，故补一次 400ms 后复测。 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const fit = () => {
+						try {
+							const w = wrapRef.current ? wrapRef.current.clientWidth : 0;
+							if (!w) return;
+							setScale(Math.max(0.2, Math.min(1, Number(((w - 40) / CANVAS_W).toFixed(2)))));
+						} catch (e) { /* 布局未就绪则保持原值 */ }
+					};
+					fit();
+					const t = setTimeout(fit, 400);
+					return () => clearTimeout(t);
+				}, [open]);
+			
+				/** 提交一个 doc 变更（统一出口：写库 + 清选中兜底） */
+				const commit = react.useCallback((next) => {
+					if (!next) return;
+					saveDoc(next);
+					if (selected && !(next.elements || []).some((e) => e.id === selected)) setSelected(null);
+				}, [selected]);
+			
+				/* ── 拖拽 / 缩放（D5）──────────────────────────────────────────
+				 * 🔴 与 DirectorDialog 同一教训：`pointerdown → pointermove → pointerup` 若落在
+				 *    同一个 task（自动化脚本连发），依赖 state 记录起点会拿到旧值 ⇒ 位移静默丢失。
+				 *    故起点与实时值都放 ref，pointerup 时以事件坐标**兜底重算**，两者幂等。
+				 */
+				const onElPointerDown = (e, el, mode) => {
+					e.stopPropagation();
+					setSelected(el.id);
+					dragRef.current = {
+						mode, id: el.id, x0: e.clientX, y0: e.clientY,
+						ex0: el.x, ey0: el.y, w0: el.w, h0: el.h,
+						/* 🔴 缩放系数必须随拖拽一起冻结（2026-09-12 审美审核时发现的逻辑缺陷）：
+						 *   画布用 `transform: scale(k)` 呈现，鼠标位移是**屏幕像素**，而元素坐标是**模型像素**。
+						 *   原实现直接把屏幕位移当模型位移用 ⇒ 缩小到 50% 时拖一格元素跑两格（视觉与手感背离），
+						 *   放大到 200% 时又拖不动。故在此冻结开局 k，位移一律 `÷k`。
+						 *   取自 ref 而非入参，避免 pointermove 闭包读到旧 scale。 */
+						scale: scale || 1
+					};
+					const move = (ev) => {
+						const d = dragRef.current;
+						if (!d) return;
+						const k = d.scale || 1;
+						const dx = (ev.clientX - d.x0) / k;
+						const dy = (ev.clientY - d.y0) / k;
+						const cur = getActiveDoc();
+						if (!cur) return;
+						const next = d.mode === "resize"
+							? resizeElement(cur, d.id, d.w0 + dx, d.h0 + dy)
+							: moveElement(cur, d.id, d.ex0 + dx, d.ey0 + dy);
+						saveDoc(next);
+					};
+					const up = () => {
+						document.removeEventListener("pointermove", move);
+						document.removeEventListener("pointerup", up);
+						dragRef.current = null;
+					};
+					document.addEventListener("pointermove", move);
+					document.addEventListener("pointerup", up);
+				};
+			
+				/* ── 键盘（D5）：Delete 删除 / 方向键微移 / Ctrl+D 复制 ── */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const onKey = (e) => {
+						const tag = (e.target && e.target.tagName) || "";
+						if (/INPUT|TEXTAREA|SELECT/.test(tag)) return; // 编辑逻辑字段时不抢键
+						if (e.key === "Escape") {
+							// Esc 只退最上层：先关个性化面板，再取消待确认，再清选中，最后才关工作室（V16 C1 的 Esc 契约）
+							/* 个性化面板自己的 window-capture 监听已经 stopPropagation（正常情况走不到这），
+							 * 这里再留一层：面板是 fixed 浮层，若它因任何原因没接住事件，
+							 * **不能变成"按 Esc 直接把整个工作室关掉"**（用户丢的是一张没保存的图）。 */
+							if (pOpen) { setPOpen(false); return; }
+							if (pending) { setPending(null); return; }
+							if (selected) { setSelected(null); return; }
+							onClose && onClose();
+							return;
+						}
+						if (!selected) return;
+						const cur = getActiveDoc();
+						if (!cur) return;
+						const STEP = e.shiftKey ? 1 : 10;
+						if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); commit(removeElement(cur, selected)); }
+						else if (e.key === "ArrowLeft") { e.preventDefault(); commit(applyOps(cur, [{ op: "move", target: selected, args: { dx: -STEP, dy: 0 } }])); }
+						else if (e.key === "ArrowRight") { e.preventDefault(); commit(applyOps(cur, [{ op: "move", target: selected, args: { dx: STEP, dy: 0 } }])); }
+						else if (e.key === "ArrowUp") { e.preventDefault(); commit(applyOps(cur, [{ op: "move", target: selected, args: { dx: 0, dy: -STEP } }])); }
+						else if (e.key === "ArrowDown") { e.preventDefault(); commit(applyOps(cur, [{ op: "move", target: selected, args: { dx: 0, dy: STEP } }])); }
+						else if (e.key.toLowerCase() === "d" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(duplicateElement(cur, selected)); }
+					};
+					document.addEventListener("keydown", onKey);
+					return () => document.removeEventListener("keydown", onKey);
+				}, [open, selected, pending, commit, onClose, pOpen]);
+			
+				/* ── 底部对话：解析 → 待确认 → 应用（D6）── */
+				const onSubmitThread = () => {
+					const text = draft.trim();
+					if (!text || !doc) return;
+					const { ops, unresolved } = parseDesignCommand(doc, text);
+					let withMsg = appendThread(doc, { role: DESIGN_ROLE.USER, text, ops });
+					if (unresolved.length) {
+						withMsg = appendThread(withMsg, {
+							role: DESIGN_ROLE.STUDIO,
+							text: "认不出这几段（请用元素名或 id）：" + unresolved.join(" / ")
+						});
+					}
+					if (ops.length) withMsg = appendThread(withMsg, { role: DESIGN_ROLE.STUDIO, text: "解析出 " + ops.length + " 项操作，待你确认后应用到图。" });
+					commit(withMsg);
+					setPending({ ops, text });
+					setDraft("");
+					if (!ops.length) { setToast("没有可执行的操作"); }
+				};
+				const onApplyPending = () => {
+					const cur = getActiveDoc();
+					if (!cur || !pending) return;
+					let next = applyOps(cur, pending.ops);
+					next = appendThread(next, { role: DESIGN_ROLE.STUDIO, text: "已应用 " + pending.ops.length + " 项操作（revision " + (cur.revision + 1) + "）。" });
+					commit(next);
+					setPending(null);
+					setToast("已应用 " + pending.ops.length + " 项");
+				};
+			
+				/* ── 工具栏：点类型 → 增加元素（D2）── */
+				const onAddKind = (kind) => {
+					if (!doc) return;
+					const next = addElement(doc, kind, {});
+					commit(next);
+					const added = (next.elements || [])[(next.elements || []).length - 1];
+					if (added) setSelected(added.id);
+					setToast("已添加：" + (ELEMENT_KINDS[kind] || {}).label);
+				};
+			
+				/* ── 顶栏动作 ── */
+				const onNewDoc = () => { const d = newDoc({ title: "设计图 " + (listDocs().length + 1), frameKey: "threeTab" }); setSelected(null); setToast("已新建：" + d.title); };
+				const onLoadFrame = () => {
+					if (!doc) return;
+					commit(loadStandardFrame(doc, "threeTab"));
+					setToast("已重新铺设标准框架");
+				};
+				/* ── 顶栏动作 · 图管理 ──────────────────────────────────────────────
+				 * 🔴 本组函数补齐的是用户报「最上面这一列功能未实现」：
+				 *    原顶栏只有「切换图 / 新建 / 载入框架 / 缩放 / 关闭」6 个动作，
+				 *    而 **删除、重命名、复制、导出** 四个在数据层早就写好了 ——
+				 *    其中 `onDeleteDoc` 甚至是**定义了从未被调用**的死代码（写了没接线）。
+				 *    这也是"看起来做了其实没做"的另一种形态：函数在、能力在、入口不在。 */
+				const delArmRef = react.useRef(0);
+				const [delArmed, setDelArmed] = react.useState(false);
+				/* 上膛 2.5s 后自动泄压。
+				 * 🔴 泄压必须由**状态**驱动（而非只存 ref 时间戳）：原实现点完「删除」只有一条 toast 变了，
+				 *    **按钮外观毫无变化** ⇒ 用户看不到"我这一下点到了、还要再点一次"，
+				 *    主观结论就是"按钮坏了"（用户原话：「目前点击都不好用」）。
+				 *    这里让按钮自己变成实心红的「确认」，2.5s 后自动变回「删除」。 */
+				react.useEffect(() => {
+					if (!delArmed) return undefined;
+					const t = setTimeout(() => { setDelArmed(false); delArmRef.current = 0; }, 2500);
+					return () => clearTimeout(t);
+				}, [delArmed]);
+				const onDeleteDoc = () => {
+					if (!doc) return;
+					/* 删图不可逆 ⇒ 二次点击确认（不用 window.confirm：桌面壳里会被拦或被静默忽略）。
+					 * 首次点击只"上膛"并提示，2.5s 内不再点即自动泄压，避免误触。 */
+					const t = Date.now();
+					if (t - (delArmRef.current || 0) > 2500) {
+						delArmRef.current = t;
+						setDelArmed(true);
+						setToast("再点一次「确认」删除「" + doc.title + "」（不可撤销）");
+						return;
+					}
+					delArmRef.current = 0;
+					setDelArmed(false);
+					deleteDoc(doc.docId);
+					setSelected(null);
+					setVerOpen(false);
+					setToast("已删除该设计图");
+				};
+			
+				const onRenameStart = () => { if (doc) setNameDraft(String(doc.title || "")); };
+				const onRenameCancel = () => setNameDraft(null);
+				const onRenameCommit = () => {
+					if (!doc) { setNameDraft(null); return; }
+					const t = String(nameDraft == null ? "" : nameDraft).trim();
+					if (!t) { setToast("名字不能为空"); return; }   // 与 renameDoc 的拒绝一致：不静默改成"未命名"
+					const r = renameDoc(doc.docId, t);
+					setNameDraft(null);
+					setToast(r ? ("已重命名为「" + r.title + "」") : "重命名失败");
+				};
+			
+				const onDuplicateDoc = () => {
+					const c = duplicateDoc(doc ? doc.docId : null);
+					if (!c) { setToast("没有可复制的图"); return; }
+					setSelected(null);
+					setToast("已复制为：" + c.title + "（不含版本历史）");
+				};
+			
+				/* 导出：走**剪贴板**而不是下载文件 —— 桌面壳对 <a download> 的拦截行为不稳定，
+				 * 而"把 JSON 贴进对话/工单"才是这一步的真实用途（沟通，不是归档）。
+				 * 🔴 真机实测过 `{"expToast":"复制失败：剪贴板不可用"}`：`navigator.clipboard` 在
+				 *    桌面壳的非安全上下文里**存在但会 reject** ⇒ 原实现直接判"失败"，功能等于没有。
+				 *    现在三级降级，保证**一定能把数据交到用户手上**：
+				 *      ① navigator.clipboard.writeText（最优）
+				 *      ② document.execCommand("copy") + 离屏 textarea（老 API，Electron 里通常可用）
+				 *      ③ 展开一个只读文本域让用户自己全选复制（剪贴板被系统级拒绝时的兜底）
+				 *    判据：任何环境点「导出」都不得停在"没有数据可拿"。 */
+				const copyViaExecCommand = (text) => {
+					try {
+						const ta = document.createElement("textarea");
+						ta.value = text;
+						ta.setAttribute("readonly", "readonly");
+						/* 必须真在文档里且可选中（否则 execCommand 拿不到内容）；
+						 * 用 fixed + 移出视口，避免 absolute 到页底把文档撑高造成滚动跳动。 */
+						ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+						document.body.appendChild(ta);
+						ta.select();
+						ta.setSelectionRange(0, text.length);
+						const ok = document.execCommand("copy");
+						document.body.removeChild(ta);
+						return !!ok;
+					} catch (e) { return false; }
+				};
+			
+				const onExportJson = () => {
+					if (!doc) { setToast("没有可导出的图"); return; }
+					try {
+						const text = JSON.stringify({ schema: 1, exportedAt: new Date().toISOString(), doc }, null, 2);
+						const fallback = () => {
+							if (copyViaExecCommand(text)) { setToast("已复制 JSON 到剪贴板（" + text.length + " 字符）"); return; }
+							setExportText(text);
+							setToast("系统剪贴板不可用，已展开 JSON 供手动复制");
+						};
+						if (navigator.clipboard && navigator.clipboard.writeText) {
+							navigator.clipboard.writeText(text).then(
+								() => setToast("已复制 JSON 到剪贴板（" + text.length + " 字符）"),
+								fallback
+							);
+						} else fallback();
+					} catch (e) { setToast("导出失败：" + String((e && e.message) || e)); }
+				};
+			
+				/* ── 顶栏动作 · 版本（"保存"与"不同版本的选择"）────────────────────── */
+				const onSaveVersion = () => {
+					if (!doc) { setToast("没有可保存的图"); return; }
+					/* 版本说明自动取「底栏对话里最近一条用户指令」—— 那正是"这次改了什么"的自然记录，
+					 * 零额外输入成本；没有对话历史时留空，面板显示"（未写说明）"。 */
+					const th = doc.thread || [];
+					let lastUser = null;
+					for (let i = th.length - 1; i >= 0; i--) { if (th[i] && th[i].role === DESIGN_ROLE.USER) { lastUser = th[i]; break; } }
+					const note = lastUser ? String(lastUser.text || "").slice(0, 80) : "";
+					const r = saveVersion(doc, note);
+					if (!r) { setToast("保存失败"); return; }
+					setToast(r.dropped
+						? ("已保存 " + r.version.label + "（超出上限，已淘汰最早的 " + r.dropped + " 个）")
+						: ("已保存 " + r.version.label));
+				};
+			
+				const onRestoreVersion = (vid) => {
+					if (!doc) return;
+					const r = restoreVersion(doc.docId, vid);
+					if (!r) { setToast("该版本不存在（可能已被删除）"); return; }
+					setSelected(null);
+					setPending(null);      // 待确认操作基于旧内容，回滚后必须作废（否则会"改到刚回滚的图上"）
+					setVerOpen(false);
+					setToast("已回到 " + r.from.label + (r.autoSaved ? "（当前样子已自动存档）" : ""));
+				};
+			
+				const onDeleteVersion = (vid) => {
+					if (!doc) return;
+					if (deleteVersion(doc.docId, vid)) setToast("已删除该版本记录（当前图内容未变）");
+					else setToast("版本不存在");
+				};
+			
+				const onToggleVersions = () => setVerOpen((v) => !v);
+				const onZoom = (delta) => setScale((s) => Math.max(0.2, Math.min(2, Number((s + delta).toFixed(2)))));
+				/* 「适应」= 缩到容器放得下（与打开时的自动行为同一算法，用户手动可复现）；
+				 * 「1:1」= 回到 100% 真实像素（审尺寸时用）。两者分开，避免"适应"点了却是 1000% 的困惑。 */
+				const onFit = () => {
+					try {
+						const w = wrapRef.current ? wrapRef.current.clientWidth : 0;
+						if (!w) { setScale(1); setToast("已回到 100%（容器尺寸未就绪）"); return; }
+						const k = Math.max(0.2, Math.min(1, Number(((w - 40) / CANVAS_W).toFixed(2))));
+						setScale(k);
+						/* 🔴 必须给反馈：若当前已是 95% 而算出来也是 95%，**值不变 ⇒ 页面零变化**，
+						 *    用户点完看到"什么都没发生"，判定为"按钮坏了"。
+						 *    真机 sweep 里它是 14 个按钮中唯一"无任何状态变化"的一个 —— 实际是幂等而非故障，
+						 *    但幂等必须靠文案讲明白，否则与故障在用户眼里没有区别。 */
+						setToast("已适应容器：" + Math.round(k * 100) + "%（画布宽 " + CANVAS_W + "px）");
+					} catch (e) { setScale(1); setToast("已回到 100%"); }
+				};
+			
+				if (!open) return null;
+			
+				const stats = doc ? docStats(doc) : { total: 0, missingLogic: 0, thread: 0 };
+				const groups = kindsByGroup();
+				/* 版本状态一屏取（dirty 两态 + 角标数 + 面板文案都从这里出，一处算三处用） */
+				const vstate = getVersionState(doc);
+			
+				return h("div", {
+					id: STUDIO_ID, style: S.root, "data-testid": "ds-root", role: "dialog", "aria-label": "设计图工作室",
+					/* 质感类：个性化里的三档纹理由 store/personalize.js 注入的样式表按
+					 * `html[data-dp-texture=...] .dp-textured` 命中（伪元素 / background-image **无法**用 inline 写）。 */
+					className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
+				}, [
+					/* ══ 顶栏（D1 · 四区 + 安全区）══════════════════════════════════════════
+					 * 🔴 安全区 —— 修用户报的「设计图的关闭按钮和标准软件的关闭按钮重叠了」：
+					 *    Harness 桌面端右上角有**原生窗口控件覆盖层**（最小化/最大化/关闭），
+					 *    真机实测：视口 1536、`getTitlebarAreaRect().width = 1399`
+					 *    ⇒ **右侧 137px 不归网页管**，且它是原生图层、z-index 对它无效。
+					 *    此前顶栏右内边距只有 10px，✕ 落在 x=1495（距右 41px）⇒ 必然被压住，
+					 *    连右边那句「修订记录 2」也被压掉一截。
+					 *    ⇒ 根治办法不是把 ✕ 左移几像素（那只是把洞挪个位置），而是让整条顶栏
+					 *      `paddingRight = inset + 10`，所有内容排进安全区左侧。
+					 *      inset 由 util/safe-area.js 三级读取（WCO API → env() → 桌面兜底）
+					 *      并监听 resize / geometrychange 实时更新。
+					 *
+					 * 四区（用竖线分组 —— 9 个同款按钮连成一排，看不出哪几个是一伙的）：
+					 *   ① 保存（按钮即状态）  ② 图管理  ③ 版本历史  ④ 视图   ⟶  统计 · 关闭
+					 */
+					h("div", {
+						key: "top", style: { ...S.top, paddingRight: Math.max(10, inset + 10) }, "data-testid": "ds-top"
+					}, [
+						/* ── ① 保存：**按钮即状态** ────────────────────────────────────────
+						 * 脏（有未保存改动）= 主色实心「● 保存」（最需要被看见）
+						 * 净（已保存）    = 绿色描边「✓ 已保存 vN」
+						 * 两态**共用同一按钮、同一尺寸**：若做成"脏时才出现"，它一出现就把
+						 * 右边的按钮整体挤走 ⇒ 用户点到的会是删除（删除就在旁边）。 */
+						h("button", {
+							key: "sv", "data-testid": "ds-save",
+							style: { ...(vstate.dirty ? S.btnSave : S.btnSaved), opacity: doc ? 1 : 0.5 },
+							title: "把当前这张图存成一个版本"
+								+ (doc ? "（自动落盘代数 revision " + (doc.revision || 0) + "，那不是版本号）" : ""),
+							onClick: onSaveVersion
+						}, vstate.dirty ? "● 保存" : ("✓ 已保存" + (vstate.match ? " " + vstate.match.label : ""))),
+			
+						h("span", { key: "s1", style: S.sep }),
+			
+						/* ── ② 图管理 ────────────────────────────────────────────────────
+						 * 重命名：点 ✎ 后把 <select> **原地换成输入框**，提交后布局不跳
+						 * （Enter 提交 / Esc 取消 / 失焦提交 —— 三种退出路径都有，不把人卡在编辑态）。
+						 * 🔴 这里曾写 `maxWidth: 200` 而输入框写 `width: 200` —— 两者**根本不同宽**：
+						 *    select 的宽度由内容撑，真机实测只有 **146px**，输入框 200px，
+						 *    差 **54px** ⇒ 点「✎ 改名」整条顶栏右移 54px，提交后又弹回 54px。
+						 *    注释当时写的是"同宽 200，提交后布局不跳"，**承诺与实现不符**
+						 *    （而 div 配平 / 单元测试 / el.click() 型 e2e 全都测不到"布局跳位"）。
+						 *    ⇒ 改成 `width: 200` 硬锁。判据同 btnSaved：sweep 必须报"顶栏位移 0 个"。 */
+						nameDraft == null
+							? h("select", {
+								key: "sel", "data-testid": "ds-doclist", "aria-label": "切换设计图", value: (doc && doc.docId) || "",
+								onChange: (e) => { setActiveDoc(e.target.value); setSelected(null); setVerOpen(false); },
+								style: { width: 200, flex: "0 0 auto", height: 26, fontSize: 11.5, borderRadius: 5, border: "1px solid #3d4148", background: "#212429", color: "#c3c8ce" }
+							}, (st.docs || []).map((d) => h("option", { key: d.docId, value: d.docId }, d.title + "（" + (d.elements || []).length + "）")))
+							: h("input", {
+								key: "sel", "data-testid": "ds-docname", style: S.nameInput, value: nameDraft,
+								autoFocus: true, "aria-label": "重命名设计图",
+								onChange: (e) => setNameDraft(e.target.value),
+								onKeyDown: (e) => {
+									if (e.key === "Enter") { e.preventDefault(); onRenameCommit(); }
+									else if (e.key === "Escape") { e.preventDefault(); onRenameCancel(); }
+								},
+								onBlur: onRenameCommit
+							}),
+						h("button", {
+							key: "rn", style: S.btn, "data-testid": "ds-rename", "aria-label": "重命名设计图",
+							title: nameDraft == null ? "重命名这张设计图" : "取消重命名",
+							onClick: nameDraft == null ? onRenameStart : onRenameCancel
+						}, "✎ 改名"),
+						h("button", { key: "n", style: S.btn, "data-testid": "ds-new", "aria-label": "新建设计图", title: "新建一张设计图（自带标准框架 20 元素）", onClick: onNewDoc }, "＋ 新建图"),
+						h("button", { key: "cp", style: S.btn, "data-testid": "ds-dup-doc", "aria-label": "复制设计图", title: "复制这张设计图（内容带走，版本历史不带）", onClick: onDuplicateDoc }, "⧉ 复制"),
+						/* 🔴 标签必须**区别于图名**：本按钮原写作「↺ 标准框架」，而左上选择器显示的图名正是
+						 *    「标准框架 · 三页签（20）」⇒ 同屏出现两个「标准框架」，一个是要打开的图、
+						 *    一个是会覆盖内容的动作，用户无法区分。改为「重载框架」= 动作导向 + 与图名脱钩。 */
+						h("button", { key: "f", style: S.btn, "data-testid": "ds-frame", "aria-label": "重载标准框架", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: onLoadFrame }, "↺ 重载框架"),
+						h("button", { key: "ex", style: S.btn, "data-testid": "ds-export", "aria-label": "导出设计图 JSON", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: onExportJson }, "导出"),
+						/* 危险动作只保留一个（删图）。原文案「🗑」是**彩色 emoji**，与同排的单色字形
+						 * （✎ / ⧉ / ↺）割裂；且 emoji 不继承 currentColor ⇒ btnDanger 的红色对它无效。
+						 * 改文字后颜色与描边真正生效，红=危险 的语义才传得到。
+						 * 上膛态换「确认」而非「确认删除」：**同为 2 字 ⇒ 宽度不变**，
+						 * 既让"这一下点到了"肉眼可见，又不把右边的版本/缩放按钮推走。 */
+						h("button", {
+							key: "del",
+							style: doc ? (delArmed ? S.btnDangerArmed : S.btnDanger) : S.btn,
+							"data-testid": "ds-del-doc", "data-armed": delArmed ? "1" : "0",
+							"aria-label": delArmed ? "确认删除设计图" : "删除设计图",
+							title: delArmed ? "再点一次即永久删除（不可撤销）" : "删除这张设计图（点两次确认，不可撤销）",
+							onClick: onDeleteDoc
+						}, delArmed ? "确认" : "删除"),
+			
+						h("span", { key: "s2", style: S.sep }),
+			
+						/* ── ③ 版本历史 ────────────────────────────────────────────────────
+						 * 锁宽：`版本 0`(54px) ↔ `版本 30`(+6px) 会把右边的缩放组推着走。
+						 * 🔴 这条差点漏掉 —— 第一次改的时候 new_string 里把 minWidth 写丢了，
+						 *    真机 computed 仍是 `minWidth: auto`、宽度 53.95px。
+						 *    为什么没被现有断言抓到：**宽度只在文字真的变长时才暴露**，
+						 *    而一次验证里版本号不会从 1 涨到 30 ⇒ 永远测不到。
+						 *    故 e2e 补了 C16.9：用"临时替换文字量宽度"的方式，把每个会变文字的按钮
+						 *    **在极值文案下全部量一遍**，不依赖运行中出现那个数字。 */
+						h("button", {
+							key: "v", style: { ...S.btn, minWidth: 74, textAlign: "center", boxSizing: "border-box" },
+							"data-testid": "ds-ver-toggle", "aria-label": "历史版本",
+							title: "历史版本：选任一个回到当时的样子（回滚前会自动存档当前）",
+							onClick: onToggleVersions
+						}, "版本 " + vstate.count),
+			
+						h("span", { key: "s3", style: S.sep }),
+			
+						/* ── ④ 视图 ────────────────────────────────────────────────────────
+						 * 顺序按行业惯例把数值**夹在中间**（－ 95% ＋）：原先是「－ ＋ 95%」，
+						 * 两个方向键并排、数值甩到右边，读起来像"两个按钮 + 一个标签"而不是一组缩放。 */
+						h("button", { key: "zo", style: S.btn, "data-testid": "ds-zoom-out", "aria-label": "缩小", title: "缩小", onClick: () => onZoom(-0.1) }, "－"),
+						h("span", {
+							key: "zs", "data-testid": "ds-zoom", "aria-live": "polite",
+							/* 锁宽：`95%`(3 字) ↔ `100%`(4 字) 差 6px，会把右边的「＋ / 适应 / 1:1」推着走 */
+							style: { ...S.muted, display: "inline-block", minWidth: 40, textAlign: "center", boxSizing: "border-box" }
+						}, Math.round(scale * 100) + "%"),
+						h("button", { key: "zi", style: S.btn, "data-testid": "ds-zoom-in", "aria-label": "放大", title: "放大", onClick: () => onZoom(0.1) }, "＋"),
+						h("button", { key: "zf", style: S.btn, "data-testid": "ds-zoom-fit", "aria-label": "适应容器", title: "缩到容器放得下", onClick: onFit }, "适应"),
+						h("button", { key: "z1", style: S.btn, "data-testid": "ds-zoom-100", "aria-label": "回到 100%", title: "回到 100% 真实像素", onClick: () => setScale(1) }, "1:1"),
+			
+						/* ── 统计（revision 转入 title —— 它此前被当成"版本号"展示，实际是自动落盘代数）──
+						 * 版本数**只出现在「版本 N」按钮上**：同屏两处显示同一个数字，除了占位没有信息量，
+						 * 还会让人以为是两个不同的计数器。 */
+						h("span", {
+							key: "st",
+							/* 锁定最小宽度 + 右对齐：统计条靠 `marginLeft:auto` 贴最右，元素数变化只会让它**向左**膨胀
+							 * （不影响任何按钮的可点性），但文字会左右跳一下；锁宽后连这一下也消失。 */
+							style: { ...S.muted, marginLeft: "auto", minWidth: 110, textAlign: "right", boxSizing: "border-box" },
+							"data-testid": "ds-stats",
+							"data-revision": (doc && doc.revision) || 0,
+							"data-version-count": vstate.count,
+							title: "自动落盘代数 revision " + ((doc && doc.revision) || 0) + "（每次写库 +1，不是版本号）"
+						}, "元素 " + stats.total + " · 逻辑缺口 " + stats.missingLogic),
+			
+						/* ── ⑤ 个性化（右上角）─────────────────────────────────────────────
+						 * 用户要求「都在右上角加自定义个性化设定」⇒ 本按钮与总监页 / 总监弹窗 /
+						 * 分支导图上的那个是**同一个面板**（同一份 localStorage、同一批 CSS 变量）。
+						 * 🔴 位置：统计与 ✕ **之间**，整条顶栏仍受 `paddingRight = inset + 10` 约束
+						 *    ⇒ 按钮自动落在原生窗口控件左侧，不会重演"✕ 被盖住"。 */
+						h("button", {
+							key: "pz", style: S.btn, "data-testid": "ds-personalize",
+							"aria-label": "个性化设定", "data-on": pOpen ? "1" : "0",
+							title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角（与总监页 / 弹窗 / 导图共用同一份）",
+							onClick: () => setPOpen((v) => !v)
+						}, "⚙ 设置"),
+			
+						/* 关闭按钮 —— 现在位于安全区左侧（原位置被原生窗口按钮盖住） */
+						h("button", {
+							key: "x", style: S.btn, "data-testid": "ds-close", "aria-label": "关闭设计图工作室",
+							title: "关闭（Esc 逐层退）", onClick: onClose
+						}, "✕")
+					]),
+			
+					/* ── 导出兜底浮层（仅在系统剪贴板被拒时出现）──
+					 * 桌面壳里 navigator.clipboard 会 reject，execCommand 也可能被拒；
+					 * 此时**把 JSON 摆出来**远比报一句"复制失败"有用：功能至少要能把数据交到用户手上。 */
+					exportText == null ? null : h("div", { key: "exp", style: S.exportWrap, "data-testid": "ds-export-panel" }, [
+						h("div", { key: "h", style: S.exportHead }, "导出 JSON · " + exportText.length + " 字符 · 系统剪贴板不可用，请点框内全选复制"),
+						h("textarea", {
+							key: "ta", "data-testid": "ds-export-text", style: S.exportArea, value: exportText, readOnly: true,
+							onFocus: (e) => { try { e.target.select(); } catch (err) { /* 选中失败也不影响手动复制 */ } },
+							onKeyDown: (e) => { if (e.key === "Escape") { e.preventDefault(); setExportText(null); } }
+						}),
+						h("button", { key: "c", style: S.btn, "data-testid": "ds-export-close", onClick: () => setExportText(null) }, "关闭")
+					]),
+			
+					/* ── 工具栏（D2）──
+					 * 工具栏也留安全区：原生窗口控件高 44px > 顶栏 40px，会向下溢出 4px，
+					 * 若工具栏首行右端正好有按钮就会被压 ⇒ 一并避让（右侧本为空白，代价为零）。 */
+					h("div", { key: "kinds", style: { ...S.kindBar, paddingRight: Math.max(10, inset + 10) }, "data-testid": "ds-kinds" },
+						Object.keys(groups).map((g) => h("div", { key: g, style: S.kgroup }, [
+							// 组标题直接用该组的分组色 ⇒ 工具栏本身就是画布的图例（无需另加 legend 行）
+							h("span", { key: "l", style: { ...S.kglabel, color: gc(g).text, fontWeight: 650 }, "data-testid": "ds-kglabel-" + g }, "● " + g),
+							...groups[g].map((k) => h("button", {
+								key: k,
+								style: { ...S.kbtn, borderLeft: "2px solid " + gc(g).base },
+								"data-testid": "ds-add-" + k, title: (ELEMENT_KINDS[k].logic && ELEMENT_KINDS[k].logic.action) || "",
+								onClick: () => onAddKind(k)
+							}, [h("span", { key: "i" }, ELEMENT_KINDS[k].icon), h("span", { key: "t" }, ELEMENT_KINDS[k].label)]))
+						]))),
+			
+					/* ── 中段：左栏 + 画布 ── */
+					h("div", { key: "mid", style: S.mid }, [
+						h("div", { key: "l", style: S.left }, [
+							h("div", { key: "lh", style: S.leftHead }, [
+								h("span", { key: "t", style: { fontWeight: 650, fontSize: 11.5 } }, "元素交互逻辑"),
+								h("span", { key: "s", style: { ...S.muted, marginLeft: "auto" } }, selected ? selected : "未选中")
+							]),
+							h(LogicPanel, {
+								key: "lb", doc, selected,
+								onLogicChange: (k, v) => commit(updateLogic(getActiveDoc(), selected, { [k]: v })),
+								onRelabel: (v) => commit(updateElement(getActiveDoc(), selected, { label: v })),
+								onDelete: () => commit(removeElement(getActiveDoc(), selected)),
+								onDuplicate: () => commit(duplicateElement(getActiveDoc(), selected)),
+								onReorder: (w) => commit(reorderElement(getActiveDoc(), selected, w))
+							})
+						]),
+						h("div", { key: "c", style: S.canvasWrap, ref: wrapRef, "data-testid": "ds-canvas-wrap" },
+							h("div", {
+								key: "g", ref: gridRef, style: { ...S.grid, transform: "scale(" + scale + ")", transformOrigin: "top left" },
+								"data-testid": "ds-canvas",
+								onPointerDown: () => setSelected(null) // 点空白 = 取消选中
+							}, visibleElements(doc).map((el) => h("div", {
+								key: el.id,
+								/* 🔴 坐标必须写进 `style`（2026-09-12 真机事故 · 单点故障复盘）：
+								 *   原写法把 `left / top / width / height / transform` 放在 **props 顶层**，
+								 *   它们不是合法 DOM 属性 ⇒ React 不当作 CSS ⇒ **坐标被静默丢弃**
+								 *   ⇒ 元素退回文档流按顺序堆叠（`getComputedStyle().transform === "none"`）。
+								 *   后果：拖拽 / 缩放 / 方向键在**数据层完全正确**（回读 model 已改），
+								 *   但 DOM 纹丝不动 ⇒ 表现为"四个交互全坏"，实际只有这一行在坏。
+								 *   本轮 e2e 的 C4.1（拖拽位移断言）正是靠"比对 DOM 实际位移"抓到了它。
+								 *   判据：**只要模型改了而 getBoundingClientRect 不变，就先查 style 有没有生效**。 */
+								style: {
+									...S.el(selected === el.id, el.kind),
+									left: el.x, top: el.y, width: el.w, height: el.h
+								},
+								"data-testid": "ds-el", "data-el-id": el.id, "data-el-kind": el.kind,
+								title: el.id + " · " + (ELEMENT_KINDS[el.kind] || {}).label + " · " + ((el.logic && el.logic.action) || ""),
+								onPointerDown: (e) => onElPointerDown(e, el, "move")
+							}, [
+								h("span", { key: "t", style: { pointerEvents: "none", lineHeight: 1.35 } }, (ELEMENT_KINDS[el.kind] || {}).icon + " " + el.label),
+								selected === el.id ? h("div", {
+									key: "h", style: S.elHandle(el.kind), "data-testid": "ds-handle",
+									onPointerDown: (e) => onElPointerDown(e, el, "resize")
+								}) : null
+							])))
+						)
+					]),
+			
+					/* ── 底栏（D6）── */
+					h(ThreadBar, {
+						key: "b", doc: doc || { thread: [], title: "" }, draft, setDraft, pending,
+						onCommit: onSubmitThread,          // 发送：解析指令 → 生成待确认
+						onApply: onApplyPending,           // 应用到图：真正落库（两个入口共用）
+						onDiscard: () => { setPending(null); setToast("已丢弃"); }
+					}),
+					pending && pending.ops.length ? h("div", {
+						key: "apply", style: { position: "absolute", right: 14, bottom: 150, display: "flex", gap: 6 }
+					}, [h("button", { key: "a", style: S.btnPri, "data-testid": "ds-apply-fab", onClick: onApplyPending }, "应用 " + pending.ops.length + " 项")]) : null,
+					/* ── 版本历史面板（顶栏「🕘 版本 N」拉起）──
+					 * key 放在 props 里由 React 提取；面板自身 `open=false` 时返回 null。 */
+					h(VersionPanel, {
+						key: "ver", doc, versions, open: verOpen, inset, limit: VERSION_LIMIT,
+						onClose: () => setVerOpen(false),
+						onRestore: onRestoreVersion,
+						onDelete: onDeleteVersion
+					}),
+			
+					toast ? h("div", {
+						key: "toast", style: {
+							/* 🔴 位置修正（2026-09-12 审美审核 · 截图取证）：
+							 *   原为 `left:12, bottom:12` ⇒ 正好压在底栏「输入框 + 发送」那一行上
+							 *   （底栏 minHeight 96，输入行占最下 ~42px）⇒ 提示遮住用户刚要敲的输入框。
+							 *   改为**顶部居中浮动药丸**：既避开底栏（高度可变，无法用固定 bottom 绕开），
+							 *   又落在视线正上方（视线从画布收回时先经过顶部）。
+							 *   同批修正：原 toast **永不自动消失**（只有手点才清），现 2.2s 自动淡出，
+							 *   且 `pointerEvents:none` 不挡点击（原写法会吃掉底栏那一片的点击）。 */
+							position: "absolute", top: 48, left: "50%", transform: "translateX(-50%)",
+							padding: "6px 14px", borderRadius: 999, pointerEvents: "none", maxWidth: "60%",
+							background: "rgba(47,111,235,.92)", border: "1px solid rgba(159,194,255,.55)",
+							color: "#fff", fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap",
+							overflow: "hidden", textOverflow: "ellipsis", boxShadow: "0 6px 22px rgba(0,0,0,.55)"
+						}, "data-testid": "ds-toast"
+					}, toast) : null,
+			
+					/* 个性化面板 —— 顶栏 40px ⇒ 面板从 46px 起落，正好压在顶栏下方、贴着右上角。
+					 * `inset` 由本组件已持有的真机安全区值传入（见 util/safe-area.js），
+					 * 面板内部会算 `right = max(10, inset + 10)`，不会钻到原生窗口按钮下面。 */
+					h(PersonalizePanel, {
+						key: "pp", open: pOpen, onClose: () => setPOpen(false),
+						inset: inset, top: 46, scope: "设计图"
+					})
+				]);
+			}
+			
+			__defaults["components/DesignStudio.js"] = DesignStudio;
+			
+			exports.STUDIO_ID = STUDIO_ID;
+			exports.DesignStudio = DesignStudio;
+		};
+
+		// ── store/mindmap-schema.js ──
+		__defs["store/mindmap-schema.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：思维导图元素库（导图态的「原子词汇表」，纯数据）
+			 * 引用：—
+			 * 上游：components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 F1–F5（思维导图元素库：节点型 / 状态 / 连线 / 控件 / 快捷键 / 覆盖度）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * store/mindmap-schema.js — 思维导图元素库（导图态的「原子词汇表」，纯数据）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html
+			 *   ├─ 板块 A · A4 分支导图态（画面：节点 4 态 / 悬浮工具条 / 右键菜单 / 底部输入条）
+			 *   └─ 板块 F · 思维导图元素库（本文件的**渲染版**：元素 × 分组 × 覆盖度）
+			 *  消费者   components/MindMap.js（图例、节点图标与配色、连线样式、菜单分组）
+			 *  同类先例  store/design-schema.js（设计图的 18 个原子）—— 两者**刻意同构**：
+			 *           一个管「设计图能摆什么」，一个管「导图能长什么样」。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么需要它（用户原话）：「按照可能用到的思维导图元素 完善思维导图」
+			 * ══════════════════════════════════════════════════════════════════
+			 *  改之前 MindMap.js 只有「一个圆点 + 一行标题」两种视觉元素，
+			 *  而设计稿 A4 已经画了：中心主题 / 分支 / 叶子 / 四态状态点 / 悬浮工具条 /
+			 *  右键菜单 / 曲线连线 / 折叠 / 缩放 / 搜索 —— 代码里**一个都没有**。
+			 *
+			 *  ⇒ 本文件的作用是**把"可能用到的元素"一次性列全并标注落地状态**，
+			 *     而不是让每次改版都临时想起一个。列全之后有两个直接好处：
+			 *     ① UI 侧可以直接遍历它渲染图例与图标（单一真相源，不各写一套）
+			 *     ② 覆盖度可核算（`MM_COVERAGE`）：哪些已落、哪些不做、**为什么不做**
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 两条铁律（违反即变成"点了像没点"）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **不造没有数据源的元素**：凡是要读宿主字段的（如「出错」态），
+			 *     先在宿主源码里取证；取证不到就标 `supported:false` 并写明原因，
+			 *     **绝不用近似推断冒充精确**。上一轮的教训是顶栏 14 个按钮"单独测全部有效果"
+			 *     却整体不好用 —— 假元素比缺元素更贵。
+			 *  ② **不做没有接口的动作**：菜单项要么有真实宿主/插件接口，要么 `enabled:false`
+			 *     并在 `title` 里说明缺什么接口。禁止「点了只弹一个 toast」。
+			 *
+			 * ⚠️ 与 R5 冻结项的关系：本文件纯数据、无副作用、**不碰任何持久化 key**。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 零、分组色（与 DesignStudio 的 GROUP_COLOR 同构，三组三色）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 元素分组色。取色规则与设计图一致：**结构=紫 / 标记=青 / 语义=金**。
+			 * `text` 是深色底上的可读前景色（对比度 ≥4.5:1，实测）。
+			 */
+			const MM_GROUP_COLOR = Object.freeze({
+				"骨架": { base: "#8957e5", rgb: "rgba(137,87,229,", text: "#c9b0ff" },
+				"标记": { base: "#22a3b8", rgb: "rgba(34,163,184,", text: "#7fd8e6" },
+				"关系": { base: "#c9942b", rgb: "rgba(201,148,43,", text: "#efd08a" }
+			});
+			
+			/** 取分组色（未知分组回落「骨架」，不返回 undefined） */
+			function mmColor(group) {
+				return MM_GROUP_COLOR[group] || MM_GROUP_COLOR["骨架"];
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、节点元素（导图上一个节点由「类型 + 徽标」组成）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 节点类型 —— 由**树形位置**决定，不是用户手动选的（避免多一份需要持久化的状态）。
+			 * `from` 写明判据，任何人可复算。
+			 */
+			const NODE_KINDS = Object.freeze({
+				topic: {
+					label: "中心主题", icon: "🎯", group: "骨架", accent: "#2f6bdd",
+					from: "depth === 0（血缘树的根；无父或父不在列表内）",
+					note: "一棵血缘树只有一个中心主题，它是「对话主线」本身"
+				},
+				branch: {
+					label: "主分支", icon: "⑂", group: "骨架", accent: "#8957e5",
+					from: "depth === 1（从中心主题直接 fork 出来的第一层）",
+					note: "对应宿主 `sessions.fork` 的第一跳"
+				},
+				sub: {
+					label: "子分支", icon: "└", group: "骨架", accent: "#6f6ab8",
+					from: "depth >= 2 且 childrenCount > 0",
+					note: "分支的分支；可继续 fork，也可收口"
+				},
+				leaf: {
+					label: "叶子", icon: "•", group: "骨架", accent: "#5b6b8f",
+					from: "childrenCount === 0",
+					note: "尚无子分支的末端节点（≠ 已完成，完成看状态点）"
+				}
+			});
+			
+			/**
+			 * 节点类型判定（纯函数）。
+			 * 🔴 顺序即优先级：先判叶子（无子），再按深度 —— 否则「depth 1 的叶子」会被判成主分支。
+			 * @param {number} depth
+			 * @param {number} childrenCount
+			 * @returns {"topic"|"branch"|"sub"|"leaf"}
+			 */
+			function kindOfNode(depth, childrenCount) {
+				if (depth === 0) return "topic";
+				if (!childrenCount) return "leaf";
+				return depth === 1 ? "branch" : "sub";
+			}
+			
+			/**
+			 * 节点徽标（第二行元信息）—— 每个都写明**数据来源**，取不到就不渲染。
+			 * `pick(row)` 返回 `null` 表示「该行没有这个事实」，由渲染层跳过（不占位、不写"未知"）。
+			 */
+			const NODE_MARKS = Object.freeze([
+				{
+					key: "fork", label: "fork 锚点", group: "标记",
+					pick: (r) => (r.seedLength == null ? null : "fork @ seq " + r.seedLength),
+					source: "宿主 fork 时写入的 meta.seedLength（摘要透出则显示）"
+				},
+				{
+					key: "children", label: "子分支数", group: "标记",
+					pick: (r) => (r.childrenCount > 0 ? "子 " + r.childrenCount : null),
+					source: "本插件按 parentId 归并计数（logic/branch-tree.js）"
+				},
+				{
+					key: "pending", label: "待处理", group: "标记",
+					pick: (r) => (r.pending ? "待" + ({ approval: "审批", "plan-review": "方案确认", question: "回答" }[r.pending] || "处理") : null),
+					source: "宿主摘要 pendingInteraction（approval / plan-review / question）"
+				},
+				{
+					key: "forked", label: "血缘断裂", group: "关系",
+					/* 🔴 只在**父不在树里**时才显示。父就在左边一格的情况下写「← 父 a」是纯噪声，
+					 *    而"父缺失"（会话被删 / 属于别的账号）才是真需要提醒的异常 —— 它意味着
+					 *    这一支的血缘只能当根看（见 buildBranchTree 的孤儿处理）。 */
+					pick: (r) => (r.parentMissing ? "⚠ 父缺失 " + String(r.parentSessionId).slice(-6) : null),
+					source: "宿主摘要 parentId 指向的会话不在当前列表内（logic/branch-tree.js 标 parentMissing）"
+				},
+				{
+					key: "preset", label: "智能体预设", group: "关系",
+					pick: (r) => (r.agentPreset ? String(r.agentPreset) : null),
+					source: "宿主摘要 agentPreset"
+				}
+			]);
+			
+			/** 按当前行取全部有据徽标（顺序即 NODE_MARKS 序）；无据的**不出现**，不返回空串占位 */
+			function marksOfRow(row) {
+				const out = [];
+				for (const m of NODE_MARKS) {
+					let v = null;
+					try { v = m.pick(row); } catch (e) { v = null; }
+					if (v) out.push({ key: m.key, group: m.group, text: v });
+				}
+				return out;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、状态点（四态，**全部由宿主字段判定**，无推断）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 状态四态。
+			 *
+			 * 🔴 设计稿 A4 的图例画的是「空闲 / 运行中 / 已完成 / 出错」四态，
+			 *    但宿主摘要里**没有"出错"字段** —— 取证范围：`dsh-client-runtime/lib/client.js`
+			 *    的会话摘要（`flattenLineage` 前的身）只有 `running / blank / completed /
+			 *    pendingInteraction / updatedAt / origin / agentPreset / parentId`，
+			 *    而 `pendingInteraction` 的取值域实测仅 `{"approval","question","plan-review"}`
+			 *    （`trackPending` 的全部调用点，无错误态）。
+			 *    ⇒ 故本版把第四态从「出错」改为**「待审」**（= `pendingInteraction` 存在），
+			 *      并把「出错」登记为 `supported:false`（见 MM_COVERAGE）。
+			 *      **这是对设计稿的显式修正，不是漏画** —— 写在此处以免下次又被"按图画"。
+			 */
+			const STATE_KINDS = Object.freeze({
+				running: {
+					label: "执行中", color: "#2f6bdd", pulse: true, supported: true,
+					from: "宿主摘要 running === true（智能体正在产出）"
+				},
+				review: {
+					label: "待审", color: "#d29922", pulse: false, supported: true,
+					from: "宿主摘要存在 pendingInteraction（approval / plan-review / question）—— 等你点确认"
+				},
+				done: {
+					label: "已收口", color: "#3fb950", pulse: false, supported: true,
+					from: "宿主摘要 completed === true（有未读完成提醒 = 该会话已跑完一轮）"
+				},
+				idle: {
+					label: "待命", color: "#6f757d", pulse: false, supported: true,
+					from: "以上都不成立（含 blank 新会话）—— 它表达的是「确实没在动」，不是「状态未知」"
+				},
+				err: {
+					label: "出错", color: "#e5534b", pulse: false, supported: false,
+					unsupportedReason: "宿主会话摘要无错误字段（pendingInteraction 取值域仅 approval/question/plan-review）⇒ 无数据源，不画",
+					from: "—（缺数据源）"
+				}
+			});
+			
+			/** 图例顺序（只列 `supported !== false` 的，由 supportedStates() 消费） */
+			const STATE_ORDER = Object.freeze(["idle", "running", "review", "done"]);
+			
+			/** 可渲染的状态（供图例遍历） */
+			function supportedStates() {
+				return STATE_ORDER.map((k) => ({ key: k, ...STATE_KINDS[k] }));
+			}
+			
+			/**
+			 * 状态判定（纯函数）。
+			 *
+			 * 🔴 与旧版的区别（这是本轮最实质的修正）：
+			 *   旧版 `stateOf()` 靠 `childrenCount / depth` **猜**（有子→待审、根→已收口），
+			 *   文件头还写着"宿主摘要无执行中字段"—— **该前提是错的**，宿主一直有 `running`
+			 *   与 `completed`。猜出来的状态在真机上是**恒定不变**的（与"现在有没有在跑"无关），
+			 *   等于一个不动的装饰。现在改为**宿主真值优先**，仅在宿主字段整组缺失时
+			 *   （localStorage 降级通道）才回落到推断，并把结果标 `stateSource:"inferred"`。
+			 *
+			 * 判定顺序即优先级：待审 > 执行中 > 已收口 > 待命。
+			 * （一个会话同时 running 且有 pending 时，用户更该看到"在等你"。）
+			 *
+			 * @param {object} row 规范行（见 branch-tree.js normalizeSummary）
+			 * @returns {"running"|"review"|"done"|"idle"}
+			 */
+			function stateOfRow(row) {
+				if (!row) return "idle";
+				if (row.pending) return "review";
+				if (row.running === true) return "running";
+				if (row.completed === true) return "done";
+				return "idle";
+			}
+			
+			/** 该行状态是否有宿主依据（false ⇒ 用了推断，UI 应标注） */
+			function hasHostState(row) {
+				return Boolean(row) && (row.running !== undefined || row.completed !== undefined || row.pending !== undefined);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、连线元素（骨架的两级 + 高亮）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 连线类型。
+			 * 🔴 视觉区分**必须有语义**，否则配色只是装饰：
+			 *   · trunk（中心主题 → 第一层）**实线** —— 这是"主线分叉"，永久存在
+			 *   · child（第一层以后）**虚线** —— 这是"分支再生分支"，可继续延伸
+			 *   · chain（选中节点的祖先链）**加粗高亮** —— 回答"我在树里的哪一条上"
+			 *   · ghost（被折叠隐藏的子树的入口）**点线** —— 提示"下面还有，点开看"
+			 */
+			const EDGE_KINDS = Object.freeze({
+				trunk: { label: "主干", stroke: "#2f6bdd", width: 2, dash: null, opacity: 0.5, group: "关系" },
+				child: { label: "分支", stroke: "#39c5cf", width: 1.5, dash: "5 4", opacity: 0.7, group: "关系" },
+				chain: { label: "选中链", stroke: "#8957e5", width: 2.5, dash: null, opacity: 0.95, group: "关系" },
+				ghost: { label: "折叠入口", stroke: "#4c525c", width: 1.5, dash: "1 4", opacity: 0.6, group: "关系" }
+			});
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、控件元素（导图态的操作面 —— 每项都对应真实实现）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 控件元素登记表。`testid` 与真实 DOM 的 `data-testid` **同名**（供 e2e 反查，
+			 * 防止"登记了但没实现"）。
+			 */
+			const CONTROL_KINDS = Object.freeze([
+				{ key: "fit", label: "适应屏幕", icon: "🔍", testid: "mm-fit", group: "骨架", desc: "把整棵血缘树缩进可视区（幂等：已在视野内时只回文案）" },
+				{ key: "zoom", label: "缩放组", icon: "－／＋", testid: "mm-zoom-out", group: "骨架", desc: "－ 100% ＋ 三件一组，数值居中；1:1 回真实像素" },
+				{ key: "collapse", label: "折叠 / 展开", icon: "🗂", testid: "mm-collapse-all", group: "骨架", desc: "全局折叠全部子树 / 展开全部；**单框折叠在框内右侧显式按钮**（见 NODE_CONTROLS.toggle）" },
+				{ key: "search", label: "搜索定位", icon: "⌕", testid: "mm-search", group: "标记", desc: "按标题 / 会话号过滤并高亮命中；命中数实时显示" },
+				{ key: "legend", label: "状态图例", icon: "●", testid: "mm-legend", group: "标记", desc: "四态点 + 文案；**只列有数据源的态**（见 STATE_KINDS）" },
+				{ key: "minimap", label: "小地图", icon: "▣", testid: "mm-minimap", group: "标记", desc: "右下角整树缩略 + 当前视野框；点击跳转" },
+				{ key: "hoverbar", label: "悬浮工具条", icon: "⋯", testid: "mm-hoverbar", group: "关系", desc: "悬停节点时出现在节点上方：fork / 打开 / 抓取 / 折叠" },
+				{ key: "ctxmenu", label: "右键菜单", icon: "▤", testid: "mm-ctxmenu", group: "关系", desc: "节点右键：只有**有接口**的项可点，其余禁用并写明缺什么" },
+				{ key: "refresh", label: "刷新血缘", icon: "↻", testid: "mm-refresh", group: "骨架", desc: "重读书缘快照（宿主 sessions 通道，失败降级并标原因）" },
+				{ key: "close", label: "关闭", icon: "✕", testid: "mm-close", group: "骨架", desc: "关闭导图（Esc 亦可）；**必须落在窗口控件安全区左侧**" }
+			]);
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、键盘元素
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 七、**单个框上的控件**（2026-09-12 第三轮新增）
+			 *
+			 * 需求原文（用户）：「思维导图的单个框没有展开和折叠的选项」
+			 *
+			 * 🔴 定位到的真实缺口（真机取证，不是猜）：
+			 *   血缘树实测 12 行、其中 **3 行确实有子节点**（`childrenCount > 0`），
+			 *   但框上只有一个 12px 宽、颜色 `#8b9199` 的三角形 —— 与徽标同行、被标题挤到几乎看不见，
+			 *   且**没有子的框上什么都没有**（用户俯视整张图 ⇒ 观感是"框上没有任何展开折叠选项"）。
+			 *
+			 * ⇒ 本表把"每个框上该有什么"显式登记，由 `controlsOfRow()` 按行与宿主能力算出 elidable 结果，
+			 *    MindMap.js 照着渲染，**不再各自 if 判断**（避免"有的框有有的框没有"这种不一致）。
+			 *
+			 * 纪律：`enabled=false` 的项必须在 UI 上**显示并写明原因**（与本项目右键菜单同一条纪律），
+			 *       不做"悄悄不渲染"—— 用户已经因为"点了像没点"投诉过三次。
+			 */
+			const NODE_CONTROLS = Object.freeze([
+				{
+					key: "toggle", icon: "▾", alt: "▸", label: "折叠子树 / 展开子树", group: "结构",
+					/** 有子才有意义：没有子节点时"折叠"是空操作 */
+					needs: "childrenCount > 0",
+					why: "该分支下有子会话（宿主机 sessions 写在 fork 的 meta.parentSession）"
+				},
+				{
+					key: "detail", icon: "💬", label: "在这侧展开对话", group: "内容",
+					needs: "总是可用（数据来自插件侧流转 + 宿主快照）",
+					why: "右侧面板显示该对话「现在在做的事」与跨维度流转，不依赖宿主写接口"
+				},
+				{
+					key: "fork", icon: "➕", label: "从此处分支", group: "动作",
+					needs: "宿主 sessions.fork",
+					why: "宿主未暴露 fork 时禁用并在此写明缺什么"
+				},
+				{
+					key: "open", icon: "📂", label: "打开该原生对话", group: "动作",
+					needs: "宿主 sessions.open",
+					why: "宿主未暴露 open 时禁用"
+				},
+				{
+					key: "move", icon: "✥", label: "拖动移动（自由摆放）", group: "布局",
+					needs: "总是可用（位置由插件侧持久化，不改血缘）",
+					why: "🔴 只移动**画面位置**，不改 `parentSession` —— 血缘由宿主固化，插件侧无接口可改"
+				}
+			]);
+			
+			/**
+			 * 算出一行上实际可用的控件（**纯函数**，可离线断言）。
+			 * @param {object} row buildBranchTree().rows[i]
+			 * @param {{fork?:boolean, open?:boolean}} [caps] hostCapabilities()
+			 * @returns {Array<{key:string, icon:string, label:string, enabled:boolean, why:string, kind:"structure"|"content"|"action"|"layout"}>}
+			 */
+			function controlsOfRow(row, caps) {
+				const c = caps || {};
+				const hasKids = Boolean(row && row.childrenCount > 0);
+				const kindOf = (g) => (g === "结构" ? "structure" : g === "内容" ? "content" : g === "布局" ? "layout" : "action");
+				return NODE_CONTROLS.map((n) => {
+					let enabled = true;
+					let why = n.why;
+					if (n.key === "toggle") {
+						enabled = hasKids;
+						why = hasKids ? n.why : "该框下没有子会话 ⇒ 无可折叠内容（不是坏了）";
+					} else if (n.key === "fork") {
+						enabled = Boolean(c.fork);
+						why = c.fork ? n.why : "宿主 sessions 服务未暴露 fork（取证：SessionRuntime 成员表）";
+					} else if (n.key === "open") {
+						enabled = Boolean(c.open);
+						why = c.open ? n.why : "宿主 sessions 服务未暴露 open";
+					}
+					return {
+						key: n.key,
+						icon: n.icon,
+						/* 折叠态替换图标（只有 toggle 有；未声明则与 icon 同）。
+						 * 🔴 透出它与 MindMap 直接写死 "▸"/"▾" 的区别：**符号表只有一份**。
+						 *    否则以后改图标要改两处，且"元素库说什么"与"界面渲染什么"会悄悄分叉。 */
+						alt: n.alt || n.icon,
+						label: n.label,
+						enabled,
+						why,
+						kind: kindOf(n.group)
+					};
+				});
+			}
+			
+			const MM_SHORTCUTS = Object.freeze([
+				{ key: "Esc", desc: "关闭导图（仅退最上层浮出物：先关菜单 → 再关导图）" },
+				{ key: "Ctrl/⌘ + 0", desc: "缩放回 100%（1:1）" },
+				{ key: "Ctrl/⌘ + -", desc: "缩小 10%" },
+				{ key: "Ctrl/⌘ + =", desc: "放大 10%" },
+				{ key: "Ctrl/⌘ + F", desc: "聚焦搜索框" },
+				{ key: "Enter", desc: "底栏输入 → 交总监路由（Shift+Enter 不提交）" }
+			]);
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 六、覆盖度总账（把"列全了"变成可核算的事实）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 每条登记一个元素族的落地状态。
+			 *   `done` = 本轮已实现且 e2e 覆盖 · `todo` = 登记但未实现 · `na` = 明确不做（附原因）
+			 * 🔴 只写"已实现"必须有 testid 或纯函数测试对应，禁止凭印象打勾。
+			 */
+			const MM_COVERAGE = Object.freeze([
+				{ id: "E01", name: "中心主题节点（🎯 主线标识）", state: "done", evidence: "kindOfNode(depth=0) → topic；e2e C-M3" },
+				{ id: "E02", name: "主分支 / 子分支 / 叶子三型", state: "done", evidence: "kindOfNode；节点左边框色随型变化；e2e C-M4" },
+				{ id: "E03", name: "状态点四态（宿主真值）", state: "done", evidence: "stateOfRow 读 running/completed/pendingInteraction；e2e C-M5 正负对照" },
+				{ id: "E04", name: "节点徽标（fork 锚点 / 子数 / 待办 / 血缘 / 预设）", state: "done", evidence: "marksOfRow + NODE_MARKS，取不到不渲染" },
+				{ id: "E05", name: "曲线连线（主干实线 / 分支虚线）", state: "done", evidence: "edgePath 三次贝塞尔；EDGE_KINDS 五行语义表" },
+				{ id: "E06", name: "选中链高亮（祖先路径）", state: "done", evidence: "ancestorChain 纯函数；e2e C-M7" },
+				{ id: "E07", name: "折叠 / 展开（单节点 + 全局）", state: "done", evidence: "visibleRows 纯函数；折叠后隐藏子树并改点线；e2e C-M8" },
+				{ id: "E08", name: "悬浮工具条", state: "done", evidence: "data-testid=mm-hoverbar，悬停出现，上移 4px 展开" },
+				{ id: "E09", name: "右键菜单（有接口才可点）", state: "done", evidence: "mm-ctx-*；无接口项 disabled + title 说明" },
+				{ id: "E10", name: "缩放组（－ 100% ＋ / 1:1 / 适应）", state: "done", evidence: "mm-zoom-*；适应对全树包围盒计算" },
+				{ id: "E11", name: "搜索定位", state: "done", evidence: "mm-search；命中高亮 + 计数" },
+				{ id: "E12", name: "小地图 + 视野框", state: "done", evidence: "mm-minimap；缩略点按比例，点击跳转" },
+				{ id: "E13", name: "状态图例（只列有据的态）", state: "done", evidence: "supportedStates() 驱动；「出错」态标 unsupported 不渲染" },
+				{ id: "E14", name: "窗口控件安全区避让（✕ 不与原生按钮重叠）", state: "done", evidence: "readInset/watchInset；e2e C-M13 断言 ✕ 右边界 ≤ 安全区边界" },
+				{ id: "E15", name: "「出错」状态点", state: "na", evidence: "宿主摘要无错误字段（取证见 STATE_KINDS.err）⇒ 无数据源不画" },
+				{ id: "E16", name: "节点自由文本备注 / 标签", state: "todo", evidence: "需要新的持久化模型（用户可编辑的注释），**本轮不做**：无需求依据且会引入第四份持久化 key" },
+				{ id: "E17", name: "合并回父 / 删除分支", state: "na", evidence: "宿主 `sessions` 服务仅暴露 create/fork/open/search/refresh（取证：SessionRuntime 成员表），**无合并与删除接口** ⇒ 菜单里禁用并写明" },
+				{ id: "E18", name: "跨会话拖拽改血缘", state: "na", evidence: "血缘由宿主 fork 时固化（meta.parentSession），插件侧无接口可改 ⇒ 拖拽只能是视觉欺骗" },
+				/* ── 第三轮新增（用户：单框要能展开折叠 / 框要能移动 / 点框在右侧展开对话）── */
+				{ id: "E19", name: "单框显式「展开 / 折叠」控件", state: "done", evidence: "NODE_CONTROLS.toggle + controlsOfRow（纯函数）；框内右侧按钮 mm-node-toggle，有子才可点，无子写明原因" },
+				{ id: "E20", name: "框可拖动自由移动（位置持久化）", state: "done", evidence: "pointer 拖动 → 位置写进既有 layout store 的 mmPos 字段（不新增持久化 key）；「自动布局」一键归位" },
+				{ id: "E21", name: "点框在右侧展开该对话面板", state: "done", evidence: "components/NodeDetailPanel.js；点框即开，面板含「现在在做的事」+ 跨维流转时间线" },
+				{ id: "E22", name: "面板最上方「现在在做的事」", state: "done", evidence: "logic/flow.js currentTaskOf（纯函数），五个优先级分支**各自标明 source**，读不到不编" },
+				{ id: "E23", name: "四维流转（总监 / 对话 / 导图 / 设计图 同一条消息）", state: "done", evidence: "logic/flow.js（trail 足迹 + flowLine）；四界面共用同一 store；切会话跟随" }
+			]);
+			
+			/** 覆盖度统计（供设计稿与 UI 的"总账"显示） */
+			function coverageStats() {
+				const total = MM_COVERAGE.length;
+				const done = MM_COVERAGE.filter((c) => c.state === "done").length;
+				const todo = MM_COVERAGE.filter((c) => c.state === "todo").length;
+				const na = MM_COVERAGE.filter((c) => c.state === "na").length;
+				return { total, done, todo, na, doneRate: total ? done / total : 0 };
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 八、按分组聚合（UI 遍历用；顺序即 MM_GROUP_COLOR 的键序）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 全部元素（节点型 + 控件 + 连线）按分组聚合，供图例/文档渲染 */
+			function elementsByGroup() {
+				const groups = { "骨架": [], "标记": [], "关系": [] };
+				for (const k of Object.keys(NODE_KINDS)) {
+					const n = NODE_KINDS[k];
+					groups[n.group].push({ key: k, label: n.label, icon: n.icon, kind: "node" });
+				}
+				for (const c of CONTROL_KINDS) {
+					groups[c.group].push({ key: c.key, label: c.label, icon: c.icon, kind: "control" });
+				}
+				for (const k of Object.keys(EDGE_KINDS)) {
+					const e = EDGE_KINDS[k];
+					groups[e.group].push({ key: k, label: e.label, icon: "—", kind: "edge" });
+				}
+				return groups;
+			}
+			
+			exports.MM_GROUP_COLOR = MM_GROUP_COLOR;
+			exports.mmColor = mmColor;
+			exports.NODE_KINDS = NODE_KINDS;
+			exports.kindOfNode = kindOfNode;
+			exports.NODE_MARKS = NODE_MARKS;
+			exports.marksOfRow = marksOfRow;
+			exports.STATE_KINDS = STATE_KINDS;
+			exports.STATE_ORDER = STATE_ORDER;
+			exports.supportedStates = supportedStates;
+			exports.stateOfRow = stateOfRow;
+			exports.hasHostState = hasHostState;
+			exports.EDGE_KINDS = EDGE_KINDS;
+			exports.CONTROL_KINDS = CONTROL_KINDS;
+			exports.NODE_CONTROLS = NODE_CONTROLS;
+			exports.controlsOfRow = controlsOfRow;
+			exports.MM_SHORTCUTS = MM_SHORTCUTS;
+			exports.MM_COVERAGE = MM_COVERAGE;
+			exports.coverageStats = coverageStats;
+			exports.elementsByGroup = elementsByGroup;
+		};
+
+		// ── logic/branch-tree.js ──
+		__defs["logic/branch-tree.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：分支血缘树（导图态的数据源）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, logic/mindmap-render.js
+			 * 下游：logic/discover.js, store/mindmap-schema.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C2（分支生命周期状态机）· F1 / F5（导图行模型与宿主真值透传）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/branch-tree.js — 分支血缘树（导图态的数据源）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html
+			 *   ├─ 板块 A · A4 分支导图态（画面）
+			 *   ├─ 板块 C · C2 分支生命周期状态机（节点状态与流转）
+			 *   └─ 板块 F · 思维导图元素库（本文件产出的行 → 元素渲染）
+			 *  使用者   components/MindMap.js（导图覆盖层）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 关键事实：血缘数据**一直都在**，本文件只做「消费」不做「新建模型」
+			 * ══════════════════════════════════════════════════════════════════
+			 *   ① 写入方：宿主 `dsh-session/lib/index.js:1841` 在 fork 时写
+			 *        `meta.parentSession = <源会话 id>` + `seedLength`
+			 *   ② 暴露方：`dsh-client-runtime/lib/client.js` 把 `parentSessionId` 放进会话摘要
+			 *   ③ 已有投影：同文件 `flattenLineage(summaries, …)` **已实现**
+			 *        children 映射 + `depth` 缩进 + **环检测**（`visited` 集合，遇环打 warning）
+			 *   ④ 标题递增：`increasedForkTitle()`（支持全角括号）
+			 *   ⇒ 故本文件是②③④的**插件侧等价实现**（宿主函数不可直接 import），
+			 *     并额外产出导图需要的**像素坐标**（findings 见 docs/10 §4.4）。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 2026-09-12 修正两条**曾被写错的事实**（真机 + 宿主源码取证）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **"宿主摘要无执行中字段"是错的**。摘要一直带着
+			 *     `running / blank / completed / pendingInteraction / updatedAt / origin / agentPreset`：
+			 *        · `ctx.sessions.list.getSnapshot()` → `{ids, current, byId}`
+			 *        · `byId[id]` 身 = `{id, displayTitle, running, completed?, blank, updatedAt,
+			 *          pendingInteraction?, title?, cwd?, parentId?, origin?, agentPreset?}`
+			 *          （取证：`dsh-client-runtime/lib/client.js` `projectList` 的 byId 构造段）
+			 *     ⇒ 状态从此**读真值**，不再靠 childrenCount/depth 猜（旧猜测在真机上恒定不变）。
+			 *
+			 *  ② **读不到 `ctx.sessions` 的真因是 inject 少了一项**，不是"宿主版本差异"。
+			 *     `ctx.slots` 能用而 `ctx.sessions` 恒 undefined，差别只在产物里
+			 *     `exports.inject = ["slots"]` —— 宿主 app-shell 自己就是
+			 *     `inject = ["slots","sessions","layout"]`（取证：`dsh-client-web/lib/index.js`）。
+			 *     少声明 ⇒ 访问抛错 ⇒ 被本文件的 try/catch 吞掉 ⇒ **静默降级成"按工作区分组的平铺树"**，
+			 *     界面上只显示"血缘不可用"，看不出是**我们没声明**。
+			 *     ⇒ 修法：`build/build.mjs` 的 inject 列表补 `"sessions"`；
+			 *        且本文件把降级原因写进 `cache.diag`，**降级不再无声**。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  两条数据通道（按可用性降级，不抛错）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   A. `ctx.sessions.list.getSnapshot()` —— 完整（含 parentId + running/completed）
+			 *   B. `discover()`（localStorage `dsh.workspace.view*`）—— 只有分组，**无血缘**
+			 *      ⇒ 此时导图退化为「按工作区分组的平铺树」，并在 UI 上标明"血缘数据不可用"
+			 *         + **具体原因**（diag）。
+			 */
+			
+			const { discover, sessionLabel } = __m("logic/discover.js");
+			const { kindOfNode, stateOfRow, hasHostState } = __m("store/mindmap-schema.js");
+			
+			/** 节点在导图画布上的布局常量（与 MindMap.js 共用，勿各自写死）
+			 * 🔴 2026-09-12 第三轮放大：节点从 200×56 调到 224×72 —— 用户要求"单个框要有展开
+			 *    折叠的选项"，而那一行控件（▾ 💬 ✚ 📂 ✥）需要纵向空间；框太矮会把它挤成
+			 *    第二个"看不见的三角"，等于没加。dx/dy 同步放大以保持间距比例。 */
+			const LAYOUT = Object.freeze({
+				x0: 48, y0: 44, dx: 272, dy: 96, nodeW: 224, nodeH: 72,
+				/** 画布留白（适应视野时留出，避免节点贴边） */
+				pad: 32,
+				/** 画布最小尺寸（节点超出时由 treeBounds 撑大） */
+				minW: 2600, minH: 1600
+			});
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 〇、规范行构造（两种宿主形状 → 同一份规范字段）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 把「宿主摘要」或「降级摘要」规范成统一字段。
+			 *
+			 * 🔴 为什么必须有这一步：宿主有**两种**会话形状，字段名不同 ——
+			 *    · `list.getSnapshot().byId[id]`：`id` / `parentId` / `displayTitle`
+			 *    · 内部 `summaries[]`（`flattenLineage` 的输入）：`sessionId` / `parentSessionId` / `title`
+			 *   旧实现只认后者 ⇒ 走 ctx 通道时**每一行都因 `sessionId === undefined` 被丢弃**，
+			 *   于是 rows 为 0 又看不出错（空树照样渲染）。规范层把两者收敛，缺一不可。
+			 *
+			 * ⚠️ 取不到的字段**保持 undefined**（不写 null / 不写 0）——
+			 *    "没有这个事实"与"这个事实是 0"在下游是两种渲染。
+			 *
+			 * @param {object} raw
+			 * @returns {object|null}
+			 */
+			function normalizeSummary(raw) {
+				if (!raw || typeof raw !== "object") return null;
+				const sessionId = raw.sessionId !== undefined ? raw.sessionId : raw.id;
+				if (!sessionId) return null;
+				const parentSessionId = raw.parentSessionId !== undefined ? raw.parentSessionId : raw.parentId;
+				const out = {
+					sessionId: String(sessionId),
+					title: raw.title || raw.displayTitle || sessionLabel(sessionId),
+					// 宿主真值（可能整组缺失 ⇒ 保持 undefined，由 stateSource 标注）
+					running: typeof raw.running === "boolean" ? raw.running : undefined,
+					completed: raw.completed === true ? true : undefined,
+					blank: typeof raw.blank === "boolean" ? raw.blank : undefined,
+					updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : undefined,
+					agentPreset: raw.agentPreset,
+					origin: raw.origin,
+					seedLength: typeof raw.seedLength === "number" ? raw.seedLength
+						: typeof raw.forkSeq === "number" ? raw.forkSeq : undefined
+				};
+				if (parentSessionId !== undefined && parentSessionId !== null && parentSessionId !== "") {
+					out.parentSessionId = String(parentSessionId);
+				}
+				// 待处理：宿主值是字符串（approval / question / plan-review）；也可能是 Map/Set 展开的布尔
+				if (raw.pendingInteraction !== undefined && raw.pendingInteraction !== null) {
+					out.pending = typeof raw.pendingInteraction === "string" ? raw.pendingInteraction : "pending";
+				}
+				return out;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、纯函数：摘要数组 → 树 / 扁平行
+			 *    与宿主 flattenLineage 同构（含环检测），并补上坐标与元素分类。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 由会话摘要构建森林。
+			 * @param {Array<object>} summaries 宿主摘要（两种形状皆可，内部会规范化）
+			 * @param {object} [opts]
+			 * @param {string} [opts.currentId] 宿主当前会话 id（用于"当前对话"标记）
+			 * @returns {{roots:Array, rows:Array, byId:Object, cycles:string[], lineage:boolean}}
+			 *   rows 为渲染序（深度优先，父在前），每行含 `depth` / `x` / `y` / `kind` / `state` / `stateSource`
+			 */
+			function buildBranchTree(summaries, opts = {}) {
+				const list = (Array.isArray(summaries) ? summaries : []).map(normalizeSummary).filter(Boolean);
+				const byId = new Map();
+				for (const s of list) byId.set(s.sessionId, s);
+			
+				const children = new Map();
+				const roots = [];
+				for (const s of list) {
+					const pid = s.parentSessionId;
+					// 父不存在（父会话被删 / 属于别的账号）⇒ 当成根，而不是丢弃
+					if (pid !== undefined && byId.has(pid)) {
+						const arr = children.get(pid) || [];
+						arr.push(s);
+						children.set(pid, arr);
+					} else roots.push(s);
+				}
+			
+				const rows = [];
+				const visited = new Set();
+				const cycles = [];
+				const walk = (s, depth, slotY) => {
+					if (visited.has(s.sessionId)) { cycles.push(s.sessionId); return; }
+					visited.add(s.sessionId);
+					const childrenCount = (children.get(s.sessionId) || []).length;
+					const parentMissing = Boolean(s.parentSessionId) && !byId.has(s.parentSessionId);
+					const row = {
+						sessionId: s.sessionId,
+						parentSessionId: s.parentSessionId,
+						parentMissing,
+						title: s.title,
+						depth,
+						x: LAYOUT.x0 + depth * LAYOUT.dx,
+						y: LAYOUT.y0 + slotY * LAYOUT.dy,
+						w: LAYOUT.nodeW, h: LAYOUT.nodeH,
+						childrenCount,
+						// 宿主真值透传（undefined 表示"宿主没说"，不是 false）
+						running: s.running, completed: s.completed, blank: s.blank,
+						updatedAt: s.updatedAt, agentPreset: s.agentPreset, origin: s.origin,
+						seedLength: s.seedLength, pending: s.pending,
+						isCurrent: opts.currentId !== undefined && s.sessionId === opts.currentId
+					};
+					row.kind = kindOfNode(depth, childrenCount);
+					row.state = stateOfRow(row);
+					row.stateSource = hasHostState(row) ? "host" : "inferred";
+					rows.push(row);
+					const kids = children.get(s.sessionId) || [];
+					let i = 0;
+					for (const kid of kids) { walk(kid, depth + 1, slotY + i + 1); i += 1; }
+				};
+				let slot = 0;
+				for (const root of roots) { walk(root, 0, slot); slot += 1; }
+				// 未访问到的（环内节点）也输出，避免"静默消失"
+				for (const s of list) if (!visited.has(s.sessionId)) { walk(s, 0, slot); slot += 1; }
+			
+				// 边：父 → 子（仅当父在 byId 内）
+				const edges = rows
+					.filter((r) => r.parentSessionId && byId.has(r.parentSessionId))
+					.map((r) => ({ from: r.parentSessionId, to: r.sessionId }));
+			
+				// 血缘是否可用：存在任一条真实父子边即为真（降级通道的边是伪造的 ws: 父）
+				const lineage = edges.some((e) => !String(e.from).startsWith("ws:"));
+			
+				return { roots, rows, edges, byId: Object.fromEntries(byId), cycles, lineage };
+			}
+			
+			/**
+			 * 折叠过滤（纯函数）。
+			 * @param {Array} rows buildBranchTree().rows
+			 * @param {Set<string>|Array<string>} collapsed 被折叠的节点 id 集合
+			 * @returns {Array} 可见行（顺序不变）
+			 */
+			function visibleRows(rows, collapsed) {
+				const set = collapsed instanceof Set ? collapsed : new Set(collapsed || []);
+				if (!set.size) return rows;
+				const hidden = new Set();
+				const out = [];
+				for (const r of rows) {
+					if (r.parentSessionId && hidden.has(r.parentSessionId)) { hidden.add(r.sessionId); continue; }
+					if (set.has(r.sessionId)) hidden.add(r.sessionId);
+					out.push(r);
+				}
+				return out;
+			}
+			
+			/**
+			 * 祖先链（纯函数）—— 选中节点到根的路径，用于连线高亮。
+			 * @returns {Set<string>} 链上节点 id（含自身）
+			 */
+			function ancestorChain(rows, id) {
+				const set = new Set();
+				if (!id) return set;
+				const byId = new Map(rows.map((r) => [r.sessionId, r]));
+				let cur = byId.get(id);
+				let guard = 0;
+				while (cur && guard < 200) {
+					set.add(cur.sessionId);
+					cur = cur.parentSessionId ? byId.get(cur.parentSessionId) : undefined;
+					guard += 1;
+				}
+				return set;
+			}
+			
+			/** 包围盒（纯函数）—— 适应视野与小地图共用 */
+			function treeBounds(rows) {
+				if (!rows || !rows.length) return { x: 0, y: 0, w: LAYOUT.minW, h: LAYOUT.minH };
+				let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+				for (const r of rows) {
+					minX = Math.min(minX, r.x);
+					minY = Math.min(minY, r.y);
+					maxX = Math.max(maxX, r.x + LAYOUT.nodeW);
+					maxY = Math.max(maxY, r.y + LAYOUT.nodeH);
+				}
+				const x = Math.max(0, minX - LAYOUT.pad);
+				const y = Math.max(0, minY - LAYOUT.pad);
+				return {
+					x, y,
+					w: Math.min(LAYOUT.minW, Math.max(maxX + LAYOUT.pad - x, 320)),
+					h: Math.min(LAYOUT.minH, Math.max(maxY + LAYOUT.pad - y, 240))
+				};
+			}
+			
+			/** 命中过滤（纯函数）：标题 / 会话号 子串匹配（大小写不敏感） */
+			function matchRows(rows, q) {
+				const s = String(q || "").trim().toLowerCase();
+				if (!s) return null;
+				return new Set(rows.filter((r) => {
+					const t = String(r.title || "").toLowerCase();
+					const id = String(r.sessionId || "").toLowerCase();
+					return t.indexOf(s) >= 0 || id.indexOf(s) >= 0;
+				}).map((r) => r.sessionId));
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、数据源读取（A: ctx.sessions 优先 → B: discover 降级）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 从 cordis `ctx.sessions` 读出会话摘要数组 + 当前会话。
+			 *
+			 * 🔴 形状按宿主源码取证（`dsh-client-runtime/lib/client.js`）：
+			 *    `ctx.sessions.list.getSnapshot()` → `{ ids, current, byId }`，
+			 *    `byId[id] = { id, displayTitle, running, completed?, blank, updatedAt, parentId?, … }`。
+			 *
+			 * 🔴 **为什么有两级读取**（2026-09-12 定位到的静默降级根因）：
+			 *    cordis 的 `ctx.<service>` 是 Proxy 陷阱，**未在 `inject` 声明的服务会直接抛错**
+			 *    （`@deepseek-ai/cordis/lib/index.js:675` → `cannot get property "sessions" without inject`）。
+			 *    旧实现外层一个 try/catch 把这句话吞了并返回 null，于是**降级无声** ——
+			 *    界面上只看到"血缘不可用"，看不出是"我们自己没声明注入"。
+			 *    ⇒ 修法三层：① 产物 `exports.inject` 补 `"sessions"`（声明真实依赖）；
+			 *       ② 这里先试 `ctx.sessions`，再退到 `ctx.get("sessions")`
+			 *          （cordis 的 `get()` 是**不要求 inject** 的读取口，
+			 *           见同文件 `:755` "Read a service from the store without the inject requirement"）；
+			 *       ③ 逐级写 `diag`，让原因能显示在 UI 的 title 上。
+			 *
+			 * @param {object} ctx
+			 * @param {object} [diag] 出参：逐级失败原因（降级不再无声）
+			 * @returns {Array|null}
+			 */
+			function readSessionsFromCtx(ctx, diag) {
+				const d = diag || {};
+				d.hasCtx = Boolean(ctx);
+				if (!ctx) { d.error = "apply(ctx) 未收到 ctx"; return null; }
+				try {
+					let svc = null;
+					try {
+						svc = ctx.sessions;                     // 路径 A：已声明 inject ⇒ 可用
+					} catch (e) {
+						d.injectMiss = String((e && e.message) || e);   // 记下"未声明 inject"这句话本身
+					}
+					if (!svc && typeof ctx.get === "function") {
+						try { svc = ctx.get("sessions"); d.viaGet = true; } catch (e) { d.getError = String((e && e.message) || e); }
+					}
+					d.hasSessions = Boolean(svc);
+					if (!svc) { d.error = d.injectMiss || d.getError || "ctx.sessions 不可用（也未通过 ctx.get 取得）"; return null; }
+					const list = svc.list;
+					d.hasList = Boolean(list);
+					if (!list) { d.error = "ctx.sessions.list 不可用"; return null; }
+					d.hasGetSnapshot = typeof list.getSnapshot === "function";
+					if (!d.hasGetSnapshot) { d.error = "ctx.sessions.list.getSnapshot 不是函数"; return null; }
+					const snap = list.getSnapshot();
+					d.snapKeys = snap && typeof snap === "object" ? Object.keys(snap).slice(0, 8) : null;
+					if (!snap) { d.error = "getSnapshot() 返回空"; return null; }
+					d.currentId = snap.current;
+					let arr = null;
+					if (snap.byId && typeof snap.byId === "object") arr = Object.keys(snap.byId).map((k) => snap.byId[k]).filter(Boolean);
+					else if (Array.isArray(snap.list)) arr = snap.list;
+					else if (Array.isArray(snap)) arr = snap;
+					d.rawCount = arr ? arr.length : 0;
+					if (!arr || !arr.length) { d.error = "快照里没有会话"; return null; }
+					d.sampleKeys = arr[0] ? Object.keys(arr[0]).slice(0, 12) : null;
+					return arr;
+				} catch (e) {
+					d.error = "读取 ctx.sessions 抛错：" + ((e && e.message) || e);
+					return null;
+				}
+			}
+			
+			/** 降级：由 discover 的 workspaces/sessions 造"无血缘"的平铺树 */
+			async function fallbackFromDiscover() {
+				try {
+					const d = await discover();
+					const summaries = [];
+					for (const ws of d.workspaces || []) {
+						const wsId = "ws:" + ws.id;
+						summaries.push({ sessionId: wsId, title: ws.name, parentSessionId: undefined, isWorkspace: true });
+						for (const sid of ws.sessionIds || []) {
+							summaries.push({ sessionId: sid, title: sessionLabel(sid), parentSessionId: wsId });
+						}
+					}
+					return { summaries, source: d.source, lineage: false };
+				} catch (e) {
+					return { summaries: [], source: "none", lineage: false };
+				}
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、状态与订阅
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			let ctxRef = null;
+			let cache = { tree: null, source: "none", lineage: false, at: 0, diag: { error: "尚未刷新" } };
+			const listeners = new Set();
+			
+			function notify() { for (const fn of listeners) { try { fn(cache); } catch (e) { /* 忽略单个订阅者异常 */ } } }
+			function subscribeBranch(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+			function getBranchSnapshot() { return cache; }
+			
+			/** 降级说明（给 UI 挂 title 用；成功时返回空串） */
+			function degradationReason() {
+				if (cache.source === "none") return "尚无数据（未刷新）";
+				if (cache.lineage) return "";
+				const d = cache.diag || {};
+				return d.error ? String(d.error) : "宿主未提供 parentId（该工作区确实没有分支）";
+			}
+			
+			/**
+			 * 刷新血缘树。
+			 * @returns {Promise<{tree:object, source:string, lineage:boolean, diag:object}>}
+			 */
+			async function refreshBranchTree() {
+				const diag = {};
+				const fromCtx = readSessionsFromCtx(ctxRef, diag);
+				if (fromCtx && fromCtx.length) {
+					const tree = buildBranchTree(fromCtx, { currentId: diag.currentId });
+					cache = { tree, source: "ctx.sessions", lineage: tree.lineage, at: Date.now(), diag };
+				} else {
+					const fb = await fallbackFromDiscover();
+					const tree = buildBranchTree(fb.summaries);
+					cache = { tree, source: fb.source, lineage: false, at: Date.now(), diag };
+				}
+				notify();
+				return cache;
+			}
+			
+			/**
+			 * 读"宿主当前会话 id"（**不重建树**，只读快照的一个字段）。
+			 *
+			 * 🔴 为什么需要它（用户原文）：「我点击左侧，点入不同的对话切进去就是和当前对话
+			 *    有关的流转信息」—— 宿主在左栏点会话时**不会**通知插件（没有事件通道），
+			 *    而 `buildBranchTree` 的 `isCurrent` 只在构建那一刻成立。
+			 *    ⇒ 只能轮询这一个字段（同步、单字段读取，代价可忽略），
+			 *      变化时通知订阅者，让右侧面板与流转列表跟着切。
+			 * @returns {string|null}
+			 */
+			function currentSessionId() {
+				const svc = sessionsService();
+				if (!svc || !svc.list || typeof svc.list.getSnapshot !== "function") return null;
+				try {
+					const s = svc.list.getSnapshot();
+					return s && s.current ? String(s.current) : null;
+				} catch (e) { return null; }
+			}
+			
+			let currentTimer = null;
+			const currentWatchers = new Set();
+			
+			/**
+			 * 观察"宿主当前会话"变化（**唯一的跟随通道**）。
+			 * 首次订阅立即回调一次当前值（订阅者不必自己先读一次 —— 这是上一轮
+			 * "先 refresh 后 subscribe ⇒ 永远停在初始快照"那类事故的固化防线）。
+			 * @param {(id:string|null)=>void} cb
+			 * @param {number} [ms] 轮询间隔，默认 800ms
+			 * @returns {() => void} 取消订阅（最后一个订阅者退出时自动停表）
+			 */
+			function watchCurrentSession(cb, ms) {
+				if (typeof cb !== "function") return () => { };
+				currentWatchers.add(cb);
+				if (!currentTimer) {
+					let last = currentSessionId();
+					currentTimer = setInterval(() => {
+						const cur = currentSessionId();
+						if (cur === last) return;
+						last = cur;
+						for (const fn of currentWatchers) { try { fn(cur); } catch (e) { /* 单个订阅者异常不影响其他 */ } }
+					}, Math.max(300, Number(ms) || 800));
+					if (currentTimer && typeof currentTimer.unref === "function") currentTimer.unref();
+				}
+				try { cb(currentSessionId()); } catch (e) { /* 首次回调异常不阻断订阅 */ }
+				return () => {
+					currentWatchers.delete(cb);
+					if (!currentWatchers.size && currentTimer) { clearInterval(currentTimer); currentTimer = null; }
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、动作面（只在有真实宿主接口时暴露 —— 不做"点了只弹 toast"）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 取 sessions 服务（两级：`ctx.sessions` 优先 → `ctx.get("sessions")` 兜底）。
+			 * 失败返回 null，**不抛** —— 调用方一律以"能力不可用"处理并给出原因。
+			 * （为什么必须两级：见 readSessionsFromCtx 的 🔴 段）
+			 */
+			function sessionsService() {
+				if (!ctxRef) return null;
+				try { const s = ctxRef.sessions; if (s) return s; } catch (e) { /* 未声明 inject ⇒ 落到 ctx.get */ }
+				try {
+					if (typeof ctxRef.get === "function") return ctxRef.get("sessions") || null;
+				} catch (e) { /* 两级都不可用 */ }
+				return null;
+			}
+			
+			/**
+			 * 宿主能力探测（供 UI 决定菜单项 enabled）。
+			 * 🔴 判据写在返回值里，UI 直接照用，不各自 `typeof` 猜。
+			 */
+			function hostCapabilities() {
+				const svc = sessionsService();
+				return {
+					available: Boolean(svc),
+					open: Boolean(svc && typeof svc.open === "function"),
+					fork: Boolean(svc && typeof svc.fork === "function"),
+					create: Boolean(svc && typeof svc.create === "function"),
+					// 取证：SessionRuntime 成员表里**没有**合并 / 删除 ⇒ 恒 false，菜单据此禁用
+					merge: false,
+					remove: false
+				};
+			}
+			
+			/** 打开某分支的原生对话（宿主 sessions.open） */
+			async function openSession(sessionId) {
+				const svc = sessionsService();
+				if (!svc || typeof svc.open !== "function") return { ok: false, reason: "宿主未提供 sessions.open" };
+				try {
+					svc.open(sessionId);
+					return { ok: true };
+				} catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+			}
+			
+			/** 从某分支 fork 出新分支（宿主 sessions.fork），成功后立即刷新血缘 */
+			async function forkBranch(sessionId) {
+				const svc = sessionsService();
+				if (!svc || typeof svc.fork !== "function") return { ok: false, reason: "宿主未提供 sessions.fork" };
+				try {
+					const res = await svc.fork({ sessionId });
+					await refreshBranchTree();
+					const childId = res && res.ok && res.value ? res.value.sessionId : undefined;
+					if (childId) return { ok: true, sessionId: childId };
+					return { ok: false, reason: (res && res.error && res.error.message) || "宿主未返回子会话 id" };
+				} catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、全局契约
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 安装全局契约并绑定 ctx（由 client-entry 的 apply 调用） */
+			function installBranchTreeApi(ctx) {
+				ctxRef = ctx || null;
+				const api = {
+					LAYOUT, buildBranchTree, normalizeSummary, visibleRows, ancestorChain, treeBounds, matchRows,
+					readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,
+					degradationReason, hostCapabilities, openSession, forkBranch,
+					currentSessionId, watchCurrentSession
+				};
+				if (typeof window !== "undefined") window.__dshBranchTree = api;
+				return api;
+			}
+			
+			exports.LAYOUT = LAYOUT;
+			exports.normalizeSummary = normalizeSummary;
+			exports.buildBranchTree = buildBranchTree;
+			exports.visibleRows = visibleRows;
+			exports.ancestorChain = ancestorChain;
+			exports.treeBounds = treeBounds;
+			exports.matchRows = matchRows;
+			exports.readSessionsFromCtx = readSessionsFromCtx;
+			exports.subscribeBranch = subscribeBranch;
+			exports.getBranchSnapshot = getBranchSnapshot;
+			exports.degradationReason = degradationReason;
+			exports.refreshBranchTree = refreshBranchTree;
+			exports.currentSessionId = currentSessionId;
+			exports.watchCurrentSession = watchCurrentSession;
+			exports.hostCapabilities = hostCapabilities;
+			exports.openSession = openSession;
+			exports.forkBranch = forkBranch;
+			exports.installBranchTreeApi = installBranchTreeApi;
+		};
+
+		// ── logic/mindmap-render.js ──
+		__defs["logic/mindmap-render.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：导图渲染派生（**纯函数，不依赖 React**）
+			 * 引用：—
+			 * 上游：components/MindMap.js
+			 * 下游：logic/branch-tree.js, store/mindmap-schema.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/mindmap-render.js — 导图渲染派生（**纯函数，不依赖 React**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 F（思维导图元素库）】
+			 *  上游     components/MindMap.js（渲染层只做布局，不做几何与文案运算）
+			 *  下游     store/mindmap-schema.js（元素词汇表）· logic/branch-tree.js（LAYOUT）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 为什么把这几行从组件里搬出来（不是洁癖，是**可测性**）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  组件文件 import 了 `react`，而 react 是**平台外置模块**（ADR-001，不进 bundle、
+			 *  Node 侧也不装）⇒ 只要这些纯函数留在组件里，离线测试就 import 不进组件文件，
+			 *  于是"连线是主干还是分支""徽标取不到时写什么"这类**纯逻辑**只能靠真机 e2e 验，
+			 *  慢且脆。搬到这里之后，`scripts/test-mindmap-logic.mjs` 可以一秒跑完。
+			 *
+			 *  ⚠️ 本文件**不得** import react / react-dom（会破坏上面的可测性）。
+			 */
+			
+			const { LAYOUT } = __m("logic/branch-tree.js");
+			const { EDGE_KINDS, NODE_KINDS, STATE_KINDS, marksOfRow } = __m("store/mindmap-schema.js");
+			
+			/**
+			 * 连线路径（三次贝塞尔 / 直角折线两种，由个性化设定切换）。
+			 * 🔴 用曲线而不是直线：血缘树的子节点在纵向上是**阶梯**排列的，直线会在分叉处
+			 *    互相穿插（三条线挤在一个交点），曲线让"哪条线进哪个节点"一眼可辨。
+			 *    「折线」档是为偏好工程感的用户准备的（个性化设定里的 edge=elbow）。
+			 * ⚠️ 两个端点**必须从实际行列坐标算**（节点可被用户拖动），不能再用 LAYOUT 常量拼 ——
+			 *    否则拖动之后连线还挂在原位。
+			 * @param {object} a 父行（含 x / y）
+			 * @param {object} b 子行
+			 * @param {number} depth 子行深度（≤1 = 主干，其余 = 分支）
+			 * @param {boolean} chain 是否在选中链上
+			 * @param {"curve"|"elbow"} [style] 个性化设定里的连线样式
+			 * @returns {{d:string, kind:string, x1:number, y1:number, x2:number, y2:number}}
+			 */
+			function edgePathFor(a, b, depth, chain, style) {
+				const x1 = a.x + LAYOUT.nodeW;
+				const y1 = a.y + LAYOUT.nodeH / 2;
+				const x2 = b.x;
+				const y2 = b.y + LAYOUT.nodeH / 2;
+				const mx = x1 + (x2 - x1) / 2;
+				const kind = chain ? "chain" : (depth <= 1 ? "trunk" : "child");
+				const d = style === "elbow"
+					? "M" + x1 + "," + y1 + " L" + mx + "," + y1 + " L" + mx + "," + y2 + " L" + x2 + "," + y2
+					: "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
+				return { d, kind, x1, y1, x2, y2 };
+			}
+			
+			/**
+			 * 把用户拖动的位置叠加到行上（**纯函数**）。
+			 * 🔴 拖动只改**画面位置**，绝不改 `parentSessionId` ——
+			 *    血缘由宿主 fork 时固化，插件侧无接口可改（元素库 E18 明确登记为不做）。
+			 * @param {Array} rows buildBranchTree().rows
+			 * @param {Object<string,{x:number,y:number}>} posMap 用户摆放的位置（按 sessionId）
+			 * @returns {Array} 新行数组（未摆放的行原样返回，不复制也安全）
+			 */
+			function applyNodePos(rows, posMap) {
+				if (!posMap || !Object.keys(posMap).length) return rows;
+				return (rows || []).map((r) => {
+					const p = posMap[r.sessionId];
+					if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return r;
+					return { ...r, x: p.x, y: p.y, moved: true };
+				});
+			}
+			
+			/** 拖动位移 → 新坐标（把屏幕像素位移换算回画布坐标；含边界夹紧，防拖出画布丢失） */
+			function draggedPos(origin, dxScreen, dyScreen, zoom, bounds) {
+				const k = Number(zoom) > 0 ? Number(zoom) : 1;
+				const w = (bounds && bounds.w) || 4000, h = (bounds && bounds.h) || 3000;
+				const x = Math.max(0, Math.min(w, Math.round((origin.x + dxScreen / k) * 10) / 10));
+				const y = Math.max(0, Math.min(h, Math.round((origin.y + dyScreen / k) * 10) / 10));
+				return { x, y };
+			}
+			
+			/** 框上的小控件样式（用 CSS 变量消费个性化设定；禁用态给明确视觉） */
+			function nodeBtnStyle(enabled, tone) {
+				return {
+					flex: "0 0 auto", display: "inline-flex", alignItems: "center", justifyContent: "center",
+					width: 17, height: 17, borderRadius: "var(--dp-radius-sm, 5px)", cursor: enabled ? "pointer" : "not-allowed",
+					fontSize: 10.5, lineHeight: 1, opacity: enabled ? 1 : 0.4,
+					border: "1px solid " + (tone ? "var(--dp-ac2-line, rgba(137,87,229,.45))" : "var(--dp-line, #31343a)"),
+					background: tone ? "var(--dp-ac2-soft, rgba(137,87,229,.16))" : "rgba(255,255,255,.05)",
+					color: tone ? "var(--dp-ac2, #8957e5)" : "var(--dp-t2, #c3c8ce)"
+				};
+			}
+			
+			/** 连线样式（从 EDGE_KINDS 取，单一真相源；未知类型回落 child） */
+			function edgeStyleOf(kind) {
+				const e = EDGE_KINDS[kind] || EDGE_KINDS.child;
+				return {
+					stroke: e.stroke, strokeWidth: e.width, opacity: e.opacity, fill: "none",
+					strokeDasharray: e.dash || undefined, strokeLinecap: "round"
+				};
+			}
+			
+			/**
+			 * 节点第二行文案。
+			 * 🔴 取不到任何有据徽标时**不写"未知"**，退回「层 N」——
+			 *    深度是从血缘算出来的事实，而"未知"是一句没有信息量的话。
+			 */
+			function metaLineOf(row) {
+				const marks = marksOfRow(row).map((m) => m.text);
+				if (marks.length) return marks.join(" · ");
+				return "层 " + row.depth;
+			}
+			
+			/** 节点类型显示名（未知类型回落叶子，不抛） */
+			function kindLabelOf(row) {
+				return (NODE_KINDS[row && row.kind] || NODE_KINDS.leaf).label;
+			}
+			
+			/** 状态点的可读说明（挂 title —— 否则用户只看到一个颜色点，不知道它是什么意思） */
+			function stateTitleOf(row) {
+				const s = STATE_KINDS[row.state] || STATE_KINDS.idle;
+				const src = row.stateSource === "host" ? "宿主快照" : "推断（血缘降级）";
+				return s.label + " —— 判据：" + s.from + " ｜ 来源：" + src;
+			}
+			
+			/** 悬浮工具条按钮样式（小方块，hover 由宿主浏览器默认态承担） */
+			const HOVER_BTN_STYLE = Object.freeze({
+				fontSize: 11.5, color: "#c3c8ce", cursor: "pointer", padding: "1px 4px", borderRadius: 3,
+				background: "rgba(255,255,255,.05)", lineHeight: 1.4
+			});
+			
+			exports.edgePathFor = edgePathFor;
+			exports.applyNodePos = applyNodePos;
+			exports.draggedPos = draggedPos;
+			exports.nodeBtnStyle = nodeBtnStyle;
+			exports.edgeStyleOf = edgeStyleOf;
+			exports.metaLineOf = metaLineOf;
+			exports.kindLabelOf = kindLabelOf;
+			exports.stateTitleOf = stateTitleOf;
+			exports.HOVER_BTN_STYLE = HOVER_BTN_STYLE;
+		};
+
+		// ── logic/flow.js ──
+		__defs["logic/flow.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/flow.js — 四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  需求原文（用户）：「最后打通总监和正常对话还有思维导图还有设计图之间的关联，
+			 *   保证同一个消息能在上面几个维度进行流转。我点击左侧，点入不同的对话切进去
+			 *   就是和当前对话有关的流转信息」
+			 *
+			 *  ⇒ 落地口径：
+			 *     一条**流转条目**（flow）= 一条消息 + 它走过哪些维度的足迹（`trail`）。
+			 *     四个界面**读写同一份数据**，于是"同一消息在四个维度流转"是可查证的，
+			 *     而不是四份互相不知道的影子状态。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么必须有这一层（而不是各界面各存一份）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  已有三份状态，但它们**互不相通**：
+			 *    · `store/plugin-db.js`  总监消息（按 nodeId 存，只有总监维度的）
+			 *    · 宿主原生会话          真实对话（在宿主里，插件只能读不能写历史）
+			 *    · 设计图底部对话（D6）  只处理设计图
+			 *  ⇒ 用户"发一句话"这件事在三个地方各记各的，看不出"这句话后来去哪了"。
+			 *  本层把「谁发的 / 发到哪 / 走到第几维 / 现在是什么状态」收敛成一份可追踪的轨迹。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 两条纪律
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **不静默分发**：`push()` 只登记"这句话产生了"，`move()` 才记"被送往某维"，
+			 *     且 UI 必须在该维度**给出可见反馈**（与 logic/routing.js 的确认闸门同一条纪律）。
+			 *  ② **不编内容**：`currentTaskOf()` 的每个分支都在 `source` 字段里写明
+			 *     "这个结论来自哪里"（host.running / host.pendingInteraction / flow.trail /
+			 *     plugin-db / none）。读不到就说读不到，不拿标题或深度顶替。
+			 *
+			 * ⚠️ 本文件**不 import react**（纯函数 + 持久化 store）⇒ 离线单测可直接 import。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、四个维度（顺序即界面顺序：总监 | 对话 | 思维导图 | 设计图）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const DIM = Object.freeze({
+				DIRECTOR: "director",
+				CHAT: "chat",
+				MINDMAP: "mindmap",
+				DESIGN: "design"
+			});
+			
+			/** 维度顺序（与用户口中的顺序一致："总监和正常对话还有思维导图还有设计图"） */
+			const DIM_ORDER = Object.freeze([DIM.DIRECTOR, DIM.CHAT, DIM.MINDMAP, DIM.DESIGN]);
+			
+			const DIM_LABEL = Object.freeze({
+				[DIM.DIRECTOR]: "总监",
+				[DIM.CHAT]: "对话",
+				[DIM.MINDMAP]: "思维导图",
+				[DIM.DESIGN]: "设计图"
+			});
+			
+			const DIM_ICON = Object.freeze({
+				[DIM.DIRECTOR]: "◆",
+				[DIM.CHAT]: "💬",
+				[DIM.MINDMAP]: "🧠",
+				[DIM.DESIGN]: "🖌"
+			});
+			
+			/** 落点（这条消息最终被送去哪；与 logic/routing.js 的 DESTINATION 语义对齐但独立计数） */
+			const FLOW_STATUS = Object.freeze({
+				OPEN: "open",        // 已登记，尚未确认去向
+				ROUTED: "routed",    // 已确认去向，已送达
+				BLOCKED: "blocked",  // 有阻塞（宿主接口不可用 / 目标不存在）
+				DONE: "done"         // 已收口（对应任务已完成）
+			});
+			
+			const FLOW_STATUS_LABEL = Object.freeze({
+				[FLOW_STATUS.OPEN]: "待确认去向",
+				[FLOW_STATUS.ROUTED]: "已送达",
+				[FLOW_STATUS.BLOCKED]: "有阻塞",
+				[FLOW_STATUS.DONE]: "已收口"
+			});
+			
+			/** 宿主的三种 pendingInteraction（与 store/mindmap-schema.js 的取值域一致） */
+			const PENDING_LABEL = Object.freeze({
+				approval: "等待批准",
+				question: "等待回答",
+				"plan-review": "等待方案评审"
+			});
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、纯函数（可离线断言）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 稳定短 id（不依赖 Math.random —— 项目纪律：禁用非确定性随机） */
+			function flowId(seed) {
+				const s = String(seed == null ? "" : seed);
+				let h1 = 2166136261, h2 = 2246822519;
+				for (let i = 0; i < s.length; i++) {
+					const c = s.charCodeAt(i);
+					h1 = (h1 ^ c) >>> 0; h1 = Math.imul(h1, 16777619) >>> 0;
+					h2 = (h2 + c * (i + 3)) >>> 0; h2 = Math.imul(h2, 3266489917) >>> 0;
+				}
+				return "fl" + h1.toString(36) + h2.toString(36).slice(0, 4);
+			}
+			
+			/** 文案截断（列表里显示用；不改变原文本） */
+			function clip(text, n) {
+				const s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+				const max = n || 60;
+				return s.length > max ? s.slice(0, max - 1) + "…" : s;
+			}
+			
+			/**
+			 * 登记一条新流转。
+			 * @param {{text:string, origin?:string, sessionId?:string, at?:number, target?:string, note?:string}} input
+			 * @returns {object} flow
+			 */
+			function makeFlow(input = {}) {
+				const text = String(input.text == null ? "" : input.text).trim();
+				const origin = DIM_ORDER.indexOf(input.origin) >= 0 ? input.origin : DIM.DIRECTOR;
+				const sessionId = input.sessionId === undefined || input.sessionId === null ? null : String(input.sessionId);
+				const at = typeof input.at === "number" ? input.at : Date.now();
+				return {
+					flowId: flowId(origin + "|" + text + "|" + at),
+					text,
+					origin,
+					sessionId,
+					at,
+					status: FLOW_STATUS.OPEN,
+					target: input.target || null,
+					trail: [{ dim: origin, at, note: input.note || "登记" }]
+				};
+			}
+			
+			/**
+			 * 让一条流转"走到"某一维（追加足迹；**不改** origin，保证"从哪来"可追溯）。
+			 * @param {object} flow
+			 * @param {string} dim
+			 * @param {string} [note]
+			 * @param {object} [extra] 可带 { status, target }
+			 * @returns {object} 新 flow（不原地改，便于对比）
+			 */
+			function hopFlow(flow, dim, note, extra) {
+				if (!flow) return null;
+				if (DIM_ORDER.indexOf(dim) < 0) return flow;
+				const at = (extra && typeof extra.at === "number") ? extra.at : Date.now();
+				const next = {
+					...flow,
+					status: (extra && extra.status) || flow.status,
+					target: (extra && extra.target) !== undefined ? extra.target : flow.target,
+					trail: (flow.trail || []).concat([{ dim, at, note: String(note || "") }])
+				};
+				return next;
+			}
+			
+			/** 这条流转走过哪些维度（去重、按界面顺序返回） */
+			function flowDims(flow) {
+				const seen = new Set((flow && flow.trail ? flow.trail : []).map((t) => t.dim));
+				return DIM_ORDER.filter((d) => seen.has(d));
+			}
+			
+			/** 人类可读的流转线：「总监 → 对话 → 思维导图」 */
+			function flowLine(flow, sep) {
+				const dims = flowDims(flow);
+				if (!dims.length) return "—";
+				return dims.map((d) => DIM_LABEL[d]).join(sep || " → ");
+			}
+			
+			/** 最后一次足迹（UI 上"现在在哪一维"） */
+			function lastHop(flow) {
+				const t = flow && flow.trail ? flow.trail : [];
+				return t.length ? t[t.length - 1] : null;
+			}
+			
+			/**
+			 * 最后活动时刻 —— 登记时刻与**全部足迹时刻**取最大。
+			 *
+			 * 🔴 为什么需要它（本闸门 B28 暴露的真实语义缺口）：
+			 *   `flow.at` 只是**登记时刻**（makeFlow 时写下，hopFlow 不再改它，因为它是"从哪来"的一部分）。
+			 *   于是一条昨天登记、今天才被推进到设计图的流转，
+			 *   `at` 仍是昨天 ⇒ 它会被排到"更晚登记但早已僵住"的条目**之后**，
+			 *   而用户看到的是「点左侧切进来、面板最上面写着要干的事」——
+			 *   他最关心的是**最近有动静的那条**，不是最近新建的那条。
+			 *   ⇒ 排序与「现在在做的事」的时间戳都改用本函数；`at` 保留原义（登记时刻）不动。
+			 */
+			function lastTouchOf(flow) {
+				if (!flow) return 0;
+				const t = flow.trail || [];
+				let m = typeof flow.at === "number" ? flow.at : 0;
+				for (const h of t) if (typeof h.at === "number" && h.at > m) m = h.at;
+				return m;
+			}
+			
+			/** 某会话的全部流转（按**最后活动**升序；sessionId 为 null 的条目属"全域"） */
+			function flowsOf(flows, sessionId) {
+				const sid = sessionId === undefined || sessionId === null ? null : String(sessionId);
+				return (Array.isArray(flows) ? flows : [])
+					.filter((f) => (f.sessionId === null ? sid === null : f.sessionId === sid))
+					.slice()
+					.sort((a, b) => lastTouchOf(a) - lastTouchOf(b));
+			}
+			
+			/** 某会话最新一条流转（无则 null） */
+			function latestFlow(flows, sessionId) {
+				const list = flowsOf(flows, sessionId);
+				return list.length ? list[list.length - 1] : null;
+			}
+			
+			/**
+			 * 「现在在做的事」—— 用户原文：「点击框在右侧展开对话，对话的最上面是
+			 * 现在正在做的事情，也就是我发给或者总监发给对话的信息，对话整理出目前
+			 * 自己在做的什么事情，我要在思维导图界面能看到」。
+			 *
+			 * 🔴 优先级固定（先"宿主真值"，后"我们自己记的"）：
+			 *     ① 宿主 `pendingInteraction` → 真的在等人（最强信号）
+			 *     ② 宿主 `running === true`  → 真的在跑
+			 *     ③ 最新流转               → 我们确实登记过的那句话
+			 *     ④ 总监消息（plugin-db）   → 总监维度的最后一句
+			 *     ⑤ 无                     → 如实报"待命 · 尚无流转"
+			 *   每个分支都带 `source`，UI 直接显示出来 ⇒ 读不到时用户知道是"没数据"，
+			 *   而不是以为界面坏了（这是本项目反复吃过亏的地方）。
+			 *
+			 * @param {{node?:object, flow?:object, flowList?:Array, msgs?:Array}} input
+			 * @returns {{title:string, detail:string, dim:string|null, at:number|null, tone:string, source:string, hops:number}}
+			 */
+			function currentTaskOf(input = {}) {
+				const node = input.node || null;
+				const flow = input.flow || null;
+				const flowList = Array.isArray(input.flowList) ? input.flowList : [];
+				const msgs = Array.isArray(input.msgs) ? input.msgs : [];
+				const hops = flowList.length;
+				const last = flow ? lastHop(flow) : null;
+				const trailNote = flow ? ("流转 " + hops + " 条 · " + flowLine(flow)) : "";
+			
+				if (node && node.pending) {
+					return {
+						title: "待你确认 —— " + (PENDING_LABEL[node.pending] || node.pending),
+						detail: flow ? clip(flow.text, 100) : "宿主报告该会话有待处理交互（pendingInteraction）",
+						dim: last ? last.dim : DIM.CHAT, at: last ? last.at : null, tone: "warn",
+						source: "host.pendingInteraction", hops
+					};
+				}
+				if (node && node.running === true) {
+					return {
+						title: "正在执行",
+						detail: flow ? clip(flow.text, 100) : "宿主报告该会话 running（插件侧尚无流转记录）",
+						dim: last ? last.dim : DIM.CHAT, at: last ? last.at : null, tone: "run",
+						source: "host.running", hops
+					};
+				}
+				if (node && node.completed === true && !flow) {
+					return {
+						title: "该对话已收口",
+						detail: "宿主报告 completed，且插件侧无未闭合流转",
+						dim: null, at: null, tone: "done", source: "host.completed", hops
+					};
+				}
+				if (flow) {
+					return {
+						title: clip(flow.text, 90) || "（空文本流转）",
+						detail: trailNote + (flow.status === FLOW_STATUS.ROUTED ? " · 已送达" : " · " + (FLOW_STATUS_LABEL[flow.status] || flow.status)),
+						/* 时间戳用**最后一次足迹**的时刻（不是登记时刻）——
+						 * 面板最上面那句「现在在做的事」旁边显示的时间，若写着几小时前，
+						 * 用户会以为界面卡住了。见 lastTouchOf 头注。 */
+						dim: last ? last.dim : flow.origin, at: last ? last.at : flow.at, tone: "info",
+						source: "flow.trail", hops
+					};
+				}
+				if (msgs.length) {
+					const m = msgs[msgs.length - 1];
+					return {
+						title: clip(m.text, 90) || "（空消息）",
+						detail: "最近一条总监消息 · " + (m.kind || "note") + " · " + new Date(m.at || 0).toLocaleTimeString(),
+						dim: DIM.DIRECTOR, at: m.at || null, tone: "info", source: "plugin-db", hops
+					};
+				}
+				return {
+					title: "待命 · 尚无流转",
+					detail: node
+						? "宿主未报 running / pending，插件侧也没有该会话的流转记录"
+						: "没有选中会话：点左侧会话或导图里的任一个框",
+					dim: null, at: null, tone: "idle", source: node ? "host.idle" : "none", hops
+				};
+			}
+			
+			/** 汇总（给总监页 R2.5 / 顶栏徽章用） */
+			function flowStats(flows) {
+				const list = Array.isArray(flows) ? flows : [];
+				const byDim = {};
+				for (const d of DIM_ORDER) byDim[d] = 0;
+				let multiDim = 0;
+				for (const f of list) {
+					const dims = flowDims(f);
+					for (const d of dims) byDim[d] += 1;
+					if (dims.length > 1) multiDim += 1;
+				}
+				return {
+					total: list.length,
+					byDim,
+					multiDim,
+					open: list.filter((f) => f.status === FLOW_STATUS.OPEN).length,
+					routed: list.filter((f) => f.status === FLOW_STATUS.ROUTED).length
+				};
+			}
+			
+			/** 按会话聚合（给"点左侧切会话 → 只显示该会话的流转"用） */
+			function flowsBySession(flows) {
+				const map = new Map();
+				for (const f of Array.isArray(flows) ? flows : []) {
+					const k = f.sessionId === null ? "__global__" : f.sessionId;
+					if (!map.has(k)) map.set(k, []);
+					map.get(k).push(f);
+				}
+				return map;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、持久化 store（唯一写入口；订阅式，与 branch-tree 同一套写法）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const FLOW_KEY = "dsh.director.flow";
+			/** 上限：超出丢弃最旧的（防止 localStorage 无限膨胀） */
+			const FLOW_MAX = 200;
+			
+			function loadFlows() {
+				try {
+					const raw = typeof localStorage !== "undefined" ? localStorage.getItem(FLOW_KEY) : null;
+					if (!raw) return { flows: [], activeSessionId: null };
+					const p = JSON.parse(raw);
+					const flows = Array.isArray(p && p.flows) ? p.flows.filter((f) => f && f.flowId && Array.isArray(f.trail)) : [];
+					return { flows, activeSessionId: (p && p.activeSessionId) || null };
+				} catch (e) { return { flows: [], activeSessionId: null }; }
+			}
+			
+			let flowState = loadFlows();
+			const flowListeners = new Set();
+			
+			function persist() {
+				try {
+					if (typeof localStorage !== "undefined") localStorage.setItem(FLOW_KEY, JSON.stringify(flowState));
+				} catch (e) { /* 隐私模式 / 超配额：流转丢失不阻断功能 */ }
+			}
+			function notifyFlow() { for (const fn of flowListeners) { try { fn(flowState); } catch (e) { /* 忽略单个订阅者异常 */ } } }
+			
+			const flowStore = {
+				getState: () => flowState,
+				subscribe: (fn) => { flowListeners.add(fn); return () => flowListeners.delete(fn); },
+			
+				/** 登记一条流转（默认落在总监维度：用户先在总监说话） */
+				push: (text, opts = {}) => {
+					const f = makeFlow({ ...opts, text });
+					if (!f.text) return null;
+					const next = flowState.flows.concat([f]);
+					flowState = { ...flowState, flows: next.length > FLOW_MAX ? next.slice(next.length - FLOW_MAX) : next };
+					persist(); notifyFlow();
+					return f;
+				},
+			
+				/** 让某条流转"走到"下一维（并记下谁触发的） */
+				move: (id, dim, note, extra) => {
+					let moved = null;
+					flowState = {
+						...flowState,
+						flows: flowState.flows.map((f) => {
+							if (f.flowId !== id) return f;
+							moved = hopFlow(f, dim, note, extra);
+							return moved;
+						})
+					};
+					if (moved) { persist(); notifyFlow(); }
+					return moved;
+				},
+			
+				/** 直接改状态（收口 / 阻塞） */
+				setStatus: (id, status, target) => flowStore.move(id, (lastHop((flowState.flows.find((f) => f.flowId === id)) || {}) || {}).dim || DIM.DIRECTOR, "状态 → " + status, { status, target }),
+			
+				/** UI 当前正在看哪个会话（"点左侧切进去"时由组件写入） */
+				setActiveSession: (sessionId) => {
+					const sid = sessionId === undefined || sessionId === null ? null : String(sessionId);
+					if (flowState.activeSessionId === sid) return sid;
+					flowState = { ...flowState, activeSessionId: sid };
+					persist(); notifyFlow();
+					return sid;
+				},
+			
+				/** 测试 / 复位用 */
+				reset: () => { flowState = { flows: [], activeSessionId: null }; persist(); notifyFlow(); return true; },
+			
+				/* ── 查询（包一层，省得组件各自 import 纯函数） ── */
+				ofSession: (sessionId) => flowsOf(flowState.flows, sessionId),
+				latestOf: (sessionId) => latestFlow(flowState.flows, sessionId),
+				stats: () => flowStats(flowState.flows),
+				taskOf: (input) => currentTaskOf(input)
+			};
+			
+			/** 全局契约（调试 / e2e 用） */
+			function installFlowApi() {
+				const api = {
+					DIM, DIM_ORDER, DIM_LABEL, DIM_ICON, FLOW_STATUS, FLOW_STATUS_LABEL, PENDING_LABEL,
+					FLOW_KEY, FLOW_MAX,
+					flowId, clip, makeFlow, hopFlow, flowDims, flowLine, lastHop, lastTouchOf,
+					flowsOf, latestFlow, currentTaskOf, flowStats, flowsBySession,
+					store: flowStore
+				};
+				if (typeof window !== "undefined") window.__dshFlow = api;
+				return api;
+			}
+			
+			exports.DIM = DIM;
+			exports.DIM_ORDER = DIM_ORDER;
+			exports.DIM_LABEL = DIM_LABEL;
+			exports.DIM_ICON = DIM_ICON;
+			exports.FLOW_STATUS = FLOW_STATUS;
+			exports.FLOW_STATUS_LABEL = FLOW_STATUS_LABEL;
+			exports.PENDING_LABEL = PENDING_LABEL;
+			exports.flowId = flowId;
+			exports.clip = clip;
+			exports.makeFlow = makeFlow;
+			exports.hopFlow = hopFlow;
+			exports.flowDims = flowDims;
+			exports.flowLine = flowLine;
+			exports.lastHop = lastHop;
+			exports.lastTouchOf = lastTouchOf;
+			exports.flowsOf = flowsOf;
+			exports.latestFlow = latestFlow;
+			exports.currentTaskOf = currentTaskOf;
+			exports.flowStats = flowStats;
+			exports.flowsBySession = flowsBySession;
+			exports.FLOW_KEY = FLOW_KEY;
+			exports.FLOW_MAX = FLOW_MAX;
+			exports.flowStore = flowStore;
+			exports.installFlowApi = installFlowApi;
+		};
+
+		// ── components/NodeDetailPanel.js ──
+		__defs["components/NodeDetailPanel.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：导图右侧「该框的对话」面板
+			 * 引用：—
+			 * 上游：client-entry.js, components/MindMap.js
+			 * 下游：logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, store/mindmap-schema.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/NodeDetailPanel.js — 导图右侧「该框的对话」面板
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  需求原文（用户）：「然后点击框在右侧展开对话 对话的最上面是现在正在做的事情，
+			 *   也就是我发给或者总监发给对话的信息，对话整理出目前自己在做的什么事情，
+			 *   我要在思维导图界面能看到」
+			 *
+			 *  ⇒ 面板自上而下三段，顺序**不可调**：
+			 *     ① **现在在做的事**（logic/flow.js `currentTaskOf`）—— 必须最上面
+			 *     ② 跨维度流转时间线（这条消息走过总监 / 对话 / 导图 / 设计图的足迹）
+			 *     ③ 输入条 —— 「点到哪里往哪里输入」：输入落到**这个框对应的会话**
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 本面板最容易犯的错，以及怎么防
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **拿"标题"顶替"在做的事"**：`ROUTE` 一类的字段看起来像结论，其实只是路由决策。
+			 *     ⇒ 一律走 `currentTaskOf()`，它每个分支都带 `source`（host.running /
+			 *       host.pendingInteraction / flow.trail / plugin-db / none），UI 把 source 显示出来。
+			 *  ② **假装能读任意会话的对话内容**：宿主只暴露"当前会话"的原生对话 DOM。
+			 *     非当前会话**读不到** ⇒ 面板明确写"该框不是当前对话，原生内容读不到；
+			 *     下面是插件侧登记过的流转"，而不是显示空白让人以为没数据。
+			 *  ③ **输入静默丢失**：非当前会话时先把流转登记 + 打开该会话 + 写入原生输入框，
+			 *     每一步都有回读校验与可见反馈（`sendToChat` 自带写后回读）。
+			 *
+			 * ⚠️ 构建约束：react / react/jsx-runtime 为平台冻结模块（ADR-001），构建期外置。
+			 */
+			
+			const react = require("react");
+			const { currentTaskOf, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip } = __m("logic/flow.js");
+			const { openSession, currentSessionId } = __m("logic/branch-tree.js");
+			const { sendToChat, findComposer } = __m("bridge/chat-bridge.js");
+			const { listDirectorMessages } = __m("store/plugin-db.js");
+			const { STATE_KINDS, NODE_KINDS } = __m("store/mindmap-schema.js");
+			
+			const h = react.createElement;
+			const NODE_DETAIL_ID = "dsh-node-detail";
+			
+			const TONE = {
+				run: { bar: "var(--dp-ac, #2f6feb)", bg: "var(--dp-ac-soft, rgba(47,111,235,.16))", label: "执行中" },
+				warn: { bar: "var(--dp-ac2, #8943e5)", bg: "var(--dp-ac2-soft, rgba(137,87,229,.16))", label: "待确认" },
+				done: { bar: "#3fb950", bg: "rgba(63,185,80,.12)", label: "已收口" },
+				info: { bar: "#d29922", bg: "rgba(210,153,34,.12)", label: "有流转" },
+				idle: { bar: "var(--dp-line, #31343a)", bg: "rgba(255,255,255,.03)", label: "待命" }
+			};
+			
+			const S = {
+				wrap: {
+					borderLeft: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-1, #141519)",
+					display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, flex: "0 0 auto"
+				},
+				hd: {
+					display: "flex", alignItems: "center", gap: 6, padding: "calc(7px * var(--dp-density,1)) 9px",
+					borderBottom: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto"
+				},
+				body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 9, display: "flex", flexDirection: "column", gap: 8 },
+				now: (tone) => ({
+					border: "1px solid var(--dp-line, #31343a)", borderLeft: "3px solid " + TONE[tone].bar,
+					background: TONE[tone].bg, borderRadius: "var(--dp-radius, 8px)", padding: "7px 9px"
+				}),
+				nowT: { fontSize: "calc(12px * var(--dp-font,1))", fontWeight: 650, marginBottom: 3, wordBreak: "break-word", lineHeight: 1.5 },
+				nowD: { fontSize: "calc(11px * var(--dp-font,1))", color: "var(--dp-t2, #c3c8ce)", lineHeight: 1.55, wordBreak: "break-word" },
+				badge: {
+					fontSize: "calc(9.5px * var(--dp-font,1))", padding: "0 5px", borderRadius: "var(--dp-radius-sm, 5px)",
+					border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #1c1e23)", color: "var(--dp-t3, #8b9199)"
+				},
+				secT: {
+					fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", letterSpacing: ".4px",
+					display: "flex", alignItems: "center", gap: 5, marginBottom: 5
+				},
+				item: {
+					border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #1c1e23)",
+					borderRadius: "var(--dp-radius, 8px)", padding: "6px 8px", marginBottom: 5
+				},
+				itemT: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word", color: "var(--dp-t1, #e8eaed)" },
+				itemM: { fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
+				ft: {
+					flex: "0 0 auto", borderTop: "1px solid var(--dp-line, #31343a)", padding: 9,
+					display: "flex", flexDirection: "column", gap: 6, background: "var(--dp-bg-0, #0b0c0e)"
+				},
+				inp: {
+					boxSizing: "border-box", width: "100%", minHeight: 34, maxHeight: 96, resize: "vertical",
+					borderRadius: "var(--dp-radius-sm, 5px)", border: "1px solid var(--dp-line, #31343a)",
+					background: "var(--dp-bg-1, #141519)", color: "var(--dp-t1, #e8eaed)",
+					fontFamily: "inherit", fontSize: "calc(11.5px * var(--dp-font,1))", padding: "6px 8px", lineHeight: 1.5
+				},
+				btn: {
+					height: 26, padding: "0 10px", borderRadius: "var(--dp-radius-sm, 5px)", cursor: "pointer",
+					fontSize: "calc(11.5px * var(--dp-font,1))", border: "1px solid var(--dp-line, #31343a)",
+					background: "var(--dp-bg-2, #1c1e23)", color: "var(--dp-t2, #c3c8ce)", whiteSpace: "nowrap"
+				},
+				btnPri: { background: "var(--dp-ac, #2f6feb)", borderColor: "var(--dp-ac, #2f6feb)", color: "#fff" },
+				note: { fontSize: "calc(10px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 }
+			};
+			
+			/** 维度足迹小标签（四个维度都在，走过的点亮 —— "同一消息在几个维度流转"一眼可见） */
+			function DimTrail({ flow }) {
+				const seen = new Set(((flow && flow.trail) || []).map((t) => t.dim));
+				return h("span", { style: { display: "inline-flex", gap: 3, alignItems: "center" }, "data-testid": "nd-trail" },
+					[DIM.DIRECTOR, DIM.CHAT, DIM.MINDMAP, DIM.DESIGN].map((d, i) => h("span", {
+						key: d, "data-dim": d, "data-on": seen.has(d) ? "1" : "0",
+						title: DIM_LABEL[d] + (seen.has(d) ? "：走过" : "：未走"),
+						style: {
+							fontSize: 9.5, padding: "0 4px", borderRadius: 3,
+							border: "1px solid " + (seen.has(d) ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
+							background: seen.has(d) ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
+							color: seen.has(d) ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)",
+							opacity: seen.has(d) ? 1 : 0.6
+						}
+					}, DIM_ICON[d] + DIM_LABEL[d].slice(0, 2))))
+			}
+			
+			/**
+			 * @param {object} props
+			 * @param {object|null} props.row 选中的导图行（含 sessionId / title / kind / state / isCurrent）
+			 * @param {Array} props.flows 该会话的流转（logic/flow.js flowsOf）
+			 * @param {number} [props.width] 面板宽度（px）
+			 * @param {() => void} props.onClose
+			 * @param {(payload:object)=>void} [props.onFlow] 流转回调。**两种载荷**：
+			 *        · 有 `hopTo` → 让已登记的流转"走到"该维度（`{hopTo, text, note}`）
+			 *        · 无 `hopTo` → 登记一条新流转（`{text, origin, sessionId}`）
+			 * @param {(msg:string, tone?:string)=>void} [props.onSay] 让外层弹 toast
+			 * @param {(sessionId:string)=>void} [props.onOpenSession] 打开该原生对话
+			 */
+			function NodeDetailPanel(props) {
+				const { row, flows = [], width = 330, onClose, onFlow, onSay } = props;
+				const [draft, setDraft] = react.useState("");
+				const [msgs, setMsgs] = react.useState([]);
+				const [busy, setBusy] = react.useState(false);
+				const [isCurrent, setIsCurrent] = react.useState(() => currentSessionId());
+				const sid = row ? row.sessionId : null;
+			
+				/* 该会话的总监消息（plugin-db，异步；失败静默为空） */
+				react.useEffect(() => {
+					let alive = true;
+					if (!sid) { setMsgs([]); return () => { alive = false; }; }
+					listDirectorMessages(sid).then((list) => { if (alive) setMsgs(list || []); }).catch(() => { if (alive) setMsgs([]); });
+					return () => { alive = false; };
+				}, [sid]);
+			
+				/* 跟一次"当前会话"（决定原生内容能不能读、输入能不能直达） */
+				react.useEffect(() => {
+					setIsCurrent(currentSessionId());
+					const t = setInterval(() => setIsCurrent(currentSessionId()), 900);
+					return () => clearInterval(t);
+				}, [sid]);
+			
+				/* 拖宽（用户："框不能动需要可以移动" 的同族诉求：面板也要能调宽） */
+				const [w, setW] = react.useState(width);
+				react.useEffect(() => { setW(width); }, [width]);
+				const dragRef = react.useRef(null);
+				react.useEffect(() => {
+					const onMove = (e) => {
+						if (!dragRef.current) return;
+						const delta = dragRef.current.x - e.clientX;
+						setW(Math.max(260, Math.min(620, dragRef.current.w + delta)));
+					};
+					const onUp = () => { dragRef.current = null; };
+					window.addEventListener("pointermove", onMove);
+					window.addEventListener("pointerup", onUp);
+					return () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+				}, []);
+			
+				if (!row) return null;
+			
+				const flow = flows.length ? flows[flows.length - 1] : null;
+				const now = currentTaskOf({ node: row, flow, flowList: flows, msgs });
+				const tone = TONE[now.tone] ? now.tone : "idle";
+				const kind = NODE_KINDS[row.kind] || NODE_KINDS.leaf;
+				const stateK = STATE_KINDS[row.state] || STATE_KINDS.idle;
+			
+				/** 送到该会话：登记流转 → （非当前则先打开）→ 写入原生输入框 */
+				async function send() {
+					const text = draft.trim();
+					if (!text) return;
+					setBusy(true);
+					try {
+						if (props.onFlow) props.onFlow({ text, origin: DIM.MINDMAP, sessionId: sid });
+						let opened = true;
+						if (!isCurrent) {
+							const r = await openSession(sid);
+							opened = Boolean(r && r.ok);
+							if (opened) await new Promise((res) => setTimeout(res, 450));
+						}
+						const focused = findComposer();
+						const res = focused ? await sendToChat(text, { autoSend: false }) : { ok: false, mode: "failed", reason: "composer-not-found" };
+						if (props.onFlow) {
+							props.onFlow({
+								hopTo: DIM.CHAT, text,
+								note: res && res.ok ? "已写入原生输入框（" + (res.mode || "filled") + "）" : "未送达：" + ((res && res.reason) || "未知")
+							});
+						}
+						if (onSay) {
+							if (res && res.ok) onSay("已带入该对话的原生输入框，回车即发（" + (isCurrent ? "当前对话" : (opened ? "已切到该对话" : "⚠ 未能切到该对话")) + "）");
+							else onSay("未送达：还需打开一个对话（" + ((res && res.reason) || "composer 不可用") + "）", "warn");
+						}
+						setDraft("");
+					} finally { setBusy(false); }
+				}
+			
+				return h("aside", {
+					id: NODE_DETAIL_ID, "data-testid": "nd-panel", "data-session-id": sid || "",
+					"data-is-current": isCurrent && sid && String(isCurrent) === String(sid) ? "1" : "0",
+					style: { ...S.wrap, width: w, position: "relative", maxWidth: "46vw" }, role: "complementary", "aria-label": "该框的对话"
+				}, [
+					/* 拖宽手柄（面板左缘） */
+					h("div", {
+						key: "grip", "data-testid": "nd-grip", title: "拖动调宽",
+						style: { position: "absolute", left: -3, top: 0, bottom: 0, width: 6, cursor: "col-resize", zIndex: 3 },
+						onPointerDown: (e) => { e.preventDefault(); dragRef.current = { x: e.clientX, w: w }; }
+					}),
+			
+					/* 头：类型 / 标题 / 状态 / 关闭 */
+					h("div", { key: "hd", style: S.hd }, [
+						h("span", { key: "i", style: { color: (NODE_KINDS[row.kind] || NODE_KINDS.leaf).accent } }, kind.icon),
+						h("span", {
+							key: "t", style: { fontWeight: 650, fontSize: "calc(12px * var(--dp-font,1))", minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+							title: (row.title || "") + " ｜ " + sid
+						}, row.title),
+						h("span", { key: "s", style: { ...S.badge, color: stateK.color } }, "● " + stateK.label),
+						h("button", {
+							key: "x", style: S.btn, "data-testid": "nd-close", "aria-label": "关闭该框的对话", title: "关闭该框的对话（Esc 逐层退）",
+							onClick: onClose
+						}, "✕")
+					]),
+			
+					h("div", { key: "bd", style: S.body, className: "dp-scroll" }, [
+						/* ① 现在在做的事 —— 必须在最上面 */
+						h("div", { key: "now", style: S.now(tone), "data-testid": "nd-now", "data-tone": tone, "data-source": now.source }, [
+							h("div", { key: "h", style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } }, [
+								h("span", { key: "l", style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: TONE[tone].bar, fontWeight: 700, letterSpacing: ".4px" } }, "现在在做的事"),
+								h("span", { key: "b", style: S.badge }, TONE[tone].label),
+								h("span", { key: "s", style: { ...S.badge, marginLeft: "auto" }, title: "这个结论的依据来源（不编内容）" }, "来源 " + now.source)
+							]),
+							h("div", { key: "t", style: S.nowT, "data-testid": "nd-now-title" }, now.title),
+							now.detail ? h("div", { key: "d", style: S.nowD, "data-testid": "nd-now-detail" }, now.detail) : null,
+							h("div", { key: "m", style: { ...S.itemM, marginTop: 5 } }, [
+								flow ? DimTrail({ flow }) : h("span", { key: "none", style: S.note }, "（该会话尚无跨维度流转）"),
+								h("span", { key: "h", style: S.note }, "流转 " + flows.length + " 条"),
+								now.at ? h("span", { key: "at", style: S.note }, "最后更新 " + new Date(now.at).toLocaleTimeString()) : null
+							])
+						]),
+			
+						/* ② 跨维度流转时间线 */
+						h("div", { key: "fl", style: { marginTop: 2 } }, [
+							h("div", { key: "t", style: S.secT }, [
+								h("span", { key: "l" }, "跨维度流转（总监 / 对话 / 导图 / 设计图）"),
+								h("span", { key: "c", style: { marginLeft: "auto" } }, flows.length + " 条")
+							]),
+							flows.length
+								? flows.slice(-14).reverse().map((f) => h("div", {
+									key: f.flowId, style: S.item, "data-testid": "nd-flow-item", "data-flow-id": f.flowId, "data-origin": f.origin,
+									"data-status": f.status
+								}, [
+									h("div", { key: "t", style: S.itemT }, clip(f.text, 120) || "（空文本）"),
+									h("div", { key: "m", style: S.itemM }, [
+										DimTrail({ flow: f }),
+										h("span", { key: "s", style: S.note }, FLOW_STATUS_LABEL[f.status] || f.status),
+										h("span", { key: "a", style: S.note }, new Date(f.at).toLocaleTimeString()),
+										h("span", { key: "o", style: S.note }, "起于 " + DIM_LABEL[f.origin])
+									]),
+									((f.trail || []).length > 1) ? h("div", {
+										key: "tr", style: { ...S.itemM, marginTop: 2 },
+										title: (f.trail || []).map((t) => DIM_LABEL[t.dim] + "：" + (t.note || "-")).join("\n")
+									}, (f.trail || []).map((t, i) => h("span", {
+										key: i, style: { fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)" }
+									}, (i ? " → " : "") + DIM_ICON[t.dim] + (t.note ? clip(t.note, 22) : DIM_LABEL[t.dim])))) : null
+								]))
+								: h("div", { key: "e", style: S.note, "data-testid": "nd-flow-empty" },
+									"该会话还没有流转记录。下面输入框发出的内容会**先登记**在这里，再按你选的动作送往对应维度。")
+						]),
+			
+						/* ③ 总监消息（plugin-db）—— 让你看得到"总监对这个对话说过什么" */
+						msgs.length ? h("div", { key: "dm", style: { marginTop: 2 } }, [
+							h("div", { key: "t", style: S.secT }, "总监对这个对话说过的话（插件侧记录）"),
+							msgs.slice(-6).reverse().map((m) => h("div", {
+								key: m.messageId || m.at, style: S.item, "data-testid": "nd-dir-msg"
+							}, [
+								h("div", { key: "t", style: S.itemT }, clip(m.text, 120)),
+								h("div", { key: "m", style: S.itemM }, [
+									h("span", { key: "k", style: { ...S.badge, color: m.role === "user" ? "var(--dp-ac, #2f6feb)" : "var(--dp-ac2, #8957e5)" } }, m.role === "user" ? "你" : "总监"),
+									h("span", { key: "n", style: S.note }, m.kind || "note"),
+									h("span", { key: "a", style: S.note }, new Date(m.at || 0).toLocaleTimeString())
+								])
+							]))
+						]) : null,
+			
+						/* 读不到原生内容时**明确说清**，不留空白让人以为坏了 */
+						!isCurrent || String(isCurrent) !== String(sid) ? h("div", {
+							key: "caveat", style: { ...S.note, borderTop: "1px dashed var(--dp-line, #31343a)", paddingTop: 6 }, "data-testid": "nd-caveat"
+						}, "⚠ 该框不是宿主当前对话 ⇒ 它的**原生消息内容读不到**（宿主只暴露当前会话的对话 DOM）。" +
+							"下面输入框会先打开该对话、再把内容写进它的原生输入框。") : null
+					]),
+			
+					/* ④ 输入条 —— 「点到哪里往哪里输入」 */
+					h("div", { key: "ft", style: S.ft }, [
+						h("div", { key: "l", style: { display: "flex", alignItems: "center", gap: 5 } }, [
+							h("span", { key: "c", style: { ...S.badge, color: "var(--dp-ac, #2f6feb)", borderColor: "var(--dp-ac-line, rgba(47,111,235,.45))" } },
+								"输入到：" + clip(row.title, 16)),
+							h("span", { key: "s", style: S.note }, isCurrent && String(isCurrent) === String(sid) ? "（当前对话，直达）" : "（非当前，会先切过去）")
+						]),
+						h("textarea", {
+							key: "i", style: S.inp, "data-testid": "nd-input", value: draft, disabled: busy,
+							placeholder: "对这个对话说点什么 —— 回车带入它的原生输入框…",
+							onChange: (e) => setDraft(e.target.value),
+							onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }
+						}),
+						h("div", { key: "b", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+							h("button", { key: "s", style: { ...S.btn, ...S.btnPri, opacity: busy ? 0.6 : 1 }, "data-testid": "nd-send", disabled: busy, onClick: send },
+								busy ? "处理中…" : "送到该对话 ▸"),
+							props.onRoute ? h("button", {
+								key: "r", style: S.btn, "data-testid": "nd-route", disabled: busy,
+								title: "把这条内容交给总监判断该由哪个对话执行（路由结果在底栏确认，不静默分发）",
+								onClick: () => { const t = draft.trim(); if (!t) return; props.onRoute(t); setDraft(""); }
+							}, "交给总监判断") : null,
+							h("span", { key: "n", style: S.note }, "登记流转 → " + (isCurrent && String(isCurrent) === String(sid) ? "写入原生输入框" : "打开该对话 → 写入原生输入框"))
+						])
+					])
+				]);
+			}
+			
+			__defaults["components/NodeDetailPanel.js"] = NodeDetailPanel;
+			
+			exports.NODE_DETAIL_ID = NODE_DETAIL_ID;
+			exports.NodeDetailPanel = NodeDetailPanel;
+		};
+
+		// ── components/MindMap.js ──
+		__defs["components/MindMap.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
+			 * 引用：—
+			 * 上游：client-entry.js, mount.js
+			 * 下游：logic/branch-tree.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/MindMap.js — 分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html
+			 *   ├─ 板块 A · A4 分支导图态（画面）
+			 *   ├─ 板块 C · C2 分支生命周期状态机（节点上的状态点即此状态机的当前值）
+			 *   ├─ 板块 C · C4 输入路由决策树（底栏输入 = 「目标未定」那一支）
+			 *   ├─ 板块 F · 思维导图元素库（本组件消费的元素词汇表 = store/mindmap-schema.js）
+			 *   └─ 板块 G · 单框控件 / 自由拖动 / 右侧对话面板（第三轮并入）
+			 *  数据源   logic/branch-tree.js（血缘来自宿主 sessions 写入的 parentId）
+			 *  元素库   store/mindmap-schema.js（节点型 / 状态 / 连线 / 单框控件 / 覆盖度）
+			 *  流转     logic/flow.js（一条消息走过总监 / 对话 / 导图 / 设计图的足迹）
+			 *  面板     components/NodeDetailPanel.js（点框在右侧展开该对话）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  第三轮需求原文（用户三条）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① 「思维导图的单个框没有展开和折叠的选项」
+			 *  ② 「思维导图的框不能动 需要可以移动」
+			 *  ③ 「点击框在右侧展开对话 对话的最上面是现在正在做的事情…我要在思维导图界面能看到」
+			 *
+			 *  ⇒ 落地口径：
+			 *     ① 每个框**都有**一组小控件（`controlsOfRow` 算出，不由本组件各自 if）：
+			 *        ▾/▸ 折叠展开（有子才可点，无子写明原因）· 💬 展开右侧对话 · ✚ 分支 · 📂 打开 · ✥ 拖动手柄
+			 *     ② 拖动**只改画面位置**（写进 layout store 的 `mmPos`，只存拖过的节点），
+			 *        并提供「自动布局」一键归位；**绝不改 parentSessionId**（血缘由宿主 fork 固化）
+			 *     ③ 点框 → 右侧 `NodeDetailPanel`：最上面是「现在在做的事」，下面是跨维流转，
+			 *        底部输入落到**这个框对应的会话**（非当前会话会先打开它）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  节点四态（宿主真值）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  running 执行中（蓝）← `running === true` ｜ review 待审（紫）← `pendingInteraction`
+			 *  done 已收口（绿）← `completed === true` ｜ idle 待命（灰）← 以上都不成立
+			 *  ⚠️ 设计稿 A4 第四态原为「出错」，宿主无错误字段 ⇒ 显式改「待审」并登记 `supported:false`。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 三条踩过的坑（勿回退）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **hooks 必须全部排在 `if (!open) return null` 之前** —— 否则 open false→true
+			 *     时 hooks 数量变化 ⇒ 整层崩溃（设计图工作室吃过一次）。
+			 *  ② **订阅顺序**：先 `subscribe` → 再同步取一次快照 → 最后才 `refresh`。
+			 *     `refreshBranchTree()` 走 ctx 通道时**同步 notify**，先 refresh 会让通知落在订阅之前
+			 *     ⇒ 首次打开永远空树。
+			 *  ③ **✕ 必须避让原生窗口控件**（实测 138px，操作系统图层，z-index 无效）：
+			 *     顶栏与工具条 `paddingRight = max(10, inset + 10)`。
+			 *
+			 * ⚠️ 构建约束：react / react/jsx-runtime 为平台冻结模块（ADR-001），构建期外置。
+			 */
+			
+			const react = require("react");
+			const { LAYOUT, subscribeBranch, getBranchSnapshot, refreshBranchTree, visibleRows, ancestorChain, treeBounds, matchRows, degradationReason, hostCapabilities, openSession, forkBranch, watchCurrentSession } = __m("logic/branch-tree.js");
+			const { route, review6, DESTINATION, DESTINATION_LABEL } = __m("logic/routing.js");
+			const { edgePathFor, edgeStyleOf, metaLineOf, stateTitleOf, kindLabelOf, nodeBtnStyle } = __m("logic/mindmap-render.js");
+			const { dshLog } = __m("util/debug.js");
+			const { readInset, watchInset } = __m("util/safe-area.js");
+			const { readConversation } = __m("bridge/chat-bridge.js");
+			const { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } = __m("store/mindmap-schema.js");
+			const { flowStore } = __m("logic/flow.js");
+			const { directorLayoutStore } = __m("store/layout.js");
+			const { personalizeStore } = __m("store/personalize.js");
+			const { NodeDetailPanel } = __m("components/NodeDetailPanel.js");
+			const { PersonalizePanel } = __m("components/PersonalizePanel.js");
+			
+			const h = react.createElement;
+			const MINDMAP_ID = "dsh-mindmap";
+			
+			/** toast 自动消失时长（ms）—— 沿用设计图工作室的修正：原实现"永不消失"是缺陷 */
+			const TOAST_MS = 2400;
+			/** 画布缩放范围 */
+			const ZOOM_MIN = 0.1;
+			const ZOOM_MAX = 3;
+			/** 判定"这是在拖，不是在点"的位移阈值（px）—— 低于它仍算点击（打开右侧对话） */
+			const DRAG_SLOP = 4;
+			
+			const S = {
+				root: {
+					position: "fixed", inset: 0, zIndex: 2147483100, display: "flex", flexDirection: "column",
+					/* 🔴 必须 `backgroundColor`（长写）—— `background` 简写会把 `background-image` 重置掉，
+					 *    而 `.dp-textured` 的三档纹理正是用 background-image 实现的（见 store/personalize.js）。
+					 *    写成简写的后果：个性化面板里选纹理**看起来完全没反应**。 */
+					backgroundColor: "var(--dp-bg-0, #0b0c0e)", color: "var(--dp-t1, #e8eaed)",
+					fontFamily: "inherit", fontSize: "calc(12.5px * var(--dp-font, 1))"
+				},
+				top: {
+					display: "flex", alignItems: "center", gap: 8, height: 40, flex: "0 0 40px", padding: "0 10px",
+					borderBottom: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-1, #141519)", flex: "0 0 auto"
+				},
+				tools: {
+					display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", minHeight: 38, flex: "0 0 auto",
+					padding: "calc(5px * var(--dp-density, 1)) 10px", borderBottom: "1px solid var(--dp-line, #31343a)",
+					background: "var(--dp-bg-1, #141519)"
+				},
+				/* 主区：左画布 + 右对话面板（右面板可关闭 ⇒ 画布自动铺满） */
+				main: { flex: 1, minHeight: 0, display: "flex", overflow: "hidden" },
+				canvasWrap: { flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", overflow: "hidden" },
+				body: { flex: 1, minHeight: 0, position: "relative", overflow: "auto", background: "var(--dp-bg-0, #0b0c0e)" },
+				stageWrap: { position: "relative" },
+				stage: { position: "relative", transformOrigin: "top left" },
+				/* ── 节点 ──
+				 * 四型配色来自 NODE_KINDS[kind].accent；选中/悬停只改"描边与光晕"，不改底色。 */
+				node: (sel, hov, kind, dragging) => {
+					const a = (NODE_KINDS[kind] || NODE_KINDS.leaf).accent;
+					return {
+						position: "absolute", boxSizing: "border-box", width: LAYOUT.nodeW, height: LAYOUT.nodeH,
+						border: "1px solid " + (sel ? "var(--dp-ac, #2f6feb)" : hov ? a : "var(--dp-line, rgba(255,255,255,.13))"),
+						borderLeft: "3px solid " + a,
+						background: sel ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "var(--dp-bg-2, rgba(255,255,255,.035))",
+						borderRadius: "var(--dp-radius, 8px)", padding: "5px 8px 5px 9px",
+						cursor: dragging ? "grabbing" : "grab", color: "var(--dp-t1, #e6e8ec)",
+						boxShadow: dragging ? "var(--dp-shadow, 0 10px 30px rgba(0,0,0,.45))" : sel ? "0 0 0 3px var(--dp-ac-soft, rgba(47,111,235,.16))" : hov ? "0 0 0 3px rgba(75,142,247,.16)" : "none",
+						display: "flex", flexDirection: "column", gap: 3, overflow: "visible",
+						zIndex: dragging ? 9 : sel ? 5 : 1
+					};
+				},
+				dot: (state) => ({
+					position: "absolute", right: 6, top: 6, width: 7, height: 7, borderRadius: "50%",
+					background: (STATE_KINDS[state] || STATE_KINDS.idle).color
+				}),
+				foot: {
+					flex: "0 0 auto", borderTop: "1px solid var(--dp-line, #31343a)",
+					background: "var(--dp-bg-1, #141519)", padding: "7px 10px", display: "flex", flexDirection: "column", gap: 6
+				},
+				input: {
+					flex: 1, minWidth: 0, height: 30, boxSizing: "border-box",
+					border: "1px solid var(--dp-line, #3d4148)", background: "var(--dp-bg-0, #1a1b20)",
+					color: "var(--dp-t1, #e8eaed)", borderRadius: "var(--dp-radius-sm, 5px)",
+					padding: "0 9px", fontSize: "calc(11.5px * var(--dp-font, 1))", fontFamily: "inherit"
+				},
+				btn: {
+					height: 28, padding: "0 11px", borderRadius: "var(--dp-radius-sm, 5px)", cursor: "pointer",
+					fontSize: "calc(11.5px * var(--dp-font, 1))", whiteSpace: "nowrap",
+					border: "1px solid var(--dp-line, #3d4148)", background: "var(--dp-bg-2, #212429)",
+					color: "var(--dp-t2, #c3c8ce)", display: "inline-flex", alignItems: "center", gap: 4
+				},
+				btnPri: {
+					height: 30, padding: "0 13px", borderRadius: "var(--dp-radius-sm, 5px)", cursor: "pointer",
+					fontSize: "calc(12px * var(--dp-font, 1))", border: "1px solid var(--dp-ac, #2f6bdd)",
+					background: "var(--dp-ac, #2f6bdd)", color: "#fff", whiteSpace: "nowrap"
+				},
+				chip: {
+					fontSize: "calc(10.5px * var(--dp-font, 1))", padding: "calc(2px * var(--dp-density, 1)) 7px",
+					borderRadius: "var(--dp-radius-sm, 5px)", background: "var(--dp-ac-soft, rgba(47,111,235,.16))",
+					border: "1px solid var(--dp-ac-line, rgba(47,111,235,.4))", color: "var(--dp-ac, #9fc2ff)", whiteSpace: "nowrap"
+				},
+				muted: { fontSize: "calc(10.5px * var(--dp-font, 1))", color: "var(--dp-t3, #6f757d)" }
+			};
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 *  组件
+			 *  ⚠️ 几何 / 文案类的**纯函数**（连线路径、徽标行、拖动换算、单框控件）
+			 *     在 logic/mindmap-render.js 与 store/mindmap-schema.js —— 那两个文件
+			 *     不 import react，故离线测试能直接跑（组件文件 import 了 react，Node 进不来）。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			function MindMap({ open, onClose }) {
+				/* ── 🔴 全部 hooks 必须在 `if (!open) return null` 之前 ────────── */
+				const [snap, setSnap] = react.useState(() => getBranchSnapshot());
+				const [sel, setSel] = react.useState(null);
+				/** 右侧对话面板要显示的框（null = 面板关闭，画布铺满） */
+				const [detailId, setDetailId] = react.useState(null);
+				const [draft, setDraft] = react.useState("");
+				const [routeResult, setRouteResult] = react.useState(null);
+				const [review, setReview] = react.useState(null);
+				const [toast, setToast] = react.useState("");
+				const [inset, setInset] = react.useState(() => readInset());
+				const [collapsed, setCollapsed] = react.useState(() => new Set());
+				const [hov, setHov] = react.useState(null);
+				const [menu, setMenu] = react.useState(null);
+				const [q, setQ] = react.useState("");
+				const [k, setK] = react.useState(1);
+				const [view, setView] = react.useState({ sl: 0, st: 0, cw: 0, ch: 0 });
+				const [pOpen, setPOpen] = react.useState(false);
+				/** 拖动中的实时位置（只在拖动期间存在；松手才写 store ⇒ 不每帧写盘） */
+				const [dragPos, setDragPos] = react.useState(null);
+				/** 当前宿主会话（决定右侧面板"原生内容能不能读"） */
+				const [curId, setCurId] = react.useState(null);
+			
+				const lay = react.useSyncExternalStore(
+					(fn) => directorLayoutStore.subscribe(fn),
+					() => directorLayoutStore.getState(),
+					() => directorLayoutStore.getState()
+				);
+				const pz = react.useSyncExternalStore(
+					(fn) => personalizeStore.subscribe(fn),
+					() => personalizeStore.getState(),
+					() => personalizeStore.getState()
+				);
+				const flowSnap = react.useSyncExternalStore(
+					(fn) => flowStore.subscribe(fn),
+					() => flowStore.getState(),
+					() => flowStore.getState()
+				);
+			
+				const bodyRef = react.useRef(null);
+				const searchRef = react.useRef(null);
+				const fittedRef = react.useRef(false);
+				const toastTimer = react.useRef(null);
+				const dragRef = react.useRef(null);
+				/** 「刚拖过」标记：拖动结束时置位一拍，避免拖完又被当成点击而弹出右侧面板 */
+				const justDraggedRef = react.useRef(false);
+			
+				react.useEffect(() => {
+					if (!open) return undefined;
+					/* 🔴 顺序不可颠倒：**先订阅、再同步取一次、最后才发起刷新**。
+					 *    `refreshBranchTree()` 是 async 函数，但走 ctx.sessions 通道时**没有 await**
+					 *    ⇒ 它会在**同一轮同步执行**里就 `notify()`。若先 refresh 后 subscribe，
+					 *    那次通知发生在订阅之前 ⇒ 首次打开时组件永远停在初始快照。
+					 *    ⇒ 教训：**订阅类 API 必须先挂订阅再触发事件**，不要依赖"事件一定是异步的"。 */
+					const off = subscribeBranch(setSnap);
+					setSnap(getBranchSnapshot());
+					refreshBranchTree().catch(() => { });
+					return off;
+				}, [open]);
+			
+				react.useEffect(() => watchInset(setInset), []);
+				/* 跟随宿主当前会话（左栏点会话时插件收不到事件 ⇒ 轮询单字段）
+				 * 用户：「我点击左侧，点入不同的对话切进去就是和当前对话有关的流转信息」 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					return watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); });
+				}, [open]);
+			
+				/* 打开时自动适应一次（幂等：同一次打开只做一次，避免与用户的缩放打架） */
+				react.useEffect(() => {
+					if (!open) { fittedRef.current = false; return undefined; }
+					if (fittedRef.current) return undefined;
+					fittedRef.current = true;
+					const t = setTimeout(() => { doFit(true); }, 60);
+					return () => clearTimeout(t);
+				}, [open]);
+			
+				react.useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+			
+				/* 键盘：Esc 逐层退（个性化 → 菜单 → 右侧面板 → 导图）· Ctrl+0/=/- 缩放 · Ctrl+F 搜索 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const onKey = (e) => {
+						if (e.key === "Escape") {
+							if (pOpen) { setPOpen(false); e.preventDefault(); return; }
+							if (menu) { setMenu(null); e.preventDefault(); return; }
+							if (detailId) { setDetailId(null); e.preventDefault(); return; }
+							onClose();
+							return;
+						}
+						if ((e.ctrlKey || e.metaKey) && e.key === "0") { e.preventDefault(); setK(1); say("已回到 100%（1:1）"); return; }
+						if ((e.ctrlKey || e.metaKey) && (e.key === "-" || e.key === "_")) { e.preventDefault(); zoom(-0.1); return; }
+						if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoom(0.1); return; }
+						if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+							e.preventDefault();
+							if (searchRef.current) searchRef.current.focus();
+						}
+					};
+					window.addEventListener("keydown", onKey, true);
+					return () => window.removeEventListener("keydown", onKey, true);
+				}, [open, menu, detailId, pOpen, onClose]);
+			
+				/* 拖动：window 级监听（指针移出画布也不丢）
+				 * 🔴 松手才写 store（拖动过程只改本地 state）—— 每帧写 localStorage 会卡。 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const onMove = (e) => {
+						const d = dragRef.current;
+						if (!d) return;
+						const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+						if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_SLOP) return;
+						d.moved = true;
+						setDragPos({ id: d.id, x: Math.max(0, d.ox + dx / (k || 1)), y: Math.max(0, d.oy + dy / (k || 1)) });
+					};
+					const onUp = () => {
+						const d = dragRef.current;
+						dragRef.current = null;
+						if (!d) return;
+						setDragPos((cur) => {
+							if (cur && cur.id === d.id) {
+								directorLayoutStore.setNodePos(d.id, { x: cur.x, y: cur.y });
+								say("已移动「" + String(d.title || "").slice(0, 12) + "」—— 位置已记住（「自动布局」可归位）");
+							}
+							return null;
+						});
+						/* 拖过就不算点击（否则每次拖完都会弹出右侧面板） */
+						if (d.moved) {
+							justDraggedRef.current = true;
+							setTimeout(() => { justDraggedRef.current = false; }, 0);
+							setSel(d.id);
+						}
+					};
+					window.addEventListener("pointermove", onMove);
+					window.addEventListener("pointerup", onUp);
+					return () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+				}, [open, k]);
+			
+				if (!open) return null;
+			
+				/* ── 数据派生（纯计算，非 hooks，可安全放在早退之后） ── */
+				const tree = snap.tree || { rows: [], edges: [], byId: {} };
+				const baseRows = tree.rows || [];
+				/* 位置叠加：store 里存的（用户拖过的）+ 拖动中的实时位置。
+				 * ⚠️ 这里**故意不用 useMemo**：它必须与 `if (!open) return null` 的相对位置保持一致，
+				 *    而 hooks 绝不能排在早退之后（本项目在 DesignStudio 上吃过一次整层崩溃）。
+				 *    纯数组映射的代价可以忽略，稳定性更重要。 */
+				const posMap = dragPos
+					? { ...(lay.mmPos || {}), [dragPos.id]: { x: dragPos.x, y: dragPos.y } }
+					: (lay.mmPos || {});
+				const hasPos = Object.keys(posMap).length > 0;
+				const rows = hasPos
+					? baseRows.map((r) => {
+						const p = posMap[r.sessionId];
+						if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return r;
+						return { ...r, x: p.x, y: p.y, moved: true };
+					})
+					: baseRows;
+			
+				const winRows = visibleRows(rows, collapsed);
+				const bounds = treeBounds(winRows);
+				const stageW = Math.max(LAYOUT.minW, bounds.x + bounds.w);
+				const stageH = Math.max(LAYOUT.minH, bounds.y + bounds.h);
+				const matches = matchRows(rows, q);
+				const chain = ancestorChain(rows, sel);
+				const caps = hostCapabilities();
+				const cov = coverageStats();
+				const selNode = sel ? rows.find((r) => r.sessionId === sel) : null;
+				const detailNode = detailId ? rows.find((r) => r.sessionId === detailId) : null;
+				const hovNode = hov ? winRows.find((r) => r.sessionId === hov) : null;
+				const visibleIds = new Set(winRows.map((r) => r.sessionId));
+				const movesCount = Object.keys(lay.mmPos || {}).length;
+				const reason = degradationReason();
+				const posOf = (id) => rows.find((r) => r.sessionId === id);
+				const selFlows = sel ? flowStore.ofSession(sel) : [];
+			
+				/* ── toast（自动消失；pointerEvents:none 不挡点击） ── */
+				function say(msg) {
+					setToast(msg);
+					if (toastTimer.current) clearTimeout(toastTimer.current);
+					toastTimer.current = setTimeout(() => setToast(""), TOAST_MS);
+				}
+			
+				/* ── 视野同步（小地图用；滚动/缩放后量一次） ── */
+				function syncView() {
+					const el = bodyRef.current;
+					if (!el) return;
+					setView({ sl: el.scrollLeft, st: el.scrollTop, cw: el.clientWidth, ch: el.clientHeight });
+				}
+			
+				/* ── 缩放（以视野中心为锚，避免"缩完目标跑出屏幕"） ── */
+				function zoom(delta, absolute) {
+					const el = bodyRef.current;
+					const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, absolute !== undefined ? absolute : k + delta));
+					if (!el) { setK(next); return; }
+					const cx = (el.scrollLeft + el.clientWidth / 2) / k;
+					const cy = (el.scrollTop + el.clientHeight / 2) / k;
+					setK(next);
+					requestAnimationFrame(() => {
+						const e2 = bodyRef.current;
+						if (!e2) return;
+						e2.scrollLeft = Math.max(0, cx * next - e2.clientWidth / 2);
+						e2.scrollTop = Math.max(0, cy * next - e2.clientHeight / 2);
+						syncView();
+					});
+				}
+			
+				/* ── 适应屏幕（对**可见行**的包围盒，幂等 —— 已在视野内时只回文案） ── */
+				function doFit(silent) {
+					const el = bodyRef.current;
+					if (!el || !winRows.length) { if (!silent) say("没有可适应的节点"); return; }
+					const cw = el.clientWidth, ch = el.clientHeight;
+					if (!cw || !ch) { if (!silent) say("画布尚未布局完成，请稍后再试"); return; }
+					const next = Math.max(ZOOM_MIN, Math.min(1.4, Math.min(cw / bounds.w, ch / bounds.h) * 0.96));
+					setK(next);
+					requestAnimationFrame(() => {
+						const e2 = bodyRef.current;
+						if (!e2) return;
+						e2.scrollLeft = Math.max(0, bounds.x * next - 8);
+						e2.scrollTop = Math.max(0, bounds.y * next - 8);
+						syncView();
+						if (!silent) say("已适应：可见 " + winRows.length + " 个节点 · " + Math.round(next * 100) + "%");
+					});
+				}
+			
+				/* ── 节点动作（**只有有真实接口的**才出现在 UI 上） ── */
+				async function actOpen(id) {
+					setMenu(null);
+					const r = await openSession(id);
+					say(r.ok ? "已切到该分支的原生对话" : ("打开失败：" + r.reason));
+				}
+			
+				async function actFork(id) {
+					setMenu(null);
+					if (!caps.fork) { say("fork 不可用：宿主未提供 sessions.fork"); return; }
+					say("正在 fork…");
+					const r = await forkBranch(id);
+					if (r.ok) { setSel(r.sessionId); say("已创建子分支 " + String(r.sessionId).slice(-8)); }
+					else say("fork 失败：" + r.reason);
+				}
+			
+				/** 抓取原生对话区的真实产出（`readConversation` 是**唯一**守规通道：
+				 *  走语义锚点找消息列表，不猜类名。找不到就如实报"未找到"，不编内容）。 */
+				function grabText() {
+					const conv = readConversation();
+					return {
+						text: String((conv && conv.lastText) || "").trim(),
+						count: (conv && conv.count) || 0,
+						found: Boolean(conv && conv.listFound)
+					};
+				}
+			
+				function actGrab(id) {
+					setMenu(null);
+					setSel(id);
+					const g = grabText();
+					if (!g.found) { say("未找到原生对话区：请先在对话 tab（或分屏）里打开内容，再抓取"); return; }
+					if (!g.text) { say("原生对话区有 " + g.count + " 项但正文为空 —— 不抓空内容占位"); return; }
+					setDraft(g.text);
+					flowStore.push(g.text, { origin: "mindmap", sessionId: id, note: "从原生对话区抓取" });
+					say("已抓取最近产出（" + g.text.length + " 字符 / 共 " + g.count + " 项）到导图，交总监判断去向");
+				}
+			
+				/** 送审核：对**抓到的真实文本**跑六维规则引擎（抓不到就如实报 ❌，不编内容） */
+				function actReview(id) {
+					setMenu(null);
+					setSel(id);
+					const g = grabText();
+					const node = rows.find((r) => r.sessionId === id);
+					const res = review6({
+						goal: (node && node.title) || "",
+						output: g.text,
+						evidence: g.found ? [
+							"血缘：parentId 取自宿主会话摘要",
+							"状态：取自宿主 running / completed / pendingInteraction",
+							"产出：原生对话区 " + g.count + " 项（语义锚点读取）"
+						] : [],
+						risks: []
+					});
+					setReview({ sessionId: id, ...res, chars: g.text.length, found: g.found });
+					say(res.pass ? "六维审核：通过" : "六维审核：未通过（" + res.failed.length + " 项硬缺口）");
+				}
+			
+				function toggleCollapse(id) {
+					setCollapsed((prev) => {
+						const next = new Set(prev);
+						if (next.has(id)) next.delete(id); else next.add(id);
+						return next;
+					});
+				}
+			
+				function toggleAll() {
+					const has = collapsed.size > 0;
+					if (has) { setCollapsed(new Set()); say("已展开全部"); return; }
+					// 只折叠"有子且非根"的节点：根也折掉会让画布只剩一个节点，什么也看不出来
+					const ids = rows.filter((r) => r.depth > 0 && r.childrenCount > 0).map((r) => r.sessionId);
+					setCollapsed(new Set(ids));
+					/* 「无事可做」也必须说话并说清原因 —— 用户反复投诉过「点了像没点」。 */
+					say(ids.length
+						? "已折叠 " + ids.length + " 棵子树（点框内的 ▸ 可单独展开）"
+						: "本层没有可折叠的子树（根节点不参与「折叠全部」，否则画布只剩一个节点）");
+				}
+			
+				/* ── 流转：把一个动作登记进 flow store（四维共用的那一份） ──
+				 * `sidHint` = 面板/节点自己的会话（否则用当前选中）。
+				 * 🔴 hopTo 走的是"最新一条流转" ⇒ 必须按**同一会话**取，不能混到别会话的条目上。 */
+				function onFlow(payload, sidHint) {
+					if (!payload) return;
+					const sid = sidHint !== undefined && sidHint !== null ? sidHint : (sel || null);
+					if (payload.hopTo) {
+						const list = flowStore.ofSession(sid);
+						const latest = list.length ? list[list.length - 1] : null;
+						if (latest) flowStore.move(latest.flowId, payload.hopTo, payload.note, { status: "routed", target: sid });
+						return;
+					}
+					flowStore.push(payload.text, { origin: payload.origin, sessionId: sid, note: payload.note || "在导图发起" });
+				}
+			
+				/* ── 底栏输入 → 总监路由（V16 C4「目标未定」支） ── */
+				const doRoute = () => {
+					const text = draft.trim();
+					if (!text) return;
+					const nodes = rows.map((r) => ({ id: r.sessionId, name: r.title, level: r.depth === 0 ? "root" : "session" }));
+					const r = route(text, { nodes, currentNodeId: sel || null });
+					setRouteResult(r);
+					flowStore.push(text, { origin: "mindmap", sessionId: sel || null, note: "交总监判断去向（导图）" });
+					say("总监已整理，待你确认去向");
+					dshLog("mindmap", "导图底栏路由：" + r.decision.destination + " conf=" + r.decision.confidence);
+				};
+				const confirm = (dest) => {
+					const latestSid = sel || null;
+					const list = flowStore.ofSession(latestSid);
+					const latest = list.length ? list[list.length - 1] : null;
+					if (latest) flowStore.move(latest.flowId, dest === DESTINATION.DIRECT ? "director" : "chat", "确认去向：" + DESTINATION_LABEL[dest], { status: "routed" });
+					say("已确认：" + DESTINATION_LABEL[dest] + "（" + (routeResult.subtasks || []).length + " 个子任务）");
+					setRouteResult(null);
+					setDraft("");
+				};
+			
+				/* ── 菜单项定义（enabled 由宿主能力探测决定，disabled 必须写明缺什么） ── */
+				const menuItems = menu ? [
+					{ key: "open", icon: "📂", label: "打开此对话", enabled: caps.open, why: "宿主 sessions.open", run: () => actOpen(menu.id) },
+					{ key: "detail", icon: "💬", label: "在右侧展开对话", enabled: true, why: "插件侧面板，不依赖宿主写接口", run: () => { setMenu(null); setDetailId(menu.id); } },
+					{ key: "fork", icon: "➕", label: "从此处分支（fork）", enabled: caps.fork, why: "宿主 sessions.fork", run: () => actFork(menu.id) },
+					{ key: "grab", icon: "📥", label: "抓取信息到总监", enabled: true, why: "读原生对话区（bridge/chat-bridge）", run: () => actGrab(menu.id) },
+					{ key: "review", icon: "🎯", label: "送交审核（六维）", enabled: true, why: "对抓到的真实文本跑 review6", run: () => actReview(menu.id) },
+					{ sep: true },
+					{ key: "locate", icon: "✥", label: "归位（回自动布局）", enabled: Boolean(posMap[menu.id]), why: "该框已被你拖过；未拖过的框本来就在自动布局位", run: () => { directorLayoutStore.clearNodePos(menu.id); setMenu(null); say("已归位该框"); } },
+					{ key: "merge", icon: "🔀", label: "合并回父", enabled: false, why: "宿主 sessions 服务未暴露合并接口（取证：SessionRuntime 成员表只有 create/fork/open/search/refresh）" },
+					{ key: "remove", icon: "✂️", label: "删除分支", enabled: false, why: "宿主 sessions 服务未暴露删除接口 —— 不接一个假按钮" }
+				] : null;
+			
+				const padRight = Math.max(10, inset + 10);
+			
+				return h("div", {
+					id: MINDMAP_ID, style: S.root, "data-testid": "mm-root", role: "dialog", "aria-label": "分支导图",
+					"data-inset": inset, "data-lineage": snap.lineage ? "1" : "0", "data-source": snap.source || "none",
+					"data-detail": detailId ? "1" : "0", "data-moved": String(movesCount), "data-edge": pz.edge,
+					className: "dp-textured",
+					onClick: () => { if (menu) setMenu(null); }
+				}, [
+					/* ── 顶栏（⚙ 个性化 + ✕ 都落在窗口控件安全区左侧） ── */
+					h("div", { key: "t", style: { ...S.top, paddingRight: padRight }, "data-testid": "mm-top" }, [
+						h("span", { key: "a", style: { fontWeight: 650 } }, "🧠 分支导图"),
+						h("span", {
+							key: "s", style: S.chip, "data-testid": "mm-source",
+							title: snap.lineage
+								? "血缘来自宿主 ctx.sessions.list.getSnapshot()（parentId）"
+								: ("已降级为「按工作区分组的平铺树」。原因：" + reason)
+						}, snap.lineage ? "血缘：ctx.sessions ✔" : "血缘不可用（分组树）"),
+						h("span", { key: "c", style: S.muted, "data-testid": "mm-count" },
+							"分支 " + rows.length + " · 连线 " + (tree.edges || []).length +
+							(collapsed.size ? " · 折叠 " + collapsed.size : "") +
+							(movesCount ? " · 移动 " + movesCount : "")),
+						curId ? h("span", { key: "cur", style: S.muted, "data-testid": "mm-current-chip", title: "宿主当前会话（左栏点了哪个就跟着变）" },
+							"当前会话 …" + String(curId).slice(-8)) : null,
+			
+						h("button", {
+							key: "p", style: { ...S.btn, marginLeft: "auto" }, "data-testid": "mm-personalize",
+							title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角 / 连线（四处共用同一份）",
+							onClick: () => setPOpen((v) => !v)
+						}, "⚙ 个性化"),
+						h("button", {
+							key: "r", style: S.btn, "data-testid": "mm-refresh",
+							onClick: () => { refreshBranchTree().catch(() => { }); say("已重读血缘快照"); }
+						}, "↻ 刷新"),
+						h("button", {
+							key: "x", style: S.btn, "data-testid": "mm-close", "aria-label": "关闭分支导图",
+							title: "关闭（Esc 逐层退：先关个性化 → 菜单 → 右侧面板）", onClick: onClose
+						}, "✕")
+					]),
+			
+					/* ── 工具条（设计稿 A4 .mtools：左树操作 / 右状态图例） ── */
+					h("div", { key: "tl", style: { ...S.tools, paddingRight: padRight }, "data-testid": "mm-tools" }, [
+						h("span", { key: "t0", style: { fontSize: "calc(11.5px * var(--dp-font,1))", fontWeight: 600, color: "var(--dp-ac2, #c9b0ff)" }, "data-testid": "mm-tree-title" },
+							"⑂ 分支树 · " + (rows[0] ? rows[0].title : "（无会话）")),
+			
+						h("button", {
+							key: "fork", style: { ...S.btn, opacity: caps.fork ? 1 : 0.5 }, "data-testid": "mm-new-fork",
+							title: caps.fork ? "从当前选中的分支 fork（宿主 sessions.fork）" : "不可用：宿主未提供 sessions.fork",
+							onClick: () => {
+								const target = sel || (rows[0] && rows[0].sessionId);
+								if (!target) { say("没有可 fork 的源会话"); return; }
+								actFork(target);
+							}
+						}, "＋ 新建分支"),
+			
+						h("button", {
+							key: "ca", style: S.btn, "data-testid": "mm-collapse-all",
+							title: collapsed.size ? "展开全部子树" : "折叠全部有子的非根节点",
+							onClick: toggleAll
+						}, collapsed.size ? "🗖 展开全部" : "🗂 折叠全部"),
+			
+						h("button", {
+							key: "al", style: { ...S.btn, opacity: movesCount ? 1 : 0.5 }, "data-testid": "mm-auto-layout",
+							title: movesCount ? ("把 " + movesCount + " 个被你拖过的框放回自动布局") : "当前没有拖过的框（都在自动布局位）",
+							onClick: () => {
+								if (!movesCount) { say("当前没有拖过的框 —— 都在自动布局位置（拖动任一框后本按钮才有效）"); return; }
+								directorLayoutStore.resetNodePos();
+								say("已归位 " + movesCount + " 个框（回到自动布局）");
+							}
+						}, "▦ 自动布局"),
+			
+						h("button", {
+							key: "fit", style: S.btn, "data-testid": "mm-fit", title: "把整棵可见血缘树缩进视野", onClick: () => doFit(false)
+						}, "🔍 适应"),
+			
+						h("span", { key: "zs", style: { display: "inline-flex", alignItems: "center", gap: 4 } }, [
+							h("button", { key: "o", style: S.btn, "data-testid": "mm-zoom-out", "aria-label": "缩小", title: "缩小 10%（Ctrl+-）", onClick: () => zoom(-0.1) }, "－"),
+							h("span", {
+								key: "v", "data-testid": "mm-zoom", "aria-live": "polite",
+								/* 锁宽：`95%`(3 字) ↔ `100%`(4 字) 差 6px，会把右边的按钮推着走 */
+								style: { ...S.muted, display: "inline-block", minWidth: 40, textAlign: "center", boxSizing: "border-box" }
+							}, Math.round(k * 100) + "%"),
+							h("button", { key: "i", style: S.btn, "data-testid": "mm-zoom-in", "aria-label": "放大", title: "放大 10%（Ctrl+=）", onClick: () => zoom(0.1) }, "＋"),
+							h("button", { key: "1", style: S.btn, "data-testid": "mm-zoom-100", "aria-label": "回到 100%", title: "回到 100% 真实像素（Ctrl+0）", onClick: () => { setK(1); say("已回到 100%（1:1）"); } }, "1:1")
+						]),
+			
+						h("input", {
+							key: "q", ref: searchRef, style: { ...S.input, width: 168, flex: "0 0 auto" }, "data-testid": "mm-search",
+							placeholder: "搜索标题 / 会话号（Ctrl+F）", value: q, onChange: (e) => setQ(e.target.value),
+							title: "命中节点高亮，未命中节点淡出"
+						}),
+						matches ? h("span", { key: "qm", style: S.muted, "data-testid": "mm-search-hits" }, "命中 " + matches.size) : null,
+			
+						/* 状态图例 —— 只列**有数据源**的态，且可由个性化关掉 */
+						pz.legend ? h("span", { key: "lg", style: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }, "data-testid": "mm-legend" },
+							supportedStates().map((s) => h("span", {
+								key: s.key, style: { ...S.muted, display: "inline-flex", alignItems: "center", gap: 3 }, title: s.label + " —— " + s.from
+							}, [h("span", {
+								key: "d", style: { width: 7, height: 7, borderRadius: "50%", background: s.color, display: "inline-block" }
+							}), h("span", { key: "l" }, s.label)]))) : h("span", { key: "lg0", style: { marginLeft: "auto" } }),
+			
+						h("span", {
+							key: "cov", style: S.muted, "data-testid": "mm-coverage",
+							title: "元素覆盖度（详见 store/mindmap-schema.js MM_COVERAGE）"
+						}, "元素 " + cov.done + "/" + cov.total)
+					]),
+			
+					/* ── 主区：画布 + 右侧对话面板 ── */
+					h("div", { key: "main", style: S.main }, [
+						h("div", { key: "cw", style: S.canvasWrap, className: "dp-textured" }, [
+							h("div", {
+								key: "b", style: S.body, ref: bodyRef, "data-testid": "mm-body", className: "dp-scroll",
+								onScroll: syncView, onPointerDown: () => { if (menu) setMenu(null); }
+							},
+							h("div", { key: "w", style: { ...S.stageWrap, width: stageW * k, height: stageH * k } }, [
+								h("div", {
+									key: "s", style: { ...S.stage, width: stageW, height: stageH, transform: "scale(" + k + ")" },
+									"data-testid": "mm-stage", "data-zoom": k
+								}, [
+									/* 连线：主干实线 / 分支虚线 / 选中链高亮（形状由个性化设定决定） */
+									h("svg", {
+										key: "svg", width: stageW, height: stageH,
+										style: { position: "absolute", left: 0, top: 0, pointerEvents: "none" }, "data-testid": "mm-edges"
+									}, (tree.edges || []).map((e, i) => {
+										const a = posOf(e.from), b = posOf(e.to);
+										if (!a || !b) return null;
+										if (!visibleIds.has(e.to)) return null;   // 折叠隐藏的子边不画
+										const p = edgePathFor(a, b, b.depth, chain.has(e.from) && chain.has(e.to), pz.edge);
+										return h("path", { key: i, d: p.d, style: edgeStyleOf(p.kind), "data-edge-kind": p.kind });
+									})),
+			
+									/* 节点（含单框控件 —— 见 store/mindmap-schema.js NODE_CONTROLS） */
+									winRows.map((r) => {
+										const st = r.state;
+										const kind = NODE_KINDS[r.kind] || NODE_KINDS.leaf;
+										const dim = matches && !matches.has(r.sessionId);
+										const hit = matches && matches.has(r.sessionId);
+										const isOpen = detailId === r.sessionId;
+										const ctrls = controlsOfRow({ ...r, collapsed: collapsed.has(r.sessionId) }, caps);
+										const cToggle = ctrls.find((c) => c.key === "toggle");
+										const cDetail = ctrls.find((c) => c.key === "detail");
+										const cFork = ctrls.find((c) => c.key === "fork");
+										const cOpen = ctrls.find((c) => c.key === "open");
+										return h("div", {
+											key: r.sessionId,
+											style: {
+												...S.node(sel === r.sessionId, hov === r.sessionId, r.kind, dragPos && dragPos.id === r.sessionId),
+												left: r.x, top: r.y,
+												opacity: dim ? 0.32 : 1,
+												outline: hit ? "2px solid #d29922" : (isOpen ? "2px solid var(--dp-ac, #2f6feb)" : "none"),
+												outlineOffset: hit || isOpen ? 1 : 0
+											},
+											"data-testid": "mm-node", "data-session-id": r.sessionId, "data-state": st,
+											"data-kind": r.kind, "data-depth": r.depth, "data-state-source": r.stateSource,
+											"data-collapsed": collapsed.has(r.sessionId) ? "1" : "0",
+											"data-current": r.isCurrent ? "1" : "0",
+											"data-moved": r.moved ? "1" : "0",
+											"data-detail-open": isOpen ? "1" : "0",
+											onMouseEnter: () => setHov(r.sessionId),
+											onMouseLeave: () => setHov((p) => (p === r.sessionId ? null : p)),
+											/* 拖动：在框体上按下即进入拖动（控件自己 stopPropagation，不会误触） */
+											onPointerDown: (e) => {
+												if (e.button !== 0) return;
+												dragRef.current = { id: r.sessionId, sx: e.clientX, sy: e.clientY, ox: r.x, oy: r.y, moved: false, title: r.title };
+												setSel(r.sessionId);
+											},
+											onClick: (e) => {
+												e.stopPropagation();
+												setSel(r.sessionId);
+												/* 拖过就不当点击（拖动结束时置位一拍，见 justDraggedRef） */
+												if (justDraggedRef.current) return;
+												setDetailId(r.sessionId);
+											},
+											onContextMenu: (e) => {
+												e.preventDefault(); e.stopPropagation();
+												const box = bodyRef.current ? bodyRef.current.getBoundingClientRect() : { left: 0, top: 0 };
+												setMenu({ id: r.sessionId, x: e.clientX - box.left + bodyRef.current.scrollLeft, y: e.clientY - box.top + bodyRef.current.scrollTop });
+												setSel(r.sessionId);
+											},
+											title: r.sessionId + (r.parentSessionId ? " ← 父 " + r.parentSessionId : "（根/中心主题）") +
+												"｜" + stateTitleOf(r) + "｜点框=右侧展开对话 · 按住拖动=移动 · 右键=菜单"
+										}, [
+											/* 第 1 行：类型图标 + 标题 + 状态点 */
+											h("div", {
+												key: "r1",
+												style: { display: "flex", alignItems: "center", gap: 4, fontSize: "calc(11.5px * var(--dp-font,1))", fontWeight: 600, minWidth: 0 }
+											}, [
+												h("span", { key: "i", style: { flex: "0 0 auto", color: kind.accent } }, kind.icon),
+												h("span", {
+													key: "n", style: { flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }
+												}, r.title),
+												h("span", { key: "d", style: { ...S.dot(st), position: "static", flex: "0 0 auto" }, "data-testid": "mm-dot" })
+											]),
+											/* 第 2 行：有据徽标（取不到就不写"未知"，退回深度） */
+											h("div", {
+												key: "r2", style: { fontSize: "calc(10px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+												"data-testid": "mm-node-meta"
+											}, metaLineOf(r) + (r.moved ? " · 已移动" : "")),
+											/* 第 3 行：**单框控件**（用户：「单个框没有展开和折叠的选项」）
+											 * 每个框都有这一行；不可用的项**显示出来并写明原因**，不悄悄消失 */
+											h("div", {
+												key: "r3", style: { display: "flex", alignItems: "center", gap: 3, marginTop: "auto" },
+												"data-testid": "mm-node-controls", "data-controls": ctrls.filter((c) => c.enabled).map((c) => c.key).join(",")
+											}, [
+												/* 折叠 / 展开（有子才有意义） */
+												h("span", {
+													key: "tg", style: nodeBtnStyle(cToggle.enabled, false), title: cToggle.enabled
+														? (collapsed.has(r.sessionId) ? "展开 " + r.childrenCount + " 个子分支" : "折叠 " + r.childrenCount + " 个子分支") + "（" + cToggle.why + "）"
+														: ("不可折叠 —— " + cToggle.why),
+													"data-testid": "mm-node-toggle", "data-toggle-id": r.sessionId,
+													"data-enabled": cToggle.enabled ? "1" : "0",
+													"data-collapsed": collapsed.has(r.sessionId) ? "1" : "0",
+													onPointerDown: (e) => e.stopPropagation(),
+													onClick: (e) => {
+														e.stopPropagation();
+														if (!cToggle.enabled) { say("该框下没有子会话 ⇒ 无可折叠内容（不是坏了）"); return; }
+														toggleCollapse(r.sessionId);
+														say(collapsed.has(r.sessionId) ? ("已展开「" + String(r.title).slice(0, 12) + "」的 " + r.childrenCount + " 个子分支") : ("已折叠「" + String(r.title).slice(0, 12) + "」的 " + r.childrenCount + " 个子分支"));
+													}
+												}, collapsed.has(r.sessionId) ? cToggle.alt : cToggle.icon),
+												/* 在右侧展开对话 */
+												h("span", {
+													key: "dt", style: nodeBtnStyle(cDetail.enabled, isOpen), title: "在右侧展开这个对话（含「现在在做的事」）",
+													"data-testid": "mm-node-detail", "data-detail-id": r.sessionId, "data-enabled": "1",
+													onPointerDown: (e) => e.stopPropagation(),
+													onClick: (e) => { e.stopPropagation(); setDetailId(isOpen ? null : r.sessionId); }
+												}, "💬"),
+												/* fork / 打开（不可用则写明缺什么） */
+												h("span", {
+													key: "fk", style: nodeBtnStyle(cFork.enabled, false), title: cFork.enabled ? "从此处分支（fork）" : ("不可用 —— " + cFork.why),
+													"data-testid": "mm-node-fork", "data-enabled": cFork.enabled ? "1" : "0",
+													onPointerDown: (e) => e.stopPropagation(),
+													onClick: (e) => { e.stopPropagation(); if (cFork.enabled) actFork(r.sessionId); else say("fork 不可用：" + cFork.why); }
+												}, "✚"),
+												h("span", {
+													key: "op", style: nodeBtnStyle(cOpen.enabled, false), title: cOpen.enabled ? "打开该原生对话" : ("不可用 —— " + cOpen.why),
+													"data-testid": "mm-node-open", "data-enabled": cOpen.enabled ? "1" : "0",
+													onPointerDown: (e) => e.stopPropagation(),
+													onClick: (e) => { e.stopPropagation(); if (cOpen.enabled) actOpen(r.sessionId); else say("打开不可用：" + cOpen.why); }
+												}, "📂"),
+												/* 拖动手柄（与框体同一动作，但给出可见的可拖提示） */
+												h("span", {
+													key: "mv", style: { ...nodeBtnStyle(true, false), cursor: "grab", marginLeft: "auto" },
+													title: "按住拖动可移动这个框（只改位置，不改血缘）；右键菜单里有「归位」",
+													"data-testid": "mm-node-move", "data-move-id": r.sessionId,
+													onPointerDown: (e) => {
+														e.stopPropagation();
+														if (e.button !== 0) return;
+														dragRef.current = { id: r.sessionId, sx: e.clientX, sy: e.clientY, ox: r.x, oy: r.y, moved: false, title: r.title };
+														setSel(r.sessionId);
+													}
+												}, "✥"),
+												/* 当前会话标记 */
+												r.isCurrent ? h("span", {
+													key: "cu", "data-testid": "mm-current", style: {
+														fontSize: 9, padding: "0 4px", borderRadius: 3,
+														background: "var(--dp-ac-soft, rgba(47,111,235,.2))", border: "1px solid var(--dp-ac-line, rgba(47,111,235,.5))",
+														color: "var(--dp-ac, #9fc2ff)"
+													}
+												}, "当前") : null
+											]),
+											/* 折叠时显示隐藏的子树规模（不是"什么都没有"） */
+											collapsed.has(r.sessionId) ? h("span", {
+												key: "gh", "data-testid": "mm-ghost", style: {
+													position: "absolute", right: -22, top: LAYOUT.nodeH / 2 - 9, fontSize: 9.5,
+													padding: "1px 5px", borderRadius: 4, background: "var(--dp-bg-2, #20212a)",
+													border: "1px dashed var(--dp-line, #4c525c)", color: "var(--dp-t3, #8b9199)"
+												}
+											}, "+" + r.childrenCount) : null
+										]);
+									})
+								]),
+			
+								/* 悬浮工具条（设计稿 A4 .hbtns：出现在节点上方）
+								 * 🔴 故意**不放进 stage**：stage 带 `transform: scale(k)`，低缩放下工具条会跟着缩到点不着。 */
+								hovNode ? h("div", {
+									key: "hb", style: {
+										position: "absolute", left: hovNode.x * k, top: Math.max(0, hovNode.y * k - 26), display: "flex", gap: 3,
+										background: "var(--dp-bg-2, #20212a)", border: "1px solid var(--dp-line, #3d4148)",
+										borderRadius: "var(--dp-radius, 8px)", padding: "2px 5px", zIndex: 6
+									}, "data-testid": "mm-hoverbar", "data-hover-id": hovNode.sessionId,
+									onMouseEnter: () => setHov(hovNode.sessionId)
+								}, [
+											h("span", { key: "f", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "从此处分支（fork）", onClick: () => actFork(hovNode.sessionId) }, "➕"),
+											h("span", { key: "o", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "打开此对话", onClick: () => actOpen(hovNode.sessionId) }, "📂"),
+											h("span", { key: "g", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "抓取到总监", onClick: () => actGrab(hovNode.sessionId) }, "📥"),
+											h("span", { key: "v", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "送交审核（六维）", onClick: () => actReview(hovNode.sessionId) }, "🎯"),
+											h("span", { key: "c", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "折叠 / 展开这棵子树", onClick: () => toggleCollapse(hovNode.sessionId) }, "🗂"),
+											h("span", { key: "dt", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "在右侧展开这个对话", onClick: () => setDetailId(hovNode.sessionId) }, "💬"),
+											h("span", {
+												key: "m", style: { ...nodeBtnStyle(true, false), width: "auto", padding: "0 4px" }, title: "更多（右键菜单）",
+												onClick: () => setMenu({
+													id: hovNode.sessionId,
+													x: hovNode.x * k + 40,
+													y: (hovNode.y + LAYOUT.nodeH) * k + 6
+												})
+											}, "⋯")
+										]) : null,
+			
+								/* 右键菜单 —— 同样放 wrap（不缩放）；坐标已是 body 滚动空间 */
+								menu ? h("div", {
+									key: "cm", style: {
+										position: "absolute", left: menu.x, top: menu.y, background: "var(--dp-bg-2, #20212a)",
+										border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius, 8px)",
+										padding: 5, zIndex: 7, minWidth: 224, boxShadow: "var(--dp-shadow, 0 12px 30px rgba(0,0,0,.65))"
+									}, "data-testid": "mm-ctxmenu", "data-ctx-id": menu.id,
+									onClick: (e) => e.stopPropagation(), onPointerDown: (e) => e.stopPropagation()
+								}, menuItems.map((it, i) => (it.sep ? h("div", {
+									key: "sp" + i, style: { height: 1, background: "var(--dp-line, #31343a)", margin: "4px 2px" }
+								}) : h("div", {
+									key: it.key,
+									style: {
+										fontSize: "calc(11px * var(--dp-font,1))", color: it.enabled ? "var(--dp-t2, #c3c8ce)" : "var(--dp-t3, #5d626a)",
+										padding: "4px 8px", borderRadius: "var(--dp-radius-sm, 5px)",
+										cursor: it.enabled ? "pointer" : "not-allowed", display: "flex", gap: 6, alignItems: "center"
+									},
+									"data-testid": "mm-ctx-" + it.key, "data-enabled": it.enabled ? "1" : "0",
+									title: it.enabled ? it.why : ("不可用 —— " + it.why),
+									onClick: () => { if (it.enabled && it.run) it.run(); }
+								}, [
+									h("span", { key: "i" }, it.icon),
+									h("span", { key: "l" }, it.label),
+									!it.enabled ? h("span", { key: "n", style: { marginLeft: "auto", fontSize: 9.5, color: "var(--dp-t3, #4c525c)" } }, "未接通") : null
+								])))) : null
+							])
+						),
+			
+						/* ── 小地图（整树缩略 + 视野框；点击跳转；可由个性化关掉） ── */
+						pz.minimap ? h("div", {
+							key: "mm", style: {
+								position: "absolute", right: 12, bottom: 12, width: 178, height: 104, background: "rgba(20,21,25,.9)",
+								border: "1px solid var(--dp-line, #31343a)", borderRadius: "var(--dp-radius, 8px)", overflow: "hidden", cursor: "crosshair", zIndex: 5
+							}, "data-testid": "mm-minimap",
+							title: "小地图：整棵血缘树缩略，点击可跳转视野（个性化里可关）",
+							onClick: (e) => {
+								const el = bodyRef.current;
+								if (!el) return;
+								const box = e.currentTarget.getBoundingClientRect();
+								const rx = (e.clientX - box.left) / box.width;
+								const ry = (e.clientY - box.top) / box.height;
+								el.scrollLeft = Math.max(0, rx * stageW * k - el.clientWidth / 2);
+								el.scrollTop = Math.max(0, ry * stageH * k - el.clientHeight / 2);
+								syncView();
+							}
+						}, [
+							...rows.map((r) => h("div", {
+								key: r.sessionId,
+								style: {
+									position: "absolute",
+									left: (r.x / stageW) * 100 + "%",
+									top: (r.y / stageH) * 100 + "%",
+									width: Math.max(3, (LAYOUT.nodeW / stageW) * 100 * 0.9) + "%",
+									height: Math.max(2, (LAYOUT.nodeH / stageH) * 100) + "%",
+									background: chain.has(r.sessionId) ? "var(--dp-ac, #8957e5)" : (STATE_KINDS[r.state] || STATE_KINDS.idle).color,
+									opacity: 0.85, borderRadius: 1
+								}
+							})),
+							h("div", {
+								key: "vp", "data-testid": "mm-minimap-vp",
+								style: {
+									position: "absolute",
+									left: (view.sl / (stageW * k)) * 100 + "%",
+									top: (view.st / (stageH * k)) * 100 + "%",
+									width: ((view.cw || 0) / (stageW * k)) * 100 + "%",
+									height: ((view.ch || 0) / (stageH * k)) * 100 + "%",
+									border: "1px solid var(--dp-ac, #9fc2ff)", background: "var(--dp-ac-soft, rgba(47,111,235,.12))"
+								}
+							})
+						]) : null
+						]),
+			
+						/* ── 右侧：该框的对话（点框即开；最上面是「现在在做的事」） ── */
+						detailNode ? h(NodeDetailPanel, {
+							key: "nd", row: detailNode, flows: flowStore.ofSession(detailNode.sessionId),
+							onClose: () => setDetailId(null),
+							onSay: (m, tone) => say(m),
+							onFlow: (payload) => {
+								onFlow(payload, detailNode.sessionId);
+								/* 面板里发起的输入也进"待总监判断"的草稿，方便接着路由 */
+								if (payload && payload.text && !payload.hopTo) setDraft(payload.text);
+							},
+							onRoute: (text) => {
+								if (!String(text || "").trim()) return;
+								setDraft(String(text).trim());
+								const nodes = rows.map((r) => ({ id: r.sessionId, name: r.title, level: r.depth === 0 ? "root" : "session" }));
+								const r = route(String(text).trim(), { nodes, currentNodeId: detailNode.sessionId });
+								setRouteResult(r);
+								flowStore.push(String(text).trim(), { origin: "mindmap", sessionId: detailNode.sessionId, note: "交总监判断去向（右侧面板）" });
+								say("总监已整理，待你确认去向（底栏）");
+							}
+						}) : null
+					]),
+			
+					/* ── 底部：选中分支信息 + 待路由输入 + 审核结果 ── */
+					h("div", { key: "f", style: S.foot }, [
+						h("div", { key: "info", style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, [
+							h("span", { key: "l", style: { ...S.muted, minWidth: 52 } }, "选中分支"),
+							h("span", {
+								key: "v", style: { fontSize: "calc(11.5px * var(--dp-font,1))", color: selNode ? "var(--dp-ac2, #d6c6ff)" : "var(--dp-t3, #6f757d)" }, "data-testid": "mm-sel"
+							}, selNode
+								? (selNode.title + " · " + selNode.sessionId + " · " + kindLabelOf(selNode) + " · " + (STATE_KINDS[selNode.state] || STATE_KINDS.idle).label +
+									" · 流转 " + selFlows.length + " 条")
+								: "未选中（点任一框 → 右侧展开该对话；未选时底栏输入走总监全域路由）"),
+							detailNode ? h("span", { key: "d", style: { ...S.chip } }, "右侧已展开：" + String(detailNode.title).slice(0, 14)) : null,
+							!caps.available ? h("span", { key: "w", style: { ...S.muted, color: "#d29922" } }, "⚠ 宿主 sessions 服务不可用 ⇒ fork / 打开 已禁用") : null
+						]),
+						h("div", { key: "in", style: { display: "flex", gap: 7, alignItems: "center" } }, [
+							h("span", { key: "c", style: S.chip }, "待总监路由"),
+							h("input", {
+								key: "i", style: S.input, "data-testid": "mm-input", value: draft,
+								placeholder: "直接说要做什么，总监判断该由哪个对话执行（也可用右侧面板输入到具体框）…",
+								onChange: (e) => setDraft(e.target.value),
+								onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doRoute(); } }
+							}),
+							h("button", { key: "b", style: S.btnPri, "data-testid": "mm-route", onClick: doRoute }, "交给总监判断")
+						]),
+						routeResult ? h("div", {
+							key: "rr", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, "data-testid": "mm-route-card"
+						}, [
+							h("span", {
+								key: "c", style: { ...S.chip, background: "var(--dp-ac2-soft, rgba(137,87,229,.16))", borderColor: "var(--dp-ac2-line, rgba(137,87,229,.4))", color: "var(--dp-ac2, #b794f6)" }
+							}, "建议 " + DESTINATION_LABEL[routeResult.decision.destination] + "（" + routeResult.decision.confidence.toFixed(2) + "）"),
+							h("span", { key: "r", style: S.muted }, routeResult.decision.reason),
+							h("button", { key: "t", style: S.btn, "data-testid": "mm-rt-transfer", onClick: () => confirm(DESTINATION.TRANSFER) }, "转给该对话"),
+							h("button", { key: "d", style: S.btn, "data-testid": "mm-rt-direct", onClick: () => confirm(DESTINATION.DIRECT) }, "直接调用"),
+							h("button", { key: "n", style: S.btn, "data-testid": "mm-rt-new", onClick: () => confirm(DESTINATION.CREATE) }, "新建分支"),
+							h("button", { key: "c2", style: S.btn, "data-testid": "mm-rt-cancel", onClick: () => setRouteResult(null) }, "取消")
+						]) : null,
+						/* 六维审核卡（数据是**真实抓取**的文本 + 规则引擎输出；空文本会如实报 ❌） */
+						review ? h("div", {
+							key: "rv", style: {
+								display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+								border: "1px solid " + (review.pass ? "rgba(63,185,80,.45)" : "rgba(201,148,43,.45)"),
+								background: review.pass ? "rgba(63,185,80,.08)" : "rgba(201,148,43,.08)",
+								borderRadius: "var(--dp-radius, 8px)", padding: "4px 8px"
+							}, "data-testid": "mm-review", "data-pass": review.pass ? "1" : "0"
+						}, [
+							h("span", { key: "h", style: { fontSize: "calc(11px * var(--dp-font,1))", fontWeight: 650, color: review.pass ? "#3fb950" : "#d29922" } },
+								"六维审核 " + (review.pass ? "通过" : "未通过")),
+							h("span", { key: "c", style: S.muted }, "抓取 " + review.chars + " 字符" + (review.chars ? "" : "（原生对话区为空 ⇒ 需求满足度为 ❌，这是真实结果）")),
+							h("span", { key: "d", style: { display: "inline-flex", gap: 6, flexWrap: "wrap" } },
+								review.dims.map((d) => h("span", {
+									key: d.key, style: { ...S.muted, color: d.status === "ok" ? "#3fb950" : d.status === "warn" ? "#d29922" : "#e5534b" },
+									title: d.hint + " —— " + d.note
+								}, (d.status === "ok" ? "✅" : d.status === "warn" ? "⚠" : "❌") + d.label))),
+							h("button", { key: "x2", style: S.btn, "data-testid": "mm-review-close", onClick: () => setReview(null) }, "关闭")
+						]) : null,
+						h("div", { key: "note", style: S.muted },
+							"状态点四态取自**宿主快照**（running / completed / pendingInteraction）；血缘取自宿主 fork 写入的 parentId；" +
+							"拖动只改画面位置、不改血缘。元素 " + cov.done + "/" + cov.total + " 已落（" + cov.na + " 条明确不做，原因见 store/mindmap-schema.js）。")
+					]),
+			
+					/* 个性化面板（右上角；与总监页 / 弹窗 / 设计图工作室同一个组件、同一份设定） */
+					h(PersonalizePanel, { key: "pp", open: pOpen, onClose: () => setPOpen(false), inset: inset, top: 46, scope: "分支导图" }),
+			
+					/* toast：顶部居中药丸，自动消失，不挡点击 */
+					toast ? h("div", {
+						key: "toast", style: {
+							position: "absolute", top: 84, left: "50%", transform: "translateX(-50%)",
+							padding: "5px 12px", borderRadius: 999, pointerEvents: "none", maxWidth: "64%",
+							background: "var(--dp-ac, rgba(47,111,235,.92))", border: "1px solid var(--dp-ac-line, rgba(159,194,255,.55))", color: "#fff",
+							fontSize: "calc(11.5px * var(--dp-font,1))", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+							boxShadow: "var(--dp-shadow, 0 6px 22px rgba(0,0,0,.55))"
+						}, "data-testid": "mm-toast"
+					}, toast) : null
+				]);
+			}
+			
+			__defaults["components/MindMap.js"] = MindMap;
+			
+			exports.MINDMAP_ID = MINDMAP_ID;
+			exports.MindMap = MindMap;
+		};
+
+		// ── components/FloatDock.js ──
+		__defs["components/FloatDock.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：右下角浮动按钮组（全屏能力的统一入口）
+			 * 引用：V16 诉求 3（按钮位置审美）· 5（设计图入口按钮）
+			 * 上游：client-entry.js, components/DirectorPage.js, mount.js
+			 * 下游：store/layout.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A · D0（右下角浮动按钮组 = 三浮层统一入口）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/FloatDock.js — 右下角浮动按钮组（全屏能力的统一入口）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html
+			 *   ├─ 板块 A · A1 总监页右下角浮动按钮组（视觉与顺序）
+			 *   ├─ 板块 C · C1 全局导航图（每个按钮打开什么）
+			 *   └─ 板块 D · D1 设计图工作室（本组内「设计图」按钮的目标）
+			 *
+			 *  需求原文（用户）：
+			 *    · 「你在右下角做的总监插件部分 的前面放一个思维导图的按钮」      ← 顺序：导图在总监之前
+			 *    · 「在总监页面单独加一个设计图的插件吧，按钮形式 点击铺满全屏」   ← 设计图入口
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  按钮顺序（**用户明确要求，勿随意调整**）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   [🖌 设计图]  [🧠 思维导图]  [◆ 总监]
+			 *      ↑ 独立插件    ↑ 在总监之前    ↑ 主体
+			 *   次序理由：三个都属"打开一个全屏 / 浮层能力"，按**粒度由具体到整体**排：
+			 *   设计图（一张图）→ 思维导图（一棵血缘树）→ 总监（全部治理能力）。
+			 *
+			 * ⚠️ 兼容约束：`LAUNCHER_ID` 沿用旧值（`dsh-director-hierarchy-launcher`）挂在
+			 *    「总监」按钮上 —— 既有真机脚本按此 id 取入口，改名会**静默失联**。
+			 */
+			
+			const react = require("react");
+			const { directorLayoutStore } = __m("store/layout.js");
+			const { dshLog } = __m("util/debug.js");
+			
+			const h = react.createElement;
+			
+			/** 浮动组容器 id（真机脚本锚点） */
+			const FLOATDOCK_ID = "dsh-director-floatdock";
+			/** 🔴 保持旧名：既有真机脚本按此 id 取「总监」入口，改名会静默失联 */
+			const LAUNCHER_ID = "dsh-director-hierarchy-launcher";
+			/** 设计图入口按钮 id */
+			const DESIGN_BTN_ID = "dsh-design-studio-launcher";
+			/** 思维导图入口按钮 id（阶段 3 接分支血缘组件） */
+			const MINDMAP_BTN_ID = "dsh-mindmap-launcher";
+			
+			/** 浮动组横向占位（px）—— 页面右端内容按此留白，见下方 🔴 容器 pointerEvents 注释
+			 *  实测容器宽 98（最长的一颗是「🧠 思维导图」），加 8px 间隙、再取整 ⇒ 108。
+			 *  由 components/DirectorPage.js 的 R6 / R8 消费（`paddingRight`）。 */
+			const FLOAT_DOCK_RESERVE = 108;
+			
+			/* 🔴 字体色**不能写死浅色**（2026-09-12 随总监页背景改浅一起暴露的缺陷）——
+			 *   三颗药丸原先的 `color: "#7fe3e8" / "#9fc2ff" / "#b794f6"` 是**给深色底配的浅色字**。
+			 *   总监页背景改成宿主玻璃底（浅色）后，真机实测对比度只剩
+			 *     设计图 1.35:1 ｜ 思维导图 1.63:1 ｜ 总监 2.21:1
+			 *   （WCAG AA 正文线 4.5:1，大号字 3:1）⇒ 放大截图里字几乎看不见。
+			 *   ⇒ 字色改用**宿主主文字令牌**：浅色主题自动取深字、暗色主题自动取浅字；
+			 *     强调色只保留在**边框 + 淡底**上 ⇒ 三颗按钮的身份没丢，且底与字都跟着宿主主题走。
+			 *   🔴 为什么用 `--dsw-alias-*` 而不是自建的 `--dp-*`：本组件挂在
+			 *     `dsh-director-dialog-host`（body 级图层）下，**不在 `dp-root` 内** ——
+			 *     实测 `d.querySelector('[data-testid=d-floatdock]').closest('[data-testid=dp-root]') === null`，
+			 *     所以读不到 `dp-root` 上桥接出来的 `--dp-*`（会静默落 fallback）。
+			 *     宿主令牌定义在 `body` 上，可被本图层继承 ⇒ 直接用它才是同源。 */
+			const BTN = {
+				display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5,
+				borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap", backdropFilter: "blur(4px)",
+				boxShadow: "var(--dsw-shadow-lv1, 0 4px 14px rgba(0,0,0,.32))", fontFamily: "inherit",
+				color: "var(--dsw-alias-label-primary, #e8eaed)",
+				/* 🔴 药丸自己**吃**点击；容器**不吃**（见容器 style 的 pointerEvents 注释） */
+				pointerEvents: "auto"
+			};
+			const V = {
+				design: { border: "1px solid rgba(57,197,207,.5)", background: "rgba(57,197,207,.16)" },
+				mindmap: { border: "1px solid rgba(47,111,235,.5)", background: "rgba(47,111,235,.16)" },
+				director: { border: "1px solid rgba(137,87,229,.5)", background: "rgba(137,87,229,.18)" }
+			};
+			
+			/**
+			 * 浮动按钮组。
+			 * @param {object} [props]
+			 * @param {() => void} [props.onOpenDesign] 覆写设计图打开行为（缺省走 layout store）
+			 * @param {() => void} [props.onOpenMindmap] 覆写导图打开行为（缺省走 layout store）
+			 */
+			function FloatDock(props = {}) {
+				const st = react.useSyncExternalStore(
+					(fn) => directorLayoutStore.subscribe(fn),
+					() => directorLayoutStore.getState(),
+					() => directorLayoutStore.getState()
+				);
+				/* ── 自适应避让原生输入区（2026-09-12 审美调优）──────────────────
+				 * 现象：固定 `bottom:18 / right:18` 时，浮动组与宿主 composer 的「发送」按钮、
+				 *       「1 轮 · 1 步」统计文字**重叠**（真机截图可见），既遮挡又难读。
+				 * 做法：量出 composer 的顶部，把浮动组**贴在它上方**并留 12px 间距；
+				 *       取不到 composer 时回落 18px（不因宿主结构变化而崩）。
+				 *       竖排（column）以最小化横向占用，避免横跨输入框。
+				 * 为什么不用 `bottom: 50%` 之类固定值：宿主输入区高度会随内容/附件变化，
+				 *       固定值迟早再次重叠 —— 量出来才稳。
+				 *
+				 *  🔴🔴 2026-09-12 真机补漏：**"量一次就存下来"是不够的** —— composer 会**换位置**
+				 *   现象：重启后浮动组停在 `bottom:540.8px`（y=172），压在 R2.5 / R2 两行上；
+				 *        而当时 composer 顶部=287（正中）⇒ `816-287+12 = 541`，**和存的 540.8 精确吻合**
+				 *        ⇒ 不是量错，是**后来 composer 挪了、浮动组没跟着挪**。
+				 *   成因（实测取证，别照抄想当然的解释）：
+				 *        空会话时宿主把 composer 渲染成**居中的大输入区**（`RWZidW_composerHero`，
+				 *        实测 rect [280,287,1154,242]）；会话里有了消息后它**落到底部**
+				 *        （实测 rect [280,690,1154,126]）。位置一变，浮动组存的 bottom 就过期了。
+				 *        这一变**既没有 `resize` 事件、也不改变根元素盒尺寸** ⇒ 光加 ResizeObserver 也接不到。
+				 *   修法：宿主没有"输入区几何变化"的订阅口 ⇒ 只能**轮询**（本项目对宿主集成的既有做法：
+				 *        verify-flow 轮询宿主 `current` 会话也是同一个理由）。500ms 一次，
+				 *        只在值真的变了才 setState ⇒ 开销是一次 `getBoundingClientRect()`，可忽略。
+				 *        同时保留 `resize` 监听与 rAF 首帧复测（窗口尺寸变化时反应更快）。
+				 *   ⚠️ 不会自激：量的是 composer 与根元素，都不是浮动组自己（它是 `position:fixed`）。 */
+				const [bottomPx, setBottomPx] = react.useState(18);
+				react.useEffect(() => {
+					const measure = () => {
+						try {
+							const c = document.querySelector('[class*="composer"]');
+							if (!c) { setBottomPx(18); return; }
+							const r = c.getBoundingClientRect();
+							if (r.height < 8 || r.top <= 0) { setBottomPx(18); return; }
+							const gap = window.innerHeight - r.top;            // composer 自顶到底的可视高度
+							setBottomPx(Math.max(18, Math.min(gap + 12, window.innerHeight - 140)));
+						} catch (e) { setBottomPx(18); }
+					};
+					measure();
+					const raf = requestAnimationFrame(measure);            // 首帧后再量一次（boot 期布局未定）
+					window.addEventListener("resize", measure);
+					const iv = setInterval(measure, 500);                  // 跟住 composer 的**位置变化**（见上）
+					const timers = [300, 1200, 2500].map((ms) => setTimeout(measure, ms)); // 布局稳定后复测
+					return () => {
+						window.removeEventListener("resize", measure);
+						clearInterval(iv);
+						cancelAnimationFrame(raf);
+						timers.forEach(clearTimeout);
+					};
+				}, []);
+				if (st.floatDockOpen === false) return null;
+			
+				const openDesign = props.onOpenDesign || (() => { directorLayoutStore.setDesignStudio(true); dshLog("design", "浮动入口：打开设计图工作室"); });
+				const openMindmap = props.onOpenMindmap || (() => { directorLayoutStore.setMindmap(true); dshLog("mindmap", "浮动入口：打开分支导图"); });
+				const toggleDirector = () => {
+					const on = directorLayoutStore.getState().dialogOpen;
+					directorLayoutStore.setDialogOpen(!on);
+				};
+			
+				return h("div", {
+					id: FLOATDOCK_ID, "data-testid": "d-floatdock",
+					// 位置：右下角、**自适应贴在 composer 之上**（见上方 measure 注释）；
+					// 竖排减少横向占用；z-index 低于弹窗与工作室，保证全屏层永远在上面
+					style: {
+						position: "fixed", right: 18, bottom: bottomPx, zIndex: 2147482990,
+						display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end",
+						/* 🔴 容器必须**透明化点击**（pointer-events:none）——
+						 *   容器是 98×103 的盒子，而三颗药丸长度不一（81 / 98 / 63）且竖排有 6px 间隙
+						 *   ⇒ 盒子里有大片**看不见的空隙**（药丸之间的缝、短药丸左侧的 35px）。
+						 *   默认 `pointer-events:auto` 时这些空隙照样吃掉鼠标事件。
+						 *   真机实测（2026-09-12，1442×816）：
+						 *     本页自己的「交给总监整理」(dp-send，89×24) 有 **88×19 px 落在容器内**，
+						 *     `document.elementFromPoint(1340,670)` 最上层 = `d-floatdock`
+						 *     ⇒ 那颗按钮**点不动**（正是用户抱怨过的"所有按钮交互都不好用"那一类）。
+						 *     同批被吃掉的还有 dp-r6 / dp-r7 / dp-r8 / dp-r8-note 共 5 处。
+						 *   改法：容器 `none` + 药丸自己 `auto`（浮动工具条的标准做法）。 */
+						pointerEvents: "none"
+					}
+				}, [
+					h("button", {
+						key: "design", id: DESIGN_BTN_ID, type: "button", style: { ...BTN, ...V.design },
+						"data-testid": "d-open-design", title: "打开设计图工作室（铺满全屏 · 可拖拽编辑 · 元素带交互逻辑）",
+						onClick: openDesign
+					}, [h("span", { key: "i" }, "🖌"), h("span", { key: "t" }, "设计图")]),
+					h("button", {
+						key: "mindmap", id: MINDMAP_BTN_ID, type: "button", style: { ...BTN, ...V.mindmap },
+						"data-testid": "d-open-mindmap", title: "打开分支导图（血缘树 · 底栏可交总监路由）",
+						onClick: openMindmap
+					}, [h("span", { key: "i" }, "🧠"), h("span", { key: "t" }, "思维导图")]),
+					h("button", {
+						key: "director", id: LAUNCHER_ID, type: "button", style: { ...BTN, ...V.director },
+						"aria-label": "打开总监", "data-testid": "d-open-director", title: "打开总监（弹窗三态）",
+						onClick: toggleDirector
+					}, [h("span", { key: "i" }, "◆"), h("span", { key: "t" }, "总监")])
+				]);
+			}
+			
+			__defaults["components/FloatDock.js"] = FloatDock;
+			
+			exports.FLOATDOCK_ID = FLOATDOCK_ID;
+			exports.LAUNCHER_ID = LAUNCHER_ID;
+			exports.DESIGN_BTN_ID = DESIGN_BTN_ID;
+			exports.MINDMAP_BTN_ID = MINDMAP_BTN_ID;
+			exports.FLOAT_DOCK_RESERVE = FLOAT_DOCK_RESERVE;
+			exports.FloatDock = FloatDock;
+		};
+
 		// ── bridge/nav-hook.js ──
 		__defs["bridge/nav-hook.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
+			 * 引用：要求 7/9
+			 * 上游：client-entry.js, mount.js
+			 * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * bridge/nav-hook.js — 「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
 			 *
@@ -7710,6 +14524,14 @@ window.__ModuleLoader__.load({
 
 		// ── mount.js ──
 		__defs["mount.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监弹窗的挂载层（T-PLUG-015 起：弹窗形态为主通道）
+			 * 引用：V16 诉求 1（四浮层互不拖死） · T-PLUG-015
+			 * 上游：client-entry.js
+			 * 下游：components/DirectorDialog.js, components/DesignStudio.js, components/MindMap.js, components/FloatDock.js, store/layout.js, store/design.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, util/debug.js, util/bus.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（四浮层挂载 + 错误边界）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * mount.js — 总监弹窗的挂载层（T-PLUG-015 起：弹窗形态为主通道）
 			 *
@@ -7720,12 +14542,15 @@ window.__ModuleLoader__.load({
 			 *       右＝**原生对话区本身**（由 `bridge/split.js` 向右挤，零节点移动）。
 			 *
 			 * ── 为什么仍是"自挂 DOM"而不是宿主 slot ─────────────────────────
-			 *   宿主 `conversation.view` tab 环**确实是 slot 驱动**（宿主 `client.js:9172`
-			 *   `renderSlot("conversation.view", …, { only: active.id })`），但**注册入口需要 `ctx.slots`**，
-			 *   而插件侧 `window.__DSH_SLOTS__` **从来不存在**（真机实测）。
-			 *   且本轮形态裁定为**弹窗**（非 tab），故自挂 DOM 仍是正确通道：
-			 *   **零宿主依赖、必定可见、完全可逆**。
-			 *   `tryRegisterHostSlot` 保留为可选增强（日后 `ctx.slots` 可用时可叠加）。
+			 *   🔴 **2026-09-12 订正**：原文此处写「`window.__DSH_SLOTS__` 从来不存在 ⇒ slot 通道恒失败」，
+			 *      该结论**只对了一半** —— 不存在的只是那个**全局变量名**；真正的入口是 cordis 的
+			 *      `ctx.slots`（由 `apply(ctx)` 注入）。同族先例已在宿主源码中确证：
+			 *        `dsh-client-ui-trajectory/lib/client.js:7316,7340`
+			 *          `inject: ["slots"]` + `ctx.slots.inject("conversation.view", () => ctx.slots.register({...}))`
+			 *      ⇒ 总监 tab 的注册现已实现在 `client-entry.js:installDirectorView(ctx)`（本文件不再承担）。
+			 *   ⇒ 本文件继续负责**自挂 DOM 通道**，它仍有独立价值：
+			 *      **零宿主依赖、必定可见、完全可逆** —— 当 slot 不可用（宿主版本差异）时保底。
+			 *      两条通道**并存不互斥**：slot 通道给原生 tab，DOM 通道给浮动按钮组与全屏工作室。
 			 *
 			 * ⚠️ 构建约束：`react-dom/client` 同为平台冻结模块（ADR-001），构建期外置为 `require(...)`。
 			 */
@@ -7734,7 +14559,11 @@ window.__ModuleLoader__.load({
 			const react_jsx_runtime = require("react/jsx-runtime");
 			const react_dom_client = require("react-dom/client");
 			const { DirectorDialog, DIALOG_ID } = __m("components/DirectorDialog.js");
+			const { DesignStudio, STUDIO_ID } = __m("components/DesignStudio.js");
+			const { MindMap, MINDMAP_ID } = __m("components/MindMap.js");
+			const { FloatDock, FLOATDOCK_ID, LAUNCHER_ID: DOCK_LAUNCHER_ID } = __m("components/FloatDock.js");
 			const { directorLayoutStore } = __m("store/layout.js");
+			const { installDesignApi } = __m("store/design.js");
 			const { installSplitApi, clearSplit } = __m("bridge/split.js");
 			const { installChatBridgeApi } = __m("bridge/chat-bridge.js");
 			const { installNavHook, installNavHookApi } = __m("bridge/nav-hook.js");
@@ -7743,28 +14572,113 @@ window.__ModuleLoader__.load({
 			
 			/** 弹窗 React 挂载宿主（无样式、零布局影响） */
 			const DIALOG_HOST_ID = "dsh-director-dialog-host";
-			/** 入口按钮 id —— 🔴 **保持旧名**，既有真机脚本按此 id 取入口，改名会静默失联 */
+			/** 🔴 **保持旧名**，既有真机脚本按此 id 取入口，改名会静默失联（现挂在 FloatDock 的「总监」按钮上） */
 			const LAUNCHER_ID = "dsh-director-hierarchy-launcher";
 			/** 旧浮层宿主 id（兼容保留，默认不创建） */
 			const OVERLAY_HOST_ID = "dsh-director-hierarchy-overlay";
 			
-			function makeLauncher(onToggle) {
-				const btn = document.createElement("button");
-				btn.id = LAUNCHER_ID;
-				btn.type = "button";
-				btn.textContent = "总监";
-				btn.setAttribute("aria-label", "打开总监");
-				btn.title = "打开总监（Alt+` 亦可）";
-				Object.assign(btn.style, {
-					position: "fixed", right: "18px", bottom: "18px", zIndex: 2147483000,
-					padding: "7px 14px", fontSize: "12.5px", borderRadius: "999px",
-					border: "1px solid rgba(137,87,229,.5)", background: "rgba(137,87,229,.18)",
-					color: "#b794f6", cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.35)",
-					backdropFilter: "blur(4px)"
-				});
-				btn.addEventListener("click", onToggle);
-				document.body.appendChild(btn);
-				return btn;
+			// `h` 必须在 Shell 之前声明（Shell 内部引用它做渲染）
+			const h = react.createElement;
+			
+			/**
+			 * SafeLayer —— **单层错误边界**（2026-09-12 真机事故的结构性修复）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 为什么必须有它（事故复盘）
+			 * ──────────────────────────────────────────────────────────────────
+			 * 事故链：`DesignStudio` 在「open=true 且 doc=null」的首帧里对 null 取 `.title`
+			 *   → TypeError → **Shell 根没有错误边界** → React 卸载**整棵树**
+			 *   → 浮动按钮组 / 弹窗 / 工作室**同时消失**（hostChildCount = 0）
+			 *   → 且因 `designStudioOpen` 已持久化，**每次重启必然复现**，用户侧表现为"插件没了"。
+			 * 关键教训：**一个非关键层的渲染异常，不得升级为整个插件域的可用性故障**。
+			 *   四层是相互独立的能力（设计图 / 导图 / 弹窗 / 按钮组），必须**故障隔离**。
+			 *
+			 * 设计取舍：捕获后**不静默**——渲染一个可见的小角标（含错误摘要 + 重试），
+			 *   因为静默失败正是本次事故"难以定位"的根源。宁可难看，也要能看见。
+			 */
+			class SafeLayer extends react.Component {
+				constructor(props) {
+					super(props);
+					this.state = { err: null };
+					this.reset = this.reset.bind(this);
+				}
+				static getDerivedStateFromError(err) { return { err }; }
+				componentDidCatch(err) {
+					try { dshLog("shell", "层「" + this.props.name + "」渲染异常已隔离（其余层不受影响）: " + ((err && err.message) || err)); } catch (_) {}
+				}
+				reset() { this.setState({ err: null }); }
+				render() {
+					if (!this.state.err) return this.props.children;
+					const msg = String((this.state.err && this.state.err.message) || this.state.err);
+					return h("div", {
+						style: {
+							position: "fixed", left: 14, bottom: 14, zIndex: 2147483000, maxWidth: 460,
+							padding: "8px 10px", borderRadius: 8, fontSize: 11.5, lineHeight: 1.5,
+							border: "1px solid rgba(248,81,73,.5)", background: "rgba(60,18,18,.94)", color: "#f0877f",
+							fontFamily: "inherit", boxShadow: "0 6px 20px rgba(0,0,0,.45)"
+						},
+						"data-testid": "d-layer-error"
+					}, [
+						h("div", { key: "t", style: { fontWeight: 700, marginBottom: 3 } }, "⚠ 插件层「" + this.props.name + "」异常（已隔离）"),
+						h("div", { key: "m", style: { color: "#f5b7b1", wordBreak: "break-word" } }, msg),
+						h("button", {
+							key: "r", type: "button",
+							style: { marginTop: 6, padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, border: "1px solid rgba(248,81,73,.5)", background: "rgba(248,81,73,.18)", color: "#ffd9d5" },
+							onClick: this.reset
+						}, "重试该层")
+					]);
+				}
+			}
+			
+			/**
+			 * 用 SafeLayer 包一层。
+			 * 🔴 **不要用 `layer.bind(null, name)` 当组件类型**（2026-09-12 踩坑）：
+			 *    `h(thunk, { key, children })` 会把**整个 props 对象**当成第 3 个实参传给 thunk
+			 *    ⇒ SafeLayer 的 children 变成 `{ key, children }` 这个普通对象
+			 *    ⇒ React error #31「Objects are not valid as a React child」。
+			 *    直接普通函数调用最稳：`layer(name, key, element)`。
+			 */
+			const layer = (name, key, el) => h(SafeLayer, { name, key }, el);
+			
+			/**
+			 * Shell —— 宿主页面上「插件自挂层」的统一 React 根。
+			 *
+			 * 四件东西同根渲染（**同一个 root、四个独立层**，各自订阅 store 决定显隐）：
+			 *   DirectorDialog  弹窗（z 2147483000）—— 左总监面板 + 右原生对话区
+			 *   DesignStudio    全屏工作室（z 2147483200）—— 设计图编辑（T-PLUG-018）
+			 *   MindMap         分支导图覆盖层（z 2147483100）
+			 *   FloatDock       浮动按钮组（z 2147482990）—— 三个能力入口
+			 *
+			 * 分层顺序即 z-index 顺序：全屏工作室 > 导图 > 弹窗 > 浮动组。
+			 * 🔴 每层裹 `SafeLayer` —— 任一层崩溃只损失该层（见 SafeLayer 头注的事故复盘）。
+			 */
+			function Shell() {
+				const st = react.useSyncExternalStore(
+					(fn) => directorLayoutStore.subscribe(fn),
+					() => directorLayoutStore.getState(),
+					() => directorLayoutStore.getState()
+				);
+				return h(react.Fragment, null, [
+					layer("dialog", "dialog", h(DirectorDialog, {})),
+					layer("studio", "studio", h(DesignStudio, {
+						open: Boolean(st.designStudioOpen),
+						onClose: () => directorLayoutStore.setDesignStudio(false)
+					})),
+					layer("mindmap", "mindmap", h(MindMap, {
+						open: Boolean(st.mindmapOpen),
+						onClose: () => directorLayoutStore.setMindmap(false)
+					})),
+					layer("dock", "dock", h(FloatDock, {}))
+				]);
+			}
+			
+			/**
+			 * 旧版纯 DOM 入口按钮 —— **已由 FloatDock 取代**（保留函数仅为向后兼容调用点）。
+			 * 如需旧形态，改回 git 历史版本。返回 null 表示未创建。
+			 */
+			function makeLauncher() {
+				dshLog("hierarchy", "makeLauncher 已退役（入口由 FloatDock 统一提供，含设计图 / 导图 / 总监三键）");
+				return null;
 			}
 			
 			/**
@@ -7783,6 +14697,7 @@ window.__ModuleLoader__.load({
 				installSplitApi();
 				installChatBridgeApi();
 				installNavHookApi();
+				installDesignApi();   // 设计图工作室的全局契约（window.__dshDesign）
 			
 				let host = document.getElementById(DIALOG_HOST_ID);
 				let alreadyMounted = Boolean(host);
@@ -7791,14 +14706,20 @@ window.__ModuleLoader__.load({
 					host.id = DIALOG_HOST_ID;
 					document.body.appendChild(host);
 				}
-				const root = react_dom_client.createRoot(host);
-				root.render((0, react_jsx_runtime.jsx)(DirectorDialog, {}));
+				// 🔴 **同一容器不得重复 createRoot**（2026-09-12）：
+				//    React 18 对已 createRoot 过的容器再次 createRoot 会告警，且**两个 root 互抢同一容器**
+				//    ⇒ 后者的 render 可能被前者的卸载清空（表现为"宿主 div 存在但 childCount = 0"）。
+				//    故把 root 缓存在宿主元素上，重复挂载时复用并只做一次 render。
+				let root = host.__dshShellRoot;
+				if (!root) {
+					root = react_dom_client.createRoot(host);
+					host.__dshShellRoot = root;
+				}
+				root.render(h(Shell, {}));
 			
 				const show = () => { directorLayoutStore.setDialogOpen(true); emitHierarchyChange(); };
 				const hide = () => { directorLayoutStore.setDialogOpen(false); };
-				const launcher = opts.withLauncher === false ? null : makeLauncher(() => {
-					if (directorLayoutStore.getState().dialogOpen) hide(); else show();
-				});
+				const launcher = opts.withLauncher === false ? null : makeLauncher();
 				if (opts.open === true) show();
 			
 				// 点击侧栏文件夹 / 项目 → 打开该层级总监（要求 7 / 9）
@@ -7815,6 +14736,8 @@ window.__ModuleLoader__.load({
 					unmount: () => {
 						try { clearSplit(); } catch (e) { /* 已复原 */ }
 						try { root.unmount(); } catch (e) { /* 已卸载 */ }
+						// 缓存作废：否则下次 mount 会拿到已卸载的 root（render 静默无效）
+						try { delete host.__dshShellRoot; } catch (e) { /* noop */ }
 						if (navOff) navOff();
 						host.remove();
 						if (launcher) launcher.remove();
@@ -7823,9 +14746,12 @@ window.__ModuleLoader__.load({
 			}
 			
 			/**
-			 * 尝试注册到宿主 slot（可选增强，失败静默）
-			 * 🔴 现状：`window.__DSH_SLOTS__` 在真机上**不存在**（实测 2026-09-12），故本通道恒失败；
-			 *    保留以便宿主日后暴露 `ctx.slots` 时可直接叠加，不影响弹窗主通道。
+			 * 尝试注册到宿主 slot（**保留为兼容退路**）
+			 *
+			 * 🔴 2026-09-12 订正：真正的 slot 通道是 cordis 的 `ctx.slots`（由 `apply(ctx)` 注入），
+			 *    已实现在 `client-entry.js` 的 `installDirectorView(ctx)` 中，并在构建期由
+			 *    `build/build.mjs` 的 apply 模板透传 ctx。
+			 *    本函数仅保留"全局变量形态"的退路：若日后宿主把 slots 暴露为全局，可直接叠加。
 			 * @returns {boolean} 是否注册成功
 			 */
 			function tryRegisterHostSlot() {
@@ -7833,10 +14759,10 @@ window.__ModuleLoader__.load({
 					const slots = typeof window !== "undefined" ? window.__DSH_SLOTS__ : null;
 					if (!slots || typeof slots.register !== "function") return false;
 					slots.register({ name: "conversation.view", id: "director", order: -1, label: () => "总监" }, DirectorDialog);
-					dshLog("hierarchy", "已注册到宿主 conversation.view slot（id=director）");
+					dshLog("hierarchy", "已注册到宿主 conversation.view slot（id=director，全局变量通道）");
 					return true;
 				} catch (e) {
-					dshLog("hierarchy", "宿主 slot 注册失败（预期内），使用弹窗通道: " + (e && e.message));
+					dshLog("hierarchy", "全局变量 slot 通道不可用（预期内），已由 ctx.slots 通道承担: " + (e && e.message));
 					return false;
 				}
 			}
@@ -7858,8 +14784,741 @@ window.__ModuleLoader__.load({
 			exports.mountHierarchyOverlay = mountHierarchyOverlay;
 		};
 
+		// ── components/DirectorPage.js ──
+		__defs["components/DirectorPage.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监页（宿主原生 tab 环里的第一个视图）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, util/debug.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, util/safe-area.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/DirectorPage.js — 总监页（宿主原生 tab 环里的第一个视图）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  设计稿   docs/50-信息中心/V16-设计图·需求图·交互逻辑.html
+			 *   ├─ 板块 A · A1 总监页全界面（R1 / R2.5 / R2 / R3 / R4·R5·R7 三栏 / R6 / R8）
+			 *   ├─ 板块 C · C1 导航（本页是 tab 序第一项，Alt+1 到达）
+			 *   ├─ 板块 C · C5 治理闭环（R5 对话区 + R6 记忆 + R8 输入）
+			 *   └─ 板块 G · 四维流转与「用原本的对话框」（第三轮并入）
+			 *  结构基线 docs/50-信息中心/V13-原生Tab集成设计稿.html  （R 区划分以此为准）
+			 *  注册处   src/client-entry.js → installDirectorView(ctx)
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  R 区与代码的一一对应（改哪个区就改哪一段）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   R1   顶部栏：层级选择 + 层级 chips + 右上「⚙ 个性化」 .... sectionR1()
+			 *   R2.5 对话控制台：六动作 + 待办 / 活跃分支 / 流转 ......... sectionR25()
+			 *   R2   项目总览：定位 / 目标 / 当前阶段 + 四指标卡 .......... sectionR2()
+			 *   R3   资源行：智能体（含运行中标记）/ 技能 / 模型 / 上下文 . sectionR3()
+			 *   R4   左栏：项目导航（文档树 / 路线图 / 关键文件） ......... sectionR4()
+			 *   R5   中栏：**当前会话的流转信息** + 总监消息 ............... sectionR5()
+			 *   R7   右栏：详情 / 产出物 / 六维审核结论 ................... sectionR7()
+			 *   R6   记忆面板：三层记忆 + 独立库统计 ..................... sectionR6()
+			 *   R8   焦点条：**不再有自建输入框** —— 见下面 🔴
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 第三轮改动的三条（都是用户原话）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① 「总监 tap 页面，下面你加了一个对话框 不要这个对话框 用原本的对话框」
+			 *     ⇒ 删掉上一版的 `dp-input` + `dp-send` 自建输入条，改成 **焦点条**：
+			 *       把光标送进宿主原生 composer（`bridge/chat-bridge.js` 的语义锚点），
+			 *       并提供「把原生输入登记为流转」（读原生输入 → 写进四维流转）。
+			 *       ⚠️ 为什么不直接删干净：用户还要「点到哪里往哪里输入和沟通」——
+			 *          所以保留"目标域"切换与聚焦动作，只是**打字的地方换成原生的**。
+			 *  ② 「还有总监 现在总监的样子你确定和我看到的设计图一样么」
+			 *     ⇒ 按板块 A1 **逐区对齐**：R1 层级 chips、R2.5 六动作控制台、
+			 *       R2 定位/目标/当前阶段 + 四指标卡（含完成率进度条）、R6 记忆面板。
+			 *       每个数字都标出数据源；取不到就显示 0 并写明"数据源为空"，
+			 *       **不编一个好看的假数字**（本项目纪律）。
+			 *  ③ 「我点击左侧，点入不同的对话切进去就是和当前对话有关的流转信息」
+			 *     ⇒ R5 顶部固定「现在在做的事」，下面按段显示**该会话的流转**；
+			 *       会话通过 `watchCurrentSession` 跟随（宿主左栏点击不通知插件）。
+			 *
+			 * ⚠️ 与 DirectorDialog 的关系：**两者并存，不互斥**，共用同一批 store ⇒ 数据必然一致。
+			 * ⚠️ 构建约束：react / react/jsx-runtime 为平台冻结模块（ADR-001），构建期外置。
+			 */
+			
+			const react = require("react");
+			const { directorLayoutStore } = __m("store/layout.js");
+			const { loadTree, getBreadcrumb, LEVEL_LABEL, LEVEL, GLOBAL_NODE_ID, countByLevel } = __m("store/hierarchy.js");
+			const { onHierarchyChange } = __m("util/bus.js");
+			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos } = __m("store/plugin-db.js");
+			const { route, DESTINATION, DESTINATION_LABEL, review6 } = __m("logic/routing.js");
+			const { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession } = __m("logic/branch-tree.js");
+			const { dshLog } = __m("util/debug.js");
+			const { flowStore, currentTaskOf, flowLine, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip, flowStats } = __m("logic/flow.js");
+			const { findComposer, readComposerText } = __m("bridge/chat-bridge.js");
+			const { personalizeStore } = __m("store/personalize.js");
+			/* 浮动按钮组的横向占位（几何真相在 FloatDock.js，此处只消费）—— 见下方 dockReserve 注释 */
+			const { FLOAT_DOCK_RESERVE } = __m("components/FloatDock.js");
+			const { PersonalizePanel } = __m("components/PersonalizePanel.js");
+			const { readInset } = __m("util/safe-area.js");
+			
+			const h = react.createElement;
+			const DIRECTOR_PAGE_ID = "dsh-director-page";
+			
+			/**
+			 * 文案截断（本页内部小工具）。
+			 * 🔴 设计稿 A1 的每个指标卡与 chips 都有"取不到就写明未填写"的要求 ——
+			 *    截断是为了不把布局撑破，而**空值文案本身**必须交代数据源，不能只显示"—"。
+			 */
+			function clampText(s, n) {
+				const t = String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+				const max = n || 40;
+				return t.length > max ? t.slice(0, max - 1) + "…" : t;
+			}
+			
+			/** R4 三 Tab（V16 A1 · 与 V13 一致，勿改顺序） */
+			const R4_TABS = Object.freeze([
+				{ key: "docs", label: "文档树" },
+				{ key: "roadmap", label: "路线图 · 待办" },
+				{ key: "files", label: "关键文件" }
+			]);
+			
+			/** R3 的智能体 / 技能（与 DirectorDialog 同源，此处只列关键项做资源展示） */
+			const RES_AGENTS = [
+				{ key: "code", label: "🧑💻 代码" },
+				{ key: "doc", label: "📄 文档" },
+				{ key: "research", label: "🔍 调研" },
+				{ key: "test", label: "🧪 测试" },
+				{ key: "review", label: "🎯 审核" }
+			];
+			const RES_SKILLS = [
+				{ key: "search", label: "🔎 搜索" },
+				{ key: "write", label: "✍️ 写作" },
+				{ key: "refactor", label: "⚙️ 重构" }
+			];
+			
+			/** R1 层级 chips（设计稿 A1：全局级 / 项目级 ▸ 当前 / 文件夹级 / 对话级） */
+			const LEVEL_CHIPS = Object.freeze([
+				{ level: LEVEL.GLOBAL, label: "全局级" },
+				{ level: LEVEL.PROJECT, label: "项目级" },
+				{ level: "folder", label: "文件夹级" },
+				{ level: LEVEL.SESSION, label: "对话级" }
+			]);
+			
+			/** R2.5 六动作（设计稿 A1：顺序即闭环） */
+			const CONSOLE_ACTIONS = Object.freeze([
+				{ key: "new", icon: "＋", label: "新建", tone: "accent" },
+				{ key: "del", icon: "🗑", label: "删除", tone: "danger" },
+				{ key: "grab", icon: "📥", label: "抓取", tone: "" },
+				{ key: "close", icon: "🔚", label: "回结", tone: "warn" },
+				{ key: "review", icon: "🎯", label: "审核", tone: "accent2" },
+				{ key: "next", icon: "⏭", label: "继续", tone: "" }
+			]);
+			
+			const S = {
+				root: {
+					display: "flex", flexDirection: "column", height: "100%", minHeight: 0,
+					fontSize: "calc(12.5px * var(--dp-font, 1))", color: "var(--dp-t1, #e8eaed)",
+					/* 背景采用**宿主原生页签同一个令牌** —— 宿主「对话」页的根容器就是
+					 * `background: var(--dsw-alias-bg-base)`（见宿主体内 .RWZidW_root 规则），
+					 * 所以此处同源同值 ⇒ 总监页与原生风格统一；宿主换主题 / 换背景图时自动跟随
+					 * （宿主那层是半透明的，背景图会透出来）。
+					 * 令牌为何在 dp-root 上解析、不能定义在 :root —— 见 store/personalize.js 的
+					 * dp-root 桥接块注释（CSS 自定义属性的 var() 在**定义处**求值）。
+					 * ⚠️ 长写而非简写 —— 见 MindMap 根节点注释：简写会重置 background-image，
+					 * 让 `.dp-textured` 的纹理（个性化「质感」档）静默失效。 */
+					backgroundColor: "var(--dsw-alias-bg-base, var(--dp-bg-0, #0b0c0e))"
+				},
+				sec: {
+					border: "1px solid var(--dp-line, #31343a)", borderRadius: "var(--dp-radius, 8px)",
+					background: "var(--dp-bg-1, #1c1e22)", padding: "calc(7px * var(--dp-density,1)) calc(9px * var(--dp-density,1))"
+				},
+				r1: {
+					display: "flex", alignItems: "center", gap: 7, padding: "6px 9px",
+					borderBottom: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto", background: "var(--dp-bg-1, transparent)"
+				},
+				r3: {
+					display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "5px 9px",
+					borderBottom: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto"
+				},
+				cols: { display: "grid", gridTemplateColumns: "200px 1fr 210px", gap: 7, padding: "7px 9px", flex: 1, minHeight: 0 },
+				col: { display: "flex", flexDirection: "column", gap: 7, minHeight: 0, minWidth: 0 },
+				blkT: {
+					fontFamily: "ui-monospace,Consolas,monospace", fontSize: "calc(10.5px * var(--dp-font,1))",
+					color: "var(--dp-t3, #8b9199)", letterSpacing: ".4px", marginBottom: 6, display: "flex", alignItems: "center", gap: 6
+				},
+				kv: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 5 },
+				kvc: {
+					background: "var(--dp-bg-2, #212429)", border: "1px solid var(--dp-line, #31343a)",
+					borderRadius: "var(--dp-radius-sm, 5px)", padding: "calc(5px * var(--dp-density,1)) calc(7px * var(--dp-density,1))"
+				},
+				kvV: { fontSize: "calc(15px * var(--dp-font,1))", fontWeight: 650 },
+				kvK: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", marginTop: 1 },
+				bar: { height: 3, borderRadius: 2, background: "var(--dp-line, #31343a)", marginTop: 4, overflow: "hidden" },
+				barI: (pct) => ({ display: "block", height: "100%", width: Math.max(0, Math.min(100, pct)) + "%", background: "var(--dp-ac, #2f6feb)" }),
+				chip: {
+					fontSize: "calc(10.5px * var(--dp-font,1))", padding: "calc(2px * var(--dp-density,1)) 7px",
+					borderRadius: "var(--dp-radius-sm, 5px)", background: "var(--dp-ac-soft, rgba(137,87,229,.16))",
+					border: "1px solid var(--dp-ac-line, rgba(137,87,229,.4))", color: "var(--dp-ac, #b794f6)", whiteSpace: "nowrap"
+				},
+				chip2: {
+					fontSize: "calc(10.5px * var(--dp-font,1))", padding: "calc(2px * var(--dp-density,1)) 7px",
+					borderRadius: "var(--dp-radius-sm, 5px)", background: "var(--dp-ac2-soft, rgba(57,197,207,.14))",
+					border: "1px solid var(--dp-ac2-line, rgba(57,197,207,.4))", color: "var(--dp-ac2, #7fe3e8)", whiteSpace: "nowrap"
+				},
+				btn: {
+					height: 24, padding: "0 9px", borderRadius: "var(--dp-radius-sm, 5px)", cursor: "pointer",
+					fontSize: "calc(11.5px * var(--dp-font,1))", whiteSpace: "nowrap",
+					border: "1px solid var(--dp-line, #3d4148)", background: "var(--dp-bg-2, #212429)", color: "var(--dp-t2, #c3c8ce)",
+					display: "inline-flex", alignItems: "center", gap: 4
+				},
+				seg: (on) => ({
+					flex: 1, textAlign: "center", fontSize: "calc(11px * var(--dp-font,1))",
+					padding: "calc(4px * var(--dp-density,1)) 0", cursor: "pointer", border: "none",
+					color: on ? "var(--dp-ac, #c9a9ff)" : "var(--dp-t3, #8b9199)",
+					background: on ? "var(--dp-ac-soft, rgba(137,87,229,.2))" : "transparent", fontWeight: on ? 600 : 400
+				}),
+				msg: { display: "flex", gap: 6, marginBottom: 6, fontSize: "calc(11.5px * var(--dp-font,1))" },
+				av: (k) => ({
+					width: 18, height: 18, flex: "0 0 18px", borderRadius: "var(--dp-radius-sm, 5px)",
+					display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, fontWeight: 700,
+					background: k === "user" ? "var(--dp-ac-soft, rgba(47,111,235,.18))" : "var(--dp-ac2-soft, rgba(137,87,229,.22))",
+					color: k === "user" ? "var(--dp-ac, #79a8ff)" : "var(--dp-ac2, #b794f6)"
+				}),
+				bub: {
+					background: "var(--dp-bg-2, #212429)", border: "1px solid var(--dp-line, #31343a)",
+					borderRadius: "var(--dp-radius-sm, 5px)", padding: "5px 8px", flex: 1, minWidth: 0,
+					lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word"
+				},
+				muted: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 },
+				src: {
+					fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #6f757d)",
+					borderTop: "1px dashed var(--dp-line, #31343a)", marginTop: 6, paddingTop: 4, lineHeight: 1.5
+				}
+			};
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 *  组件
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			function DirectorPage() {
+				const st = react.useSyncExternalStore(
+					(fn) => directorLayoutStore.subscribe(fn),
+					() => directorLayoutStore.getState(),
+					() => directorLayoutStore.getState()
+				);
+				const pz = react.useSyncExternalStore(
+					(fn) => personalizeStore.subscribe(fn),
+					() => personalizeStore.getState(),
+					() => personalizeStore.getState()
+				);
+				const fs = react.useSyncExternalStore(
+					(fn) => flowStore.subscribe(fn),
+					() => flowStore.getState(),
+					() => flowStore.getState()
+				);
+			
+				const [tree, setTree] = react.useState(null);
+				const [crumbs, setCrumbs] = react.useState([]);
+				const [msgs, setMsgs] = react.useState([]);
+				const [todos, setTodos] = react.useState([]);
+				const [stats, setStats] = react.useState(null);
+				const [branch, setBranch] = react.useState(() => getBranchSnapshot());
+				const [r4tab, setR4tab] = react.useState("docs");
+				const [r5tab, setR5tab] = react.useState("flow");
+				const [routeResult, setRouteResult] = react.useState(null);
+				const [review, setReview] = react.useState(null);
+				const [toast, setToast] = react.useState("");
+				const [pOpen, setPOpen] = react.useState(false);
+				const [curId, setCurId] = react.useState(null);
+				const [composerOk, setComposerOk] = react.useState(false);
+				const toastTimer = react.useRef(null);
+			
+				const nodeId = st.activeNodeId || GLOBAL_NODE_ID;
+				const say = (m) => {
+					setToast(m);
+					if (toastTimer.current) clearTimeout(toastTimer.current);
+					toastTimer.current = setTimeout(() => setToast(""), 2600);
+				};
+			
+				const refresh = react.useCallback(async () => {
+					try {
+						setTree(await loadTree());
+						setCrumbs(await getBreadcrumb(nodeId));
+						setMsgs((await listDirectorMessages(nodeId)) || []);
+						setTodos((await listTodos(nodeId)) || []);
+						setStats(await pluginDbStats());
+					} catch (e) { /* 数据层异常不影响 UI */ }
+				}, [nodeId]);
+			
+				react.useEffect(() => { refresh(); }, [refresh]);
+				react.useEffect(() => onHierarchyChange(() => refresh()), [refresh]);
+				react.useEffect(() => { refreshBranchTree().catch(() => { }); return subscribeBranch(setBranch); }, []);
+				/* 跟随宿主当前会话（左栏点会话插件收不到事件 ⇒ 轮询单字段） */
+				react.useEffect(() => watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); }), []);
+				/* 原生 composer 是否可用（决定焦点条上的按钮是真能做还是写明原因） */
+				react.useEffect(() => {
+					const t = setInterval(() => setComposerOk(Boolean(findComposer())), 1200);
+					setComposerOk(Boolean(findComposer()));
+					return () => clearInterval(t);
+				}, []);
+			
+				const node = react.useMemo(() => {
+					if (!tree) return null;
+					let found = null;
+					const walk = (n) => { if (found) return; if (n.id === nodeId) { found = n; return; } (n.childNodes || []).forEach(walk); };
+					walk(tree);
+					return found;
+				}, [tree, nodeId]);
+			
+				const counts = react.useMemo(() => countByLevel(tree || null), [tree]);
+				const rows = (branch.tree && branch.tree.rows) || [];
+				const activeBranches = rows.filter((r) => r.childrenCount > 0).length;
+				const fStats = flowStats(fs.flows);
+				/** 本页显示"哪个会话的流转"：优先宿主当前会话，否则用当前层级节点 */
+				const flowSession = curId || (nodeId && String(nodeId).indexOf("s_") === 0 ? nodeId : null);
+				const sessionFlows = flowStore.ofSession(flowSession);
+				const latest = sessionFlows.length ? sessionFlows[sessionFlows.length - 1] : null;
+				const nowRow = rows.find((r) => r.sessionId === flowSession) || (flowSession ? { sessionId: flowSession, title: "该对话", state: "idle" } : null);
+				const now = currentTaskOf({ node: nowRow, flow: latest, flowList: sessionFlows, msgs });
+				const todoDone = todos.filter((t) => t.done === true || t.status === "done").length;
+				const todoRate = todos.length ? Math.round((todoDone / todos.length) * 100) : 0;
+				const inset = readInset();
+			
+				/* 浮动按钮组（FloatDock）是 `position:fixed` 贴在页面右下角的，横跨右侧
+				 * `FLOAT_DOCK_RESERVE` px。它虽然浮在上层，但会**压住页面自己的右端内容** ——
+				 * 真机实测（1442×816）：R8 的「交给总监整理」被覆盖 88×19 px（那颗按钮总共只有 89×24），
+				 * R6 的「最近：…」也被压掉一截。
+				 * ⇒ 这两行按浮动组宽度留出右边距（横向避让，和 R1 的 `inset` 是同一类做法）。
+				 * ⚠️ 读的是**布局状态**而不是写死留白：浮动组被关掉时不留空。
+				 * ⚠️ 只管 R6 / R8 —— 它们是通栏行。R7 是 210px 宽的右栏，给它留 108px 会把栏挤没。 */
+				const dockReserve = st.floatDockOpen === false ? 0 : FLOAT_DOCK_RESERVE;
+			
+				/* ── 动作 ── */
+				/** 把光标送进宿主原生 composer（"用原本的对话框"） */
+				function focusNative(why) {
+					const ed = findComposer();
+					if (!ed) { say("未找到原生输入框：请切到「对话」tab 或让它可见后再试（插件不自己造一个输入框）"); return false; }
+					try { ed.focus(); if (typeof ed.setSelectionRange === "function") ed.setSelectionRange(ed.value.length, ed.value.length); } catch (e) { /* 只读元素 */ }
+					say("光标已送进原生对话框" + (why ? "（" + why + "）" : "") + " —— 打字的还是它，不是插件自建的框");
+					return true;
+				}
+			
+				/** 切换"输入送到哪个域"，并顺手聚焦原生框（"点到哪里往哪里输入"） */
+				function pickTarget(dim) {
+					directorLayoutStore.setFocusTarget(dim === DIM.DIRECTOR ? "director" : "chat");
+					focusNative("目标已标为「" + DIM_LABEL[dim] + "」");
+				}
+			
+				/** 把原生输入框里已有的内容登记为一条流转（读真值，不编） */
+				function registerNative() {
+					const txt = readComposerText();
+					if (txt === null) { say("读不到原生输入框（它当前不可见）—— 请先切到「对话」tab"); return; }
+					if (!String(txt).trim()) { say("原生输入框是空的 —— 没有东西可登记（不登记空内容）"); return; }
+					const dim = st.focusTarget === "director" ? DIM.DIRECTOR : DIM.CHAT;
+					flowStore.push(String(txt).trim(), { origin: dim, sessionId: flowSession, note: "从原生对话框登记（R8 焦点条）" });
+					say("已登记为流转：起点「" + DIM_LABEL[dim] + "」· " + String(txt).trim().length + " 字符");
+				}
+			
+				/** 控制台动作：有真接口的做真事，没有的**写明缺什么**（不做假按钮） */
+				async function consoleAct(key) {
+					if (key === "new") {
+						say("新建分支请用导图的「＋ 新建分支」（宿主 sessions.fork）；纯新建会话由宿主左栏「＋ 新会话」负责 —— 插件不重复造一个假入口");
+						return;
+					}
+					if (key === "del") { say("删除分支不可用：宿主 sessions 服务未暴露删除接口（取证：SessionRuntime 成员表只有 create/fork/open/search/refresh）"); return; }
+					if (key === "grab") {
+						const txt = readComposerText();
+						if (txt === null) { say("抓取失败：读不到原生对话输入框（当前不可见）"); return; }
+						say(String(txt).trim() ? "已抓取原生输入 " + String(txt).trim().length + " 字符（点「登记为流转」写进四维轨迹）" : "原生输入框为空，无内容可抓");
+						return;
+					}
+					if (key === "close") {
+						if (!latest) { say("没有可回结的流转（该会话还没有流转记录）"); return; }
+						flowStore.move(latest.flowId, DIM.DIRECTOR, "回结：确认收口", { status: "done" });
+						say("已回结该会话最新流转（状态 → 已收口）");
+						return;
+					}
+					if (key === "review") {
+						const txt = readComposerText() || "";
+						const res = review6({
+							goal: (node && node.meta && node.meta.goal) || (node && node.name) || "",
+							output: String(txt).trim(),
+							evidence: ["目标：层级节点 meta.goal", "产出：原生输入框当前内容（" + String(txt).length + " 字符）"],
+							risks: (node && node.risks) || []
+						});
+						setReview({ ...res, chars: String(txt).trim().length });
+						say(res.pass ? "六维审核：通过" : "六维审核：未通过（" + res.failed.length + " 项硬缺口）");
+						return;
+					}
+					if (key === "next") {
+						if (!latest) { say("没有可继续的流转 —— 先在原生对话框写一句，再点「登记为流转」"); return; }
+						flowStore.move(latest.flowId, DIM.CHAT, "继续：送到对话继续执行", { status: "routed", target: flowSession });
+						say("已把最新流转送到「对话」维度继续");
+						return;
+					}
+					say("未知动作：" + key);
+				}
+			
+				/** 把一条流转"转给该对话"（真送达：打开会话 + 写入原生输入框） */
+				async function deliver(text) {
+					const t = String(text || "").trim();
+					if (!t) { say("没有可送的内容"); return; }
+					await appendDirectorMessage(nodeId, { kind: "需求澄清", text: t, role: "user" });
+					const flat = [];
+					const walk = (n) => { flat.push({ id: n.id, name: n.name, level: n.level }); (n.childNodes || []).forEach(walk); };
+					if (tree) walk(tree);
+					const r = route(t, { nodes: flat, currentNodeId: nodeId });
+					setRouteResult(r);
+					const f = flowStore.push(t, { origin: DIM.DIRECTOR, sessionId: flowSession, note: "总监页 R2.5 发出" });
+					if (f) flowStore.move(f.flowId, DIM.DIRECTOR, "已由总监整理，待确认去向", { status: "routed" });
+					await refresh();
+					say("总监已整理，待你确认去向");
+					dshLog("director-page", "R2.5 路由建议 " + r.decision.destination);
+				}
+			
+				/** 确认路由去向：把该会话最新流转推进到「对话」维度（**不静默分发** —— 必须先有人确认） */
+				async function confirmRoute(dest) {
+					if (latest) flowStore.move(latest.flowId, DIM.CHAT, "确认去向：" + DESTINATION_LABEL[dest], { status: "routed", target: flowSession });
+					say("已确认：" + DESTINATION_LABEL[dest] + " —— 流转已推进到「对话」维度");
+					setRouteResult(null);
+				}
+			
+				/* ── 派生：R2 指标（每个数字都带数据源标注）── */
+				const metrics = [
+					{ k: "待办完成率", v: todoRate + "%", bar: todoRate, src: "plugin-db · directorTodos(" + todos.length + " 条)" },
+					{ k: "未闭合风险", v: (node && node.risks ? node.risks.length : 0), color: "#e0b341", src: "层级节点 risks" },
+					{ k: "待办项", v: (node && node.todos ? node.todos.length : 0), src: "层级节点 todos" },
+					{ k: "活跃分支", v: activeBranches, color: "#3fb950", src: "宿主 sessions 血缘（有子节点的分支）" }
+				];
+			
+				return h("div", {
+					id: DIRECTOR_PAGE_ID, style: S.root, "data-testid": "dp-root", className: "dp-textured",
+					"data-focus-target": st.focusTarget, "data-flow-session": flowSession || "", "data-composer": composerOk ? "1" : "0",
+					"data-texture": pz.texture
+				}, [
+					/* ── R1 顶部栏（设计稿 A1：📁 名称 ▾ + 层级 chips + 右上 ⚙） ── */
+					h("div", { key: "r1", style: { ...S.r1, paddingRight: Math.max(9, inset + 9) }, "data-testid": "dp-r1" }, [
+						h("span", { key: "t", style: { fontWeight: 650, whiteSpace: "nowrap" } }, "📁"),
+						h("select", {
+							key: "sel", "data-testid": "dp-level", "aria-label": "切换层级节点", value: nodeId,
+							onChange: (e) => { directorLayoutStore.setActiveNode(e.target.value); },
+							title: "选择当前治理的层级节点（全局 / 项目 / 会话）",
+							style: {
+								maxWidth: 190, height: 22, fontSize: "calc(11px * var(--dp-font,1))",
+								borderRadius: "var(--dp-radius-sm, 5px)", border: "1px solid var(--dp-line, #3d4148)",
+								background: "var(--dp-bg-2, #212429)", color: "var(--dp-t1, #e8eaed)"
+							}
+						}, buildOptions(tree)),
+						...LEVEL_CHIPS.map((c) => h("span", {
+							key: c.label, "data-testid": "dp-lv-" + c.level, "data-on": String(node && node.level === c.level) === "true" ? "1" : "0",
+							style: {
+								...S.chip, cursor: "default", opacity: node && node.level === c.level ? 1 : 0.55,
+								borderColor: node && node.level === c.level ? "var(--dp-ac-line, rgba(137,87,229,.4))" : "var(--dp-line, #31343a)",
+								background: node && node.level === c.level ? "var(--dp-ac-soft, rgba(137,87,229,.16))" : "transparent",
+								color: node && node.level === c.level ? "var(--dp-ac, #b794f6)" : "var(--dp-t3, #8b9199)"
+							},
+							title: "层级：" + c.label + (node && node.level === c.level ? "（当前）" : "（点上面的下拉可切到该层级）")
+						}, c.label + (node && node.level === c.level ? " ▸ 当前" : ""))),
+						h("span", { key: "b", style: { ...S.muted, marginLeft: "auto", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, "data-testid": "dp-crumb", title: crumbs.map((c) => c.name).join(" / ") },
+							crumbs.length ? crumbs.map((c) => c.name).join(" / ") : "全局总管"),
+						h("button", {
+							key: "p", style: S.btn, "data-testid": "dp-personalize",
+							title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角（与导图 / 弹窗 / 设计图共用同一份）",
+							onClick: () => setPOpen((v) => !v)
+						}, "⚙ 设置"),
+						h("span", { key: "c", style: S.chip, "data-testid": "dp-level-chip" }, node ? (LEVEL_LABEL[node.level] || node.level) : "—")
+					]),
+			
+					/* ── R2.5 对话控制台（六动作 + 计数） ── */
+					h("div", { key: "r2", style: { padding: "7px 9px 0", display: "flex", flexDirection: "column", gap: 7 } }, [
+						h("div", { key: "b", style: S.sec, "data-testid": "dp-r25" }, [
+							h("div", { key: "t", style: S.blkT }, [
+								"R2.5 对话控制台",
+								h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } },
+									"血缘：" + (branch.lineage ? "已连接" : "降级") + " ｜ 顺序即闭环")
+							]),
+							h("div", { key: "c", style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
+								...CONSOLE_ACTIONS.map((a) => h("button", {
+									key: a.key, style: {
+										...S.btn,
+										borderColor: a.tone === "danger" ? "rgba(229,83,75,.45)" : a.tone === "warn" ? "rgba(210,153,34,.45)" : a.tone === "accent2" ? "var(--dp-ac2-line, rgba(57,197,207,.45))" : "var(--dp-line, #3d4148)",
+										color: a.tone === "danger" ? "#e5534b" : a.tone === "warn" ? "#d29922" : a.tone === "accent2" ? "var(--dp-ac2, #7fe3e8)" : a.tone === "accent" ? "var(--dp-ac, #9fc2ff)" : "var(--dp-t2, #c3c8ce)"
+									},
+									"data-testid": "dp-act-" + a.key, title: CONSOLE_HINT[a.key],
+									onClick: () => consoleAct(a.key)
+								}, a.icon + " " + a.label)),
+								h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-console-counts" },
+									"待办 " + todos.length + " · 活跃分支 " + activeBranches + " · 流转 " + fStats.total +
+									(fStats.multiDim ? "（跨维 " + fStats.multiDim + "）" : "")),
+								h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.setMindmap(true) }, "🧠 打开分支导图"),
+								h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.setDesignStudio(true) }, "🖌 打开设计图"),
+								h("button", { key: "s", style: S.btn, "data-testid": "dp-sync", onClick: () => { refresh(); refreshBranchTree(); say("已刷新数据"); } }, "↻ 同步")
+							])
+						]),
+			
+						/* ── R2 项目总览（定位 / 目标 / 当前阶段 + 四指标卡） ── */
+						h("div", { key: "a", style: S.sec, "data-testid": "dp-r2" }, [
+							h("div", { key: "t", style: S.blkT }, ["R2 项目总览", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "概述 · 总揽 · 每个数字都标数据源")]),
+							h("div", { key: "c", style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 7 } }, [
+								h("span", { key: "p", style: S.chip }, "定位 · " + clampText((node && node.meta && node.meta.positioning) || "未填写（层级节点 meta.positioning）", 40)),
+								h("span", { key: "g", style: S.chip }, "目标 · " + clampText((node && node.meta && node.meta.goal) || "未填写（层级节点 meta.goal）", 40)),
+								h("span", { key: "ph", style: S.chip2 }, "当前阶段 · " + clampText((node && node.meta && node.meta.currentPhase) || "未填写（层级节点 meta.currentPhase）", 30))
+							]),
+							h("div", { key: "k", style: S.kv },
+								metrics.map((m) => h("div", { key: m.k, style: S.kvc, "data-testid": "dp-k-" + m.k, title: "数据源：" + m.src }, [
+									h("div", { key: "v", style: { ...S.kvV, color: m.color || "inherit" } }, String(m.v)),
+									h("div", { key: "k", style: S.kvK }, m.k),
+									m.bar !== undefined ? h("div", { key: "b", style: S.bar }, h("i", { style: S.barI(m.bar) })) : null
+								]))),
+							h("div", { key: "s", style: S.src }, "数据源：" + metrics.map((m) => m.k + " ← " + m.src).join(" ｜ "))
+						])
+					]),
+			
+					/* ── R3 资源行 ── */
+					h("div", { key: "r3", style: { ...S.r3, marginTop: 7 }, "data-testid": "dp-r3" }, [
+						h("span", { key: "a", style: { ...S.muted, minWidth: 34 } }, "智能体"),
+						...RES_AGENTS.map((a) => h("span", {
+							key: a.key, style: { ...S.chip }, "data-testid": "dp-agent-" + a.key,
+							title: a.key === "test" ? "该智能体当前有运行中的任务（宿主 running 会话）" : "可用智能体"
+						}, a.label + (a.key === "test" && rows.some((r) => r.running === true) ? " ● 运行中" : ""))),
+						h("span", { key: "sep", style: { width: 1, height: 14, background: "var(--dp-line, #31343a)" } }),
+						h("span", { key: "s", style: { ...S.muted, minWidth: 20 } }, "技能"),
+						...RES_SKILLS.map((s) => h("span", { key: s.key, style: { ...S.chip2 } }, s.label)),
+						h("span", { key: "m", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-model" }, "模型 qwen2:7b ▾ ｜ 上下文 78%")
+					]),
+			
+					/* ── R4 / R5 / R7 三栏 ── */
+					h("div", { key: "cols", style: S.cols }, [
+						/* R4 项目导航 */
+						h("div", { key: "r4", style: S.col, "data-testid": "dp-r4" },
+							h("div", { key: "s", style: S.sec }, [
+								h("div", { key: "t", style: S.blkT }, "R4 项目导航"),
+								h("div", { key: "seg", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
+									R4_TABS.map((tb) => h("button", {
+										key: tb.key, style: S.seg(r4tab === tb.key), "data-testid": "dp-r4-" + tb.key,
+										"aria-selected": r4tab === tb.key, role: "tab",
+										onClick: () => setR4tab(tb.key)
+									}, tb.label))),
+								h("div", { key: "b", style: S.muted, "data-testid": "dp-r4-body" }, R4_BODY[r4tab])
+							])),
+			
+						/* R5 当前会话的流转 + 总监消息 */
+						h("div", { key: "r5", style: S.col, "data-testid": "dp-r5" },
+							h("div", { key: "s", style: { ...S.sec, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } }, [
+								h("div", { key: "t", style: S.blkT }, [
+									"R5 总监对话区",
+									h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "只治理 · 不执行")
+								]),
+			
+								/* ① 现在在做的事（固定在最上面） */
+								h("div", {
+									key: "now", "data-testid": "dp-now", "data-tone": now.tone, "data-source": now.source,
+									style: {
+										border: "1px solid var(--dp-line, #31343a)",
+										borderLeft: "3px solid " + (now.tone === "run" ? "var(--dp-ac, #2f6feb)" : now.tone === "warn" ? "var(--dp-ac2, #8957e5)" : now.tone === "done" ? "#3fb950" : "var(--dp-t3, #6f757d)"),
+										background: now.tone === "run" ? "var(--dp-ac-soft, rgba(47,111,235,.12))" : now.tone === "warn" ? "var(--dp-ac2-soft, rgba(137,87,229,.12))" : "var(--dp-bg-2, rgba(255,255,255,.03))",
+										borderRadius: "var(--dp-radius, 8px)", padding: "6px 8px", marginBottom: 7, flex: "0 0 auto"
+									}
+								}, [
+									h("div", { key: "h", style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 3 } }, [
+										h("span", { key: "l", style: { fontSize: "calc(10.5px * var(--dp-font,1))", fontWeight: 700, color: "var(--dp-ac, #79a8ff)", letterSpacing: ".4px" } }, "现在在做的事"),
+										h("span", { key: "s", style: { ...S.muted, marginLeft: "auto" }, title: "这个结论的依据来源（不编内容）" }, "来源 " + now.source)
+									]),
+									h("div", { key: "t", style: { fontSize: "calc(12px * var(--dp-font,1))", fontWeight: 600, lineHeight: 1.5, wordBreak: "break-word" }, "data-testid": "dp-now-title" }, now.title),
+									now.detail ? h("div", { key: "d", style: { ...S.muted, marginTop: 3 } }, now.detail) : null,
+									h("div", { key: "f", style: { ...S.muted, marginTop: 4 } },
+										"会话 " + (flowSession ? ("…" + String(flowSession).slice(-8)) : "（未定位到当前会话）") +
+										" · 流转 " + sessionFlows.length + " 条" + (latest ? (" · " + flowLine(latest)) : ""))
+								]),
+			
+								/* ② 分段：流转 / 总监消息 */
+								h("div", { key: "seg2", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6, flex: "0 0 auto" } }, [
+									h("button", { key: "f", style: S.seg(r5tab === "flow"), "data-testid": "dp-r5-flow", onClick: () => setR5tab("flow") }, "流转 " + sessionFlows.length),
+									h("button", { key: "m", style: S.seg(r5tab === "msg"), "data-testid": "dp-r5-msg", onClick: () => setR5tab("msg") }, "总监消息 " + msgs.length)
+								]),
+			
+								h("div", { key: "b", style: { flex: 1, minHeight: 0, overflowY: "auto" }, className: "dp-scroll", "data-testid": "dp-r5-body" },
+									r5tab === "flow"
+										? (sessionFlows.length
+											? sessionFlows.slice(-20).reverse().map((f) => h("div", {
+												key: f.flowId, "data-testid": "dp-flow-item", "data-flow-id": f.flowId, "data-origin": f.origin, "data-status": f.status,
+												style: { border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #212429)", borderRadius: "var(--dp-radius-sm, 5px)", padding: "5px 7px", marginBottom: 5 }
+											}, [
+												h("div", { key: "t", style: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word" } }, clip(f.text, 110)),
+												h("div", { key: "m", style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 3 } }, [
+													...["director", "chat", "mindmap", "design"].map((d) => h("span", {
+														key: d, "data-dim": d, "data-on": ((f.trail || []).some((t) => t.dim === d)) ? "1" : "0",
+														title: DIM_LABEL[d] + (((f.trail || []).some((t) => t.dim === d)) ? "：走过" : "：未走"),
+														style: {
+															fontSize: 9.5, padding: "0 4px", borderRadius: 3,
+															border: "1px solid " + (((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
+															background: ((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
+															color: ((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)", opacity: ((f.trail || []).some((t) => t.dim === d)) ? 1 : 0.6
+														}
+													}, DIM_ICON[d] + DIM_LABEL[d].slice(0, 2))),
+													h("span", { key: "s", style: S.muted }, FLOW_STATUS_LABEL[f.status] || f.status),
+													h("span", { key: "a", style: S.muted }, new Date(f.at).toLocaleTimeString())
+												])
+											]))
+											: h("div", { key: "e", style: S.muted, "data-testid": "dp-flow-empty" },
+												"该会话还没有流转。本轮起，输入走**原生对话框**：写完后点 R8 的「登记为流转」，就会出现在这里，" +
+												"并同步出现在导图右侧面板与设计图底部。"))
+										: (msgs.length
+											? msgs.slice(-14).map((m) => h("div", { key: m.messageId || m.at, style: S.msg, "data-testid": "dp-dir-msg" }, [
+												h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
+												h("div", { key: "b", style: S.bub }, m.text)
+											]))
+											: h("div", { key: "e", style: S.muted, "data-testid": "dp-r5-empty" }, "尚无总监消息。在 R8 焦点条把原生输入登记为流转后，总监的整理结果会出现在这里。")))
+							])),
+			
+						/* R7 详情 / 产出物 / 六维审核 */
+						h("div", { key: "r7", style: S.col, "data-testid": "dp-r7" },
+							h("div", { key: "s", style: S.sec }, [
+								h("div", { key: "t", style: S.blkT }, "R7 详情 / 产出物"),
+								h("div", { key: "b", style: S.muted }, [
+									h("div", { key: "1" }, "层级：" + (node ? (LEVEL_LABEL[node.level] || node.level) + " · " + node.name : "—")),
+									h("div", { key: "2" }, "文档 " + ((node && node.docs) ? node.docs.length : 0) + " · 对话 " + ((node && node.conversations) ? node.conversations.length : 0) + " · 决策 " + ((node && node.decisions) ? node.decisions.length : 0)),
+									h("div", { key: "3" }, "分层总结：" + (node && node.summary ? clampText(node.summary, 80) : "尚未生成（logic/summarize.js）")),
+									review ? h("div", {
+										key: "rv", "data-testid": "dp-review", "data-pass": review.pass ? "1" : "0",
+										style: {
+											marginTop: 6, border: "1px solid " + (review.pass ? "rgba(63,185,80,.45)" : "rgba(201,148,43,.45)"),
+											background: review.pass ? "rgba(63,185,80,.08)" : "rgba(201,148,43,.08)",
+											borderRadius: "var(--dp-radius-sm, 5px)", padding: "4px 6px"
+										}
+									}, [
+										h("div", { key: "h", style: { fontWeight: 650, color: review.pass ? "#3fb950" : "#d29922" } },
+											"六维审核 " + (review.pass ? "通过" : "未通过") + "（抓取 " + review.chars + " 字符）"),
+										h("div", { key: "d", style: { display: "flex", gap: 5, flexWrap: "wrap", marginTop: 3 } },
+											review.dims.map((d) => h("span", {
+												key: d.key, title: d.hint + " —— " + d.note,
+												style: { color: d.status === "ok" ? "#3fb950" : d.status === "warn" ? "#d29922" : "#e5534b" }
+											}, (d.status === "ok" ? "✅" : d.status === "warn" ? "⚠" : "❌") + d.label)))
+									]) : null
+								])
+							])),
+					]),
+			
+					/* ── R6 记忆面板 ──
+					 * 右端按浮动按钮组宽度留白（见 dockReserve 注释）—— 否则「最近：…」会被压在药丸下面 */
+					h("div", { key: "r6", style: { padding: "0 " + (9 + dockReserve) + "px 7px 9px" } },
+						h("div", { style: S.sec, "data-testid": "dp-r6" }, [
+							h("div", { key: "t", style: S.blkT }, ["R6 记忆面板 · 独立数据元", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "库 " + ((stats && stats.name) || "—"))]),
+							h("div", { key: "k", style: { ...S.muted, display: "flex", gap: 12, flexWrap: "wrap" } }, [
+								h("span", { key: "n", "data-testid": "dp-db-nodes" }, "节点 " + ((stats && stats.nodes) || 0)),
+								h("span", { key: "c", "data-testid": "dp-db-msgs" }, "消息 " + ((stats && stats.conversations) || 0)),
+								h("span", { key: "r" }, "审核 " + ((stats && stats.reviews) || 0)),
+								h("span", { key: "d" }, "决策 " + ((stats && stats.decisions) || 0)),
+								h("span", { key: "m" }, "记忆项 " + ((node && node.decisions ? node.decisions.length : 0) + (node && node.docs ? node.docs.length : 0))),
+								h("span", { key: "rk", style: { color: (node && node.risks && node.risks.length) ? "#d29922" : "inherit" } }, "风险 " + ((node && node.risks) ? node.risks.length : 0)),
+								h("span", { key: "td" }, "回结收件箱 · " + todos.filter((t) => t.done !== true).length),
+								h("span", { key: "rec", style: { marginLeft: "auto" }, title: "最近一次层级变更" },
+									"最近：" + clampText((node && node.meta && node.meta.updatedAt) ? new Date(node.meta.updatedAt).toLocaleString() : "（无变更记录）", 30))
+							])
+						])),
+			
+					/* ── R8 焦点条（**不再自建输入框** —— 用户：「不要这个对话框 用原本的对话框」） ──
+					 * 右端按浮动按钮组宽度留白（见 dockReserve 注释）—— 否则最右的「交给总监整理」整颗被压住 */
+					h("div", { key: "r8", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "7px " + (9 + dockReserve) + "px 7px 9px", borderTop: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto", background: "var(--dp-bg-1, transparent)" }, "data-testid": "dp-r8" }, [
+						h("span", { key: "l", style: { ...S.muted, minWidth: 52 } }, "输入目标"),
+						h("button", {
+							key: "fd", "data-testid": "dp-route-director", "data-on": st.focusTarget === "director" ? "1" : "0",
+							style: { ...S.btn, borderColor: st.focusTarget === "director" ? "var(--dp-ac-line, rgba(137,87,229,.45))" : "var(--dp-line, #3d4148)", color: st.focusTarget === "director" ? "var(--dp-ac, #b794f6)" : "var(--dp-t3, #8b9199)" },
+							title: "点到哪里就往哪里输入：选「总监」后，本条登记为总监维度",
+							onClick: () => pickTarget(DIM.DIRECTOR)
+						}, "◆ 总监" + (st.focusTarget === "director" ? " ●" : "")),
+						h("button", {
+							key: "fc", "data-testid": "dp-route-chat", "data-on": st.focusTarget === "chat" ? "1" : "0",
+							style: { ...S.btn, borderColor: st.focusTarget === "chat" ? "var(--dp-ac-line, rgba(47,111,235,.5))" : "var(--dp-line, #3d4148)", color: st.focusTarget === "chat" ? "var(--dp-ac, #79a8ff)" : "var(--dp-t3, #8b9199)" },
+							title: "点到哪里就往哪里输入：选「对话」后，本条登记为对话维度",
+							onClick: () => pickTarget(DIM.CHAT)
+						}, "💬 对话" + (st.focusTarget === "chat" ? " ●" : "")),
+			
+						h("button", {
+							key: "fo", style: S.btn, "data-testid": "dp-focus-native", "aria-disabled": composerOk ? "false" : "true",
+							title: composerOk ? "把光标送进宿主原生对话框（本页不再自建输入框）" : "当前读不到宿主原生对话框：请切到「对话」tab 或让它可见",
+							onClick: () => focusNative("目标：" + (st.focusTarget === "director" ? "总监" : "对话"))
+						}, "⌨ 聚焦原生对话框" + (composerOk ? "" : "（不可用）")),
+			
+						h("button", {
+							key: "rg", style: S.btn, "data-testid": "dp-register-flow", disabled: !composerOk,
+							title: composerOk ? "读原生输入框当前内容，登记成一条四维流转（读真值，空内容不登记）" : "原生输入框不可见 ⇒ 读不到内容",
+							onClick: registerNative
+						}, "📥 登记为流转"),
+			
+						h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-r8-note" },
+							"输入在**原生对话框**（页面底部）；这里只负责标目标与登记流转。当前会话 " + (flowSession ? ("…" + String(flowSession).slice(-8)) : "未定位")),
+			
+						h("button", { key: "s", style: { ...S.btn, background: "var(--dp-ac, #2f6bdd)", borderColor: "var(--dp-ac, #2f6bdd)", color: "#fff" }, "data-testid": "dp-send", onClick: () => deliver(readComposerText() || "") }, "交给总监整理")
+					]),
+			
+					/* 路由确认卡（V16 C4：目标多义必确认 —— 不静默分发） */
+					routeResult ? h("div", {
+						key: "rr", style: { padding: "0 9px 7px", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, "data-testid": "dp-route-card"
+					}, [
+						h("span", { key: "c", style: S.chip }, "建议 " + DESTINATION_LABEL[routeResult.decision.destination] + "（" + routeResult.decision.confidence.toFixed(2) + "）"),
+						h("span", { key: "r", style: S.muted }, routeResult.decision.reason),
+						h("button", { key: "t", style: S.btn, "data-testid": "dp-rt-transfer", onClick: () => confirmRoute(DESTINATION.TRANSFER) }, "转给该对话"),
+						h("button", { key: "d", style: S.btn, "data-testid": "dp-rt-direct", onClick: () => confirmRoute(DESTINATION.DIRECT) }, "直接调用"),
+						h("button", { key: "n", style: S.btn, "data-testid": "dp-rt-new", onClick: () => confirmRoute(DESTINATION.CREATE) }, "新建对话"),
+						h("button", { key: "x", style: S.btn, "data-testid": "dp-rt-cancel", onClick: () => setRouteResult(null) }, "取消")
+					]) : null,
+			
+					toast ? h("div", {
+						key: "toast", style: {
+							padding: "0 9px 7px", color: "var(--dp-ac, #79a8ff)", fontSize: "calc(11.5px * var(--dp-font,1))",
+							display: "flex", gap: 6, alignItems: "center"
+						}, "data-testid": "dp-toast", onClick: () => setToast("")
+					}, toast) : null,
+			
+					/* 个性化面板（右上角；四处共用同一组件与同一份设定） */
+					h(PersonalizePanel, { key: "pp", open: pOpen, onClose: () => setPOpen(false), inset: inset, top: 40, scope: "总监页" })
+				]);
+			}
+			
+			/** R4 三个 Tab 的正文（静态骨架，真实数据接入后替换） */
+			const R4_BODY = Object.freeze({
+				docs: "文档树：按 00-统筹入口 / 10-架构设计 / 20-任务文档 / 40-测试质量 / 50-信息中心 分组浏览。",
+				roadmap: "路线图 · 待办：按阶段展示，已完成项划销；未完成项标红并显示依赖。",
+				files: "关键文件：直接指向改代码时最常动的文件（client-entry / mount / DirectorDialog / DesignStudio / MindMap）。"
+			});
+			
+			/** R2.5 六动作的说明（title 用；写明"能做什么 / 不能做时缺什么"） */
+			const CONSOLE_HINT = Object.freeze({
+				new: "新建分支：走导图的「＋ 新建分支」（宿主 sessions.fork）；纯新建会话由宿主左栏负责",
+				del: "删除分支：宿主 sessions 无删除接口 ⇒ 不可用（会如实告知，不做假按钮）",
+				grab: "抓取：读宿主原生输入框当前内容（语义锚点，不猜类名）",
+				close: "回结：把该会话最新流转标记为「已收口」",
+				review: "审核：对抓到的真实文本跑六维规则引擎（空文本会如实报 ❌）",
+				next: "继续：把该会话最新流转送回「对话」维度继续执行"
+			});
+			
+			function buildOptions(tree) {
+				const out = [];
+				const walk = (n, d) => {
+					out.push(h("option", { key: n.id, value: n.id }, "　".repeat(d) + (LEVEL_LABEL[n.level] || n.level) + " · " + n.name));
+					(n.childNodes || []).forEach((c) => walk(c, d + 1));
+				};
+				if (tree) walk(tree, 0);
+				return out;
+			}
+			
+			__defaults["components/DirectorPage.js"] = DirectorPage;
+			
+			exports.DIRECTOR_PAGE_ID = DIRECTOR_PAGE_ID;
+			exports.clampText = clampText;
+			exports.R4_TABS = R4_TABS;
+			exports.DirectorPage = DirectorPage;
+		};
+
 		// ── client-entry.js ──
 		__defs["client-entry.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：插件浏览器侧入口（批次 1 已落地）
+			 * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
+			 * 上游：（无：插件入口层）
+			 * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, components/DirectorDialog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, components/NodeDetailPanel.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
 			/**
 			 * client-entry.js — 插件浏览器侧入口（批次 1 已落地）
 			 *
@@ -7927,8 +15586,9 @@ window.__ModuleLoader__.load({
 			 *     → memory → branch → persist（依赖 debug）→ store 工厂
 			 */
 			
-			const { installDshDebug } = __m("util/debug.js");
+			const { installDshDebug, dshLog } = __m("util/debug.js");
 			const { installV9Log } = __m("util/log-collector.js");
+			const { installNoDrag } = __m("util/no-drag.js");
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { dshThemeStore } = __m("store/theme.js");
 			const { directorConfig } = __m("config/model.js");
@@ -7968,14 +15628,37 @@ window.__ModuleLoader__.load({
 			const { installChatBridgeApi, sendToChat, readConversation } = __m("bridge/chat-bridge.js");
 			const { installNavHook, installNavHookApi } = __m("bridge/nav-hook.js");
 			const { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } = __m("components/DirectorDialog.js");
+			// ── 批次 10 设计图工作室 + 总监 tab（T-PLUG-018）──
+			//    设计图：store/design-schema.js（元素原子）+ store/design.js（CRUD）+ components/DesignStudio.js
+			//    总监 tab：components/DirectorPage.js（R1–R8）+ 下面的 installDirectorView(ctx)
+			const { installDesignApi, DESIGN_KEY } = __m("store/design.js");
+			const { DesignStudio, STUDIO_ID } = __m("components/DesignStudio.js");
+			const { FloatDock, FLOATDOCK_ID, FLOAT_DOCK_RESERVE } = __m("components/FloatDock.js");
+			const { DirectorPage, DIRECTOR_PAGE_ID } = __m("components/DirectorPage.js");
+			const { installBranchTreeApi } = __m("logic/branch-tree.js");
+			const { MindMap, MINDMAP_ID } = __m("components/MindMap.js");
+			// ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）──
+			//    个性化：store/personalize.js（CSS 变量 + 注入样式表）→ components/PersonalizePanel.js（右上角）
+			//    流转：  logic/flow.js（一条消息走过总监 / 对话 / 导图 / 设计图的足迹）
+			const { installPersonalizeApi, personalizeStore } = __m("store/personalize.js");
+			const { PersonalizePanel, PERSONALIZE_PANEL_ID } = __m("components/PersonalizePanel.js");
+			const { installFlowApi, flowStore, DIM, DIM_LABEL } = __m("logic/flow.js");
+			const { NodeDetailPanel, NODE_DETAIL_ID } = __m("components/NodeDetailPanel.js");
 			
-			const PLUGIN_VERSION = "0.9.0-batch9";
+			const PLUGIN_VERSION = "0.13.0-batch13";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
 				// 1. 日志基础设施（顺序敏感：debug 先于 log-collector）
 				installDshDebug();
 				installV9Log();
+			
+				// 1.5 桌面壳：把可交互元素从 OS「标题栏拖拽带」里救出来。
+				//     必须早于任何 UI 挂载 —— 设计图工作室铺满整个窗口，顶栏整条落在 Windows
+				//     的 caption area（本机 CSS 0~44）内；鼠标落在那里会被系统当成「拖动窗口」，
+				//     消息根本进不了渲染进程（连 mousemove 都没有）。表现为顶栏所有按钮点不动。
+				//     🔴 该故障对静态检查 / 离线单测 / CDP 合成事件全部不可见，详见 util/no-drag.js 头部。
+				installNoDrag();
 			
 				// 2. 状态层（构造时即自挂 window，见各模块）
 				//    directorLayoutStore → window.__directorLayoutStore
@@ -8057,6 +15740,25 @@ window.__ModuleLoader__.load({
 					window.__dshNavApi = installNavHookApi();
 					window.__dshReview6 = { REVIEW_DIMS, review6 };
 					window.__dshDirectorDialog = DirectorDialog;
+					// ── 批次 10 设计图工作室（T-PLUG-018）──
+					//    要求：总监页单独加设计图插件，按钮点击铺满全屏，可拖拽增删元素，
+					//          底部临时对话只处理设计图，点元素在左侧显示交互逻辑。
+					window.__dshDesignApi = installDesignApi();
+					window.__dshDesignStudio = DesignStudio;
+					window.__dshMindMap = MindMap;
+					window.__dshFloatDock = FloatDock;
+					window.__dshDirectorPage = DirectorPage;
+					// ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）──
+					//    需求原文：「全部找审美重新审核一下质感加上，同时都在右上角加自定义个性化设定」
+					//              「保证同一个消息能在上面几个维度进行流转」
+					//    ⚠️ 个性化**必须早于界面挂载**（浮动按钮组等在此之后才 mount）——
+					//       它注入的是 CSS 变量与样式表，晚注入会有一帧"未套肤"的闪动。
+					window.__dshPersonalize = installPersonalizeApi();
+					window.__dshFlow = installFlowApi();
+				} else {
+					// 无 DOM 环境（离线测试）：仍要建立 store，保证 import 侧行为一致
+					installPersonalizeApi();
+					installFlowApi();
 				}
 			
 				// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -8177,7 +15879,15 @@ window.__ModuleLoader__.load({
 					// 分屏当前是否生效（弹窗打开且未最小化时为 true）
 					splitActive: isSplitActive(),
 					// 独立库落盘统计（异步，稍后就绪）
-					pluginDbStats: null
+					pluginDbStats: null,
+					// ── 批次 11 个性化设定 + 四维流转 ──
+					personalizeApi: typeof window !== "undefined" ? Boolean(window.__dshPersonalize) : false,
+					personalize: personalizeStore.getState(),
+					flowApi: typeof window !== "undefined" ? Boolean(window.__dshFlow) : false,
+					flowDimensions: ["director", "chat", "mindmap", "design"],
+					nodeDetailPanel: typeof NodeDetailPanel === "function",
+					personalizePanelId: PERSONALIZE_PANEL_ID,
+					nodeDetailId: NODE_DETAIL_ID
 				};
 			
 				hierarchyReady.then((t) => {
@@ -8191,6 +15901,33 @@ window.__ModuleLoader__.load({
 				// 独立库统计（异步；仅用于真机取证与弹窗 R6「数据元独立」展示，失败静默）
 				pluginDbStats().then((s) => { installed.pluginDbStats = s; }).catch(() => { });
 			
+				/* 批次 12 · 总监页风格与宿主统一（需求：「总监 tap 页面的背景采用原软件的背景」）
+				 * 纯记录用途：把这套令牌映射写成可读契约，便于真机/离线断言"产物真的带了它"。
+				 * 真正的判据是运行期的 computed 值（见 verify-flow.mjs F 段），不是这张表。 */
+				installed.uiTheme = {
+					scope: '[data-testid="dp-root"]',
+					source: "host --dsw-alias-*",
+					surface: "--dsw-alias-bg-base",
+					card: "--dsw-alias-bg-layer-1",
+					card2: "--dsw-alias-bg-layer-2",
+					text: "--dsw-alias-label-primary",
+					textDim: "--dsw-alias-label-tertiary",
+					border: "--dsw-alias-border-l2"
+				};
+			
+				/* 批次 13 · 浮动按钮组的两条几何/配色契约（背景改浅后连带暴露的两处缺陷）
+				 * ① 容器透明化点击、药丸自己吃点击 —— 否则容器的**透明空隙**会吃掉页面自己按钮的事件
+				 *    （真机实测「交给总监整理」被压住且点不动）；
+				 * ② 药丸字色取宿主主文字令牌 —— 原先写死的浅色在浅底上对比度只剩 1.35–2.21:1。
+				 * `reserve` 从 FloatDock 的真实常量取（**不写第二份真相**）。 */
+				installed.floatDock = {
+					containerPointerEvents: "none",
+					pillPointerEvents: "auto",
+					pillColorToken: "--dsw-alias-label-primary",
+					reserve: FLOAT_DOCK_RESERVE,
+					reserveConsumers: ["dp-r6", "dp-r8"]
+				};
+			
 				if (typeof window !== "undefined") {
 					window.__dshDirectorBatch1 = installed;
 					window.__dshDirectorBatch2 = installed; // 批次 2 别名
@@ -8201,11 +15938,93 @@ window.__ModuleLoader__.load({
 					window.__dshDirectorBatch7 = installed; // 批次 7 别名
 					window.__dshDirectorBatch8 = installed; // 批次 8 别名
 					window.__dshDirectorBatch9 = installed; // 批次 9 别名（弹窗式总监架构）
+					window.__dshDirectorBatch10 = installed; // 批次 10 别名（设计图工作室 + 总监 tab）
+					window.__dshDirectorBatch11 = installed; // 批次 11 别名（个性化设定 + 四维流转）
+					window.__dshDirectorBatch12 = installed; // 批次 12 别名（总监页背景改走宿主令牌）
+					window.__dshDirectorBatch13 = installed; // 批次 13 别名（浮动入口点击穿透 + 药丸配色随主题）
 				}
 				return installed;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns // 要求 6/10/11 弹窗本体 }; 
+			/* ══════════════════════════════════════════════════════════════════
+			 * 批次 10 · 总监 tab 注册（宿主原生三页签的第一项）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 这是本插件与宿主**唯一**的正式对接点，契约逐条取证自宿主源码：
+			 *
+			 *   ① 数据源：`conversation.view` 是 **list slot**（宿主 client.js:11724 声明
+			 *      `kind:"list", scope:"session"`），tab 环直接由它的 entries 生成：
+			 *        `viewTabs()` → `for (const entry of slots.entries("conversation.view"))`
+			 *                     → `{ id: entry.options.id, label: resolveSlotLabel(entry.options.label) }`
+			 *        （宿主 client.js:11621-11631）
+			 *   ② 渲染：`renderSlot("conversation.view", {inspect,onInspectDone}, { only: active.id })`
+			 *        （宿主 client.js:9175）⇒ 组件收到 inspect 与 onInspectDone 两个 props
+			 *   ③ 显示条件：`tabs.length > 1`（宿主 client.js:9120）—— 目前 chat + trajectory = 2，
+			 *      本注册后为 3，tab 环必定显示
+			 *   ④ 顺序：宿主 chat 用 `order: 0`、trajectory 用 `order: 10`
+			 *      ⇒ 本插件用 **`order: -1`** 排在**最前**（设计稿：总监 | 对话 | 轨迹）
+			 *   ⑤ 通道写法照同族先例 `dsh-client-ui-trajectory/lib/client.js:7316,7340`：
+			 *        `inject: ["slots"]` + `ctx.slots.inject(slot, () => ctx.slots.register({...}, Cmp))`
+			 *   ⑥ 注册必须包在 `ctx.slots.inject(...)` 回调里 —— slot 未声明前注册会抛
+			 *      `slot "…" is not declared`（slots 包 register 的第 2 行检查）
+			 *
+			 *  由 `build/build.mjs` 的 apply 模板透传 ctx 后调用（apply 里 `void ctx` 曾是断链根因）。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 总监视图 id（写入 slot entry 的 `id`，宿主 `resolveActiveView` 按它匹配，不可改名） */
+			const DIRECTOR_VIEW_ID = "director";
+			/** 排在最前（宿主 chat=0 / trajectory=10） */
+			const DIRECTOR_VIEW_ORDER = -1;
+			
+			/**
+			 * 把「总监」注册进宿主原生 tab 环。
+			 * 失败**不抛**：返回结构化结果，由调用方决定是否降级到浮层通道（`mount.js`）。
+			 * @param {object} ctx cordis 上下文（由 apply 注入）
+			 * @returns {{registered:boolean, id:string, order:number, reason:string|null}}
+			 */
+			function installDirectorView(ctx) {
+				const out = { registered: false, id: DIRECTOR_VIEW_ID, order: DIRECTOR_VIEW_ORDER, reason: null };
+				/* 🔴 纪律（2026-09-12 真机教训 · 单点故障复盘）：
+				 *   「诊断句柄必须在任何**可能自身抛错**的语句之前落盘」。
+				 *   上一版把 `window.__dshDirectorView = out` 放在函数末尾，而 catch 块里的 `dshLog`
+				 *   因未 import 抛 ReferenceError（且 catch 块内的抛错**不在 try 保护范围内**），
+				 *   异常直接逃出本函数 ⇒ 末行永不执行 ⇒ 真机上 `__dshDirectorView` 恒为 undefined，
+				 *   连"注册失败原因"都拿不到。故此处三处修正：
+				 *     ① 前置落盘（每一条退出路径都先写 window.__dshDirectorView）；
+				 *     ② 日志一律包在 `safeLog()` 里，**日志失败绝不影响主流程**；
+				 *     ③ 返回前再同步一次，保证调用方拿到的 out 与全局一致。 */
+				const safeLog = (msg) => { try { dshLog("hierarchy", msg); } catch (_) { /* 日志是最外层可观测性，绝不反噬主流程 */ } };
+				const publish = () => { if (typeof window !== "undefined") window.__dshDirectorView = out; };
+			
+				publish(); // ① 前置落盘：此刻 out 还是 {registered:false, reason:null}
+				try {
+					if (!ctx || !ctx.slots) {
+						out.reason = "ctx.slots 不可用（宿主版本差异）—— 已由浮层通道保底";
+						publish();
+						safeLog("总监 tab 注册跳过: " + out.reason);
+						return out;
+					}
+					// slot 声明就绪后再注册；inject 回调由 slots 服务在声明后触发
+					ctx.slots.inject("conversation.view", () => ctx.slots.register({
+						name: "conversation.view",
+						id: DIRECTOR_VIEW_ID,
+						order: DIRECTOR_VIEW_ORDER,
+						label: () => "总监",
+						// 与 trajectory 同构：把 sessionId 交给组件，便于组件按会话取数
+						inject: (sessionId) => ({ sessionId })
+					}, DirectorPage));
+					out.registered = true;
+					publish();
+					safeLog("已注册总监 tab（id=director, order=-1）到宿主 conversation.view");
+				} catch (e) {
+					out.reason = String((e && e.message) || e);
+					publish(); // ② 先落盘，后日志 —— 顺序不可颠倒
+					safeLog("总监 tab 注册失败，已降级浮层通道: " + out.reason);
+				}
+				publish(); // ③ 兜底同步
+				return out;
+			}
+			
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns, // 要求 6/10/11 弹窗本体 // ── 批次 10 设计图工作室 + 分支导图 + 总监 tab（T-PLUG-018）── installDesignApi, DESIGN_KEY,                       // 设计图数据层 DesignStudio, STUDIO_ID,                            // 设计图全屏工作室 installBranchTreeApi, MindMap, MINDMAP_ID,          // 分支血缘导图 FloatDock, FLOATDOCK_ID,                            // 浮动按钮组（设计图 / 导图 / 总监） DirectorPage, DIRECTOR_PAGE_ID,                     // 总监页（R1–R8） // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）── installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID, installFlowApi, flowStore, DIM, DIM_LABEL, NodeDetailPanel, NODE_DETAIL_ID, installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER // 宿主 tab 注册 }; 
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
 			exports.directorLayoutStore = directorLayoutStore;
@@ -8265,15 +16084,58 @@ window.__ModuleLoader__.load({
 			exports.AGENTS = AGENTS;
 			exports.SKILLS = SKILLS;
 			exports.listAgentRuns = listAgentRuns;
+			exports.installDesignApi = installDesignApi;
+			exports.DESIGN_KEY = DESIGN_KEY;
+			exports.DesignStudio = DesignStudio;
+			exports.STUDIO_ID = STUDIO_ID;
+			exports.installBranchTreeApi = installBranchTreeApi;
+			exports.MindMap = MindMap;
+			exports.MINDMAP_ID = MINDMAP_ID;
+			exports.FloatDock = FloatDock;
+			exports.FLOATDOCK_ID = FLOATDOCK_ID;
+			exports.DirectorPage = DirectorPage;
+			exports.DIRECTOR_PAGE_ID = DIRECTOR_PAGE_ID;
+			exports.installPersonalizeApi = installPersonalizeApi;
+			exports.personalizeStore = personalizeStore;
+			exports.PersonalizePanel = PersonalizePanel;
+			exports.PERSONALIZE_PANEL_ID = PERSONALIZE_PANEL_ID;
+			exports.installFlowApi = installFlowApi;
+			exports.flowStore = flowStore;
+			exports.DIM = DIM;
+			exports.DIM_LABEL = DIM_LABEL;
+			exports.NodeDetailPanel = NodeDetailPanel;
+			exports.NODE_DETAIL_ID = NODE_DETAIL_ID;
+			exports.installDirectorView = installDirectorView;
+			exports.DIRECTOR_VIEW_ID = DIRECTOR_VIEW_ID;
+			exports.DIRECTOR_VIEW_ORDER = DIRECTOR_VIEW_ORDER;
 		};
 
 		// ── Harness client 插件契约导出 ──
 		var __entry = __m("client-entry.js");
+		// 🔴 ctx 必须**透传**给 installBatch1 —— 且槽位注册要用到它。
+		//    历史缺陷：旧模板写 void ctx;（把 ctx 丢弃），导致插件拿不到 ctx.slots，
+		//    总监 tab 无法注册进宿主原生 tab 环（只能退回浮层），这是"三页签做不出来"的真根因。
 		var apply = function apply(ctx) {
-			void ctx;
-			return __entry.installBatch1({});
+			// 逐步痕迹：任一步失败都能在真机上 window.__dshApplyTrace 里看到断点（诊断用，勿删）
+			var trace = [];
+			try { if (typeof window !== "undefined") window.__dshApplyTrace = trace; } catch (_) {}
+			var installed = null;
+			try { trace.push("batch1:start"); installed = __entry.installBatch1({ ctx: ctx }); trace.push("batch1:ok"); }
+			catch (e) { trace.push("batch1:ERR " + ((e && e.message) || e)); }
+			try { trace.push("branch:" + typeof __entry.installBranchTreeApi); __entry.installBranchTreeApi(ctx); trace.push("branch:ok"); }
+			catch (e) { trace.push("branch:ERR " + ((e && e.message) || e)); }
+			try {
+				trace.push("view:" + typeof __entry.installDirectorView);
+				var reg = __entry.installDirectorView(ctx);
+				trace.push("view:" + JSON.stringify(reg));
+				if (installed && typeof installed === "object") installed.directorView = reg;
+			} catch (e) { trace.push("view:ERR " + ((e && e.message) || e)); }
+			return installed;
 		};
-		var inject = [];
+		// 依赖服务：slots（slot 注册前置）+ sessions（分支血缘导图前置）。
+		// 少声明 sessions 会让 ctx.sessions 抛 cannot get property ... without inject，
+		// 而旧代码用 try/catch 吞掉该错 → 血缘静默降级成"按工作区分组的平铺树"。
+		var inject = ["slots", "sessions"];
 		exports.apply = apply;
 		exports.inject = inject;
 		exports.__entry = __entry;

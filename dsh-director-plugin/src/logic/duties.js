@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：总监职责配置定义（03号文 §3.1「执行逻辑项」）
+ * 引用：03 号文 §3.1
+ * 上游：components/DirectorWorkbench.js, logic/director-run.js, store/duty-config.js
+ * 下游：（无）
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * logic/duties.js — 总监职责配置定义（03号文 §3.1「执行逻辑项」）
  *

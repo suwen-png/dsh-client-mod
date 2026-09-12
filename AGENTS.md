@@ -2,7 +2,39 @@
 
 > **本文件是 dsh-client-mod 项目的最高优先级执行规范。任何 AI 操作本项目时，必须先完整阅读本文件，再按其约束执行。**
 > **创建日期**: 2026-08-27
-> **项目定位**: DeepSeek Harness 原客户端修改工作区 — 备份-修改-符号链接-复原 全链路 + 总监对话模式
+> **项目定位**: DeepSeek Harness 原客户端修改工作区 — **总监驾驶舱插件（含设计图工作室）** + 备份-修改-复原 全链路
+> **最后更新**: 2026-09-12（V16 落死：主管道由「改宿主编译产物」切换为「官方 client 插件」）
+
+---
+
+## 〇、当前基线（2026-09-12 落死 · 先读这条）
+
+> **项目现状的唯一权威描述在**：`docs/00-统筹入口/10-当前基线-落死锚点-V16.md`
+>
+> ### 三件必须知道的事
+>
+> 1. **主管道已切换**：现在的交付物是**独立插件包 `dsh-director-plugin/`**（走 Harness 官方 client 插件通道），
+>    **不是**改宿主编译产物。§二 里描述的 `workspace/@deepseek-ai/... + apply.ps1` 流程属**历史通道**，
+>    仅在排查旧问题时参考，**不要再据此施工**。
+> 2. **动手前先跑基线校验**：`cd dsh-director-plugin && node scripts/baseline-check.mjs`
+>    输出 `IS_PASS: TRUE（漂移=0）` 才能引用基线文档当"现状"；`FALSE` 说明代码已漂移，先对齐。
+> 3. **不要新开版本号**。用户明确要求「把这一版落死，我不想再开一版本了」——
+>    基线演进 = **就地更新** `10-当前基线-落死锚点-V16.md` + `node scripts/baseline-check.mjs --write` 重新封存，
+>    **禁止**新建 V17/V18 之类的新文档。
+
+| 一句话 | 内容 |
+|:-------|:-----|
+| 交付物 | `dsh-director-plugin/`（产物 `lib/client.js` **883,339 B / 54 模块** · 绑定对账 **450 = 450 / 170 条 import** · `inject = ["slots","sessions"]`） |
+| 界面 | 宿主三页签【总监】【对话】【轨迹】+ 三浮层（设计图工作室 / 思维导图 / 总监弹窗）；四处右上角共用同一个**个性化设定**面板（总监页 / 总监弹窗 / 分支导图 / 设计图工作室） |
+| 设计稿 | `docs/50-信息中心/V16-设计图·需求图·交互逻辑.html`（A 高保真 / B 需求图 / C 交互逻辑 / **D 设计图工作室** / **E 保存·版本·窗口安全区** / **F 思维导图元素库 18 条总账** / **G 单框控件·拖动·右侧对话·四维流转·质感与个性化**） |
+| 基线闸门 | 静态闸门 `TRUE`（阻塞 0 / 提示 16） · CDP 模板 `TRUE` · bundle 桩执行 **90/90** · 设计图纯函数 **49/49** · 版本层 **63/63** · 思维导图纯函数 **91/91** · 个性化+四维流转 **87/87** · 设计稿卫生 **5/5** · 工作室逐交互 **90/90** · 导图逐交互 **86/86** · 真机演练 **57/57** · 构建 **890,104 B / 54 模块 · 452 = 452** · 映射索引幂等 · 指纹 `漂移=0`（↑真机三套**各连跑 3 次**，且工作室那套要求**载荷逐字一致**） |
+| 真机演练 | `scripts/verify-flow.mjs` **57/57 · 零跳过 · 连跑 3 次全绿**（五组原话逐条落点：原生对话框 / 个性化四处 / 单框控件+拖动+连线对账 / 右侧对话首位 / 四维流转跟随切换；**F 段**：总监页同源 + 浮动组 F8 不吃点击 · F9 配色随主题 · F10 位置不漂 · F11 跟随性正负对照）+ CDP 健康度断言 E2 |
+| 构建→装机 7 步 | 闸门 → `gen-source-map.mjs` → `build/build.mjs` → `plugin-install.mjs --apply` → **重启 Harness** → `verify-design-studio.mjs` + `verify-mindmap.mjs` + **`verify-flow.mjs`**（各连跑 3 次） |
+
+> 🔴 **两条最容易踩的测试陷阱**（详见 `docs/00-统筹入口/10-…V16.md` §七 7.5 / §八 13–19）：
+> ① 用真实鼠标驱动 e2e 时，坐标必须**视口内且命中测试为自己** —— 画布滚动后第一个节点可能是 **x=-934**，
+> 事件打空却像「功能坏了」（改用 `focusVisibleNode()`）；
+> ② **不要无条件按 Esc** —— 无菜单时它关闭**整张导图**，会让其后所有断言都在量一个已卸载的 DOM。
 
 ---
 
@@ -13,54 +45,78 @@
 | 顺序 | 文件 | 路径 | 说明 |
 |:----:|------|------|------|
 | 1 | 项目 AGENTS.md（本文件） | `AGENTS.md` | 最高优先级，强制全读 |
-| 2 | workspace 全局 AGENTS.md | `D:\workspace\AGENTS.md` | 全局约束+行为逻辑框架V1.2 |
-| 3 | 总统筹入口文档 | `docs/00-统筹入口/00-总统筹入口文档.md` | 项目定位、特性、进度 |
-| 4 | AI对话执行约束规范 | `docs/00-统筹入口/AI对话执行约束规范.md` | 10步链路+6条约束+25条行为逻辑V1.2 |
-| 5 | AI规范执行保障机制 | `docs/00-统筹入口/AI规范执行保障机制.md` | 四层保障：加载协议+检查点+触发表+违规自检 |
-| 6 | AI任务审核标准通用模板 | `docs/00-统筹入口/AI任务审核标准通用模板.md` | 审核标准（只读检查清单章节） |
-| 7 | 项目大索引 | `docs/00-统筹入口/05-项目大索引.md` | 文档定位指南 |
-| 8 | 项目记忆 | `_memory/MEMORY.md` | 历史决策、ADR、风险注意事项 |
+| 2 | **★ 当前基线 · 落死锚点** | `docs/00-统筹入口/10-当前基线-落死锚点-V16.md` | **项目现状唯一权威描述**：代码地图 / 三方映射 / 冻结契约 / 闸门 / 缺陷台账 |
+| 3 | workspace 全局 AGENTS.md | `D:\workspace\AGENTS.md` | 全局约束+行为逻辑框架V1.2 |
+| 4 | 总统筹入口文档 | `docs/00-统筹入口/00-总统筹入口文档.md` | 项目定位、特性、进度 |
+| 5 | AI对话执行约束规范 | `docs/00-统筹入口/AI对话执行约束规范.md` | 10步链路+6条约束+25条行为逻辑V1.2 |
+| 6 | AI规范执行保障机制 | `docs/00-统筹入口/AI规范执行保障机制.md` | 四层保障：加载协议+检查点+触发表+违规自检 |
+| 7 | AI任务审核标准通用模板 | `docs/00-统筹入口/AI任务审核标准通用模板.md` | 审核标准（只读检查清单章节） |
+| 8 | 项目大索引 | `docs/00-统筹入口/05-项目大索引.md` | 文档定位指南 |
+| 9 | 项目记忆 | `_memory/MEMORY.md` | 历史决策、ADR、风险注意事项 |
 
 **未加载必读集合之前，禁止执行任何写操作。**
+
+**最小读取豁免**：仅"看一眼现状"类任务，可只读 #2 + 跑一次基线校验，不必全量加载。
 
 ---
 
 ## 二、项目特殊性（Harness 客户端修改的特殊约束）
 
-dsh-client-mod 与普通项目不同，有以下特殊约束必须遵守：
+> 🔴 **2026-09-12 起，主管道是「官方 client 插件」**（`dsh-director-plugin/`）。
+> 下列 §2.2 描述的 `workspace/@deepseek-ai/* + apply.ps1` 属**历史通道**，仅排查旧问题时参考。
+> 插件通道的三处安装点、重启陷阱、冻结契约见 `docs/00-统筹入口/10-当前基线-落死锚点-V16.md` §二 与 §五。
 
 ### 2.1 关键铁律（不可违反）
 
-1. **永远不要直接修改原安装目录** — 只在 `workspace/` 中修改，通过 `apply.ps1` 应用
-2. **apply 前自动快照** — `snapshots/` 中保留每次应用前的工作区状态，出问题可回滚
-3. **original/ 是只读复原源** — 除非重新备份，否则不要修改 `original/` 目录
-4. **修改后必须清除缓存并完全退出 Harness 重启** — `client.js?rev=` 缓存机制要求，必须清除 Cache/Code Cache/GPUCache/blob_storage/Network
+1. **主管道** — 功能改动落在 `dsh-director-plugin/src/**`，构建产物 `lib/client.js` 由 `build/build.mjs` 生成
+2. **不直接修改原安装目录** — 装机走 `scripts/plugin-install.mjs --apply`（幂等 + 写后逐文件回读校验）
+3. **改完必须重启 Harness** — 插件在 boot 时装载，不重启不生效（启动命令与 `ELECTRON_RUN_AS_NODE` 陷阱见锚点文档 §二）
+4. **`original/` 是只读复原源** — 除非重新备份，否则不要修改 `original/` 目录
 5. **所有操作有日志** — `logs/dsh-mod-YYYYMMDD.log`，重要操作必须记录
+6. **契约不可改名** — localStorage key / DB 版本与 store 名 / cookie 前缀 / DOM 锚点 / view order，
+   改名即老用户数据全丢（R5 冻结，见锚点文档 §五）
+7. **视觉改动必须截图复验** — 逻辑断言全绿 ≠ 界面可用；锚点文档 §七 7.2 的 5 个缺陷全是在"全绿"下靠截图发现的
+8. **不新开版本号** — 基线演进就地更新，禁止新建 V17+ 文档
 
-### 2.2 技术栈与修改范围
+### 2.2 插件通道（现行）与历史通道对照
 
-- **修改对象**：Harness 原客户端编译产物（`lib/client.js`、`lib/index.js` 等）
-- **技术栈**：JavaScript / PowerShell / Junction 符号链接 / Ollama 本地模型
-- **目标包（7个）**：dsh-client-ui-layout、dsh-client-ui-conversation、dsh-client-ui-sidebar、dsh-client-ui-slots、dsh-client-runtime、dsh-client-web-react、dsh-client-web
-- **修改方式**：在 `workspace/@deepseek-ai/<包名>/lib/*.js` 中直接修改，改完用 `apply.ps1` 应用
+| 项 | **现行：官方 client 插件** | 历史：改宿主编译产物 |
+|:---|:--------------------------|:---------------------|
+| 改哪里 | `dsh-director-plugin/src/**` | `workspace/@deepseek-ai/<包名>/lib/*.js` |
+| 怎么装机 | `node scripts/plugin-install.mjs --apply` | `.\apply.ps1`（快照 + Junction 替换 + 清缓存） |
+| 回滚 | `--uninstall` / `--purge`（外科式只删本插件 entry） | `.\restore.ps1` |
+| 三处安装点 | ① 实体包 `<Harness>/resources/host/node_modules/@deepseek-ai/dsh-director-plugin/` ② `~/.dsh/profiles/node_modules/...`（junction）③ `~/.dsh/profiles/web/cordis.patch.yml`（entry `deepseek-ai.director`） | Junction 替换目标包 lib/ |
+| 生效条件 | 重启 Harness | 清 Cache/Code Cache/GPUCache/**blob_storage**/Network 后重启 |
+| ⚠️ 清缓存禁忌 | **不得删 `Network`** — 那是 Chromium 的 cookie 存储，内含 `dsh_director_*` 持久化 cookie，删即总监状态丢失 | — |
 
-### 2.3 标准工作流
+**技术栈**：JavaScript（ESM）+ Node 22 / Electron / react（平台外置）/ IndexedDB + localStorage + Cookie。
+
+### 2.3 标准工作流（现行）
 
 ```
-日常修改流程：
-1. 在 workspace/@deepseek-ai/<包名>/lib/ 下修改 *.js
-2. .\diff.ps1 查看改了哪些文件
-3. .\apply.ps1 应用修改（自动快照 + Junction 替换 + 清除缓存）
-4. 完全退出 Harness 后重启生效
-5. 出问题：.\restore.ps1 一键复原
+改一处功能的完整闭环：
+1. node scripts/baseline-check.mjs              # 先确认没在读一份过期的"现状"
+2. （界面改动）先改设计稿 docs/50-信息中心/V16-设计图·需求图·交互逻辑.html
+3. 改 dsh-director-plugin/src/**，同步文件头映射注释
+4. node scripts/lint-undefined-symbols.mjs && node scripts/lint-cdp-templates.mjs
+   node scripts/test-design-logic.mjs && node scripts/test-design-version.mjs
+   node scripts/test-mindmap-logic.mjs && node scripts/verify-bundle.mjs
+5. node build/build.mjs && node scripts/plugin-install.mjs --apply   # 写后逐文件回读校验
+6. 重启 Harness（后台方式 + env -u ELECTRON_RUN_AS_NODE）
+7. node scripts/verify-design-studio.mjs && node scripts/verify-mindmap.mjs  # 真机逐交互（各连跑 3 次）
+8. （视觉改动）node scripts/shot-studio.mjs logs/x.png   # 截图复验
+   （设计稿改动）node scripts/verify-design-html.mjs "docs/50-信息中心/V16-设计图·需求图·交互逻辑.html"   # 卫生五项 5/5
+9. 更新 10-当前基线-落死锚点-V16.md → node scripts/baseline-check.mjs --write
 ```
 
 ### 2.4 风险提示
 
-- 修改编译产物风险高，必须仔细测试
-- 每次 apply 前自动快照，但仍建议重要修改前手动快照
-- 总监对话模式涉及本地模型（qwen2:7b），需确保 Ollama 服务运行
-- 三tab共存（总监/对话/轨迹），修改时需确保不破坏原功能
+- 宿主**无 React 错误边界** ⇒ 单层崩溃卸载整棵 Shell 根 ⇒ 四个浮层全灭；故每层裹 `SafeLayer`，新增浮层必须照做
+- 持久化的"打开态"是**自锁死**放大器 ⇒ 凡 `open && 数据为 null` 的组合必须判空
+- 构建模板字符串内**禁用反引号**（构建期被当模板字面量求值）
+- 写盘必须显式 LF（Windows 文本模式会转 CRLF，导致假重写 diff）
+- Harness 端口每次启动变化 ⇒ localStorage 按 origin 分区 ⇒ 主存有丢失风险，设计图有 IndexedDB 冷备
+- 修改编译产物风险高，必须仔细测试；三 tab 共存（总监/对话/轨迹），修改时需确保不破坏原功能
 
 ---
 
@@ -144,12 +200,15 @@ dsh-client-mod 与普通项目不同，有以下特殊约束必须遵守：
 
 | 检查项 | 要求 |
 |--------|------|
-| 是否已加载必读集合 | 是（见§一） |
-| 是否理解项目特殊性 | 是（见§二关键铁律） |
-| 修改是否在 workspace/ 中进行 | 是，禁止直接修改原安装目录 |
-| apply 前是否有快照 | 是，自动快照+重要修改手动快照 |
-| 修改后是否清除缓存并重启 Harness | 是，必须清除 Cache/Code Cache/GPUCache/blob_storage/Network |
-| 是否准备了回滚方案 | 是，restore.ps1 一键复原 |
+| 是否已加载必读集合 | 是（见§一，**含 §0 当前基线锚点**） |
+| 是否跑过基线校验 | 是（`node scripts/baseline-check.mjs`） |
+| 是否理解项目特殊性 | 是（见§二，**主管道=插件通道**） |
+| 修改是否在 `dsh-director-plugin/src/` 中进行 | 是，禁止直接修改原安装目录 |
+| 装机是否走 plugin-install.mjs | 是（幂等 + 写后逐文件回读校验） |
+| 修改后是否重启 Harness | 是（后台方式 + `env -u ELECTRON_RUN_AS_NODE`） |
+| 是否触碰冻结契约 | 无（localStorage key / DB 版本 / 锚点 / order 一律不改名） |
+| 视觉改动是否截图复验 | 是 |
+| 是否准备了回滚方案 | 是（`--uninstall` / `--purge` / git） |
 | 用户说的"标准"是否有明确定义 | 没有则必须先询问，禁止自行编造 |
 
 ---
@@ -161,21 +220,28 @@ dsh-client-mod/
 ├── AGENTS.md                 ← 本文件（最高优先级）
 ├── README.md                 ← 项目说明
 ├── config.json               ← 配置（原路径、目标包列表、规则）
-├── config/                   ← 项目配置
-├── original/@deepseek-ai/    ← 原客户端代码备份（只读，复原源）
-├── workspace/@deepseek-ai/   ← 修改工作区（在此修改，改完 apply）
-├── patches/                  ← 差异报告与 patch 文件
-├── snapshots/                ← 应用前自动快照（可回滚到任意快照）
-├── scripts/                  ← 自动化脚本（backup/init-workspace/apply/restore/status/diff/snapshot）
+├── dsh-director-plugin/      ← ★ 主管道：总监驾驶舱插件（现行交付物）
+│   ├── src/                  ←   源码（47 个 js / 10,488 行）
+│   ├── build/build.mjs       ←   构建（产物 lib/client.js，React 平台外置）
+│   ├── lib/client.js         ←   构建产物
+│   ├── scripts/              ←   闸门 / 安装器 / 真机验证 / 截图 / 基线指纹
+│   ├── docs/                 ←   插件级设计说明（01 迁移明细 … 11 设计稿审核）
+│   ├── INSTALL.md            ←   安装权威说明
+│   └── BASELINE.lock.json    ←   ★ 落死基线指纹（60 文件 md5 / 1,730,783 B）
 ├── docs/
 │   ├── 00-统筹入口/          ← 核心文档（必读集合）
+│   │   └── 10-当前基线-落死锚点-V16.md   ← ★ 项目现状唯一权威描述
 │   ├── 10-架构设计/
 │   ├── 20-任务文档/
 │   ├── 30-开发链路/
 │   ├── 40-测试质量/
-│   ├── 50-信息中心/
+│   ├── 50-信息中心/          ← 设计稿本体（V16 …含板块 D）
 │   ├── 90-历史归档/
 │   └── 99-个人沟通/
+├── original/@deepseek-ai/    ← 原客户端代码备份（只读，复原源）
+├── workspace/@deepseek-ai/   ← 历史通道工作区（现行已不用）
+├── patches/  snapshots/      ← 历史通道差异与快照
+├── scripts/                  ← 历史通道自动化脚本（backup/apply/restore/…）
 ├── logs/                     ← 操作日志（按天）
 └── _memory/                  ← 项目记忆（MEMORY.md）
 ```
@@ -206,9 +272,12 @@ dsh-client-mod/
 - `docs/00-统筹入口/AI行为逻辑框架审核文档.md` — 行为逻辑框架审核记录
 - `docs/00-统筹入口/AI任务审核标准通用模板.md` — 审核标准
 - `docs/00-统筹入口/AI需求驱动读取范围与最小权限规范.md` — 读取范围规范
+- `docs/00-统筹入口/10-当前基线-落死锚点-V16.md` — **项目现状唯一权威描述（V16 落死锚点）**
+- `docs/50-信息中心/V16-设计图·需求图·交互逻辑.html` — 设计稿本体（A 高保真 / B 需求图 / C 交互逻辑 / D 设计图工作室）
+- `dsh-director-plugin/BASELINE.lock.json` — 落死基线指纹（60 文件 md5 / 1,730,783 B）
 - `docs/50-信息中心/01-Harness客户端修改-踩坑记录与快速定位索引.md` — 项目踩坑记录
 
 ---
 
 *本文件创建: 2026-08-27（项目初始化+标准整改+行为逻辑框架V1.2同步+保障机制集成）*
-*本文件最后更新: 2026-08-27*
+*本文件最后更新: 2026-09-12（批次 11 收敛：§〇 基线锚点表同步产物 883,339 B / 54 模块 / 绑定 450 = 450、新增「真机演练」行（verify-flow 46/46 ×3）、构建→装机 7 步补入 verify-flow.mjs、基线指纹 60 文件）*

@@ -22,6 +22,10 @@ logs/*.log
 logs/*.json
 # 真实日志只保留 .log 的纯文本，不入仓二进制与截图
 !logs/*.md
+# 2026-09-12：上面几条是**根目录锚定**的，插件自己的 logs/ 从未被覆盖 ⇒
+#   真机 e2e 的日志（各 run 的 .log 与视觉取证的 .png）一直以 untracked 形式漂在 git status 里（实测 7.0 MB）。
+#   插件日志与根日志同类（运行时产物、可重建），按本文件"只保留可重建物"的既定口径不入仓。
+dsh-director-plugin/logs/
 
 # === 4. 配置文件（个人凭据不入仓） ===
 .credentials.yaml
@@ -65,6 +69,8 @@ coverage/
 # 这些是排障期间的一次性脚本/中间产物，无长期价值。
 # 🔴 注意：scripts/_platform-stub*.mjs 是离线验证套件的依赖，**必须入仓**，故此处只匹配 _probe-。
 # 如需保留某个探针，用 `git add -f <path>` 强制入库。
-dsh-director-plugin/scripts/_probe-*.mjs
+# 2026-09-12：模式由 `_probe-*.mjs` 放宽到 `_probe-*` —— 实测 `.js` 形态的探针（cdp-eval 用的行内片段）
+#   不受旧模式覆盖，一直以 untracked 形式漂在 `git status` 里（一次就积了 6 个）。
+dsh-director-plugin/scripts/_probe-*
 dsh-director-plugin/.tmpcheck/
 

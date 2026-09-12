@@ -32,6 +32,9 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
+/* 产物语法自检用（见文件末「语法闸门」）—— 用 vm.Script 只做**语法解析**，
+ * 不执行代码，故不会触发 require / module 等运行时依赖。 */
+import { Script } from "node:vm";
 
 const PLUGIN_ROOT = resolve(import.meta.dirname, "..");
 const SRC = join(PLUGIN_ROOT, "src");
@@ -89,6 +92,14 @@ function stripComments(s) {
 	return s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 }
 
+/**
+ * import 绑定对账记录（每个 import 语句一条）。
+ * 用途：构建末尾核对「**原始子句里声明的项数**」与「**实际写进产物的绑定项数**」是否一致。
+ * 这是本次事故（产物静默少绑 5 个符号、语法却完全合法）唯一有效的防线 ——
+ * 语法闸门判不了它，md5 一致性判不了它，装机 PASS 也判不了它。
+ */
+const bindAudit = [];
+
 /** 收集具名导出（供 exports 回填） */
 function collectExportNames(code) {
 	const names = new Set();
@@ -126,23 +137,89 @@ function transform(abs, code) {
 
 		// ── import 语句（含多行形态）：聚拢直到闭合 ──
 		if (/^import\s/.test(t)) {
-			let stmt = t;
+			let stmt = stripComments(t).trim();
+			/* stmtRaw：**保留注释的原始子句**。用途只有一个 —— 构建末尾拿它做
+			 * 「声明项数 vs 绑定项数」双路对账（见 bindAudit）。
+			 * 为什么必须留一份原文：本次事故的形态是"产物少绑 5 个符号但语法合法"，
+			 * 任何只看**剥完注释之后**的字符串的检查都看不出少了东西（少了就是少了，
+			 * 剩下的每一项都长得合法）⇒ 必须有一份不受剥注释影响的参照。 */
+			let stmtRaw = t.trim();
 			let j = i;
 			// 单行内已闭合（含 from "..." 或裸 "..."）则不再聚拢
 			const closed = () => /from\s*["'][^"']+["']\s*;?$/.test(stmt) || /^import\s*["'][^"']+["']\s*;?$/.test(stmt);
 			while (!closed() && j + 1 < lines.length) {
 				j++;
-				stmt += " " + lines[j].trim();
+				/* 🔴 注释必须**逐行剥掉**（在拼接成单行之前）—— 2026-09-12 真机事故的**第二层**根因。
+				 *    第一层：注释被当成了绑定名（已由 stripComments 修）。
+				 *    第二层（更隐蔽，且第一层修完仍会踩）：
+				 *      下面的聚拢把多行**拼成一个单行字符串**（`stmt += " " + lines[j].trim()`），
+				 *      而 stripComments 的行注释正则是 `//[^\n]*` —— 在单行里**没有 `\n` 可停**，
+				 *      于是一行 `// 说明` 会一路**吃到整个字符串末尾**：
+				 *          const { a, b, // 说明  c, d } = __m("x.js");
+				 *                          ^^^^^^^^^^^^^^^ 全被替换成空格
+				 *      ⇒ **产物语法完全合法**（`const { a, b } = ...` 是对的），
+				 *        只是**静默少绑定了 5 个符号** ⇒ 运行期才炸 `X is not defined`，
+				 *        而且**语法闸门抓不到**（它只判"是不是合法 JS"，不判"绑全了没有"）。
+				 *      实测后果：Harness 重启后 `batch1:ERR VERSION_LIMIT is not defined`，
+				 *      浮动按钮组与设计图 API 全部不挂载，而 build / install 三道关都报成功。
+				 *    ⇒ 解法是**顺序**问题：注释要在"还没有跨行"时剥掉。 */
+				stmt += " " + stripComments(lines[j].trim()).trim();
+				/* 🔴 stmtRaw **必须用换行拼接**（而不是空格）——
+				 *    写这段对账逻辑时我在这里**又踩了同一个坑**：stmtRaw 若也用空格拼成单行，
+				 *    下面的 declaredItems 逐项剥注释时，`//` 会因为"没有换行可停"而吃掉该行后的项，
+				 *    于是**参照物自己少算**，反而报出"声明 15 / 绑定 16"的假失败。
+				 *    教训：只要还有任何一处把带注释的文本压成单行，
+				 *    "注释吃行尾"就会在那里复活 —— 这个 bug 在同一文件里已出现三次。 */
+				stmtRaw += "\n" + lines[j].trim();
 			}
 			i = j;
 
 			// import { a, b as c } from "./x.js" | "react";
 			let m = stmt.match(/^import\s*\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']\s*;?$/);
 			if (m) {
-				const binds = m[1]
+				/* 绑定名提取 —— **三道防线的最后一关**（前两道：聚拢处逐行剥注释 + 上方语法闸门）。
+				 *
+				 * 🔴 这里**绝不能静默丢弃"无法识别的项"**。
+				 *    本次事故正是以**静默**形态出现的：注释吃掉了 5 个绑定名，
+				 *    产物语法完全合法、build 报成功、install 报 IS_PASS，
+				 *    直到重启 Harness 才炸 `VERSION_LIMIT is not defined`。
+				 *    原先的写法（split → trim → **filter(Boolean)** → map）把无法识别的项
+				 *    悄悄过滤掉，等于给这类缺陷开了一条无声通道。
+				 *    ⇒ 改为：不匹配「标识符」或「标识符 as 标识符」的项一律**抛错**，
+				 *      让"注释污染绑定名"这一族问题在**构建期**断掉。 */
+				const items = m[1]
 					.split(",")
-					.map((s) => s.trim())
-					.filter(Boolean)
+					.map((s) => stripComments(s).trim())
+					.filter(Boolean);
+				const bad = items.filter((s) => !/^[A-Za-z_$][\w$]*(\s+as\s+[A-Za-z_$][\w$]*)?$/.test(s));
+				if (bad.length) {
+					throw new Error(
+						`[build] ${id}: import 子句里有无法识别的项 → ${JSON.stringify(bad)}\n` +
+						`   疑似注释未被剥离（历史事故：注释吞掉后续绑定名，产物**静默少绑定** 5 个符号）。\n` +
+						`   原始子句：${m[1].slice(0, 160)}`
+					);
+				}
+				/* 🔴 双路对账：从**保留注释的原始子句**（stmtRaw）按逗号切分，再**逐项**剥注释，
+				 *    得到"声明项"。正常实现下它与 items 完全相同。
+				 *    但若哪天有人把"剥注释"挪回**跨行拼接之后**（历史 bug 的形态），
+				 *    `//` 会吃到行尾 ⇒ items 少若干项，而 declaredItems 由 stmtRaw 得来、**不会少**
+				 *    ⇒ 两者数量不等 ⇒ 当场抛错。
+				 *    这是唯一能抓住「静默少绑定」的检查：产物语法合法、绑定名合法，
+				 *    只有"数量对不上"这一个可观测差异。 */
+				const declaredItems = ((stmtRaw.match(/\{([\s\S]*?)\}/) || [null, ""])[1])
+					.split(",")
+					.map((s) => stripComments(s).trim())
+					.filter(Boolean);
+				bindAudit.push({ id, spec: m[2], declared: declaredItems.length, bound: items.length });
+				if (declaredItems.length !== items.length) {
+					throw new Error(
+						`[build] ${id}: import 绑定对账失败 —— 声明 ${declaredItems.length} 项，产物只绑 ${items.length} 项\n` +
+						`   声明：${declaredItems.join(", ")}\n` +
+						`   绑定：${items.join(", ")}\n` +
+						`   ⇒ 极可能是"剥注释发生在跨行拼接之后"，注释吃掉了后续绑定名。`
+					);
+				}
+				const binds = items
 					.map((s) => {
 						const [orig, alias] = s.split(/\s+as\s+/).map((x) => x.trim());
 						return alias ? `${orig}: ${alias}` : orig;
@@ -362,11 +439,39 @@ function emit() {
 
 	p.push(`\t\t// ── Harness client 插件契约导出 ──`);
 	p.push(`\t\tvar __entry = __m(${JSON.stringify(moduleId(ENTRY))});`);
+	p.push(`\t\t// 🔴 ctx 必须**透传**给 installBatch1 —— 且槽位注册要用到它。`);
+	p.push(`\t\t//    历史缺陷：旧模板写 void ctx;（把 ctx 丢弃），导致插件拿不到 ctx.slots，`);
+	p.push(`\t\t//    总监 tab 无法注册进宿主原生 tab 环（只能退回浮层），这是"三页签做不出来"的真根因。`);
 	p.push(`\t\tvar apply = function apply(ctx) {`);
-	p.push(`\t\t\tvoid ctx;`);
-	p.push(`\t\t\treturn __entry.installBatch1({});`);
+	p.push(`\t\t\t// 逐步痕迹：任一步失败都能在真机上 window.__dshApplyTrace 里看到断点（诊断用，勿删）`);
+	p.push(`\t\t\tvar trace = [];`);
+	p.push(`\t\t\ttry { if (typeof window !== "undefined") window.__dshApplyTrace = trace; } catch (_) {}`);
+	p.push(`\t\t\tvar installed = null;`);
+	p.push(`\t\t\ttry { trace.push("batch1:start"); installed = __entry.installBatch1({ ctx: ctx }); trace.push("batch1:ok"); }`);
+	p.push(`\t\t\tcatch (e) { trace.push("batch1:ERR " + ((e && e.message) || e)); }`);
+	p.push(`\t\t\ttry { trace.push("branch:" + typeof __entry.installBranchTreeApi); __entry.installBranchTreeApi(ctx); trace.push("branch:ok"); }`);
+	p.push(`\t\t\tcatch (e) { trace.push("branch:ERR " + ((e && e.message) || e)); }`);
+	p.push(`\t\t\ttry {`);
+	p.push(`\t\t\t\ttrace.push("view:" + typeof __entry.installDirectorView);`);
+	p.push(`\t\t\t\tvar reg = __entry.installDirectorView(ctx);`);
+	p.push(`\t\t\t\ttrace.push("view:" + JSON.stringify(reg));`);
+	p.push(`\t\t\t\tif (installed && typeof installed === "object") installed.directorView = reg;`);
+	p.push(`\t\t\t} catch (e) { trace.push("view:ERR " + ((e && e.message) || e)); }`);
+	p.push(`\t\t\treturn installed;`);
 	p.push(`\t\t};`);
-	p.push(`\t\tvar inject = [];`);
+		// 声明依赖的服务：slots 是 slot 注册的前置（同族先例 dsh-client-ui-trajectory 同款写法）。
+		// 🔴 sessions 是**分支血缘导图**的前置：cordis 的 ctx 服务访问是 Proxy 陷阱，
+		//    未声明的服务读一次就抛 cannot get property "sessions" without inject
+		//    （@deepseek-ai/cordis/lib/index.js:675）。旧产物只声明了 slots ⇒
+		//    ctx.sessions 恒抛错 → 被 logic/branch-tree.js 的 try/catch 吞掉 →
+		//    **静默降级**成"按工作区分组的平铺树"，界面上只显示"血缘不可用"，
+		//    看不出是我们少写了一个词。宿主 app-shell 自己就是
+		//    inject = ["slots","sessions","layout"]（dsh-client-web/lib/index.js），同款。
+		// ⚠️ 本段是模板字面量，**禁写反引号**（见文件头约束）。
+		p.push(`\t\t// 依赖服务：slots（slot 注册前置）+ sessions（分支血缘导图前置）。`);
+		p.push(`\t\t// 少声明 sessions 会让 ctx.sessions 抛 cannot get property ... without inject，`);
+		p.push(`\t\t// 而旧代码用 try/catch 吞掉该错 → 血缘静默降级成"按工作区分组的平铺树"。`);
+		p.push(`\t\tvar inject = ["slots", "sessions"];`);
 	p.push(`\t\texports.apply = apply;`);
 	p.push(`\t\texports.inject = inject;`);
 	p.push(`\t\texports.__entry = __entry;`);
@@ -388,4 +493,53 @@ console.log(`[build] 平台外置（不打包，由 require 提供）: ${externa
 const bundle = emit();
 if (!existsSync(dirname(OUT))) mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, bundle, "utf8");
+
+/* ── 产物语法闸门（2026-09-12 新增 · 补一次真实漏检）──────────────────────
+ * 为什么必须有：当天发生了一次「**三道关都报成功、产物却是坏的**」——
+ *   build 打印了产物字节数、install 报 IS_PASS: TRUE、三处安装点 md5 一致，
+ *   但产物中有一段**语法非法**的 JS。直到**重启 Harness** 才以
+ *   「Failed to load plugins / failed to import loader entry」暴露，插件全灭。
+ *
+ *   根因不是"漏了一个检查"，而是**检查分布不均**：build 与 install 查的都是
+ *   "文件有没有被正确搬运"（字节数、md5、路径），**没有任何一环查过
+ *   "搬过去的这串字符是不是合法 JS"**。属台账规则 D「校验器不得跳过自身」的盲区。
+ *
+ * 为什么用 vm.Script：它只做**语法解析、不执行**，因此不触发 require / module /
+ *   indexedDB 等运行时依赖 —— 对"CJS 形态但以 ESM 加载"的产物同样适用，
+ *   这里要判的只有语法这一件事。
+ *
+ * 台账规则 F：本闸门已做正负对照校准（`--selftest-syntax`：好样本必过、坏样本必拦）。
+ */
+if (process.argv.includes("--selftest-syntax")) {
+	/* 坏样本精确复刻本次事故形态：行注释吞掉了后续绑定名与闭合括号，下一行又是语句开头 */
+	const good = "var a = 1; function f(x) { return x + a; } const { p, q } = g;";
+	const bad = "const { a, b, // 说明吞掉了后续\nconst { d } = y;";
+	let ok = true;
+	try { new Script(good); console.log("  ✅ 负对照 · 合法样本未被误拦"); }
+	catch (e) { ok = false; console.log("  ❌ 负对照误报（好样本被拦）：" + e.message); }
+	try { new Script(bad); ok = false; console.log("  ❌ 正对照漏报（本次事故形态未被拦）"); }
+	catch (e) { console.log("  ✅ 正对照 · 注释吞掉绑定名的形态已被拦：" + e.message); }
+	console.log("SELFTEST-SYNTAX: " + (ok ? "PASS" : "FAIL"));
+	process.exit(ok ? 0 : 1);
+}
+
+let syntaxErr = null;
+try { new Script(bundle, { filename: "lib/client.js" }); } catch (e) { syntaxErr = e; }
+
 console.log(`[build] 产物: ${relative(PLUGIN_ROOT, OUT).split("\\").join("/")}  ${Buffer.byteLength(bundle, "utf8")} B（字符 ${bundle.length}）`);
+if (syntaxErr) {
+	console.error("");
+	console.error("[build] ❌ 产物语法自检未通过 —— 该产物**不可装机**");
+	console.error("        （装机后的表现是 Harness 启动即 Failed to load plugins，不是运行时偶发）");
+	console.error("        语法错误：" + syntaxErr.message);
+	console.error("        产物已写出供排查：" + relative(PLUGIN_ROOT, OUT).split("\\").join("/"));
+	process.exit(1);
+}
+console.log("[build] ✅ 产物语法自检通过（vm.Script 解析无错）");
+
+/* import 绑定对账汇总 —— 明细在 bindAudit。
+ * 任何一条不等早在 transform 里就抛错了；这里把规模写进日志，
+ * 让"这条防线覆盖了多少"每次构建都可核验（不至于悄悄变成空跑）。 */
+const declaredTotal = bindAudit.reduce((s, r) => s + r.declared, 0);
+const boundTotal = bindAudit.reduce((s, r) => s + r.bound, 0);
+console.log(`[build] ✅ import 绑定对账通过（${bindAudit.length} 条 import 语句 · 声明 ${declaredTotal} 项 / 绑定 ${boundTotal} 项）`);

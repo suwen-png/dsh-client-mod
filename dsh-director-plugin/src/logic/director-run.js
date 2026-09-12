@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
+ * 引用：03 号文 §1.2
+ * 上游：client-entry.js, components/DirectorWorkbench.js
+ * 下游：logic/duties.js, config/model.js, util/debug.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * logic/director-run.js — 总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
  *

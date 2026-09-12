@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
+ * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
+ * 上游：client-entry.js, mount.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, components/PersonalizePanel.js, util/safe-area.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * components/DirectorDialog.js — 总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
  *
@@ -40,6 +48,11 @@ import { appendDirectorMessage, listDirectorMessages, pluginDbStats, PLUGIN_DB_N
 import { DirectorWorkbench } from "./DirectorWorkbench.js";
 import { DirectorHierarchy } from "./DirectorHierarchy.js";
 import { dshLog } from "../util/debug.js";
+/* 右上角「⚙ 个性化」—— 与总监页 / 设计图 / 导图**共用同一个组件与同一份持久化**。
+ * 需求原文：「…同时都在右上角加自定义个性化设定」。 */
+import { PersonalizePanel } from "./PersonalizePanel.js";
+/* 原生窗口控件安全区：本弹窗是全屏 fixed 层，右上角面板必须避让（实测 138px，z-index 无效）。 */
+import { readInset } from "../util/safe-area.js";
 
 export const DIALOG_ID = "dsh-director-dialog";
 export const CHIP_ID = "dsh-director-chip";
@@ -90,9 +103,12 @@ const S = {
 	hole: { position: "absolute", pointerEvents: "none", borderRadius: 8 },
 	panel: {
 		position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column",
-		background: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
-		border: "1px solid rgba(137,87,229,.42)", borderRadius: 10, overflow: "hidden",
-		boxShadow: "0 24px 70px rgba(0,0,0,.62)", fontFamily: "inherit", fontSize: 12.5
+		/* 🔴 `backgroundColor` 长写（非 `background` 简写）：简写会把 `background-image` 重置，
+		 *    使 `.dp-textured` 的三档纹理（个性化「质感」）静默失效。四处已统一修正。 */
+		backgroundColor: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
+		border: "1px solid var(--dp-ac2-line, rgba(137,87,229,.42))", borderRadius: "var(--dp-radius-lg, 10px)", overflow: "hidden",
+		boxShadow: "var(--dp-shadow, 0 24px 70px rgba(0,0,0,.62))", fontFamily: "inherit",
+		fontSize: "calc(12.5px * var(--dp-font, 1))"
 	},
 	head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1c1e22)" },
 	headTitle: { fontWeight: 620, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
@@ -305,6 +321,9 @@ export function DirectorDialog(props = {}) {
 	const [toast, setToast] = react.useState("");
 	const [dragW, setDragW] = react.useState(null);
 	const [unread, setUnread] = react.useState(0);
+	/* 右上角「⚙ 个性化」开合 —— 与其他三处同一个面板组件。
+	 * 🔴 必须排在下方 `if (!open) return null` 之前（React Hooks 规则；本组件已踩过这个坑）。 */
+	const [pOpen, setPOpen] = react.useState(false);
 	const panelRef = react.useRef(null);
 	const dragRef = react.useRef(null);
 	const convRef = react.useRef({ count: 0, lastText: "" });
@@ -408,7 +427,12 @@ export function DirectorDialog(props = {}) {
 	react.useEffect(() => {
 		if (!open) return undefined;
 		const onKey = (e) => {
-			if (e.key === "Escape") { directorLayoutStore.setDialogOpen(false); return; }
+			if (e.key === "Escape") {
+				/* 个性化面板在最上层 ⇒ Esc 先关它（面板自身 window-capture 已 stopPropagation，
+				 * 正常走不到这里；留一层是防"按 Esc 把整个总监弹窗关掉"）。 */
+				if (pOpen) { setPOpen(false); return; }
+				directorLayoutStore.setDialogOpen(false); return;
+			}
 			if (e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
 				e.preventDefault();
 				if (e.key === "1") directorLayoutStore.toggleDirectorCollapsed();
@@ -418,7 +442,7 @@ export function DirectorDialog(props = {}) {
 		};
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
-	}, [open]);
+	}, [open, pOpen]);
 
 	/* ── 拖拽中缝 ── */
 	const dragWRef = react.useRef(null);
@@ -583,6 +607,9 @@ export function DirectorDialog(props = {}) {
 				}, [
 					h("button", { key: "r", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.toggleChatCollapsed(); } }, "⇥"),
 					h("button", { key: "z", style: S.btn, title: "复位栏宽", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.resetPanelWidths(); } }, "▢"),
+					/* 个性化：折叠左栏后此处是**唯一**入口，故与右栏同一组按钮并列（不是"右上角"布局，
+					 * 但面板本体仍是 `position:fixed` 贴右上角，见文件末尾 PersonalizePanel）。 */
+					h("button", { key: "p", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); setPOpen((v) => !v); } }, "⚙"),
 					h("button", { key: "m", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogCollapsed(true); } }, "–"),
 					h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
 				])
@@ -593,7 +620,9 @@ export function DirectorDialog(props = {}) {
 				//    后者是全插件「树行」的唯一选择器（`components/DirectorHierarchy.js` TreeItem），
 				//    面板若占用同名属性，`[data-node-id]` 的首个命中会变成面板本身，
 				//    使既有逐交互脚本「点第一行 → 选中态迁移」失效（2026-09-12 真机实测踩中）。
-				role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId
+				role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId,
+				/* 质感类（三档纹理由 store/personalize.js 注入的样式表按 html[data-dp-texture] 命中） */
+				className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
 			}, [
 				/* mhead：R1 顶部栏 + 层级切换器（I5）*/
 				h("div", { key: "h", style: S.head }, [
@@ -610,6 +639,10 @@ export function DirectorDialog(props = {}) {
 						h("button", { key: "2", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: () => directorLayoutStore.toggleChatCollapsed() }, "⇥"),
 						h("button", { key: "3", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: () => directorLayoutStore.setDialogCollapsed(true) }, "–"),
 						h("button", { key: "4", style: S.btn, title: "复位栏宽（双击中缝同效）", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: () => directorLayoutStore.resetPanelWidths() }, "▢"),
+						/* 右上角个性化（需求原文：「同时都在右上角加自定义个性化设定」）。
+						 * 本按钮在 `btns`（marginLeft:auto ⇒ 贴面板右上角），展开的面板本体
+						 * 由文件末尾的 PersonalizePanel 以 fixed 定位贴整个窗口右上角。 */
+						h("button", { key: "6", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: () => setPOpen((v) => !v) }, "⚙"),
 						h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
 					])
 				]),
@@ -682,7 +715,14 @@ export function DirectorDialog(props = {}) {
 				position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10,
 				color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
 			}
-		}, "● 与「对话 tab」同源（同一渲染节点）")) : null
+		}, "● 与「对话 tab」同源（同一渲染节点）")) : null,
+
+		/* 个性化面板 —— 贴整个窗口右上角（`position:fixed`），由 `inset` 避让原生窗口控件。
+		 * 放在 dialog 图层内（zIndex 由 PersonalizePanel 自己抬到 2147483300 ⇒ 高于本层 2147483000 档）。 */
+		h(PersonalizePanel, {
+			key: "pp", open: pOpen, onClose: () => setPOpen(false),
+			inset: readInset(), top: 46, scope: "总监弹窗"
+		})
 	]);
 }
 

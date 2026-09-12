@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：自动同步：让**每一个**对话 / 文件夹都拥有总监
+ * 引用：—
+ * 上游：client-entry.js, components/DirectorHierarchy.js
+ * 下游：store/hierarchy.js, logic/discover.js, store/idb.js, util/debug.js, util/bus.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * logic/sync.js — 自动同步：让**每一个**对话 / 文件夹都拥有总监
  *

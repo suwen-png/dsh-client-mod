@@ -1,0 +1,251 @@
+{
+  "sealedAt": "2026-09-12T14:24:48.768Z",
+  "version": "V16",
+  "title": "总监驾驶舱 · 三页签 + 设计图工作室（落死基线）",
+  "policy": "指纹只锁会决定运行行为的东西（src/build/package.json/cordis.patch.yml/产物/设计图）。scripts/*.mjs 与 docs/*.md 属叙述层，不纳入。",
+  "command": "node scripts/baseline-check.mjs   # 校验；--write 重新封存",
+  "fileCount": 60,
+  "totalBytes": 1744027,
+  "files": {
+    "src/bridge/chat-bridge.js": {
+      "bytes": 10130,
+      "md5": "6fb5941a8966388f7ca021f8717654b5"
+    },
+    "src/bridge/nav-hook.js": {
+      "bytes": 5825,
+      "md5": "71a4cf156149d0d048d745bccfc9ff32"
+    },
+    "src/bridge/spike-fs-probe.js": {
+      "bytes": 3853,
+      "md5": "0570fa4653628f4af8b836ea5fc9707c"
+    },
+    "src/bridge/split.js": {
+      "bytes": 14292,
+      "md5": "ad1f61f91dc5bc1e28aeb96026f031da"
+    },
+    "src/client-entry.js": {
+      "bytes": 36202,
+      "md5": "ba791d11ef6c6f33b870fb44391dc19b"
+    },
+    "src/components/DesignStudio.js": {
+      "bytes": 68592,
+      "md5": "6f284f414aca133bc753604284400931"
+    },
+    "src/components/DirectorDialog.js": {
+      "bytes": 49352,
+      "md5": "f66dfa04db0768e7d53e88ddab875c32"
+    },
+    "src/components/DirectorFlow.js": {
+      "bytes": 9873,
+      "md5": "7f97b34eeba733e28ab09eef98da27ac"
+    },
+    "src/components/DirectorHierarchy.js": {
+      "bytes": 21188,
+      "md5": "8daa448e207440eb8b527cc17a86ade0"
+    },
+    "src/components/DirectorPage.js": {
+      "bytes": 47393,
+      "md5": "7e5ed8cbbde4ca74e6078e0c12b5e95b"
+    },
+    "src/components/DirectorWorkbench.js": {
+      "bytes": 13142,
+      "md5": "4681cd1d1d9600b2297b7214cb1b8f63"
+    },
+    "src/components/FloatDock.js": {
+      "bytes": 12287,
+      "md5": "896085e1861d1ad0bb1276f5a7b5bd41"
+    },
+    "src/components/MindMap.js": {
+      "bytes": 57519,
+      "md5": "cace01f61f33b378355596bd2dafcd1b"
+    },
+    "src/components/NodeDetailPanel.js": {
+      "bytes": 19515,
+      "md5": "73285d22330bb6e641a20279fd5ddff4"
+    },
+    "src/components/PersonalizePanel.js": {
+      "bytes": 10954,
+      "md5": "85994473a16a395972d8a5b152205052"
+    },
+    "src/components/VersionPanel.js": {
+      "bytes": 8678,
+      "md5": "360f49a476064df58f2544ef6f426e2f"
+    },
+    "src/config/model.js": {
+      "bytes": 5826,
+      "md5": "f7c70db9afcabfc88cbfff9fdbf1bdac"
+    },
+    "src/dev/layout-probe.js": {
+      "bytes": 5652,
+      "md5": "57f55d322498d1f6a8557e57fdd93979"
+    },
+    "src/index.js": {
+      "bytes": 5110,
+      "md5": "8b48a6314f29fda124ea6cc91765eafd"
+    },
+    "src/logic/branch-tree.js": {
+      "bytes": 26575,
+      "md5": "b73d8cdba6aabee1294aa6cf864f933f"
+    },
+    "src/logic/director-run.js": {
+      "bytes": 14648,
+      "md5": "d7f1677291f56c218b41d2187a102cf6"
+    },
+    "src/logic/discover.js": {
+      "bytes": 6916,
+      "md5": "ab52216b7a9c15a2afd51d6378971d3b"
+    },
+    "src/logic/duties.js": {
+      "bytes": 6364,
+      "md5": "9a652be446086f323a3de5c085bd1c47"
+    },
+    "src/logic/flow.js": {
+      "bytes": 19032,
+      "md5": "3e5ba33c2ef0804c1e3dea89b821fadf"
+    },
+    "src/logic/mindmap-render.js": {
+      "bytes": 7470,
+      "md5": "53f09fd21bc70db6c49098d54d5e661b"
+    },
+    "src/logic/process.js": {
+      "bytes": 8825,
+      "md5": "f874ca7c3e637d0cca305a4810c6df55"
+    },
+    "src/logic/review.js": {
+      "bytes": 5496,
+      "md5": "e80db635ea71a7541eaa8a0a404473c4"
+    },
+    "src/logic/routing.js": {
+      "bytes": 19734,
+      "md5": "2f5405583afbeeeccd0d95e6c3d015e4"
+    },
+    "src/logic/summarize.js": {
+      "bytes": 9197,
+      "md5": "eafdeb79b22f9e687b60b1e3583081a8"
+    },
+    "src/logic/sync.js": {
+      "bytes": 9226,
+      "md5": "33af959eefac6f7a6ca1388409c692a3"
+    },
+    "src/mount.js": {
+      "bytes": 13438,
+      "md5": "a0e27a60531cb664bd4554a11a511cef"
+    },
+    "src/store/branch.js": {
+      "bytes": 12531,
+      "md5": "c5ffbb26096eeb8ff68b87477ed490ae"
+    },
+    "src/store/cookie.js": {
+      "bytes": 3506,
+      "md5": "2f734b9265c62f6ad83a35d39720b6b4"
+    },
+    "src/store/create-store.js": {
+      "bytes": 9531,
+      "md5": "a5a83ab8a5070b5b9439e2572ed38946"
+    },
+    "src/store/design-schema.js": {
+      "bytes": 29493,
+      "md5": "b3b4a42684c47e10451515f272018b6d"
+    },
+    "src/store/design.js": {
+      "bytes": 33839,
+      "md5": "54c88593755bf91f052de98a8123b209"
+    },
+    "src/store/docs-index-inject.js": {
+      "bytes": 4911,
+      "md5": "1bbf28b44482823da51c85af94f113ca"
+    },
+    "src/store/docs.js": {
+      "bytes": 7949,
+      "md5": "f592be7969283855e3d1dc2f1543fc17"
+    },
+    "src/store/duty-config.js": {
+      "bytes": 5740,
+      "md5": "fa20b4c04bff23f021f50fc0c1b2f13c"
+    },
+    "src/store/file-adapter.js": {
+      "bytes": 14248,
+      "md5": "8f92bbea6fbfaf9bb75870b3eec1417d"
+    },
+    "src/store/hierarchy.js": {
+      "bytes": 15354,
+      "md5": "7aff6f61485d8b27acdcdf38904673f3"
+    },
+    "src/store/idb.js": {
+      "bytes": 9626,
+      "md5": "3b11ebb7ccbc8fa4fc6343f41c038dfd"
+    },
+    "src/store/layout.js": {
+      "bytes": 11627,
+      "md5": "753ca8f269218ecb4d22ef0d20f7258b"
+    },
+    "src/store/memory.js": {
+      "bytes": 5811,
+      "md5": "699537e194f19834daaeb64a082829a8"
+    },
+    "src/store/messages.js": {
+      "bytes": 2439,
+      "md5": "f058f4b5ab907bb919a8169578778909"
+    },
+    "src/store/mindmap-schema.js": {
+      "bytes": 28381,
+      "md5": "4cb13f656c791376d7ddab4a7c20f7af"
+    },
+    "src/store/persist.js": {
+      "bytes": 12920,
+      "md5": "dca97f3b914422d5c5d9c53b5500c0a8"
+    },
+    "src/store/personalize.js": {
+      "bytes": 18524,
+      "md5": "b110984decbdef8b2e99c4d494187fa2"
+    },
+    "src/store/plugin-db.js": {
+      "bytes": 14163,
+      "md5": "e663f5e8cc0e599af043a2bbd2366809"
+    },
+    "src/store/theme.js": {
+      "bytes": 3417,
+      "md5": "7b64702f730d457f80df8249230e24c9"
+    },
+    "src/store/use-store.js": {
+      "bytes": 3315,
+      "md5": "997c5d314cfdec71db4c8ab2998b3699"
+    },
+    "src/util/bus.js": {
+      "bytes": 2054,
+      "md5": "720e9ec8afe97a4f2be33d7179a2c16e"
+    },
+    "src/util/debug.js": {
+      "bytes": 8173,
+      "md5": "cb96d5ee80dd4cafc68cee426f7ef687"
+    },
+    "src/util/log-collector.js": {
+      "bytes": 2961,
+      "md5": "46a8012a38fa678fd67df95bab7cef82"
+    },
+    "src/util/no-drag.js": {
+      "bytes": 3793,
+      "md5": "1048317f0f52e73ff2b32d74a4c6d90f"
+    },
+    "src/util/safe-area.js": {
+      "bytes": 7491,
+      "md5": "f26d0beea6c45dec02028229be0a1680"
+    },
+    "build/build.mjs": {
+      "bytes": 27820,
+      "md5": "d07933771716e1332b415111e643b66e"
+    },
+    "package.json": {
+      "bytes": 1300,
+      "md5": "c53d16081385dcdcc604eba9d41688fd"
+    },
+    "cordis.patch.yml": {
+      "bytes": 702,
+      "md5": "1a23d6fe791934c72e413924d144a01e"
+    },
+    "lib/client.js": {
+      "bytes": 890104,
+      "md5": "6a401eab53d2f08c587d57558051028e"
+    }
+  }
+}

@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：D2 对话返回审核（**保留能力，当前无调用点**）
+ * 引用：—
+ * 上游：client-entry.js
+ * 下游：config/model.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * logic/review.js — D2 对话返回审核（**保留能力，当前无调用点**）
  *

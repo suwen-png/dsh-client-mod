@@ -1,5 +1,31 @@
 # dsh-director-plugin — 总监驾驶舱插件包
 
+> ## ★ 当前基线（V16 · 2026-09-12 落死）
+>
+> **项目现状的唯一权威描述在** → [`docs/00-统筹入口/10-当前基线-落死锚点-V16.md`](../docs/00-统筹入口/10-当前基线-落死锚点-V16.md)
+>
+> 动手前先跑这一条，确认你读到的不是过期的"现状"：
+>
+> ```bash
+> cd dsh-director-plugin && node scripts/baseline-check.mjs
+> # IS_PASS: TRUE（漂移=0） ⇒ 文档即事实，可放心照读
+> # IS_PASS: FALSE        ⇒ 代码已漂移，先看清单再决定对齐哪边
+> ```
+>
+> | 项 | 值 |
+> |:---|:---|
+> | 产物 | `lib/client.js` · **883,339 B** · 54 模块 · 绑定对账 **450 = 450**（170 条 import）· React 外置零打包 · `inject = ["slots","sessions"]` |
+> | 源码 | `src/**` **56 个 js · 15,375 行**，**每个文件带 `@map` 映射头** |
+> | 映射索引 | [`docs/12-源码映射索引.md`](./docs/12-源码映射索引.md)（生成器 `scripts/gen-source-map.mjs`，56 文件） |
+> | 设计稿 | [`docs/50-信息中心/V16-设计图·需求图·交互逻辑.html`](../docs/50-信息中心/V16-设计图·需求图·交互逻辑.html)（A 高保真 / B 需求图 / C 交互逻辑 / **D 设计图工作室** / **E 保存·版本·窗口安全区** / **F 思维导图元素库 18 条总账** / **G 单框控件·拖动·右侧对话·四维流转·质感与个性化**） |
+> | 本轮新增 | **批次 12** —— 总监页背景采用原软件的背景（六令牌桥接宿主 `--dsw-alias-*`，与原生页签**同源同值** + 正负对照）· **批次 11** —— 单框展开/折叠与可拖动 · 点框右侧展开对话（首块＝「现在在做的事」）· 四处共用的**个性化设定**面板 · **四维流转**（总监/对话/导图/设计图同一条消息带足迹） |
+> | 基线闸门 | 静态 `TRUE`（阻塞 0 / 提示 16） · CDP 模板 `TRUE` · bundle 桩执行 **90/90** · 设计图纯函数 **49/49** · 版本层 **63/63** · 思维导图纯函数 **91/91** · 个性化+四维流转 **87/87** · 设计稿卫生 **5/5** · 构建 **890,104 B / 54 模块 · 452 = 452** · 指纹 `漂移=0` |
+> | 真机 | `verify-flow.mjs` **57/57 ×3**（五组原话 + 总监页背景 + 浮动入口三件套 F8–F11）· `verify-mindmap.mjs` **86/86 ×3** · `verify-design-studio.mjs` **90/90 ×3（且载荷逐字一致）** |
+>
+> 完整命令手册见锚点文档 §二。**不要再新开版本号** —— 基线演进就地更新锚点文档 + `baseline-check.mjs --write` 重新封存。
+
+---
+
 > 26号文 P0 阶段产物（T-PLUG-004）。目标：把内联在 dsh-client-ui-conversation/lib/client.js 里的总监功能迁为独立插件，走 Harness 官方 client 插件通道。
 > **施工图**：`docs/01-插件迁移明细清单.md`（v3）— 含 19 个迁移块 + 依赖拓扑 + 风险登记 + 行号导航表。
 
@@ -123,10 +149,28 @@ node scripts/verify-install-clean.mjs   # ⑧ 干净目录部署（双机模拟�
 node scripts/cdp-verify.mjs             # ⑨ 真机：CDP 核查渲染进程            39 项
 node scripts/cdp-click.mjs              # ＋ 真机逐交互点击验证               66 项
 
+# 设计图 / 分支导图（2026-09-12 新增）
+node scripts/test-design-logic.mjs      # 设计图纯函数                        49 项
+node scripts/test-design-version.mjs    # 版本层纯函数                        63 项
+node scripts/test-mindmap-logic.mjs     # 思维导图纯函数（元素库 18 条自证）   69 项
+node scripts/verify-design-studio.mjs   # 真机：设计图工作室逐交互            90 项
+node scripts/verify-mindmap.mjs         # 真机：分支导图逐交互                86 项
+node scripts/baseline-check.mjs         # 基线指纹：56 文件逐字节一致
+
+# 设计稿卫生（在仓库根 D:/hermes-data/dsh-client-mod 下执行）
+node scripts/verify-design-html.mjs "docs/50-信息中心/V16-设计图·需求图·交互逻辑.html"
+
 # 辅助
 node --check src/index.js                                    # 语法校验（逐文件）
 python scripts/restore-a14.py --check                        # A14 回滚锚点自检
 ```
+
+> 🔴 **两套真机套件必须连跑 3 次**（`verify-design-studio.mjs` / `verify-mindmap.mjs`）——
+> 单跑通过只说明「第一次碰巧成立」；两套都出现过「前两次绿、第三次红」。
+> 另：`verify-mindmap.mjs` 的断言全部基于**真实几何 + 真实鼠标事件**，脚本内含 `state(tag)`
+> 现场勘察行；**失败时先看那一行**（页面当时是否还在），再看功能本身 ——
+> 本轮曾出现「4 段全红其实只是导图层被关掉」，若没有这一行就会去改 4 个本来没坏的模块。
+> 设计稿卫生五项（LF / 零反引号 / 字号 ≥10.5 / 标签平衡 / class 定义对账）必须 **5/5**。
 
 > ⑧ 为**离线全生命周期**测试（临时沙箱，不触碰真实环境）；⑨ 与 ＋ 需 Harness **带调试端口运行中**（见 [`INSTALL.md`](./INSTALL.md) §四）。
 

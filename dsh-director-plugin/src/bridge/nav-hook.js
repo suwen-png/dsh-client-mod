@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
+ * 引用：要求 7/9
+ * 上游：client-entry.js, mount.js
+ * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * bridge/nav-hook.js — 「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
  *

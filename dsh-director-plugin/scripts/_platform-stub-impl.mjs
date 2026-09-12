@@ -12,6 +12,26 @@
 
 export const Fragment = Symbol.for("react.fragment");
 
+/**
+ * 🔴 必须提供 `Component`（2026-09-12 补）：
+ *   产物里有 `class SafeLayer extends react.Component`（单层错误边界）。
+ *   桩里缺这个基类 ⇒ `react.Component` 是 undefined ⇒ factory 立刻抛
+ *   `Class extends value undefined is not a constructor or null` ⇒ 之后 44 项断言
+ *   **全部级联失败**，报告读起来像「插件整个坏了」，其实只是测试桩少了一个基类。
+ *   真机由真 React 提供，插件一直是正常的（同轮 verify-mindmap.mjs 真机 80/80 绿）。
+ *   `PureComponent` 一并给出，避免下次换个基类再踩同一个坑。
+ */
+export class Component {
+	constructor(props) { this.props = props || {}; this.state = {}; this.context = {}; }
+	setState(partial) {
+		const patch = typeof partial === "function" ? partial(this.state, this.props) : partial;
+		this.state = Object.assign({}, this.state, patch || {});
+	}
+	forceUpdate() { /* no-op：离线不渲染 */ }
+	render() { return null; }
+}
+export class PureComponent extends Component { }
+
 export function createElement(type, props, ...children) {
 	return { $$el: true, type, props: props || {}, children };
 }
@@ -35,7 +55,7 @@ export function memo(c) { return c; }
 export function forwardRef(c) { return c; }
 
 export default {
-	Fragment, createElement, jsx, jsxs, jsxDEV,
+	Fragment, Component, PureComponent, createElement, jsx, jsxs, jsxDEV,
 	useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback,
 	useContext, useReducer, useSyncExternalStore, memo, forwardRef
 };

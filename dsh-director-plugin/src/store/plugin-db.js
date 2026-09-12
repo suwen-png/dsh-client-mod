@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：插件**自有**数据元层（独立数据库）
+ * 引用：V16 诉求 7（落死：数据不丢） · 要求 1 · 17 号文 §2.2 · 17 号文 §2.3 · 17 号文 §1 · T-PLUG-009
+ * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, logic/routing.js, store/design.js, store/hierarchy.js
+ * 下游：（无）
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D7（锚点契约 · 设计图冷备库）】
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * store/plugin-db.js — 插件**自有**数据元层（独立数据库）
  *
@@ -48,16 +56,23 @@ const hasWindow = typeof window !== "undefined";
 
 /** 插件自有数据库（**与宿主库无关**，不参与其版本协商） */
 export const PLUGIN_DB_NAME = "dsh-director-plugin-db";
-export const PLUGIN_DB_VERSION = 1;
+/**
+ * 🔴 v1 → v2（2026-09-12）：新增 `directorDesigns`（设计图冷备，T-PLUG-018）。
+ *    仅动**本库**版本，宿主 `dsh-director-db` v3 的协商互不可见（IDB 版本协商只在同名库内发生）。
+ *    `onupgradeneeded` 是**幂等加法**（遍历 PDB_ALL_STORES 只补缺失的 store）⇒ 老库平滑升级。
+ */
+export const PLUGIN_DB_VERSION = 2;
 
-/** 6 个 store（对齐 17 号文 §2.2 原始设计的 6 类记忆） */
+/** 7 个 store（原 6 类记忆 + 设计图冷备） */
 export const PDB = Object.freeze({
 	NODES: "directorNodes",
 	CONVERSATIONS: "directorConversations",
 	PLANS: "directorPlans",
 	REVIEWS: "directorReviews",
 	DECISIONS: "directorDecisions",
-	TODOS: "directorTodos"
+	TODOS: "directorTodos",
+	/** 设计图快照冷备（localStorage 的兜底恢复源，不是主存） */
+	DESIGNS: "directorDesigns"
 });
 
 /**
@@ -70,7 +85,9 @@ export const PDB_SCHEMA = Object.freeze({
 	[PDB.PLANS]: { keyPath: "planId", indexes: { nodeId: "nodeId" } },
 	[PDB.REVIEWS]: { keyPath: "reviewId", indexes: { nodeId: "nodeId", targetId: "targetId" } },
 	[PDB.DECISIONS]: { keyPath: "decisionId", indexes: { nodeId: "nodeId" } },
-	[PDB.TODOS]: { keyPath: "todoId", indexes: { nodeId: "nodeId" } }
+	[PDB.TODOS]: { keyPath: "todoId", indexes: { nodeId: "nodeId" } },
+	// 设计图冷备：单条快照记录（graph 内聚，无需索引）
+	[PDB.DESIGNS]: { keyPath: "designId", indexes: {} }
 });
 
 /** 全部 store 名（校验用） */

@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：智能路由（要求 8）＋ 六维审核（要求 3）
+ * 引用：要求 8 · 要求 3 · 17 号文 §1
+ * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js
+ * 下游：store/plugin-db.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C（输入路由决策树）】
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * logic/routing.js — 智能路由（要求 8）＋ 六维审核（要求 3）
  *

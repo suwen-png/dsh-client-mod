@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：多层级总监面板（方案 C：层级树 + 主内容区）
+ * 引用：03 号文 §1.3 · 17 号文 §2.1 · 17 号文 §1 · 03 号文 §4.3
+ * 上游：client-entry.js, components/DirectorDialog.js
+ * 下游：store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * components/DirectorHierarchy.js — 多层级总监面板（方案 C：层级树 + 主内容区）
  *

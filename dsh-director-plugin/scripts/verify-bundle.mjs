@@ -38,10 +38,58 @@ if (!existsSync(BUNDLE)) {
 const src = readFileSync(BUNDLE, "utf8");
 check("lib/client.js 存在", true, statSync(BUNDLE).size + " B");
 
+/* 🔴 剥注释 —— **扫源码的断言（无论正负）都必须先过这一道**。
+ *  原因：注释里写"旧写法是 `#7fe3e8` 所以对比度不够"是**好注释**，
+ *  但裸扫源码会把它当成"旧色还在"判红 ⇒ **注释写得越清楚，闸门越红** ⇒ 逼人删注释、丢信息。
+ *  同向的假绿更隐蔽：正向断言"产物里有 `pointerEvents:"none"`"也可能只是**注释里提过**而通过。
+ *  （同一个坑在 test-personalize.mjs 的 C6 已经吃过一次，这次在产物层又踩到 ——
+ *   所以做成显式工具，而不是靠"下次注意"。）
+ *
+ *  ⚠️ 实现用**行级过滤**，不用字符串/正则状态机 —— 这里有个实证教训：
+ *     第一版是逐字符扫描（跳过字符串内部的 `//`），加进 888KB 产物后**静默失步**了：
+ *     产物里有正则字面量（如 `/["']/`），扫描器遇到其中的引号会"进入字符串"并一路吞到很远，
+ *     从此把后面**所有**注释都当成代码 ⇒ 负断言把一条纯注释判成"旧色还在"（真机上就是这么红的）。
+ *     失步比漏剥危险得多：**漏剥只影响一条断言，失步会让全文件的所有扫描断言一起假绿**。
+ *     行级过滤没有状态，不会失步；代价是"块注释里不以 `*` 开头的行"剥不掉 ——
+ *     但本项目块注释体一律以 `*` 开头（可 grep 校验），所以充分。
+ */
+const stripJsComments = (s) => String(s).split("\n").map((line) => {
+	const t = line.trim();
+	if (t.startsWith("/*") || t.startsWith("*") || t.startsWith("//")) return "";
+	const i = line.indexOf("/*");
+	return i >= 0 ? line.slice(0, i) : line;
+}).join("\n");
+/** 去注释后的产物源码 —— 所有"扫源码"断言都用它，不用 `src` */
+const SRC_NC = stripJsComments(src);
+
+/* 🔴 按**模块**取源码片段 —— 产物是 `__defs["<模块路径>"] = function (exports) {…}`
+ *  顺序拼接的。为什么不能全文件搜字符串：同一个色值/写法在别的模块里可能是**正当**的
+ *  （例：`#b794f6` 在 DesignStudio / DirectorPage 里是 `var(--dp-ac, …)` 的**兜底色**，
+ *   即用户个性化主色的默认值 —— 那是设计意图，不是缺陷）。
+ *  全文件搜会把"别处的正当用法"误判成本模块的问题 ⇒ 断言必须**按块取文本**。 */
+const moduleSlice = (name) => {
+	const marker = '__defs["' + name + '"]';
+	const i = SRC_NC.indexOf(marker);
+	if (i < 0) return "";
+	const j = SRC_NC.indexOf('__defs["', i + marker.length);
+	return SRC_NC.slice(i, j < 0 ? SRC_NC.length : j);
+};
+
 /* ── 1. 构建最小浏览器环境桩 ─────────────────────────────────── */
 
 const styleTags = [];
 const createdEls = [];
+/* :root 变量与 html 属性的**记录桩**（批次 11 新增）。
+ * 为什么必须补 `documentElement`：此前桩里没有它 ⇒ `applyPersonalize()` 在
+ * `document.documentElement.style.setProperty(...)` 处抛错并被自身 try 吞掉，
+ * 于是"个性化设定到底有没有真的写进 DOM"在产物层**完全测不到**
+ * （样式表因 appendChild 在前而侥幸留下，变量与 data-* 全丢）。
+ * 补上之后，闸门可以断言：① 样式表已注入 ② `--dp-*` 变量已写 ③ `data-dp-texture` 已落。 */
+const rootStyleVars = {};
+/* 🔴 必须是**对象**而不是数组：数组上挂 `data-dp-texture` 这类非索引键虽然能读出来，
+ * 但 `JSON.stringify` 会输出 `[]` ⇒ 断言虽然是对的，证据却是误导性的
+ * （闸门打印出来的东西本身也是证据，不能自相矛盾）。 */
+const rootAttrs = {};
 
 const documentStub = {
 	head: { appendChild: (el) => styleTags.push(el) },
@@ -52,6 +100,10 @@ const documentStub = {
 		dataset: {}, textContent: "", appendChild: () => {},
 	}),
 	querySelector: () => null,
+	documentElement: {
+		style: { setProperty: (k, v) => { rootStyleVars[k] = v; } },
+		setAttribute: (k, v) => { rootAttrs[k] = v; }
+	},
 };
 
 const windowStub = {
@@ -138,13 +190,26 @@ if (captured) {
 /**
  * 平台模块桩表 —— 严格对齐 `@deepseek-ai/dsh-client-web/lib/index.js` 的
  * `getStaticModules()`（第 165 行）返回的 10 项。
- * 批次 3 起，`store/use-store.js` 会 `require("react")`，故必须提供。
+ *
+ * 🔴 React 桩的**单一真相源**是 `_platform-stub-impl.mjs`（2026-09-12 修）。
+ *   这里原先**另写了一份**极简 react（只有 useCallback / useSyncExternalStore /
+ *   useState），与那份共享桩长期漂移，缺了 `Component`。后果极具误导性：
+ *   产物里有 `class SafeLayer extends react.Component`（单层错误边界）⇒
+ *   `react.Component` 为 undefined ⇒ factory 抛
+ *   `Class extends value undefined is not a constructor or null` ⇒
+ *   其后 44 项断言**全部级联失败**（window.__dshDirectorBatch5、__entry 导出批次 5…），
+ *   报告读起来像「插件整个坏了」，真因只是**第二份桩少了一个基类**。
+ *   而真机一直正常（同轮 verify-mindmap.mjs 真机 80/80 绿）。
+ *   教训：桩这类测试基础设施也只能有一份，重复即漂移。
  */
+const reactStub = await import("./_platform-stub-impl.mjs");
 const platformStub = {
-	"react": { useCallback: () => {}, useSyncExternalStore: () => ({}), useState: () => [null, () => {}] },
-	"react/jsx-runtime": {},
+	"react": reactStub,
+	"react/jsx-runtime": {
+		Fragment: reactStub.Fragment, jsx: reactStub.jsx, jsxs: reactStub.jsxs, jsxDEV: reactStub.jsxDEV
+	},
 	"react-dom": {},
-	"react-dom/client": {},
+	"react-dom/client": { createRoot: reactStub.createRoot, hydrateRoot: reactStub.hydrateRoot },
 	"@deepseek-ai/cordis": {},
 	"@deepseek-ai/dsh-client-ui-slots": {},
 	"@deepseek-ai/dsh-client-web-react": {},
@@ -291,12 +356,115 @@ check("🔴 迁移期修正标记 directorFlowFixedFilteredMessages", applied?.d
 check("window.__dshDirectorFlow 为函数（组件）", typeof windowStub.__dshDirectorFlow === "function", typeof windowStub.__dshDirectorFlow);
 // 🔴 反证：bundle 产出的组件源码不得含越界引用，且必须含修正后引用
 //    ⚠️ toString() 会**连注释一起返回**，而注释中刻意引用了宿主原代码行（取证链需要）→ 必须先剥离注释
-const stripJsComments = (s) => String(s).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+//    （`stripJsComments` 统一在上面定义，本处不再重复声明 —— 同一事实只留一份真相源）
 const flowFnSrc = typeof windowStub.__dshDirectorFlow === "function" ? windowStub.__dshDirectorFlow.toString() : "";
 const flowFnCode = stripJsComments(flowFnSrc);
 check("🔴 bundle 反证：组件源码零 filteredMessages 引用（剥离注释后）", !/filteredMessages\s*\./.test(flowFnCode), "零命中");
 check("bundle 组件源码含 state.messages.map", flowFnCode.includes("state.messages.map"), "已改用 state.messages");
 check("__entry 导出批次 5 组件", typeof entryExports?.DirectorFlow === "function", typeof entryExports?.DirectorFlow);
+
+/* ── 6f. 批次 11：个性化设定 + 四维流转（2026-09-12 第三轮） ──── */
+
+console.log("\n  ── 批次 11（个性化 + 四维流转）契约 ──");
+check("installed.personalizeApi", applied?.personalizeApi === true, String(applied?.personalizeApi));
+check("installed.personalize 为合法设定（默认质感 = grid）", applied?.personalize?.texture === "grid", JSON.stringify(applied?.personalize));
+check("installed.flowApi", applied?.flowApi === true, String(applied?.flowApi));
+check("installed.flowDimensions 四维且顺序与用户原话一致",
+	Array.isArray(applied?.flowDimensions) && applied.flowDimensions.join(",") === "director,chat,mindmap,design",
+	JSON.stringify(applied?.flowDimensions));
+check("installed.nodeDetailPanel", applied?.nodeDetailPanel === true, String(applied?.nodeDetailPanel));
+check("installed.personalizePanelId 稳定（e2e 靠它找面板）", applied?.personalizePanelId === "dsh-personalize-panel", String(applied?.personalizePanelId));
+check("installed.nodeDetailId 稳定", applied?.nodeDetailId === "dsh-node-detail", String(applied?.nodeDetailId));
+check("window.__dshDirectorBatch11 === installed（别名一致，不是另一个对象）",
+	typeof windowStub.__dshDirectorBatch11 === "object" && windowStub.__dshDirectorBatch11 === windowStub.__dshDirectorBatch1,
+	windowStub.__dshDirectorBatch11 === windowStub.__dshDirectorBatch1 ? "同一引用" : "引用不同");
+check("__entry 导出批次 11 六项",
+	typeof entryExports?.installPersonalizeApi === "function" && typeof entryExports?.installFlowApi === "function"
+	&& typeof entryExports?.PersonalizePanel === "function" && typeof entryExports?.NodeDetailPanel === "function"
+	&& typeof entryExports?.personalizeStore === "object" && typeof entryExports?.flowStore === "object",
+	`pers=${typeof entryExports?.installPersonalizeApi} flow=${typeof entryExports?.installFlowApi} panel=${typeof entryExports?.PersonalizePanel} nd=${typeof entryExports?.NodeDetailPanel}`);
+
+check("window.__dshPersonalize 契约可调用（store.set / pCssText / pVarsFor）",
+	typeof windowStub.__dshPersonalize?.store?.set === "function"
+	&& typeof windowStub.__dshPersonalize?.pCssText === "function"
+	&& typeof windowStub.__dshPersonalize?.pVarsFor === "function", null);
+check("window.__dshFlow 契约可调用（store.push / currentTaskOf / DIM）",
+	typeof windowStub.__dshFlow?.store?.push === "function"
+	&& typeof windowStub.__dshFlow?.currentTaskOf === "function"
+	&& typeof windowStub.__dshFlow?.DIM === "object", null);
+check("🔴 反证：产物内样式表真的含三档纹理规则（不是空壳函数）",
+	(() => { const css = String(windowStub.__dshPersonalize?.pCssText?.() || "");
+		return css.indexOf('data-dp-texture="grid"') >= 0 && css.indexOf('data-dp-texture="dots"') >= 0 && css.indexOf('data-dp-texture="glass"') >= 0; })(), null);
+check("🔴 apply() 真的把样式表注入 DOM（<style id=dsh-personalize-css> 出现在 head）",
+	styleTags.some((s) => s && s.id === "dsh-personalize-css" && String(s.textContent || "").length > 200),
+	styleTags.map((s) => s && s.id).filter(Boolean).join(","));
+check("🔴 apply() 真的把 --dp-* 变量写到 :root（个性化能生效的物理证据）",
+	rootStyleVars["--dp-ac"] !== undefined && rootStyleVars["--dp-font"] !== undefined && rootStyleVars["--dp-radius"] !== undefined,
+	"--dp-ac=" + rootStyleVars["--dp-ac"] + " / --dp-font=" + rootStyleVars["--dp-font"] + " / --dp-radius=" + rootStyleVars["--dp-radius"]);
+check("🔴 apply() 真的写了 html[data-dp-texture]（纹理选择器要靠它命中）",
+	rootAttrs["data-dp-texture"] === "grid" && rootAttrs["data-dp-motion"] === "1", JSON.stringify(rootAttrs));
+check("🔴 反证：改主色 ⇒ :root 的 --dp-ac 立刻变（证明 set 真的重写到 DOM，不是只改内存）",
+	(() => { const before = rootStyleVars["--dp-ac"];
+		windowStub.__dshPersonalize.store.set("accent", "#39c5cf");
+		const after = rootStyleVars["--dp-ac"];
+		windowStub.__dshPersonalize.store.reset();
+		return before === "#2f6feb" && after === "#39c5cf" && after !== before; })(),
+	rootStyleVars["--dp-ac"]);
+/* ── 6g 批次 12：总监页背景改走宿主令牌（风格统一） ── */
+
+check("window.__dshDirectorBatch12 === installed（别名一致，不是另一个对象）",
+	typeof windowStub.__dshDirectorBatch12 === "object" && windowStub.__dshDirectorBatch12 === windowStub.__dshDirectorBatch1,
+	windowStub.__dshDirectorBatch12 === windowStub.__dshDirectorBatch1 ? "同一引用" : "引用不同");
+check("installed.uiTheme 六项令牌映射齐备（总监页表面/卡片/文字/边框都指到宿主 --dsw-alias-*）",
+	(() => { const u = applied?.uiTheme || {};
+		return u.scope === '[data-testid="dp-root"]' && u.source === "host --dsw-alias-*"
+		&& u.surface === "--dsw-alias-bg-base" && u.card === "--dsw-alias-bg-layer-1"
+		&& u.card2 === "--dsw-alias-bg-layer-2" && u.text === "--dsw-alias-label-primary"
+		&& u.border === "--dsw-alias-border-l2"; })(),
+	JSON.stringify(applied?.uiTheme));
+
+check("🔴 产物内样式表真的含 dp-root 宿主令牌桥接（≥6 个 --dsw-alias-*）",
+	(() => { const css = String(windowStub.__dshPersonalize?.pCssText?.() || "");
+		const i = css.indexOf('[data-testid="dp-root"]{');
+		if (i < 0) return false;
+		const blk = css.slice(i, css.indexOf("}", i) + 1);
+		return (blk.match(/--dsw-alias-[a-z0-9-]+/g) || []).length >= 6; })(), null);
+check("🔴 反证：桥接**不得**写在 :root 上（var() 在定义处求值；宿主令牌在 body 上，:root 取不到 ⇒ 静默失效）",
+	(() => { const css = String(windowStub.__dshPersonalize?.pCssText?.() || "");
+		const i = css.indexOf(":root{");
+		if (i < 0) return false;
+		const blk = css.slice(i, css.indexOf("}", i) + 1);
+		return blk.indexOf("--dsw-alias-") < 0; })(), null);
+check("🔴 纹理色走变量（--dp-tex），不再是写死的白色 —— 浅色底下白纹理等于不可见",
+	(() => { const css = String(windowStub.__dshPersonalize?.pCssText?.() || "");
+		return /--dp-tex:/.test(css) && css.indexOf("background-image:linear-gradient(var(--dp-tex)") >= 0
+		&& css.indexOf("rgba(255,255,255,.035) 1px") < 0; })(), null);
+/* ── 6h 批次 13：浮动按钮组不吃点击 + 药丸配色随主题 ──
+ *  批次 12 把总监页背景改成宿主浅色玻璃后**连带暴露**的两处缺陷（深色底把它们掩盖了）：
+ *   ① 浮动组容器是 98×103 但有透明空隙，默认吃点击 ⇒ 页面自己的「交给总监整理」点不动；
+ *   ② 三颗药丸写死的是给深色底配的浅色 ⇒ 浅底上对比度只剩 1.35–2.21:1。
+ *  这里只验"产物真的带了改动"；运行期行为由 verify-flow.mjs 的 F8 / F9 在真机上验。 */
+
+check("window.__dshDirectorBatch13 === installed（别名一致，不是另一个对象）",
+	typeof windowStub.__dshDirectorBatch13 === "object" && windowStub.__dshDirectorBatch13 === windowStub.__dshDirectorBatch1,
+	windowStub.__dshDirectorBatch13 === windowStub.__dshDirectorBatch1 ? "同一引用" : "引用不同");
+check("installed.floatDock 五项契约齐备（容器不吃点击 / 药丸吃点击 / 字色取宿主令牌 / 横向占位数）",
+	(() => { const f = applied?.floatDock || {};
+		return f.containerPointerEvents === "none" && f.pillPointerEvents === "auto"
+		&& f.pillColorToken === "--dsw-alias-label-primary" && f.reserve === 108
+		&& Array.isArray(f.reserveConsumers) && f.reserveConsumers.join(",") === "dp-r6,dp-r8"; })(),
+	JSON.stringify(applied?.floatDock));
+const dockSrc = moduleSlice("components/FloatDock.js");
+const pageSrc = moduleSlice("components/DirectorPage.js");
+check("🔴 浮动组模块内真的有 pointer-events：容器 none + 药丸 auto（容器保留 auto 时会吃掉页面按钮的点击）",
+	dockSrc.length > 0 && /pointerEvents:\s*"none"/.test(dockSrc) && /pointerEvents:\s*"auto"/.test(dockSrc),
+	"FloatDock 片段 " + dockSrc.length + " 字符");
+check("🔴 横向占位常量确实定义在浮动组模块、并被总监页消费（不留白 ⇒ 浮动组压住页面按钮）",
+	/FLOAT_DOCK_RESERVE/.test(dockSrc) && /export/.test(dockSrc) && /dockReserve/.test(pageSrc),
+	"FloatDock 有常量=" + /FLOAT_DOCK_RESERVE/.test(dockSrc) + " / DirectorPage 有 dockReserve=" + /dockReserve/.test(pageSrc));
+check("🔴 反证：浮动组模块内三颗药丸的旧浅色硬编码（#7fe3e8 / #9fc2ff / #b794f6）已清除（已剥注释 + 已按模块取块）",
+	dockSrc.length > 0 && !/#7fe3e8|#9fc2ff|#b794f6/i.test(dockSrc), null);
+check("PLUGIN_VERSION 已升到批次 13", /batch13/.test(String(entryExports?.PLUGIN_VERSION)), String(entryExports?.PLUGIN_VERSION));
 
 /* ── 汇总 ─────────────────────────────────────────────────── */
 

@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：A1 总监消息 store（内存层）
+ * 引用：批次 3
+ * 上游：client-entry.js, store/create-store.js, store/persist.js
+ * 下游：（无）
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C（消息投递时序）】
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * store/messages.js — A1 总监消息 store（内存层）
  *

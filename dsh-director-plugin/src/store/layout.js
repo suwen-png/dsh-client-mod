@@ -1,3 +1,11 @@
+/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：A11 布局 store（弹窗三态扩展版）
+ * 引用：T-PLUG-015
+ * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js
+ * 下游：（无）
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+ * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+ * @map:end */
 /**
  * store/layout.js — A11 布局 store（弹窗三态扩展版）
  *
@@ -82,7 +90,24 @@ const DEFAULTS = Object.freeze({
 	dialogOpen: false,
 	dialogCollapsed: false,
 	activeNodeId: null,
-	leftTab: LEFT_TAB.DIRECTOR
+	leftTab: LEFT_TAB.DIRECTOR,
+	// ── 本轮新增（设计图工作室 · T-PLUG-018）──
+	//  📐 设计图是**全屏覆盖层**（用户：「点击铺满全屏」），与弹窗三态无关，
+	//     故单开一个布尔。打开时弹窗前端的浮层会让位（避免两层浮层叠着打架）。
+	designStudioOpen: false,
+	// 分支导图（血缘树）覆盖层。与设计图同为全屏层，但内容不同：
+	//   导图 = 真实会话的分支血缘（消费 sessions.fork 写入的 meta.parentSession）
+	//   设计图 = 手工编辑的界面稿（元素 + 交互逻辑）
+	mindmapOpen: false,
+	// 浮动按钮组里「思维导图」在前、「总监」在后（用户明确要求顺序）
+	floatDockOpen: true,
+	/* ── 本轮新增：导图节点的**用户摆放位置**（用户：思维导图的框不能动 需要可以移动）──
+	 * 🔴 放这里而不是新开一个持久化 key：本 store 的语义就是"在哪"（宽度/折叠/焦点），
+	 *    节点坐标同属"在哪"。再开第四个 key 只会让"复位"变成半复位。
+	 * 🔴 只存**用户拖过的**节点（未拖过的走自动布局）⇒ 数据量最小、自动布局改动仍能生效。
+	 *    形如 { "<sessionId>": { x, y } }
+	 */
+	mmPos: {}
 });
 
 export function createDirectorLayoutStore() {
@@ -159,7 +184,40 @@ export function createDirectorLayoutStore() {
 			notify();
 		},
 		/** 全部复位（调试/测试用） */
-		resetLayout: () => { state = { ...DEFAULTS }; notify(); }
+		resetLayout: () => { state = { ...DEFAULTS }; notify(); },
+
+		/* ── 本轮新增：设计图工作室（T-PLUG-018）──────────────── */
+		/** 打开/关闭设计图工作室（全屏覆盖层；**不依赖 dialogOpen**） */
+		setDesignStudio: (v) => { state = { ...state, designStudioOpen: Boolean(v) }; notify(); },
+		toggleDesignStudio: () => { state = { ...state, designStudioOpen: !state.designStudioOpen }; notify(); },
+		/** 浮动按钮组显隐 */
+		setFloatDock: (v) => { state = { ...state, floatDockOpen: Boolean(v) }; notify(); },
+
+		/* ── 本轮新增：分支导图覆盖层 ─────────────────────────── */
+		setMindmap: (v) => { state = { ...state, mindmapOpen: Boolean(v) }; notify(); },
+		toggleMindmap: () => { state = { ...state, mindmapOpen: !state.mindmapOpen }; notify(); },
+		/** 记录用户把某个框拖到哪（**只改画面位置，不改血缘**） */
+		setNodePos: (sessionId, pos) => {
+			if (!sessionId || !pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false;
+			state = { ...state, mmPos: { ...state.mmPos, [String(sessionId)]: { x: Math.round(pos.x), y: Math.round(pos.y) } } };
+			notify();
+			return true;
+		},
+		/** 单个框归位（回到自动布局） */
+		clearNodePos: (sessionId) => {
+			if (!state.mmPos || !(String(sessionId) in state.mmPos)) return false;
+			const next = { ...state.mmPos };
+			delete next[String(sessionId)];
+			state = { ...state, mmPos: next };
+			notify();
+			return true;
+		},
+		/** 全部归位（"自动布局"按钮） */
+		resetNodePos: () => {
+			state = { ...state, mmPos: {} };
+			notify();
+			return true;
+		}
 	};
 }
 
