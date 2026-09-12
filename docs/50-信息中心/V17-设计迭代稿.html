@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V17 · 设计迭代稿 — dsh-director（在 V16 基础上补充迭代）</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --sbg:#101114; --sbg2:#15161a; --sbg3:#1a1b1f; --sbg4:#1c1d21;
+    --panel:#212227; --panel2:#25272d;
+    --line:#26282e; --line2:#2e3138; --line3:#34373e; --line4:#3d4148;
+    --fg:#e8eaed; --fg2:#c9ced6; --fg3:#9aa0a6; --fg4:#6b7076;
+    --acc:#2f6feb; --acc2:#8ab4f8; --accbg:#1d2739; --accbd:#2b3f5e;
+    --pur:#8957e5; --pur2:#c9a8ff; --purbg:#1a1524; --purbd:#4c3a6b;
+    --teal:#39c5cf; --teal2:#7fe3e8; --tealbg:#15201f; --tealbd:#2b6b70;
+    --ok:#3fb950; --ok2:#8fd48f; --okbg:#152318; --okbd:#2b6b3a;
+    --warn:#d29922; --warn2:#e3c07a; --warnbg:#241d10; --warnbd:#6b5320;
+    --err:#f85149; --err2:#ff9a92; --errbg:#1e1416; --errbd:#6b2b28;
+    --doc:#0d0e11;
+    --t:140ms;
+    --radius-s:6px; --radius-m:9px; --radius-l:12px;
+    --space-xs:4px; --space-s:7px; --space-m:11px; --space-l:16px;
+  }
+  body{background:var(--doc);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;font-size:11.5px;padding:26px 18px 60px}
+  .wrap{max-width:1260px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:9px}
+  .sub{font-size:12.5px;color:var(--fg3);margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #24262c}
+  .sub b{color:var(--acc2);font-weight:600}
+
+  .blk{margin-bottom:30px}
+  .blk > .bh{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:9px;border-bottom:1px solid #24262c}
+  .blk > .bh .k{font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 11px;border-radius:6px;background:var(--acc);color:#fff}
+  .blk.b > .bh .k{background:var(--pur)}
+  .blk.c > .bh .k{background:var(--teal);color:#0d0e11}
+  .blk.d > .bh .k{background:var(--teal);color:#0d0e11}
+  .blk > .bh h2{font-size:17px;font-weight:650}
+  .blk > .bh .r{margin-left:auto;font-size:11.5px;color:var(--fg4)}
+
+  .sec{background:var(--sbg3);border:1px solid #26282e;border-radius:12px;margin-bottom:20px;overflow:hidden}
+  .sec > header{padding:11px 16px;background:var(--sbg2);border-bottom:1px solid #26282e;display:flex;align-items:center;gap:10px}
+  .sec > header .no{font-size:11px;font-weight:700;padding:2px 9px;border-radius:5px;background:#2b2e35;color:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+  .sec > header .no.p{background:#2a2140;color:var(--pur2)}
+  .sec > header .no.t{background:#16302f;color:var(--teal2)}
+  .sec > header h3{font-size:14px;font-weight:600}
+  .sec > header .tag{margin-left:auto;font-size:11px;color:var(--fg4);white-space:nowrap}
+  .sec > .bd{padding:16px}
+  .cap{font-size:11px;color:var(--fg4);margin-top:8px;text-align:center}
+
+  .note{font-size:11.5px;color:var(--fg3);background:var(--sbg2);border-left:3px solid var(--acc);padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--pur)}
+  .note.t{border-left-color:var(--teal)}
+  .note b{color:var(--fg)}
+
+  /* 域标识 */
+  .domain-tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:5px;letter-spacing:.3px}
+  .domain-tag.dir{background:var(--accbg);color:var(--acc2);border:1px solid var(--accbd)}
+  .domain-tag.design{background:var(--tealbg);color:var(--teal2);border:1px solid var(--tealbd)}
+  .domain-tag.map{background:var(--purbg);color:var(--pur2);border:1px solid var(--purbd)}
+
+  /* 真实应用窗口 */
+  .app{width:100%;background:var(--sbg4);border:1px solid #2b2e34;border-radius:11px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 22px 56px rgba(0,0,0,.6)}
+  .app-tb{height:34px;background:var(--sbg);display:flex;align-items:center;padding:0 11px;gap:7px;flex-shrink:0;border-bottom:1px solid #1c1e23}
+  .tl{width:11px;height:11px;border-radius:50%}
+  .tl.r{background:#ec6a5e}.tl.y{background:#f4bf4f}.tl.g{background:#61c554}
+  .app-tb .ttl{margin-left:9px;font-size:11.5px;color:var(--fg4)}
+  .app-tb .rt{margin-left:auto;display:flex;gap:12px;font-size:11px;color:var(--fg4)}
+  .app-bd{display:flex;height:560px}
+
+  /* 侧栏 */
+  .sb{width:220px;background:var(--sbg2);border-right:1px solid #232529;display:flex;flex-direction:column;flex-shrink:0}
+  .sb-hd{height:38px;display:flex;align-items:center;gap:7px;padding:0 11px;border-bottom:1px solid #232529}
+  .sb-hd .nm{font-size:12px;font-weight:600;color:var(--fg)}
+  .sb-list{flex:1;padding:7px 0;overflow:hidden}
+  .sb-row{display:flex;align-items:center;gap:7px;padding:5px 11px;font-size:11.5px;color:var(--fg3);position:relative}
+  .sb-row.on{background:#23252b;color:var(--fg);box-shadow:inset 2px 0 0 var(--acc)}
+  .sb-row .ico{width:13px;text-align:center;font-size:11px;flex-shrink:0}
+  .sb-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sb-row .dir-ico{position:absolute;right:8px;opacity:0;transition:opacity var(--t);font-size:10px;color:var(--acc2)}
+  .sb-row:hover .dir-ico{opacity:1}
+  .sb-row.sub{padding-left:26px}
+  .sb-foot{border-top:1px solid #232529;padding:8px 11px;display:flex;align-items:center;gap:7px;font-size:11px;color:var(--fg4)}
+  .sb-foot .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+
+  /* 主区 */
+  .mn{flex:1;display:flex;flex-direction:column;background:var(--sbg4);min-width:0}
+  .tabs{height:37px;display:flex;align-items:flex-end;padding:0 9px;border-bottom:1px solid #232529;flex-shrink:0;background:var(--sbg4)}
+  .tb{padding:0 13px;height:100%;display:flex;align-items:center;font-size:12.5px;color:var(--fg4);border-bottom:2px solid transparent;margin-bottom:-1px;gap:6px}
+  .tb.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+  .tb .cnt{font-size:10.5px;background:#2b2e35;color:var(--fg3);border-radius:8px;padding:0 5px}
+  .tabs .rt{margin-left:auto;display:flex;align-items:center;gap:9px;padding-bottom:7px;font-size:11px;color:var(--fg4)}
+
+  /* 面包屑 */
+  .breadcrumb{height:30px;display:flex;align-items:center;padding:0 13px;gap:6px;font-size:11px;color:var(--fg3);background:var(--sbg3);border-bottom:1px solid #232529;flex-shrink:0}
+  .breadcrumb .sep{color:var(--fg4)}
+  .breadcrumb a{color:var(--acc2);cursor:pointer;text-decoration:none}
+  .breadcrumb a:hover{text-decoration:underline}
+  .breadcrumb .cur{color:var(--fg);font-weight:600}
+
+  .content{flex:1;overflow-y:auto;padding:9px;display:flex;flex-direction:column;gap:7px}
+
+  /* 卡片 */
+  .cd{background:var(--panel);border:1px solid var(--line2);border-radius:9px;padding:9px 11px;position:relative;flex-shrink:0}
+  .cd-hd{display:flex;align-items:center;gap:7px;margin-bottom:7px;cursor:pointer;user-select:none}
+  .cd-hd .fold{width:14px;height:14px;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--fg4);transition:transform var(--t)}
+  .cd.folded .fold{transform:rotate(-90deg)}
+  .cd-hd .ttl{font-size:12px;font-weight:600;color:var(--fg)}
+  .cd-hd .summary{margin-left:auto;font-size:10.5px;color:var(--fg4)}
+  .cd-bd{transition:opacity var(--t),max-height var(--t)}
+  .cd.folded .cd-bd{display:none}
+
+  /* 总监对话区 */
+  .msg-list{flex:1;display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:120px}
+  .msg{max-width:85%;padding:6px 10px;border-radius:8px;font-size:11.5px;line-height:1.5}
+  .msg.user{align-self:flex-end;background:var(--accbg);border:1px solid var(--accbd);color:var(--fg)}
+  .msg.ai{align-self:flex-start;background:var(--sbg3);border:1px solid var(--line2);color:var(--fg2)}
+  .msg .role{font-size:10px;color:var(--fg4);margin-bottom:3px;font-weight:600}
+  .composer{display:flex;gap:7px;padding-top:7px;border-top:1px solid var(--line2);margin-top:7px}
+  .composer input{flex:1;background:var(--sbg3);border:1px solid var(--line3);border-radius:7px;padding:6px 10px;font-size:11.5px;color:var(--fg);outline:none}
+  .composer input:focus{border-color:var(--acc)}
+  .composer .target-badge{display:flex;align-items:center;gap:4px;font-size:10px;padding:0 8px;border-radius:6px;background:var(--accbg);color:var(--acc2);border:1px solid var(--accbd);cursor:pointer;white-space:nowrap}
+
+  /* FloatDock */
+  .float-dock{position:absolute;bottom:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:100}
+  .fd-btn{width:42px;height:42px;border-radius:50%;background:var(--panel);border:1px solid var(--line3);display:flex;align-items:center;justify-content:center;font-size:17px;cursor:pointer;position:relative;transition:all var(--t);box-shadow:0 4px 12px rgba(0,0,0,.4)}
+  .fd-btn:hover{transform:scale(1.08);border-color:var(--acc)}
+  .fd-btn.active{background:var(--accbg);border-color:var(--acc);box-shadow:0 0 0 3px rgba(47,111,235,.2)}
+  .fd-btn .unread{position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;background:var(--err);border:2px solid var(--panel)}
+  .fd-btn .tooltip{position:absolute;right:52px;top:50%;transform:translateY(-50%);background:var(--sbg);border:1px solid var(--line3);padding:4px 9px;border-radius:6px;font-size:11px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity var(--t)}
+  .fd-btn:hover .tooltip{opacity:1}
+
+  /* 节点操作提示条 */
+  .node{position:relative;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:var(--panel);border:1px solid var(--line3);border-radius:8px;font-size:11.5px;cursor:pointer;transition:all var(--t)}
+  .node:hover{border-color:var(--pur);box-shadow:0 0 0 3px rgba(137,87,229,.15)}
+  .node.root{background:var(--purbg);border-color:var(--purbd);color:var(--pur2)}
+  .node-hint{position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);display:flex;gap:4px;background:var(--sbg);border:1px solid var(--line3);border-radius:7px;padding:4px 6px;opacity:0;pointer-events:none;transition:opacity var(--t);z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+  .node:hover .node-hint{opacity:1;pointer-events:auto}
+  .node-hint .hint-btn{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:5px;font-size:12px;color:var(--fg3);cursor:pointer;transition:all var(--t)}
+  .node-hint .hint-btn:hover{background:var(--sbg3);color:var(--fg)}
+
+  /* Toast */
+  .toast{position:fixed;top:16px;right:16px;background:var(--sbg);border:1px solid var(--line3);border-left:3px solid var(--ok);border-radius:8px;padding:9px 14px;font-size:11.5px;color:var(--fg);display:flex;align-items:center;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:1000;animation:slideIn var(--t) ease-out}
+  @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+  /* 错误页 */
+  .error-page{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;text-align:center}
+  .error-page .ico{font-size:42px;margin-bottom:14px}
+  .error-page .title{font-size:16px;font-weight:600;color:var(--fg);margin-bottom:6px}
+  .error-page .desc{font-size:12px;color:var(--fg3);margin-bottom:16px;max-width:320px}
+  .error-page .actions{display:flex;gap:10px}
+  .btn{padding:6px 16px;border-radius:7px;font-size:11.5px;cursor:pointer;border:1px solid transparent;transition:all var(--t)}
+  .btn.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+  .btn.primary:hover{background:#3d7bf0}
+  .btn.secondary{background:var(--sbg3);color:var(--fg2);border-color:var(--line3)}
+  .btn.secondary:hover{border-color:var(--fg4)}
+  .error-page .details{margin-top:16px;font-size:10.5px;color:var(--fg4);cursor:pointer;text-decoration:underline}
+
+  /* 设计令牌表 */
+  .token-table{width:100%;border-collapse:collapse;font-size:11px}
+  .token-table th{text-align:left;padding:6px 10px;background:var(--sbg2);border-bottom:1px solid var(--line2);color:var(--fg3);font-weight:600}
+  .token-table td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(--fg2)}
+  .swatch{display:inline-block;width:16px;height:16px;border-radius:4px;vertical-align:middle;margin-right:6px;border:1px solid var(--line3)}
+
+  /* 对比标注 */
+  .diff-add{color:var(--ok2);font-weight:600}
+  .diff-change{color:var(--warn2);font-weight:600}
+  .diff-keep{color:var(--fg4)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V17 · 设计迭代稿 <small>在 V16 落死基础上补充迭代 · 不新开版本号</small></h1>
+<div class="sub">
+  7 项改进点：<b>浮层入口统一</b> · <b>层级路径缩短</b> · <b>信息密度优化</b> · <b>顶栏响应式</b> · <b>节点操作发现性</b> · <b>流转状态反馈</b> · <b>错误恢复路径</b>
+  ｜ 原则：不破坏现有功能 · 风格完全统一 · 交互可预测
+</div>
+
+<!-- 板块 A：总监页优化版 -->
+<div class="blk">
+  <div class="bh"><span class="k">A</span><h2>总监页优化版（域标识 + 面包屑 + 可折叠区域）</h2><span class="r">改进点 1/2/3</span></div>
+
+  <div class="sec">
+    <header><span class="no">A1</span><h3>总监页 — 优化后高保真</h3><span class="tag">新增：域标识 / 面包屑 / 可折叠 R2 R4 R6 / 记忆面板点击展开</span></header>
+    <div class="bd">
+      <div class="app">
+        <div class="app-tb">
+          <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+          <span class="ttl">DeepSeek Harness — 总监驾驶舱</span>
+          <span class="rt">⌘K 搜索</span>
+        </div>
+        <div class="app-bd">
+          <!-- 侧栏 -->
+          <div class="sb">
+            <div class="sb-hd"><span class="nm">📁 工作区</span></div>
+            <div class="sb-list">
+              <div class="sb-row on"><span class="ico">📂</span><span class="nm">dsh-client-mod</span><span class="dir-ico">◆</span></div>
+              <div class="sb-row sub"><span class="ico">📄</span><span class="nm">AGENTS.md</span><span class="dir-ico">◆</span></div>
+              <div class="sb-row sub"><span class="ico">📁</span><span class="nm">dsh-director-plugin</span><span class="dir-ico">◆</span></div>
+              <div class="sb-row sub sub2"><span class="ico">📁</span><span class="nm">src</span><span class="dir-ico">◆</span></div>
+              <div class="sb-row sub sub2"><span class="ico">📁</span><span class="nm">scripts</span><span class="dir-ico">◆</span></div>
+              <div class="sb-row"><span class="ico">📂</span><span class="nm">另一个项目</span><span class="dir-ico">◆</span></div>
+            </div>
+            <div class="sb-foot"><span class="dot"></span><span>已连接</span><span class="r">v16</span></div>
+          </div>
+          <!-- 主区 -->
+          <div class="mn">
+            <div class="tabs">
+              <div class="tb on"><span>◆</span>总监<span class="cnt hi">3</span></div>
+              <div class="tb"><span>💬</span>对话<span class="cnt">12</span></div>
+              <div class="tb"><span>📍</span>轨迹</div>
+              <div class="rt"><span class="domain-tag dir">◆ 总监域</span></div>
+            </div>
+            <!-- 面包屑（新增） -->
+            <div class="breadcrumb">
+              <a>全局</a><span class="sep">›</span>
+              <a>dsh-client-mod</a><span class="sep">›</span>
+              <span class="cur">dsh-director-plugin</span>
+            </div>
+            <div class="content">
+              <!-- R2 项目总览（可折叠） -->
+              <div class="cd">
+                <div class="cd-hd"><span class="fold">▼</span><span class="ttl">📊 项目总览</span><span class="summary">定位 · 目标 · 阶段 · 进度 68% · 风险 2 · 待办 5</span></div>
+                <div class="cd-bd">
+                  <div style="display:flex;gap:16px;font-size:11px;color:var(--fg3)">
+                    <div><b style="color:var(--fg)">定位</b>：Harness 总监驾驶舱插件</div>
+                    <div><b style="color:var(--fg)">目标</b>：沟通治理层 + 执行产出层分离</div>
+                    <div><b style="color:var(--fg)">阶段</b>：V16 落死 → V17 迭代</div>
+                  </div>
+                  <div style="margin-top:8px;height:6px;background:var(--sbg);border-radius:3px;overflow:hidden">
+                    <div style="width:68%;height:100%;background:linear-gradient(90deg,var(--acc),var(--pur));border-radius:3px"></div>
+                  </div>
+                </div>
+              </div>
+              <!-- R3 智能体/技能 -->
+              <div class="cd">
+                <div class="cd-hd"><span class="fold">▼</span><span class="ttl">🤖 智能体 ｜ 技能</span><span class="summary">5 类智能体 · 调用方式：总监自动 / 客户手选</span></div>
+                <div class="cd-bd">
+                  <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <span style="padding:3px 9px;background:var(--accbg);border:1px solid var(--accbd);border-radius:5px;font-size:10.5px;color:var(--acc2)">💻 代码</span>
+                    <span style="padding:3px 9px;background:var(--sbg3);border:1px solid var(--line3);border-radius:5px;font-size:10.5px;color:var(--fg3)">📄 文档</span>
+                    <span style="padding:3px 9px;background:var(--sbg3);border:1px solid var(--line3);border-radius:5px;font-size:10.5px;color:var(--fg3)">🔍 调研</span>
+                    <span style="padding:3px 9px;background:var(--sbg3);border:1px solid var(--line3);border-radius:5px;font-size:10.5px;color:var(--fg3)">🧪 测试</span>
+                    <span style="padding:3px 9px;background:var(--sbg3);border:1px solid var(--line3);border-radius:5px;font-size:10.5px;color:var(--fg3)">✅ 审核</span>
+                  </div>
+                </div>
+              </div>
+              <!-- R5 总监对话 + R6 记忆（点击展开） -->
+              <div class="cd" style="flex:1;display:flex;flex-direction:column;min-height:0">
+                <div class="cd-hd"><span class="fold">▼</span><span class="ttl">💬 总监对话</span><span class="summary">治理链路 · 六维审核 · 智能路由</span></div>
+                <div class="cd-bd" style="flex:1;display:flex;flex-direction:column;min-height:0">
+                  <div class="msg-list">
+                    <div class="msg user"><div class="role">用户</div>帮我梳理一下当前项目的总监功能完整度</div>
+                    <div class="msg ai"><div class="role">◆ 总监</div>已完成六维审核：需求满足度 100% · 方案符合度 95% · 质量达标度 92% · 风险控制 88% · 完整性 90% · 一致性 95%。建议优先改进浮层入口统一和层级切换路径。</div>
+                    <div class="msg user"><div class="role">用户</div>好，按这个方向迭代</div>
+                  </div>
+                  <div class="composer">
+                    <span class="target-badge">◆ 总监 ▾</span>
+                    <input placeholder="向总监输入…（Alt+D 切换目标）">
+                  </div>
+                </div>
+              </div>
+              <!-- R6 记忆（点击展开，非 hover） -->
+              <div class="cd folded">
+                <div class="cd-hd"><span class="fold">▼</span><span class="ttl">🧠 总监记忆</span><span class="summary">3 条核心记忆 · 2 条决策 · 1 条风险（点击展开）</span></div>
+                <div class="cd-bd">
+                  <div style="font-size:11px;color:var(--fg3);line-height:1.8">
+                    <div>📌 核心记忆：V16 已落死 · 主管道=插件通道 · 产物 964,872B</div>
+                    <div>📌 决策记录：方案 C 布局分屏（57分居首）· 独立库 dsh-director-plugin-db v1</div>
+                    <div>⚠️ 风险：T-PLUG-030 文档上下文死链路（docs 是 map 当数组用）</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">▲ 总监页优化版：域标识（右上角）· 面包屑导航 · R2/R4/R6 可折叠 · R6 记忆面板点击展开（非 hover）· 侧栏悬浮显示总监图标</div>
+    </div>
+  </div>
+
+  <div class="note ok"><b>改进点说明</b>：① 右上角新增<b>域标识</b>（◆ 总监域），用户始终知道自己在哪个域；② 新增<b>面包屑导航</b>（全局 › 项目 › 文件夹），可点击回退；③ R2/R4/R6 <b>可折叠</b>，折叠状态持久化；④ R6 记忆面板改为<b>点击展开</b>（非 hover），不干扰阅读；⑤ 侧栏文件夹/项目<b>悬浮显示总监图标</b>（◆），提示"点击查看该项目总监"。</div>
+</div>
+
+<!-- 板块 B：FloatDock 统一入口 -->
+<div class="blk b">
+  <div class="bh"><span class="k">B</span><h2>FloatDock 统一入口（激活态 + 未读标记 + 工具提示）</h2><span class="r">改进点 1/6</span></div>
+
+  <div class="sec">
+    <header><span class="no p">B1</span><h3>FloatDock — 统一浮层切换入口</h3><span class="tag">三按钮调用同一 toggleOverlay · 激活态高亮 · 未读标记小圆点</span></header>
+    <div class="bd">
+      <div style="position:relative;height:280px;background:var(--sbg3);border-radius:9px;border:1px solid var(--line2);overflow:hidden">
+        <div style="padding:14px;font-size:11.5px;color:var(--fg3)">
+          <div style="margin-bottom:8px"><b style="color:var(--fg)">FloatDock 行为规范：</b></div>
+          <div>• 三个按钮调用同一个 <code style="color:var(--acc2)">toggleOverlay(type)</code> 函数</div>
+          <div>• 切换浮层时：先关当前（140ms 淡出）→ 再开目标（140ms 淡入+轻微放大）</div>
+          <div>• 激活态：按钮背景变蓝 + 3px 蓝色光晕</div>
+          <div>• 未读标记：目标浮层未打开时有新内容 → 右上角红色小圆点</div>
+          <div>• 工具提示：悬浮显示按钮名称（140ms 淡入）</div>
+        </div>
+        <!-- FloatDock 模拟 -->
+        <div class="float-dock">
+          <div class="fd-btn active" style="color:var(--teal2)">
+            ◈<span class="tooltip">设计图工作室（Alt+1）</span>
+          </div>
+          <div class="fd-btn" style="color:var(--pur2)">
+            ❖<span class="unread"></span><span class="tooltip">思维导图（Alt+2）· 有新同步</span>
+          </div>
+          <div class="fd-btn" style="color:var(--acc2)">
+            ◆<span class="tooltip">总监弹窗（Alt+3）</span>
+          </div>
+        </div>
+      </div>
+      <div class="cap">▲ FloatDock：◈ 设计图（激活态·青色）· ❖ 导图（未读标记·紫色）· ◆ 总监（蓝色）· 悬浮显示工具提示</div>
+    </div>
+  </div>
+
+  <div class="note p"><b>改进点说明</b>：FloatDock 为<b>唯一浮层切换入口</b>（主入口），总监页内入口改为快捷唤起，快捷键作为键盘用户替代入口。所有入口调用同一函数，切换逻辑一致。浮层未打开时有新内容时，按钮显示<b>未读标记</b>（红色小圆点）。</div>
+</div>
+
+<!-- 板块 C：思维导图节点操作提示条 -->
+<div class="blk c">
+  <div class="bh"><span class="k">C</span><h2>思维导图节点操作发现性（悬浮提示条）</h2><span class="r">改进点 5</span></div>
+
+  <div class="sec">
+    <header><span class="no t">C1</span><h3>节点悬浮 500ms 显示操作提示条</h3><span class="tag">不阻挡节点点击 · 300ms 延迟消失 · 列出最常用 5 个操作</span></header>
+    <div class="bd">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:30px 0">
+        <!-- 根节点 -->
+        <div class="node root">
+          📋 dsh-client-mod
+          <div class="node-hint">
+            <span class="hint-btn" title="添加子节点">➕</span>
+            <span class="hint-btn" title="编辑">✏️</span>
+            <span class="hint-btn" title="折叠">📁</span>
+            <span class="hint-btn" title="聚焦">🎯</span>
+            <span class="hint-btn" title="更多（右键菜单）">⋯</span>
+          </div>
+        </div>
+        <!-- 连线 -->
+        <div style="width:2px;height:20px;background:var(--line3)"></div>
+        <!-- 子节点 -->
+        <div style="display:flex;gap:30px">
+          <div class="node">
+            📁 dsh-director-plugin
+            <div class="node-hint">
+              <span class="hint-btn" title="添加子节点">➕</span>
+              <span class="hint-btn" title="添加兄弟">↔️</span>
+              <span class="hint-btn" title="编辑">✏️</span>
+              <span class="hint-btn" title="更多">⋯</span>
+            </div>
+          </div>
+          <div class="node" style="opacity:.6">
+            📁 docs（悬浮试试）
+          </div>
+          <div class="node" style="opacity:.6">
+            📁 scripts
+          </div>
+        </div>
+      </div>
+      <div class="cap">▲ 节点悬浮 500ms 显示操作提示条：添加子节点 / 添加兄弟 / 编辑 / 折叠 / 聚焦 / 更多（右键菜单完整入口）。提示条不阻挡节点点击，鼠标移开 300ms 后消失。</div>
+    </div>
+  </div>
+
+  <div class="note t"><b>改进点说明</b>：节点有三套操作（右键菜单 / 悬浮工具条 / 快捷键），新用户发现性低。新增<b>操作提示条</b>：节点悬浮 500ms 后在节点下方显示，列出最常用的 4-5 个操作图标。提示条不阻挡节点点击，鼠标移开 300ms 后消失（给用户时间移到提示条上）。首次使用时显示一次性引导（"右键节点查看更多操作，按 ? 查看快捷键"）。</div>
+</div>
+
+<!-- 板块 D：消息流转 + 错误页 -->
+<div class="blk d">
+  <div class="bh"><span class="k">D</span><h2>消息流转状态反馈 + 错误恢复路径</h2><span class="r">改进点 6/7</span></div>
+
+  <div class="sec">
+    <header><span class="no t">D1</span><h3>消息流转 Toast 提示</h3><span class="tag">轻量 toast · 1.5s 自动消失 · 不阻塞操作 · 不抢焦点</span></header>
+    <div class="bd">
+      <div style="position:relative;height:120px;background:var(--sbg3);border-radius:9px;border:1px solid var(--line2);overflow:hidden;display:flex;align-items:center;justify-content:center">
+        <div style="font-size:12px;color:var(--fg3)">用户在设计图工作室发送消息 → 四维流转同步 → 目标界面显示 toast</div>
+        <!-- Toast 模拟 -->
+        <div class="toast" style="position:absolute;top:16px;right:16px">
+          <span style="color:var(--ok);font-size:14px">✓</span>
+          <span>已同步到思维导图</span>
+        </div>
+      </div>
+      <div class="cap">▲ Toast 提示：右上角轻量通知，1.5s 后自动消失，不阻塞操作不抢焦点。如果目标界面未打开，则不显示提示（避免干扰），但 FloatDock 对应按钮显示未读标记。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no t">D2</span><h3>SafeLayer 错误友好页</h3><span class="tag">错误图标 + 友好文案 + 重试按钮 + 恢复指引 + 技术详情折叠</span></header>
+    <div class="bd">
+      <div style="background:var(--sbg3);border-radius:9px;border:1px solid var(--line2);overflow:hidden">
+        <div class="error-page">
+          <div class="ico">⚠️</div>
+          <div class="title">出了点小问题</div>
+          <div class="desc">这个界面暂时无法正常显示。别担心，你的数据没有丢失，试试下面的方法恢复。</div>
+          <div class="actions">
+            <button class="btn primary">🔄 重试</button>
+            <button class="btn secondary">📖 查看详情</button>
+          </div>
+          <div class="details">如果重试 3 次仍然失败，请重启 Harness</div>
+        </div>
+      </div>
+      <div class="cap">▲ 错误友好页：SafeLayer 捕获错误后显示（非空白），包含错误图标、友好文案、重试按钮、恢复指引。技术详情默认折叠（高级用户可展开）。重试 3 次失败后显示"请重启 Harness"指引。错误记录到 debug 日志。</div>
+    </div>
+  </div>
+</div>
+
+<!-- 板块 E：视觉统一规范 -->
+<div class="blk">
+  <div class="bh"><span class="k">E</span><h2>视觉统一规范（四界面共用设计令牌）</h2><span class="r">P0 · 纯 CSS · 所有迭代的基础</span></div>
+
+  <div class="sec">
+    <header><span class="no">E1</span><h3>设计令牌总表</h3><span class="tag">颜色 / 字体 / 间距 / 圆角 / 过渡 — 四界面共用同一套</span></header>
+    <div class="bd">
+      <table class="token-table">
+        <tr><th style="width:120px">类别</th><th style="width:160px">令牌</th><th style="width:120px">值</th><th>用途</th></tr>
+        <tr><td rowspan="4"><b>颜色</b></td><td>--acc（主色）</td><td><span class="swatch" style="background:#2f6feb"></span>#2f6feb</td><td>总监域 · 主按钮 · 链接 · 焦点高亮</td></tr>
+        <tr><td>--pur（辅助）</td><td><span class="swatch" style="background:#8957e5"></span>#8957e5</td><td>导图域 · 节点 · 辅助强调</td></tr>
+        <tr><td>--teal（强调）</td><td><span class="swatch" style="background:#39c5cf"></span>#39c5cf</td><td>设计图域 · 成功状态 · 强调</td></tr>
+        <tr><td>--ok/--warn/--err</td><td><span class="swatch" style="background:#3fb950"></span><span class="swatch" style="background:#d29922"></span><span class="swatch" style="background:#f85149"></span></td><td>成功 / 警告 / 错误 状态色</td></tr>
+        <tr><td rowspan="3"><b>字体</b></td><td>--font-xs</td><td>10.5px</td><td>辅助文字（最小字号，不得小于此值）</td></tr>
+        <tr><td>--font-s</td><td>11.5px</td><td>基础字号（正文 / 列表 / 输入框）</td></tr>
+        <tr><td>--font-m / --font-l / --font-xl</td><td>13 / 17 / 22px</td><td>标题 / 区域标题 / 页面标题</td></tr>
+        <tr><td rowspan="3"><b>间距</b></td><td>--space-xs / --space-s</td><td>4 / 7px</td><td>紧凑间距 / 控件内间距</td></tr>
+        <tr><td>--space-m</td><td>11px</td><td>卡片内间距</td></tr>
+        <tr><td>--space-l</td><td>16px</td><td>区域间距 / 大容器内边距</td></tr>
+        <tr><td rowspan="3"><b>圆角</b></td><td>--radius-s</td><td>6px</td><td>小控件（按钮 / 标签 / 输入框）</td></tr>
+        <tr><td>--radius-m</td><td>9px</td><td>卡片 / 面板</td></tr>
+        <tr><td>--radius-l</td><td>12px</td><td>弹窗 / 大容器 / section</td></tr>
+        <tr><td><b>过渡</b></td><td>--t</td><td>140ms</td><td>所有交互动画（hover / 折叠 / 浮层切换）。prefers-reduced-motion 降级为 0</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">E2</span><h3>四界面域标识规范</h3><span class="tag">每个界面左上角显示域标识（颜色+文字），用户始终知道自己在哪个域</span></header>
+    <div class="bd">
+      <div style="display:flex;gap:20px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--sbg3);border-radius:8px;border:1px solid var(--line2)">
+          <span class="domain-tag dir">◆ 总监</span>
+          <span style="font-size:11px;color:var(--fg3)">总监页 / 总监弹窗 — 蓝色 #2f6feb</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--sbg3);border-radius:8px;border:1px solid var(--line2)">
+          <span class="domain-tag design">◈ 设计图</span>
+          <span style="font-size:11px;color:var(--fg3)">设计图工作室 — 青色 #39c5cf</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--sbg3);border-radius:8px;border:1px solid var(--line2)">
+          <span class="domain-tag map">❖ 导图</span>
+          <span style="font-size:11px;color:var(--fg3)">思维导图 — 紫色 #8957e5</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 板块 F：迭代前后对比 -->
+<div class="blk b">
+  <div class="bh"><span class="k">F</span><h2>迭代前后对比（7 项改进点汇总）</h2><span class="r">验收标准 20 项</span></div>
+
+  <div class="sec">
+    <header><span class="no p">F1</span><h3>7 项改进点对比表</h3><span class="tag">P0-P3 优先级 · 预估工作量</span></header>
+    <div class="bd">
+      <table class="token-table">
+        <tr><th style="width:40px">#</th><th style="width:140px">改进点</th><th>迭代前（V16）</th><th>迭代后（V17）</th><th style="width:60px">优先级</th><th style="width:60px">工作量</th></tr>
+        <tr><td>1</td><td>浮层入口统一</td><td class="diff-keep">三处入口逻辑分散（FloatDock/页内/快捷键）</td><td class="diff-add">FloatDock 唯一主入口 + 统一 toggleOverlay + 激活态/未读标记</td><td>P1</td><td>中</td></tr>
+        <tr><td>2</td><td>层级路径缩短</td><td class="diff-keep">4 步：打开弹窗→选层级→选节点→确认</td><td class="diff-add">2 步：侧栏点击→自动打开+切换 + 面包屑导航</td><td>P1</td><td>中</td></tr>
+        <tr><td>3</td><td>信息密度优化</td><td class="diff-keep">R1-R8 全展开拥挤 · R6 hover 展开易误触</td><td class="diff-add">R2/R4/R6 可折叠（持久化）· R6 点击展开 · 折叠显示摘要</td><td>P2</td><td>中</td></tr>
+        <tr><td>4</td><td>顶栏响应式</td><td class="diff-keep">小窗口下按钮拥挤/截断</td><td class="diff-add">≥1200px 全展开 / 800-1200px 次要收入更多 / <800px 只留核心</td><td>P2</td><td>中</td></tr>
+        <tr><td>5</td><td>节点操作发现性</td><td class="diff-keep">三套操作（右键/悬浮/快捷键），新用户不知道</td><td class="diff-add">悬浮 500ms 显示操作提示条（4-5 个常用操作）+ 首次引导</td><td>P2</td><td>中</td></tr>
+        <tr><td>6</td><td>流转状态反馈</td><td class="diff-keep">四维流转同步时无视觉反馈</td><td class="diff-add">目标界面 toast 提示（1.5s）· FloatDock 未读标记</td><td>P3</td><td>小</td></tr>
+        <tr><td>7</td><td>错误恢复路径</td><td class="diff-keep">SafeLayer 捕获后显示空白</td><td class="diff-add">友好错误页 + 重试按钮 + 恢复指引 + 技术详情折叠</td><td>P3</td><td>小</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="note ok"><b>实施顺序</b>：P0（设计令牌统一+域标识，纯CSS）→ P1（浮层入口统一 + 层级路径缩短，并行）→ P2（信息密度优化 + 顶栏响应式 + 节点发现性，并行）→ P3（流转反馈 + 错误恢复，并行）。所有迭代<b>不破坏现有功能</b>，完成后就地更新 V16 设计稿和基线文档，跑 <code>baseline-check.mjs --write</code> 重新封存指纹。</div>
+</div>
+
+<div style="text-align:center;padding:30px 0;color:var(--fg4);font-size:11px;border-top:1px solid #24262c;margin-top:30px">
+  V17 设计迭代稿 · 在 V16 落死基础上补充迭代 · 不新开版本号 · 7 项改进点 · 验收标准 20 项
+</div>
+
+</div>
+</body>
+</html>
