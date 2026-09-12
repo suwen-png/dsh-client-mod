@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V15 三页签 · 弹窗 · 分支导图设计稿 — dsh-director</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#16171a; --bg2:#1c1d21; --bg3:#232428; --bg4:#2a2c31;
+    --border:#31343a; --border2:#3d4148;
+    --fg:#e8eaed; --fg2:#9aa0a6; --fg3:#8b9199;
+    --accent:#2f6feb; --accent2:#4b8ef7;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149;
+    --purple:#8957e5; --teal:#39c5cf;
+    --t:140ms;
+  }
+  body{background:#0f1012;color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px 20px 60px;line-height:1.55;font-size:11.5px}
+  .wrap{max-width:1240px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg2);font-size:13px;margin-left:10px}
+  .sub{font-size:12.5px;color:var(--fg2);margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)}
+  .sub b{color:var(--accent2);font-weight:600}
+  .view{background:var(--bg);border:1px solid var(--border);border-radius:12px;margin-bottom:22px;overflow:hidden}
+  .view > header{padding:12px 18px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  .view > header .no{background:var(--accent);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;letter-spacing:.5px;white-space:nowrap}
+  .view > header .no.p{background:var(--purple)}
+  .view > header .no.r{background:var(--err)}
+  .view > header .no.g{background:var(--ok);color:#0f1012}
+  .view > header h2{font-size:14px;font-weight:600}
+  .view > header .tag{margin-left:auto;font-size:11px;color:var(--fg3);white-space:nowrap}
+  .view .body{padding:18px}
+  .note{font-size:12px;color:var(--fg2);background:var(--bg2);border-left:3px solid var(--accent);padding:9px 13px;border-radius:0 6px 6px 0;margin-bottom:14px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.err{border-left-color:var(--err)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--purple)}
+  .note b{color:var(--fg)}
+
+  /* ===== 骨架 ===== */
+  .skeleton{background:var(--bg3);border:1px solid var(--border2);border-radius:10px;overflow:hidden}
+  .sk-topbar{height:26px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 10px;gap:6px}
+  .dotbtn{width:9px;height:9px;border-radius:50%;background:var(--border2)}
+  .sk-row{display:flex}
+  .sk-side{width:150px;background:var(--bg2);border-right:1px solid var(--border);padding:8px 0;flex-shrink:0}
+  .sk-side .item{font-size:11px;color:var(--fg2);padding:4px 10px;display:flex;gap:6px;align-items:center}
+  .sk-side .item.on{color:var(--fg);background:var(--bg4)}
+  .sk-side .item.sub{padding-left:24px;font-size:10.5px}
+  .sk-main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+  /* ===== tab 环 ===== */
+  .tabsbar{height:38px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:2px;background:var(--bg);flex-shrink:0}
+  .tab{font-size:12px;padding:4px 10px;color:var(--fg2);border-bottom:2px solid transparent;position:relative}
+  .tab.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+  .tab.new{color:var(--accent2);font-weight:700}
+  .tab .flag{position:absolute;top:-4px;right:-2px;font-size:10.5px;background:var(--accent);color:#fff;padding:0 4px;border-radius:6px;font-weight:600}
+  .tabs-hint{margin-left:14px;font-size:10.5px;color:var(--fg3)}
+
+  /* 内容舞台（用于演示弹窗浮层） */
+  .stage{position:relative;background:var(--bg3);min-height:210px;overflow:hidden}
+  .stage-inner{padding:10px}
+  .pop{position:absolute;top:0;bottom:0;right:0;width:250px;background:#1a1b1f;border-left:1px solid var(--purple);display:flex;flex-direction:column;z-index:3}
+  .pop .ph{height:30px;display:flex;align-items:center;gap:6px;padding:0 9px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;background:#20212a}
+  .pop .ph .x{margin-left:auto;font-size:12px;color:var(--fg3)}
+  .pop .pb{flex:1;padding:8px 9px;font-size:10.5px;color:var(--fg2);overflow:hidden}
+  .pop .pf{border-top:1px solid var(--border);padding:6px 8px}
+  .pop .pf .fld{height:24px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;font-size:10.5px;color:var(--fg3);padding:0 8px;display:flex;align-items:center}
+  .rail{position:absolute;top:0;bottom:0;right:0;width:34px;background:#20212a;border-left:1px solid var(--purple);z-index:3;display:flex;flex-direction:column;align-items:center;padding-top:8px;gap:6px}
+  .rail .vt{writing-mode:vertical-rl;font-size:10.5px;color:var(--purple);font-weight:700;letter-spacing:2px}
+  .rail .ic{font-size:12px;color:var(--fg3)}
+  .railbtn{position:absolute;bottom:10px;right:10px;display:flex;gap:8px;z-index:4}
+  .rb{background:#20212a;border:1px solid var(--border2);border-radius:20px;padding:5px 12px;font-size:11px;color:var(--fg2);display:flex;align-items:center;gap:5px}
+  .rb.mind{border-color:var(--teal);color:var(--teal)}
+  .rb.dir{border-color:var(--purple);color:var(--purple)}
+  .rb .ord{font-size:10.5px;color:var(--fg3)}
+
+  /* R 区 */
+  .R{border:1px dashed var(--border2);border-radius:7px;padding:8px 10px;position:relative;margin-bottom:8px}
+  .R > .lbl{position:absolute;top:-7px;left:9px;font-size:10.5px;background:var(--bg3);padding:0 5px;color:var(--accent2);font-weight:700;letter-spacing:.4px}
+  .R > .lbl .d{color:var(--fg3);font-weight:400;margin-left:4px}
+  .R.fill{background:var(--bg2);border-style:solid}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .chip{font-size:10.5px;background:var(--bg4);border:1px solid var(--border2);border-radius:5px;padding:2px 8px;color:var(--fg2)}
+  .chip.k{color:var(--fg);background:#2d3038}
+  .chip.pp{border-color:var(--purple);color:#c9a8ff}
+  .chip.tl{border-color:var(--teal);color:#7fe3e8}
+  .chip.ml{margin-left:auto}
+  .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px}
+  .metric{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 9px}
+  .metric .v{font-size:15px;font-weight:700;color:var(--fg)}
+  .metric .k{font-size:10.5px;color:var(--fg3)}
+  .bar{height:5px;background:var(--bg4);border-radius:3px;overflow:hidden;margin-top:5px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:65%}
+  .three{display:grid;grid-template-columns:170px 1fr;gap:8px}
+  .msgs{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px}
+  .m{margin-bottom:7px;display:flex;gap:6px}
+  .m .who{flex-shrink:0;font-size:10.5px;font-weight:700;padding:1px 5px;border-radius:4px;height:17px;line-height:15px}
+  .m.d .who{background:#2b3a55;color:#8ab4f8}
+  .m.u .who{background:#3a3320;color:#e3b341}
+  .m .txt{color:var(--fg2);font-size:10.5px}
+  .m .txt b{color:var(--fg)}
+  .inputbar{margin-top:7px;display:flex;gap:6px}
+  .inputbar .fld{flex:1;height:26px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;font-size:10.5px;color:var(--fg3);padding:0 9px;display:flex;align-items:center}
+  .btn{font-size:10.5px;background:var(--accent);color:#fff;border-radius:6px;padding:5px 11px;font-weight:600;white-space:nowrap}
+  .btn.gh{background:transparent;border:1px solid var(--border2);color:var(--fg2);font-weight:400}
+  .btn.pp{background:var(--purple)}
+
+  /* 导图 */
+  .mind{position:relative;height:262px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .mind svg{position:absolute;inset:0;width:100%;height:100%}
+  .mn{position:absolute;background:var(--bg3);border:1.5px solid var(--border2);border-radius:8px;padding:6px 9px;width:140px;font-size:10.5px;z-index:2}
+  .mn .h{font-weight:700;font-size:11px;color:var(--fg);display:flex;align-items:center;gap:5px}
+  .mn .t{font-size:10.5px;color:var(--fg3);margin-top:3px}
+  .mn.root{border-color:var(--accent);background:#1e2a3f;width:150px}
+  .mn.fork{border-color:var(--teal)}
+  .mn.sel{border-color:var(--purple);box-shadow:0 0 0 3px rgba(137,87,229,.18)}
+  .st{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .st.idle{background:#6b7076}.st.busy{background:var(--warn)}.st.err{background:var(--err)}.st.done{background:var(--ok)}
+  .mind-tools{display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+  .legend{margin-left:auto;display:flex;gap:11px;font-size:10.5px;color:var(--fg2);align-items:center}
+  .legend span{display:flex;align-items:center;gap:4px}
+
+  /* 缩放三档 */
+  .zooms{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .zc{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px}
+  .zc .zt{font-size:11px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .zc .zst{font-size:10.5px;color:var(--fg3);margin-bottom:7px}
+  .zcanvas{height:118px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;position:relative;overflow:hidden}
+  .zbar{height:3px;background:var(--bg4);border-radius:2px;margin:6px 0}
+  .zbar i{display:block;height:100%;background:var(--warn);border-radius:2px}
+  .zmini{position:absolute;background:var(--bg4);border:1px solid var(--border2);border-radius:4px;width:54px;height:20px}
+
+  /* 控制台六动作 */
+  .acts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .act{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+  .act .ah{font-size:11.5px;font-weight:700;color:var(--fg);display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .act .ad{font-size:10.5px;color:var(--fg2);line-height:1.5}
+  .act .an{font-size:10.5px;color:var(--fg3);margin-top:5px;font-family:ui-monospace,Consolas,monospace}
+
+  /* 弹窗形态对比 */
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .cmpc{border-radius:9px;padding:11px;border:1px solid}
+  .cmpc.bad{border-color:var(--err);background:#1e1416}
+  .cmpc.good{border-color:var(--ok);background:#131c15}
+  .cmpc .ct{font-size:12px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:7px}
+  .cmpc.bad .ct{color:var(--err)}
+  .cmpc.good .ct{color:var(--ok)}
+  .mockup{position:relative;height:132px;background:var(--bg3);border:1px solid var(--border2);border-radius:7px;overflow:hidden}
+  .mk-content{position:absolute;top:0;left:0;right:0;bottom:0;padding:8px;font-size:10.5px;color:var(--fg3)}
+  .mk-block{height:9px;background:var(--bg4);border-radius:3px;margin-bottom:6px}
+  .mk-panel{position:absolute;top:0;bottom:0;left:0;width:112px;background:#1a1b1f;border-right:1px solid var(--purple);z-index:2}
+  .mk-panel .p1{height:22px;border-bottom:1px solid var(--border);background:#20212a}
+  .mk-gap{position:absolute;top:0;bottom:0;left:112px;width:34px;background:repeating-linear-gradient(45deg,#2a1418,#2a1418 4px,#1e1416 4px,#1e1416 8px);z-index:3;border-left:1px solid var(--err);border-right:1px solid var(--err)}
+  .mk-pop{position:absolute;top:0;bottom:0;right:0;width:112px;background:#1a1b1f;border-left:1px solid var(--purple);z-index:3}
+  .mk-pop .p1{height:22px;border-bottom:1px solid var(--border);background:#20212a}
+  .mk-rail{position:absolute;top:0;bottom:0;right:0;width:26px;background:#20212a;border-left:1px solid var(--purple);z-index:3}
+  .mk-full{position:absolute;top:0;bottom:0;left:0;right:0;padding:8px;font-size:10.5px;color:var(--fg2);z-index:1}
+
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th,td{border:1px solid var(--border);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--bg2);color:var(--fg);font-weight:600;font-size:11px}
+  td{color:var(--fg2)}
+  td b{color:var(--fg)}
+  .bad{color:var(--err);font-weight:700}
+  .good{color:var(--ok);font-weight:700}
+  .mid{color:var(--warn);font-weight:700}
+  .pp{color:#c9a8ff;font-weight:700}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--bg4);padding:1px 5px;border-radius:4px;color:#a5d6ff}
+  .foot{text-align:center;font-size:11px;color:var(--fg3);margin-top:26px;padding-top:16px;border-top:1px solid var(--border)}
+  .anchor{background:linear-gradient(90deg,rgba(137,87,229,.14),transparent);border-left:3px solid var(--purple);padding:8px 12px;border-radius:0 6px 6px 0;font-size:11.5px;color:var(--fg2);margin-bottom:12px}
+  .anchor b{color:#c9a8ff}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V15 三页签 · 弹窗 · 分支导图设计稿 <small>dsh-director · 需求重审版</small></h1>
+<div class="sub">
+  依据：<b>用户 8 条口述需求</b>（2026-09-12）｜ 样式基线：<b>V13-原生Tab集成设计稿</b>（继承，不另造一套）<br>
+  本稿只解决一件事：<b>把「总监页 / 弹窗 / 分支导图」三件东西的形态一次性钉死</b>，实现待批。
+  ｜ 相关：<code>docs/09</code>（原生 Tab 方案）· <code>docs/10</code>（业务不变量）· <code>docs/11</code>（审核与选型）
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no r">重审</span><h2>我错在哪 —— 你原话 vs 我做的</h2><span class="tag">7 处偏差 · 逐条认领</span></header>
+  <div class="body">
+    <div class="note err">
+      <b>三次改版三个样，根因是我在「形态」上反复自作主张，且每次都没回你确认。</b>
+      下表把偏差钉在台账上，后续设计全部以此为准，不再回摆。
+    </div>
+    <table>
+      <tr><th style="width:34px">#</th><th style="width:260px">你的原话</th><th>我做成的</th><th style="width:62px">判定</th></tr>
+      <tr>
+        <td>1</td>
+        <td>「原对话<b>前面</b>新增一个『总监』<b>页面</b>」</td>
+        <td>做成<b>浮动覆盖层</b>（右下角按钮 → 全屏 overlay），<b>根本不占 tab 环</b></td>
+        <td class="bad">✗ 形态错</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td>「增加后一共<b>三个页面</b>：总监 · 对话 · 轨迹」</td>
+        <td>宿主里<b>只有「对话」「轨迹」两个</b>；总监在浮层里另画了一套内页签</td>
+        <td class="bad">✗ 数量错</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td>「总监页<b>最右侧</b>做一个<b>对话弹窗</b>，点击可以<b>缩进</b>」</td>
+        <td>把<b>整个原生对话区</b>用 <code>padding-left</code> 挤到右边当"右栏"（分屏方案 C）</td>
+        <td class="bad">✗ 理解错</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td>「对话页最右侧加<b>总监弹窗</b>」</td>
+        <td>没有。总监只有一个全局浮层，对话页里看不见</td>
+        <td class="bad">✗ 缺失</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td>「点击完之后 <b>对话不铺满</b>、<b>留下占位</b>；都弹窗了为什么不缩回去」</td>
+        <td>正是分屏的必然结果：左栏 300px + 原生区被 <code>padding-left:300px</code> 让位 ⇒ <b>永远留一条占位</b>，且无从缩回</td>
+        <td class="bad">✗ 设计缺陷</td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td>「V13 里 <b>R1–R8 都画好了</b>，为什么没按显示处理」</td>
+        <td>V14/V14.1 把 R1–R8 压成了「左面板 + 右分屏」两条，R4/R6/R7 <b>整块丢掉</b></td>
+        <td class="bad">✗ 丢内容</td>
+      </tr>
+      <tr>
+        <td>7</td>
+        <td>「<b>分支</b> = 新建分支会<b>复制现对话到新页面</b>；我说的是这个」</td>
+        <td>理解成"会话内的分支对象"，画了个<b>一个对话内部的树</b> —— 而真实分支是<b>跨会话的 fork</b></td>
+        <td class="bad">✗ 概念错</td>
+      </tr>
+    </table>
+
+    <div class="note p" style="margin-top:14px">
+      <b>为什么三次改版三个样 —— 三级根因</b><br>
+      <b>① 地基选错了</b>：宿主里「总监 tab」的注册被 <code>MOD-B 退坡 C-2 · 2026-09-07</code> 摘掉了（源码注释原文：
+      「director 视图注册已移除……恢复方式：git revert 本文件或从 snapshots/ 取回」），
+      而我探测 slot 时用了一个<b>从来不存在的全局名</b> <code>window.__DSH_SLOTS__</code> ⇒ 判定"通道不可用" ⇒ 走 DOM 浮层兜底。<br>
+      <b>② 兜底当成了默认</b>：<code>mount.js</code> 里 <code>tryRegisterHostSlot()</code> 恒返回 false，于是 <code>mountHierarchyOverlay()</code>
+      从"应急通道"变成了"唯一通道"，后续所有设计都长在这个错误地基上。<br>
+      <b>③ 我把「弹窗」读成了对「tab」的覆盖</b>：你第 17 条说"两者均为弹窗形式"，我据此把 <code>docs/09 §六·1</code> 的 tab 形态
+      <b>标为作废</b>，转向覆盖层 —— 但你要的是 <b>tab（页面）+ 弹窗（页面内的辅助面板）并存</b>，不是二选一。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 1</span><h2>一级结构：三页签 —— 总监 · 对话 · 轨迹</h2><span class="tag">需求 1 · 2</span></header>
+  <div class="body">
+    <div class="anchor">
+      <b>唯一形态改动点</b>：向宿主 <code>conversation.view</code> 注册一个 entry，<code>{ id:"director", order:-1, label:()=>"总监" }</code>。
+      <code>order:-1</code> ⇒ 排在「对话」<b>之前</b>。tab 环是纯 slot 驱动（宿主 <code>client.js:9172</code> <code>renderSlot("conversation.view",…) </code>），
+      <b>宿主零改动</b>；同族先例：「轨迹」tab 正是这么注册的。
+    </div>
+
+    <div class="skeleton">
+      <div class="sk-topbar"><span class="dotbtn"></span><span class="dotbtn"></span><span class="dotbtn"></span></div>
+      <div class="sk-row">
+        <div class="sk-side">
+          <div class="item on">▾ 📁 dsh-client-mod</div>
+          <div class="item sub">💬 设计稿评审 <span style="color:var(--accent2);font-size:10.5px">①</span></div>
+          <div class="item sub">💬 设计稿评审 (1) <span style="color:var(--teal);font-size:10.5px">⑂</span></div>
+          <div class="item sub">💬 设计稿评审 (2) <span style="color:var(--teal);font-size:10.5px">⑂</span></div>
+          <div class="item">💬 插件构建</div>
+          <div class="item">▸ 📁 镜辰 NetSuite</div>
+        </div>
+        <div class="sk-main">
+          <div class="tabsbar">
+            <span class="tab on new">总监<span class="flag">order:-1</span></span>
+            <span class="tab">对话</span>
+            <span class="tab">轨迹</span>
+            <span class="tabs-hint">← 原生 tab 环（宿主托管 · 三个页面同级同构）</span>
+          </div>
+          <div class="stage" style="min-height:150px">
+            <div class="stage-inner">
+              <div class="R fill" style="margin:0">
+                <span class="lbl">总监页<span class="d">当前激活 · 见 视图 2 · 3</span></span>
+                <div style="font-size:11px;color:var(--fg3);padding:3px 0">项目概述 · 总揽 · 归纳想法 · 调度资源 ｜ 最右侧挂「对话」弹窗</div>
+              </div>
+            </div>
+            <div class="railbtn">
+              <span class="rb mind">🧠 思维导图</span>
+              <span class="rb dir">◆ 总监</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:12px">
+      <b>三页签的职责边界</b>（互不越界，这是"不跑偏"的结构保证）<br>
+      · <b>总监页</b>：项目总览 + 归纳 + 调度 —— <b>不执行</b>；最右侧挂「对话弹窗」用于<b>看执行</b>。<br>
+      · <b>对话页</b>：原生对话逻辑<b>一字不改</b>（含分支、轨迹）；最右侧挂「总监弹窗」用于<b>就地对话</b>。<br>
+      · <b>轨迹页</b>：宿主原有，<b>完全不碰</b>。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 2</span><h2>总监页 = R1–R8 全保留 + 最右侧「对话」弹窗</h2><span class="tag">需求 3 · 6</span></header>
+  <div class="body">
+    <div class="note ok">
+      <b>与 V13 的关系：R1–R8 一个都不删、一个都不并。</b>V14/V14.1 把 R4/R6/R7 压掉是错的，本稿恢复 V13 原分区，
+      只在<b>最右侧</b>新增一条可收起的「对话弹窗」带 —— 它是<b>浮层</b>，不参与 R 区栅格，<b>不挤压任何 R 区</b>。
+    </div>
+
+    <div class="skeleton">
+      <div class="tabsbar"><span class="tab on">总监</span><span class="tab">对话</span><span class="tab">轨迹</span>
+        <span class="tabs-hint">弹窗展开态</span></div>
+      <div class="stage" style="min-height:300px">
+        <div class="stage-inner" style="padding:10px 262px 10px 10px">
+          <div class="R fill" style="margin-bottom:8px"><span class="lbl">R1<span class="d">顶部固定栏 · 40px</span></span>
+            <div class="chips"><span class="chip k">📁 dsh-client-mod</span><span class="chip">阶段 · T-PLUG-015</span><span class="chip pp">总监驾驶舱</span><span class="chip ml">⚙ 设置</span></div>
+          </div>
+          <div class="R fill" style="margin-bottom:8px"><span class="lbl">R2<span class="d">项目总览卡片 ★ 概述与总揽</span></span>
+            <div class="chips" style="margin-bottom:7px"><span class="chip k">定位 · Harness 客户端插件化</span><span class="chip k">目标 · 三页签 + 分支导图</span><span class="chip">当前阶段 · 设计待审</span></div>
+            <div class="grid4">
+              <div class="metric"><div class="v">65%</div><div class="k">待办完成率</div><div class="bar"><i></i></div></div>
+              <div class="metric"><div class="v" style="color:var(--warn)">3</div><div class="k">未闭合风险</div></div>
+              <div class="metric"><div class="v">12</div><div class="k">待办项</div></div>
+              <div class="metric"><div class="v" style="color:var(--teal)">4</div><div class="k">活跃分支</div></div>
+            </div>
+          </div>
+          <div class="R fill" style="margin-bottom:8px"><span class="lbl">R3<span class="d">智能体 / 技能行 ★ 自动安排资源 + 调用情况</span></span>
+            <div class="chips"><span class="chip k">智能体</span><span class="chip">技能</span>
+              <span class="chip">🧑💻 代码</span><span class="chip">📄 文档</span><span class="chip">🔍 调研</span><span class="chip" style="border-color:var(--ok);color:#8fd48f">🧪 测试 ● 运行中</span><span class="chip">🎯 审核</span>
+              <span class="chip tl">🔎 搜索</span><span class="chip tl">✍️ 写作</span>
+              <span class="chip ml">调用方式 · 总监决定 / 手选</span>
+            </div>
+          </div>
+          <div class="three" style="margin-bottom:8px">
+            <div class="R fill" style="margin:0"><span class="lbl">R4<span class="d">项目导航</span></span>
+              <div class="chips" style="flex-direction:column;align-items:stretch;gap:4px">
+                <span class="chip k">📄 文档树</span><span class="chip">🗺️ 路线图 / 待办</span><span class="chip">⭐ 关键文件</span>
+              </div>
+            </div>
+            <div class="R fill" style="margin:0"><span class="lbl">R5<span class="d">总监对话区 ★ 归纳想法</span></span>
+              <div class="msgs">
+                <div class="m u"><span class="who">你</span><span class="txt">对话前面加总监页，一共三个页面</span></div>
+                <div class="m d"><span class="who">总监</span><span class="txt"><b>已归纳</b> → 注册 <code>order:-1</code> tab；R1–R8 全保留</span></div>
+                <div class="m d"><span class="who">总监</span><span class="txt">建议资源：<span class="chip" style="font-size:10.5px">🧑💻 代码</span> ｜ <b>[✅确认]</b> <b>[调整]</b></span></div>
+              </div>
+              <div class="inputbar"><span class="fld">输入…</span><span class="btn">发送 ➤</span></div>
+            </div>
+          </div>
+          <div class="R fill" style="margin-bottom:8px"><span class="lbl">R6<span class="d">总监记忆面板 · 记忆 / 决策 / 风险</span></span>
+            <div class="chips"><span class="chip k">记忆</span><span class="chip">决策</span><span class="chip">风险</span><span class="chip ml">hover 展开 / 移开收回 / 🔒 锁定</span></div>
+          </div>
+          <div class="R fill" style="margin-bottom:0"><span class="lbl">R7<span class="d">a-2 小窗 · 240~420px 可折叠</span></span>
+            <div class="chips"><span class="chip k">💬 对话</span><span class="chip">📄 文档</span><span class="chip">📋 详情</span></div>
+          </div>
+          <div class="R fill" style="margin-top:8px;margin-bottom:0"><span class="lbl">R8<span class="d">全局输入框 + 焦点路由</span></span>
+            <div class="inputbar"><span class="chip">→ 总监 ▾</span><span class="fld">输入内容，按焦点路由提交</span><span class="btn">发送</span></div>
+          </div>
+        </div>
+
+        <div class="pop">
+          <div class="ph"><span style="color:var(--purple)">💬</span><span>对话 · 设计稿评审</span><span class="x">⇥ 缩起</span></div>
+          <div class="pb">
+            <div class="m u"><span class="who">你</span><span class="txt">R1–R8 必须全保留</span></div>
+            <div class="m d"><span class="who">对话</span><span class="txt">已在改，R4/R6/R7 补回</span></div>
+            <div class="m d"><span class="who">对话</span><span class="txt">正在生成 V15 设计稿…</span></div>
+            <div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);font-size:10.5px;color:var(--fg3)">
+              ↑ 这里就是<b style="color:#8ab4f8">原生对话本体</b>（同一 store / 同一渲染器）
+            </div>
+          </div>
+          <div class="pf"><div class="fld">在总监页直接发消息 → 送进此对话</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:12px">
+      <b>缩起态</b>：点击右缘的 <code>⇥ 缩起</code> ⇒ 弹窗收成 <b>34px 竖边条</b>（贴右缘，竖排「对话」二字 + 未读计数），
+      R 区内容<b>立即回铺满</b>；再次点击边条 ⇒ 展开。这与"分屏留占位"是本质区别。<br>
+      <b>弹窗宽度</b>：默认 340px，可拖拽 <code>clamp(240, 46%×W)</code>；<b>不参与栅格，不挤压 R 区</b>。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 3</span><h2>对话页 = 原生逻辑不变 + 最右侧「总监」弹窗</h2><span class="tag">需求 4</span></header>
+  <div class="body">
+    <div class="note ok">
+      对话页<b>不改一个字</b>：消息流、输入框、分支、思维导图全按宿主原样。只在最右侧叠一条<b>可收起的「总监」浮层</b>，
+      用于<b>在对话中就地指挥总监</b>（归纳 / 派活 / 审核 / 纠偏）。
+    </div>
+
+    <div class="skeleton">
+      <div class="tabsbar"><span class="tab">总监</span><span class="tab on">对话</span><span class="tab">轨迹</span>
+        <span class="tabs-hint">弹窗展开态</span></div>
+      <div class="stage" style="min-height:262px">
+        <div class="mk-full" style="padding:10px 262px 10px 10px">
+          <div class="msgs" style="background:transparent;border:none;padding:0">
+            <div class="m u"><span class="who">你</span><span class="txt">把总监页做回原生 tab</span></div>
+            <div class="m d"><span class="who">助手</span><span class="txt">好的，正在注册 <code>conversation.view</code>…</span></div>
+            <div class="m d"><span class="who">助手</span><span class="txt">已注册 <code>order:-1</code>，总监页现排在「对话」之前。</span></div>
+            <div class="m u"><span class="who">你</span><span class="txt">这里再帮我开个分支试试</span></div>
+          </div>
+          <div class="inputbar" style="margin-top:10px"><span class="chip">⑂ 主线 ▾</span><span class="fld">输入…</span><span class="btn">发送</span></div>
+        </div>
+        <div class="pop" style="border-left-color:var(--teal);width:250px">
+          <div class="ph" style="background:#182025"><span style="color:var(--teal)">◆</span><span>总监 · dsh-client-mod</span><span class="x">⇥ 缩起</span></div>
+          <div class="pb">
+            <div class="m d"><span class="who" style="background:#1e3a33;color:#6ee7c8">总监</span><span class="txt">看到你在对话里开了分支。要我为 <b>(1)</b> 派个测试智能体吗？</span></div>
+            <div class="chips" style="margin:6px 0"><span class="chip tl">🧪 测试</span><span class="chip tl">🔎 审查</span><span class="chip tl">⏹ 先不派</span></div>
+            <div class="chips"><span class="chip k">路由</span><span class="chip">建议去向 · 设计稿评审 (1)</span></div>
+          </div>
+          <div class="pf"><div class="fld">在对话里直接和总监说话</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note p" style="margin-top:12px">
+      <b>两个弹窗互为镜像，语义对称但数据源独立</b>（要求 1「独立数据元」不破）：<br>
+      · 总监页的「对话弹窗」= 看<b>原生会话</b>（订阅 session store）<br>
+      · 对话页的「总监弹窗」= 看<b>总监自有会话</b>（<code>dsh.director.store.*</code>）<br>
+      ⇒ 两者<b>不共用一套数据</b>，只通过"投递消息 / 回传结果"的显式动作交互。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no r">视图 4</span><h2>弹窗规则：真浮层 vs 我做的挤占分屏</h2><span class="tag">需求 5 · 核心纠错</span></header>
+  <div class="body">
+    <div class="cmp">
+      <div class="cmpc bad">
+        <div class="ct"><span>✗</span><span>我做的：布局分屏（padding-left 挤占）</span></div>
+        <div class="mockup">
+          <div class="mk-content">
+            <div class="mk-block" style="width:70%"></div>
+            <div class="mk-block" style="width:88%"></div>
+            <div class="mk-block" style="width:56%"></div>
+          </div>
+          <div class="mk-panel"><div class="p1"></div></div>
+          <div class="mk-gap"></div>
+        </div>
+        <div style="font-size:10.5px;color:var(--fg2);margin-top:8px;line-height:1.6">
+          左栏占 <b>300px</b>，原生区被注入 <code>padding-left:300px</code>。<br>
+          <span class="bad">红色斜纹 = 永久占位</span>：对话<b>永远铺不满</b>；<br>
+          左栏"缩起"后 padding 仍留 40px ⇒ <b>看不到"缩回去"</b>。
+        </div>
+      </div>
+      <div class="cmpc good">
+        <div class="ct"><span>✓</span><span>正确：浮层覆盖（absolute，零挤压）</span></div>
+        <div class="mockup">
+          <div class="mk-full">
+            <div class="mk-block" style="width:70%"></div>
+            <div class="mk-block" style="width:88%"></div>
+            <div class="mk-block" style="width:56%"></div>
+            <div class="mk-block" style="width:78%"></div>
+          </div>
+          <div class="mk-pop"><div class="p1"></div></div>
+        </div>
+        <div style="font-size:10.5px;color:var(--fg2);margin-top:8px;line-height:1.6">
+          弹窗 <code>position:absolute; right:0</code>，<b>脱离文档流</b>。<br>
+          <span class="good">底层内容一像素不动</span>：关掉弹窗 = 本来就是这样；<br>
+          缩起 = 收成 34px 竖边条，展开 = 再点一次。
+        </div>
+      </div>
+    </div>
+
+    <table style="margin-top:14px">
+      <tr><th style="width:120px">规则</th><th>内容</th><th style="width:170px">反例（我犯的）</th></tr>
+      <tr><td><b>定位方式</b></td><td><code>absolute</code> 于内容舞台右缘，<b>脱离文档流</b></td><td class="bad">改原生根 <code>padding-left</code> ⇒ 动了下层布局</td></tr>
+      <tr><td><b>底层是否让位</b></td><td><b>永不让位</b>。关掉弹窗时下层就是完整原貌</td><td class="bad">分屏必然留占位（300px 或 40px）</td></tr>
+      <tr><td><b>缩起形态</b></td><td><code>34px</code> 竖边条（竖排标题 + 未读点）</td><td class="bad">无缩起态；只有"折叠成 40px 但仍占位"</td></tr>
+      <tr><td><b>展开/收起入口</b></td><td>弹窗头 <code>⇥</code>／边条本体／<code>Alt+2</code>（左）<code>Alt+3</code>（右）</td><td class="bad">入口散落，折叠后部分按钮不可达</td></tr>
+      <tr><td><b>遮罩</b></td><td><b>不用全屏遮罩</b>（会盖住要求 4 的"对话原貌"）；仅弹窗自身描边 + 投影表达层次</td><td class="bad">曾提"加视觉遮罩"，与"不遮挡"自相矛盾</td></tr>
+      <tr><td><b>焦点</b></td><td>非模态：不锁滚动、不锁焦点，可并行操作两侧</td><td class="bad">曾按模态设计 Esc/点遮罩关闭，语义冲突</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 5</span><h2>滚轮缩放：从「对话流」自然长出「分支树」</h2><span class="tag">需求 8 · 交互核心</span></header>
+  <div class="body">
+    <div class="note">
+      <b>你说的交互</b>：「我在一个对话中不断缩小滚轮，然后会展开这个对话对应的<b>所有分支</b>」。
+      ⇒ 不是"点按钮切换视图"，而是<b>连续缩放</b>：内容随 <code>Ctrl/⌘ + 滚轮</code> 缩小，
+      到达阈值后<b>对话流淡出、分支树淡入</b>，落点正好装满视口。
+    </div>
+
+    <div class="zooms">
+      <div class="zc">
+        <div class="zt"><span class="chip k">档 1</span><span>对话流</span></div>
+        <div class="zst">zoom 100% · 常态</div>
+        <div class="zcanvas">
+          <div style="padding:7px">
+            <div class="zbar" style="width:88%"><i style="width:70%"></i></div>
+            <div class="zbar" style="width:76%"><i style="width:45%"></i></div>
+            <div class="zbar" style="width:92%"><i style="width:88%"></i></div>
+            <div class="zbar" style="width:64%"><i style="width:30%"></i></div>
+            <div class="zbar" style="width:80%"><i style="width:55%"></i></div>
+          </div>
+        </div>
+      </div>
+      <div class="zc">
+        <div class="zt"><span class="chip k">档 2</span><span>分支浮现</span></div>
+        <div class="zst">zoom ≈ 62% · 消息聚成节点</div>
+        <div class="zcanvas">
+          <div class="zmini" style="left:12px;top:46px;width:62px"></div>
+          <div class="zmini" style="left:96px;top:22px;width:52px"></div>
+          <div class="zmini" style="left:96px;top:70px;width:52px"></div>
+          <div class="zmini" style="left:168px;top:46px;width:46px;border-color:var(--teal)"></div>
+          <svg style="position:absolute;inset:0;width:100%;height:100%">
+            <path d="M74,56 C85,56 85,32 96,32" stroke="#2f6feb" stroke-width="1.5" fill="none" opacity=".5"/>
+            <path d="M74,56 C85,56 85,80 96,80" stroke="#2f6feb" stroke-width="1.5" fill="none" opacity=".5"/>
+            <path d="M148,32 C158,32 158,56 168,56" stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="4 3" opacity=".7"/>
+          </svg>
+        </div>
+      </div>
+      <div class="zc">
+        <div class="zt"><span class="chip">档 3</span><span>全树导图</span></div>
+        <div class="zst">zoom ≈ 34% · 自动 fit 视口</div>
+        <div class="zcanvas">
+          <div class="mn root" style="left:8px;top:42px;width:66px;padding:4px 6px;border-radius:5px">
+            <div class="h" style="font-size:10.5px">🎯 主线</div>
+          </div>
+          <div class="mn" style="left:104px;top:14px;width:62px;padding:4px 6px;border-radius:5px">
+            <div class="h" style="font-size:10.5px"><i class="st busy"></i>(1)</div>
+          </div>
+          <div class="mn" style="left:104px;top:72px;width:62px;padding:4px 6px;border-radius:5px">
+            <div class="h" style="font-size:10.5px"><i class="st idle"></i>(2)</div>
+          </div>
+          <div class="mn sel" style="left:186px;top:38px;width:56px;padding:4px 6px;border-radius:5px">
+            <div class="h" style="font-size:10.5px"><i class="st idle"></i>(3)</div>
+          </div>
+          <svg style="position:absolute;inset:0;width:100%;height:100%">
+            <path d="M74,52 C89,52 89,24 104,24" stroke="#2f6feb" stroke-width="1.5" fill="none" opacity=".55"/>
+            <path d="M74,52 C89,52 89,82 104,82" stroke="#2f6feb" stroke-width="1.5" fill="none" opacity=".55"/>
+            <path d="M166,24 C176,24 176,48 186,48" stroke="#8957e5" stroke-width="1.5" fill="none" stroke-dasharray="4 3" opacity=".7"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <table style="margin-top:14px">
+      <tr><th style="width:150px">规则</th><th>内容</th></tr>
+      <tr><td><b>触发</b></td><td><code>Ctrl/⌘ + 滚轮</code> 在对话区内连续缩放；<b>阈值 60%</b> 触发"消息 → 节点"语义切换（不是硬切视图）</td></tr>
+      <tr><td><b>落点</b></td><td>档 3 进入时<b>自动 fit 视口</b>（整棵树完整可见，根节点居中偏左）</td></tr>
+      <tr><td><b>反向</b></td><td>放大回 ≥ 85% ⇒ 淡回对话流；<b>缩放层级与选中节点双向记忆</b></td></tr>
+      <tr><td><b>与 tab 的关系</b></td><td>导图<b>不是第四个 tab</b>，而是「对话」页的一个<b>缩放态</b>；也可由右下角「🧠 思维导图」按钮直接跳到档 3</td></tr>
+      <tr><td><b>可访问性</b></td><td>纯键盘路径：<code>Alt+M</code> 直接进出导图态；滚轮非唯一入口</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no p">视图 6</span><h2>思维导图页：看分支 + 直接输入 → 总监判断由谁执行</h2><span class="tag">需求 8 · 核心</span></header>
+  <div class="body">
+    <div class="anchor">
+      <b>分支 = 原生 fork = 一个新对话。</b>宿主 <code>sessions.fork({sessionId, atSeq, increaseTitle:true})</code>
+      ⇒ 复制到 <code>atSeq</code> 为止的历史，<b>创建新会话</b>并打开；子对话标题自动递增（<code>xxx</code> → <code>xxx (1)</code> → <code>xxx (2)</code>）。
+      层级靠 <code>meta.parentSession</code> 维系 —— <b>数据早就有，只是没有视图</b>。
+    </div>
+
+    <div class="mind-tools">
+      <span class="chip k">⑂ 分支树 · 设计稿评审</span>
+      <span class="chip tl">＋ 新建分支（fork）</span>
+      <span class="chip">🔍 适应屏幕</span><span class="chip">＋</span><span class="chip">－</span>
+      <span class="chip">🗂️ 折叠全部</span>
+      <div class="legend">
+        <span><i class="st idle"></i>空闲</span><span><i class="st busy"></i>运行中</span>
+        <span><i class="st done"></i>已完成</span><span><i class="st err"></i>出错</span>
+      </div>
+    </div>
+
+    <div class="mind">
+      <svg viewBox="0 0 900 262" preserveAspectRatio="none">
+        <path d="M172,131 C205,131 205,48 238,48"  stroke="#2f6feb" stroke-width="2" fill="none" opacity=".55"/>
+        <path d="M172,131 C205,131 205,131 238,131" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".55"/>
+        <path d="M172,131 C205,131 205,214 238,214" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".55"/>
+        <path d="M390,48 C423,48 423,20 456,20"   stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="4 3" opacity=".7"/>
+        <path d="M390,48 C423,48 423,76 456,76"   stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="4 3" opacity=".7"/>
+        <path d="M390,214 C423,214 423,196 456,196" stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="4 3" opacity=".7"/>
+      </svg>
+
+      <div class="mn root" style="left:22px;top:104px">
+        <div class="h">🎯 设计稿评审</div><div class="t">主线 · 进行中 · 24 条</div>
+      </div>
+      <div class="mn fork" style="left:238px;top:22px">
+        <div class="h"><i class="st busy"></i>设计稿评审 (1)</div><div class="t">fork @ seq 18 · 8 条</div>
+      </div>
+      <div class="mn fork" style="left:238px;top:105px">
+        <div class="h"><i class="st done"></i>设计稿评审 (2)</div><div class="t">fork @ seq 18 · 5 条</div>
+      </div>
+      <div class="mn fork" style="left:238px;top:188px">
+        <div class="h"><i class="st err"></i>设计稿评审 (3)</div><div class="t">fork @ seq 22 · 3 条</div>
+      </div>
+      <div class="mn sel" style="left:456px;top:-4px">
+        <div class="h"><i class="st idle"></i>(1) 测试子分支</div><div class="t">fork @ seq 6 · 2 条</div>
+      </div>
+      <div class="mn" style="left:456px;top:52px">
+        <div class="h"><i class="st idle"></i>(1) 审查子分支</div><div class="t">fork @ seq 4 · 1 条</div>
+      </div>
+      <div class="mn" style="left:456px;top:172px">
+        <div class="h"><i class="st done"></i>(3) 重构子分支</div><div class="t">fork @ seq 3 · 4 条</div>
+      </div>
+
+      <div style="position:absolute;left:22px;bottom:10px;right:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span class="chip k">🖱 滚轮缩放 · fit</span>
+        <span class="chip">悬浮节点：➕fork · 📂打开 · ✂️删除 · 🔀合并回父</span>
+        <span class="chip tl ml">🗑 删除时：子分支<b>上提挂父节点</b>，不整棵丢</span>
+      </div>
+    </div>
+
+    <div class="note p" style="margin-top:14px">
+      <b>★ 在导图页直接输入 → 总监判断由哪个对话执行</b><br>
+      导图底部是一条<b>归属未定的输入框</b>。输入后<b>不直接发给任何对话</b>，而是先过总监的五步路由：
+      意图理解 → 项目/分支匹配 → 任务拆分 → <b>路由决策（出确认卡）</b> → 转派 / 直调 / 新建。
+    </div>
+
+    <div class="skeleton" style="padding:11px">
+      <div class="inputbar" style="margin:0">
+        <span class="chip pp">→ 待总监路由 ▾</span>
+        <span class="fld">「把弹窗那条占位问题也修了」</span>
+        <span class="btn pp">交给总监判断</span>
+      </div>
+      <div style="margin-top:10px;border:1px solid var(--purple);border-radius:7px;padding:9px 11px;background:#1a1524">
+        <div style="font-size:11.5px;font-weight:700;color:#c9a8ff;margin-bottom:6px">◆ 总监路由建议 · 置信度 82%</div>
+        <div style="font-size:10.5px;color:var(--fg2);line-height:1.6">
+          <b>建议去向</b>：<code>设计稿评审 (1)</code> — 该分支正在改「弹窗规则」，与你这句话同域<br>
+          <b>理由</b>：命中该分支最近 3 条第 2 条的关键词「占位 / 缩回」；主线已归档该议题
+        </div>
+        <div class="chips" style="margin-top:8px">
+          <span class="chip k">⤷ 转派到 (1)</span><span class="chip">▶ 直接调用（在新消息里执行）</span>
+          <span class="chip">＋ 新建分支执行</span><span class="chip">⌄ 改为其他对话</span>
+        </div>
+        <div style="font-size:10.5px;color:var(--fg3);margin-top:7px">确认后写入 <code>directorDecisions</code>（留痕：谁 → 哪 → 为什么）</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 7</span><h2>右下角悬浮按钮组 —— 思维导图在总监<b>前面</b></h2><span class="tag">需求 8</span></header>
+  <div class="body">
+    <div class="note">顺序按你的原话：<b>「在总监插件部分的前面放一个思维导图的按钮」</b> ⇒ 导图在<b>左</b>，总监在<b>右</b>。</div>
+    <div class="skeleton" style="position:relative;height:150px">
+      <div class="tabsbar"><span class="tab on">总监</span><span class="tab">对话</span><span class="tab">轨迹</span></div>
+      <div style="padding:12px;font-size:10.5px;color:var(--fg3)">… 页面内容 …</div>
+      <div class="railbtn">
+        <span class="rb mind">🧠 思维导图</span>
+        <span class="rb dir">◆ 总监</span>
+      </div>
+    </div>
+    <table style="margin-top:14px">
+      <tr><th style="width:70px">序位</th><th style="width:150px">按钮</th><th>行为</th></tr>
+      <tr><td><b>① 前</b></td><td><span class="chip tl">🧠 思维导图</span></td><td>跳「对话」页并直接进入档 3 导图态；显示<b>当前对话</b>的全部 fork 分支树；再点一次退出</td></tr>
+      <tr><td><b>② 后</b></td><td><span class="chip pp">◆ 总监</span></td><td>唤出/收起当前层级的总监弹窗（与页面最右侧弹窗同源，同一实例）</td></tr>
+    </table>
+    <div class="note warn" style="margin-top:12px">
+      <b>两处会与现有实现冲突，需你点一下头（我不擅自动）</b><br>
+      ① 现在这个位置是<b>一个</b>「总监层级」按钮 ⇒ 要拆成两个并调序；<br>
+      ② 按钮组现在是 <code>position:fixed</code> 挂 <code>body</code> 的浮层件 ⇒ 若走 tab 方案，应改挂内容舞台右下角，避免与原生 tab 布局打架。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no p">视图 8</span><h2>总监的对话控制台 —— 高频：新建 / 删除 / 抓取 / 回结 / 审核 / 继续</h2><span class="tag">需求 8 · 控制面</span></header>
+  <div class="body">
+    <div class="note p">
+      你说：「新作一个分支相当于新建一个对话，所以总监对于对话的控制一定非常频繁」。
+      因此控制台是 <b>R2/R3 之间的一块常驻区</b>，不是藏在菜单里的低频功能。
+    </div>
+    <div class="acts">
+      <div class="act">
+        <div class="ah">➕ 新建对话 / 分支</div>
+        <div class="ad">从任意节点 fork，或直接开新会话。可选择"带历史"或"空对话"。</div>
+        <div class="an">sessions.fork({sessionId, atSeq})</div>
+      </div>
+      <div class="act">
+        <div class="ah">🗑 删除对话</div>
+        <div class="ad">删除前先列<b>影响面</b>（其下 N 个子分支怎么办）；默认<b>子分支上提挂父</b>，不整棵丢。</div>
+        <div class="an">危险动作 · 二次确认 + 留痕</div>
+      </div>
+      <div class="act">
+        <div class="ah">📥 抓取信息</div>
+        <div class="ad">从某对话<b>抽取结论/产出/文件路径</b>，汇入总监记忆（记忆 / 决策 / 风险）。</div>
+        <div class="an">→ directorDocs / directorDecisions</div>
+      </div>
+      <div class="act">
+        <div class="ah">🔚 结束回结</div>
+        <div class="ad">对话结束时<b>自动把结果回传总监</b>：产出摘要 + 结论 + 未决项，形成一张「回结卡」。</div>
+        <div class="an">session 结束事件 → 总监收件箱</div>
+      </div>
+      <div class="act">
+        <div class="ah">🎯 审核</div>
+        <div class="ad">对回结结果做<b>六维审核</b>（目标/范围/质量/一致/风险/交付），出三态结论。</div>
+        <div class="an">ok / warn / bad + 纠偏指令</div>
+      </div>
+      <div class="act">
+        <div class="ah">⏭ 决定是否继续</div>
+        <div class="ad">审核后三选一：<b>继续推进</b>（追加消息）/ <b>再开分支</b> / <b>收口归档</b>。</div>
+        <div class="an">写 directorDecisions</div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:14px">
+      <b>闭环形态</b>：<code>新分支</code> → <code>执行</code> → <code>结束回结</code> → <code>总监审核</code> →
+      <code>继续 / 再分支 / 归档</code> → 回到 <code>新分支</code>。
+      每一跳都在导图上留下一条边与一个状态点，所以导图既是<b>视图</b>，也是<b>控制面板</b>。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no g">证据</span><h2>分支数据真相 —— 层级早就有，只是没画</h2><span class="tag">宿主源码取证 · 非推断</span></header>
+  <div class="body">
+    <div class="note ok">
+      <b>关键结论：不需要新建任何数据模型。</b>宿主 fork 时已写入 <code>meta.parentSession</code>，
+      运行时已把它投影成带 <code>depth</code> 的行 —— 我们要做的只是<b>把这条链画出来</b>。
+    </div>
+    <table>
+      <tr><th style="width:44px">#</th><th style="width:250px">事实</th><th>源码出处</th></tr>
+      <tr><td>1</td><td>原生「新建分支」= <code>sessions.fork({sessionId, atSeq, increaseTitle})</code></td><td><code>dsh-client-ui-conversation/lib/client.js:11950</code></td></tr>
+      <tr><td>2</td><td>入口在消息气泡的操作条；文案「<b>在新对话中分支</b>」；限制「仅可从已完成轮次的最后一条消息分支」</td><td>同文件 <code>:5044</code> · <code>:7825</code> · <code>:7826</code></td></tr>
+      <tr><td>3</td><td><b>fork 会写父子字段</b> <code>meta.parentSession = 源会话 id</code>，并记 <code>seedLength</code></td><td><code>dsh-session/lib/index.js:1841</code></td></tr>
+      <tr><td>4</td><td>客户端 schema 已暴露 <code>parentSessionId</code></td><td><code>dsh-client-runtime/lib/client.js:4659 / 4665 / 4673</code></td></tr>
+      <tr><td>5</td><td><b>运行时已构建会话血缘树</b>：<code>flattenLineage()</code> 按 <code>parentSessionId</code> 建 children 映射并输出 <code>depth</code> 缩进（含环检测）</td><td><code>dsh-client-runtime/lib/client.js:5608</code></td></tr>
+      <tr><td>6</td><td>子对话标题自动递增（ASCII 与全角括号均支持）</td><td><code>dsh-client-runtime/lib/client.js:8847 increasedForkTitle()</code></td></tr>
+      <tr><td>7</td><td>总监 tab <b>曾注册过</b>，被 <code>MOD-B 退坡 C-2 · 2026-09-07</code> 摘除；注释明写恢复方式</td><td><code>dsh-client-ui-conversation/lib/client.js:11962-11964</code></td></tr>
+    </table>
+    <div class="note warn" style="margin-top:14px">
+      <b>所以「层级没有体现」的准确表述是</b>：<b>侧栏有缩进，但没有纵览视图，也没有控制入口</b>。
+      <code>flattenLineage</code> 只被用来给侧栏列表做缩进（这正是你看到的"层级没提现/没办法控制"）。
+      导图要做的是把同一份 <code>parentSessionId</code> 数据<b>二维化 + 加操作</b>。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 9</span><h2>设计图标注模式（V12 视图 5）—— 补回</h2><span class="tag">需求 7（重复项）</span></header>
+  <div class="body">
+    <div class="note">
+      你提到「还有设计图页面，原来应该有<b>设计图页面的设置</b>」 ⇒ 指 <b>V12 视图 5 · 设计图标注模式</b>。
+      V13/V14 都把它漏了，本稿补回：总监页内可切到「标注模式」，在<b>截取的界面图上直接画框 + 加注</b>，
+      标注结果作为<b>需求证据</b>挂到 R6 记忆面板（喂给后续路由与审核）。
+    </div>
+    <div class="skeleton" style="position:relative;height:190px">
+      <div style="padding:11px">
+        <div class="chips" style="margin-bottom:9px">
+          <span class="chip k">🖼 标注模式</span><span class="chip">＋ 框选</span><span class="chip">T 文字</span>
+          <span class="chip">🔗 关联到</span><span class="chip">📎 附到 R6 记忆</span><span class="chip ml">导出 PNG / 存为证据</span>
+        </div>
+        <div style="position:relative;height:120px;background:var(--bg3);border:1px solid var(--border2);border-radius:7px;overflow:hidden">
+          <div style="position:absolute;inset:0;padding:9px">
+            <div class="mk-block" style="width:60%;height:8px"></div>
+            <div class="mk-block" style="width:82%;height:8px"></div>
+            <div class="mk-block" style="width:44%;height:8px"></div>
+          </div>
+          <div style="position:absolute;left:12px;top:38px;width:150px;height:48px;border:2px solid var(--err);border-radius:4px"></div>
+          <div style="position:absolute;left:168px;top:36px;font-size:10.5px;color:var(--err)">① 这里就是"留占位"——<b>必须去掉</b></div>
+          <div style="position:absolute;right:12px;top:14px;width:78px;height:34px;border:2px solid var(--teal);border-radius:4px"></div>
+          <div style="position:absolute;right:12px;top:52px;font-size:10.5px;color:var(--teal)">② 弹窗缩起入口</div>
+        </div>
+      </div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th style="width:150px">能力</th><th>说明</th><th style="width:170px">去向</th></tr>
+      <tr><td>框选 + 文字</td><td>在任意界面截图上框选并落文字，编号自动递增</td><td>标注层（可显隐）</td></tr>
+      <tr><td>关联到视图</td><td>每条标注可绑定到某个 V 视图 / R 区，形成"需求 ↔ 界面"双向索引</td><td>R4 项目导航</td></tr>
+      <tr><td>存为证据</td><td>导出 PNG + 结构化 JSON，作为需求锚点挂到总监记忆</td><td>R6 记忆面板</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no r">裁定</span><h2>打分机制错在哪 —— 你说得对</h2><span class="tag">需求 7</span></header>
+  <div class="body">
+    <div class="note err">
+      <b>你是对的。我的打分机制本身有问题，不是"算错了分"，是"评分框架错了"。</b>
+    </div>
+    <table>
+      <tr><th style="width:170px">缺陷</th><th>具体表现</th><th style="width:250px">后果</th></tr>
+      <tr>
+        <td><b>① 把硬需求当成了可加权项</b></td>
+        <td>我用「信息密度 / 导航效率 / 可扩展性 / <b>实现成本</b> / <b>UI 一致性</b>」五项加权。
+        「与原生同构、不做外来浮层」<b>本身就是你的需求</b>，却被我降级成一个可被"实现成本"抵消的维度。</td>
+        <td class="bad">方案 C 靠"实现成本 7 分"赢了方案 A 的"实现成本 4 分"，<b>用成本否决了需求</b></td>
+      </tr>
+      <tr>
+        <td><b>② 成本项建立在未验证的假设上</b></td>
+        <td>方案 A 被判"需插槽实例共享，<b>未经实测，高风险</b>" ⇒ 扣分。而我当时探测的全局名 <code>window.__DSH_SLOTS__</code> <b>根本不存在</b>。</td>
+        <td class="bad">用<b>错误的探测结论</b>给唯一正确的方案判了死刑</td>
+      </tr>
+      <tr>
+        <td><b>③ 候选集构造就是错的</b></td>
+        <td>A（原生 tab）/ B / C / D 四个候选里，<b>只有 A 是 tab 系</b>，其余都是浮层系。等于在一堆错答案里选一个"最不坏的"。</td>
+        <td class="bad">即使打分公平，<b>最优解也不在候选集里</b></td>
+      </tr>
+      <tr>
+        <td><b>④ 没有"需求符合度"这一票否决项</b></td>
+        <td>打分表里没有任何一栏问"<b>这个方案满足了几条核心需求</b>"。5 个维度全是工程视角。</td>
+        <td class="bad">跑偏了 3 轮，每一轮打分都是"高分"</td>
+      </tr>
+    </table>
+
+    <div class="note p" style="margin-top:14px">
+      <b>正确做法（本稿起生效）</b><br>
+      <b>第 0 步 · 硬判（一票否决）</b>：先用你的核心需求逐条做「满足 / 不满足」二值判定。
+      凡违反<b>硬需求</b>（tab 形态、三页签、真弹窗不挤占、分支 = fork 导图）的方案<b>直接出局，不进入打分</b>。<br>
+      <b>第 1 步 · 加权择优</b>：只在通过硬判的方案之间，用工程维度（可维护性 / 风险 / 工作量）排序。<br>
+      <b>第 2 步 · 显式标注</b>：每项打分必须附<b>证据或实测</b>；拿不到证据的项记 <code>?</code> 并说明，<b>不得当作扣分理由</b>。
+    </div>
+
+    <table style="margin-top:14px">
+      <tr><th style="width:34px">#</th><th style="width:290px">核心需求</th><th style="width:110px">现有实现</th><th style="width:110px">V13 方案</th><th>本稿 V15</th></tr>
+      <tr><td>1</td><td>对话前增加总监页</td><td class="bad">✗ 无 tab</td><td class="good">✓</td><td class="good">✓</td></tr>
+      <tr><td>2</td><td>三个页面：总监/对话/轨迹</td><td class="bad">✗ 只有 2 个</td><td class="good">✓</td><td class="good">✓</td></tr>
+      <tr><td>3</td><td>总监页最右侧「对话弹窗」可缩收</td><td class="bad">✗ 用分屏代替</td><td class="mid">△ 未定义</td><td class="good">✓</td></tr>
+      <tr><td>4</td><td>对话页最右侧「总监弹窗」</td><td class="bad">✗ 无</td><td class="mid">△ 未定义</td><td class="good">✓</td></tr>
+      <tr><td>5</td><td>弹窗不挤占、可缩回（不留占位）</td><td class="bad">✗ 永久占位</td><td class="good">✓（不涉及）</td><td class="good">✓</td></tr>
+      <tr><td>6</td><td>R1–R8 全保留</td><td class="bad">✗ 丢 R4/R6/R7</td><td class="good">✓ 全画</td><td class="good">✓ 全保留</td></tr>
+      <tr><td>7</td><td>分支 = 原生 fork（复制到新对话）</td><td class="bad">✗ 概念错</td><td class="bad">✗ 会话内树</td><td class="good">✓ 跨会话血缘</td></tr>
+      <tr><td>8</td><td>滚轮缩放展开全部分支</td><td class="bad">✗ 无</td><td class="bad">✗ 按钮切换</td><td class="good">✓ 连续缩放</td></tr>
+      <tr><td>9</td><td>导图页直接输入 → 总监路由</td><td class="bad">✗ 无</td><td class="mid">△ 部分</td><td class="good">✓</td></tr>
+      <tr><td>10</td><td>右下角：「🧠 导图」在「◆ 总监」<b>前面</b></td><td class="bad">✗ 只有总监</td><td class="bad">✗ 未定义</td><td class="good">✓</td></tr>
+      <tr><td>11</td><td>设计图标注模式（V12 视图 5）</td><td class="bad">✗ 丢失</td><td class="bad">✗ 丢失</td><td class="good">✓ 补回</td></tr>
+      <tr><td colspan="2" style="text-align:right"><b>满足度</b></td><td class="bad"><b>0 / 11</b></td><td class="mid"><b>4 / 11</b></td><td class="good"><b>11 / 11</b></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="view">
+  <header><span class="no">视图 10</span><h2>已有文档的处理裁定</h2><span class="tag">本稿对存量文档的唯一实质裁定</span></header>
+  <div class="body">
+    <table>
+      <tr><th style="width:250px">文档</th><th>定位</th><th style="width:170px">处理</th></tr>
+      <tr><td><code>V13-原生Tab集成设计稿.html</code></td><td>tab 形态 + R1–R8 的正确基线</td><td class="good">✅ <b>沿用为样式与结构基线</b>（本稿继承其全部令牌）</td></tr>
+      <tr><td><code>docs/09-页面交互重设计·原生Tab集成方案.md</code></td><td>tab 方案 + 技术证据链（含 slot 取证）</td><td class="good">✅ 沿用；<b>撤销其 §〇·补「tab 形态作废」一节</b></td></tr>
+      <tr><td><code>V12多分支流水线协作系统设计稿.html</code></td><td>8 视图；tab 栏实绘「总监｜对话｜轨迹」</td><td class="good">✅ 沿用（视觉基准 + 视图 5 标注模式）</td></tr>
+      <tr><td><code>18-总监驾驶舱UI设计方案</code></td><td>R1–R8 完整分区规格</td><td class="good">✅ 沿用（设计基线）</td></tr>
+      <tr><td><code>V14 / V14.1-弹窗式总监架构设计稿.html</code></td><td>覆盖层 + 分屏方案</td><td class="bad">⛔ <b>作废</b>（形态错误：吞 tab、留占位、丢 R 区）；保留作决策痕迹</td></tr>
+      <tr><td><code>docs/11-设计稿审核与实现方案.md</code></td><td>审美审核 + 选型（方案 C 胜出）</td><td class="mid">🔴 <b>§三 选型作废</b>（候选集与打分框架错误）；§一 审美 10 项<b>继续有效</b></td></tr>
+      <tr><td><code>docs/10-总监与对话架构总纲.md</code></td><td>业务不变量唯一真相源</td><td class="mid">🟡 <b>§4.1 / §4.4 需重写</b>（分屏 → 浮层；补 fork 血缘）</td></tr>
+      <tr><td><code>src/bridge/split.js</code>（分屏通道）</td><td>padding-left 挤占实现</td><td class="bad">⛔ 作废；改为弹窗挂载器</td></tr>
+    </table>
+
+    <div class="note warn" style="margin-top:14px">
+      <b>一处必须先跟你对齐、我才能动手的地方</b><br>
+      你的第 5、17 条里「<b>两者均为弹窗形式</b>」这句，我先前读成"总监与对话两个整体都是弹窗"，因而废掉了 tab。
+      本稿按新理解执行：<b>tab 是页面（形态层），弹窗是页面内最右侧的辅助面板（组件层）</b> —— 两者并存。
+      如果你原意确实是"总监整个都用弹窗、不要 tab"，请在评审时指出，我改视图 1/2/3。
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  V15 · 三页签 · 弹窗 · 分支导图设计稿 ｜ 2026-09-12 ｜ <b>本稿只出设计，不含实现</b>（等你点头再落地）<br>
+  样式继承 <code>V13-原生Tab集成设计稿.html</code>（令牌一字未改，仅字号底线统一至 ≥10.5px）<br>
+  配套：<code>docs/09</code> · <code>docs/10</code> · <code>docs/11</code>
+</div>
+
+</div>
+</body>
+</html>

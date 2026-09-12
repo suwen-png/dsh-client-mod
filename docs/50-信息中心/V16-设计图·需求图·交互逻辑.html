@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V16 · 设计图 + 需求图 + 交互逻辑 — dsh-director</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --sbg:#101114; --sbg2:#15161a; --sbg3:#1a1b1f; --sbg4:#1c1d21;
+    --panel:#212227; --panel2:#25272d;
+    --line:#26282e; --line2:#2e3138; --line3:#34373e; --line4:#3d4148;
+    --fg:#e8eaed; --fg2:#c9ced6; --fg3:#9aa0a6; --fg4:#6b7076;
+    --acc:#2f6feb; --acc2:#8ab4f8; --accbg:#1d2739; --accbd:#2b3f5e;
+    --pur:#8957e5; --pur2:#c9a8ff; --purbg:#1a1524; --purbd:#4c3a6b;
+    --teal:#39c5cf; --teal2:#7fe3e8; --tealbg:#15201f; --tealbd:#2b6b70;
+    --ok:#3fb950; --ok2:#8fd48f; --okbg:#152318; --okbd:#2b6b3a;
+    --warn:#d29922; --warn2:#e3c07a; --warnbg:#241d10; --warnbd:#6b5320;
+    --err:#f85149; --err2:#ff9a92; --errbg:#1e1416; --errbd:#6b2b28;
+    --doc:#0d0e11;
+    --t:140ms;
+  }
+  body{background:var(--doc);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;font-size:11.5px;padding:26px 18px 60px}
+  .wrap{max-width:1260px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:9px}
+  .sub{font-size:12.5px;color:var(--fg3);margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #24262c}
+  .sub b{color:var(--acc2);font-weight:600}
+
+  /* 板块 */
+  .blk{margin-bottom:26px}
+  .blk > .bh{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:9px;border-bottom:1px solid #24262c}
+  .blk > .bh .k{font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 11px;border-radius:6px;background:var(--acc);color:#fff}
+  .blk.b > .bh .k{background:var(--pur)}
+  .blk.c > .bh .k{background:var(--teal);color:#0d0e11}
+  .blk > .bh h2{font-size:17px;font-weight:650}
+  .blk > .bh .r{margin-left:auto;font-size:11.5px;color:var(--fg4)}
+
+  .sec{background:var(--sbg3);border:1px solid #26282e;border-radius:12px;margin-bottom:20px;overflow:hidden}
+  .sec > header{padding:11px 16px;background:var(--sbg2);border-bottom:1px solid #26282e;display:flex;align-items:center;gap:10px}
+  .sec > header .no{font-size:11px;font-weight:700;padding:2px 9px;border-radius:5px;background:#2b2e35;color:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+  .sec > header .no.p{background:#2a2140;color:var(--pur2)}
+  .sec > header .no.t{background:#16302f;color:var(--teal2)}
+  .sec > header h3{font-size:14px;font-weight:600}
+  .sec > header .tag{margin-left:auto;font-size:11px;color:var(--fg4);white-space:nowrap}
+  .sec > .bd{padding:16px}
+  .cap{font-size:11px;color:var(--fg4);margin-top:8px;text-align:center}
+
+  .note{font-size:11.5px;color:var(--fg3);background:var(--sbg2);border-left:3px solid var(--acc);padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.err{border-left-color:var(--err)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--pur)}
+  .note.t{border-left-color:var(--teal)}
+  .note b{color:var(--fg)}
+
+  /* ============ 真实应用窗口（高保真） ============ */
+  .app{width:100%;background:var(--sbg4);border:1px solid #2b2e34;border-radius:11px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 22px 56px rgba(0,0,0,.6)}
+  .app-tb{height:34px;background:var(--sbg);display:flex;align-items:center;padding:0 11px;gap:7px;flex-shrink:0;border-bottom:1px solid #1c1e23}
+  .tl{width:11px;height:11px;border-radius:50%}
+  .tl.r{background:#ec6a5e}.tl.y{background:#f4bf4f}.tl.g{background:#61c554}
+  .app-tb .ttl{margin-left:9px;font-size:11.5px;color:var(--fg4)}
+  .app-tb .rt{margin-left:auto;display:flex;gap:12px;font-size:11px;color:var(--fg4)}
+  .app-bd{display:flex;height:596px}
+
+  /* 侧栏 */
+  .sb{width:230px;background:var(--sbg2);border-right:1px solid #232529;display:flex;flex-direction:column;flex-shrink:0}
+  .sb-hd{height:40px;display:flex;align-items:center;gap:7px;padding:0 11px;border-bottom:1px solid #232529}
+  .sb-hd .nm{font-size:12px;font-weight:600;color:var(--fg)}
+  .sb-hd .ic{margin-left:auto;font-size:12px;color:var(--fg4)}
+  .sb-acts{display:flex;gap:6px;padding:9px 11px;border-bottom:1px solid #232529}
+  .sb-btn{flex:1;text-align:center;font-size:11px;color:var(--fg3);background:#22242a;border:1px solid #2e3138;border-radius:7px;padding:5px 0}
+  .sb-btn.pri{background:#243a63;border-color:#33507f;color:#b9d2f8}
+  .sb-list{flex:1;padding:7px 0;overflow:hidden}
+  .sb-row{display:flex;align-items:center;gap:7px;padding:5px 11px;font-size:11.5px;color:var(--fg3)}
+  .sb-row.on{background:#23252b;color:var(--fg);box-shadow:inset 2px 0 0 var(--acc)}
+  .sb-row .ico{width:13px;text-align:center;font-size:11px;flex-shrink:0}
+  .sb-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sb-row .bg{font-size:10.5px;color:var(--fg4);flex-shrink:0}
+  .sb-row .bg.tl{color:var(--teal)}
+  .sb-row .bg.pu{color:var(--pur2)}
+  .sb-row.sub{padding-left:26px}
+  .sb-row.sub2{padding-left:40px}
+  .sb-foot{border-top:1px solid #232529;padding:8px 11px;display:flex;align-items:center;gap:7px;font-size:11px;color:var(--fg4)}
+  .sb-foot .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .sb-foot .r{margin-left:auto}
+
+  /* 主区 */
+  .mn{flex:1;display:flex;flex-direction:column;background:var(--sbg4);min-width:0}
+  .tabs{height:39px;display:flex;align-items:flex-end;padding:0 9px;border-bottom:1px solid #232529;flex-shrink:0;background:var(--sbg4)}
+  .tb{padding:0 14px;height:100%;display:flex;align-items:center;font-size:12.5px;color:var(--fg4);border-bottom:2px solid transparent;margin-bottom:-1px;gap:6px}
+  .tb.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+  .tb .cnt{font-size:10.5px;background:#2b2e35;color:var(--fg3);border-radius:8px;padding:0 5px}
+  .tb .cnt.hi{background:#243a63;color:#b9d2f8}
+  .tabs .rt{margin-left:auto;display:flex;align-items:center;gap:9px;padding-bottom:7px;font-size:11px;color:var(--fg4)}
+
+  .content{flex:1;overflow:hidden;position:relative;display:flex;flex-direction:column;gap:7px;padding:9px}
+
+  /* 卡片（真控件，非虚线框） */
+  .cd{background:var(--panel);border:1px solid var(--line2);border-radius:9px;padding:9px 11px;position:relative;flex-shrink:0}
+  .cd-hd{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+  .cd-hd .no{font-size:10.5px;font-weight:700;color:var(--acc2);background:var(--accbg);border:1px solid #24344f;border-radius:4px;padding:0 5px;flex-shrink:0}
+  .cd-hd .tt{font-size:11.5px;font-weight:600;color:var(--fg)}
+  .cd-hd .r{margin-left:auto;font-size:10.5px;color:var(--fg4);display:flex;align-items:center;gap:6px}
+  .cd.acc{border-color:#2d4a7a;background:#1d2333}
+  .cd.pur{border-color:var(--purbd);background:#1c1728}
+  .cd.warn{border-color:var(--warnbd);background:#1f1a0f}
+
+  /* chips */
+  .ch{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;background:#2a2c33;border:1px solid var(--line3);border-radius:5px;padding:2px 7px;color:var(--fg3);white-space:nowrap}
+  .ch.k{background:#33363e;color:var(--fg2);border-color:#41454e}
+  .ch.a{background:var(--accbg);border-color:#2b4a7a;color:var(--acc2)}
+  .ch.p{background:#2a2140;border-color:var(--pur);color:var(--pur2)}
+  .ch.t{background:var(--tealbg);border-color:var(--tealbd);color:var(--teal2)}
+  .ch.o{background:var(--okbg);border-color:var(--okbd);color:var(--ok2)}
+  .ch.w{background:var(--warnbg);border-color:var(--warnbd);color:var(--warn2)}
+  .ch.e{background:var(--errbg);border-color:var(--errbd);color:var(--err2)}
+  .ch.sm{font-size:10.5px;padding:1px 6px}
+  .rows{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+
+  /* 指标 */
+  .mets{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+  .met{background:#1b1c21;border:1px solid var(--line2);border-radius:7px;padding:6px 9px}
+  .met .v{font-size:16px;font-weight:700;color:var(--fg);line-height:1.25}
+  .met .k{font-size:10.5px;color:var(--fg4)}
+  .bar{height:4px;background:#2a2c33;border-radius:2px;margin-top:5px;overflow:hidden}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+  .bar i.w{background:linear-gradient(90deg,var(--warn),var(--warn2))}
+  .bar i.o{background:linear-gradient(90deg,var(--ok),var(--ok2))}
+
+  /* 消息 */
+  .msg{display:flex;gap:8px;margin-bottom:8px}
+  .msg:last-child{margin-bottom:0}
+  .av{width:21px;height:21px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700}
+  .av.u{background:#3a3320;color:#e3b341}
+  .av.d{background:#1e3a33;color:#6ee7c8}
+  .av.a{background:#2b3a55;color:var(--acc2)}
+  .bub{background:var(--panel2);border:1px solid var(--line2);border-radius:9px 9px 9px 3px;padding:6px 10px;font-size:11.5px;color:var(--fg2);max-width:100%}
+  .bub b{color:var(--fg)}
+  .bub .quote{color:var(--acc2)}
+  .msg.me{flex-direction:row-reverse}
+  .msg.me .bub{background:#1e2b41;border-color:var(--accbd);border-radius:9px 9px 3px 9px;color:#d4e2f5}
+  .msg .meta{font-size:10.5px;color:var(--fg4);margin-top:3px}
+
+  /* 输入条 */
+  .comp{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line3);border-radius:9px;padding:6px 8px;flex-shrink:0}
+  .comp.foc{border-color:#3b62a0;box-shadow:0 0 0 2px rgba(47,111,235,.14)}
+  .comp .ta{flex:1;font-size:11.5px;color:var(--fg4);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .comp .ta.f{color:var(--fg3)}
+
+  /* 按钮 */
+  .b{display:inline-flex;align-items:center;gap:4px;font-size:11px;border-radius:7px;padding:5px 12px;font-weight:600;white-space:nowrap}
+  .b.pri{background:var(--acc);color:#fff}
+  .b.pu{background:var(--pur);color:#fff}
+  .b.tl{background:#166064;color:#d9fbff}
+  .b.gh{background:transparent;border:1px solid var(--line4);color:var(--fg3);font-weight:400}
+  .b.dg{background:#5c2320;color:#ffd9d6}
+  .b.sm{font-size:10.5px;padding:3px 9px}
+
+  /* 浮动按钮 */
+  .float{position:absolute;right:10px;bottom:10px;display:flex;gap:8px;z-index:6}
+  .fb{display:flex;align-items:center;gap:5px;font-size:11px;border-radius:18px;padding:6px 13px;background:#23252c;border:1px solid var(--teal);color:var(--teal2);box-shadow:0 8px 22px rgba(0,0,0,.55)}
+  .fb.pu{border-color:var(--pur);color:var(--pur2)}
+
+  /* 弹窗（浮层） */
+  .pop{position:absolute;top:0;right:0;bottom:0;width:322px;background:#191a1f;border-left:1px solid var(--pur);display:flex;flex-direction:column;z-index:5;box-shadow:-20px 0 40px rgba(0,0,0,.55)}
+  .pop.tl{border-left-color:var(--teal)}
+  .pop-hd{height:35px;display:flex;align-items:center;gap:7px;padding:0 11px;border-bottom:1px solid #232529;background:#1f2027;flex-shrink:0}
+  .pop-hd .tt{font-size:11.5px;font-weight:600;color:var(--fg)}
+  .pop-hd .sub{font-size:10.5px;color:var(--fg4);border:0;margin:0;padding:0}
+  .pop-hd .x{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:11px;color:var(--fg4)}
+  .pop-hd .x span{background:#282a31;border-radius:5px;padding:1px 6px}
+  .pop-bd{flex:1;padding:10px 11px;overflow:hidden}
+  .pop-ft{border-top:1px solid #232529;padding:7px 9px;flex-shrink:0}
+
+  /* 三栏 */
+  .cols{display:grid;grid-template-columns:186px 1fr 168px;gap:7px;flex:1;min-height:0}
+  .cols > .cd{display:flex;flex-direction:column;overflow:hidden}
+
+  /* tab 环细节 */
+  .tb-detail{display:flex;gap:0;align-items:flex-end;height:39px;padding:0 9px;background:var(--sbg4);border-bottom:1px solid #232529}
+
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th,td{border:1px solid #2a2d33;padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:#1e2026;color:var(--fg2);font-weight:600;font-size:11px}
+  td{color:var(--fg3)}
+  td b{color:var(--fg2)}
+  .ok{color:var(--ok2);font-weight:700}
+  .no{color:var(--err2);font-weight:700}
+  .mid{color:var(--warn2);font-weight:700}
+  .pu{color:var(--pur2);font-weight:700}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:#2a2c33;padding:1px 5px;border-radius:4px;color:#a5d6ff}
+  .tscroll{overflow-x:auto}
+  .toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:7px;margin-bottom:22px}
+  .toc a{display:block;background:var(--sbg3);border:1px solid #26282e;border-radius:8px;padding:8px 11px;font-size:11px;color:var(--fg3);text-decoration:none}
+  .toc a b{color:var(--acc2);margin-right:6px}
+  .toc.p a b{color:var(--pur2)}
+  .toc.t a b{color:var(--teal2)}
+  .foot{text-align:center;font-size:11px;color:var(--fg4);margin-top:26px;padding-top:16px;border-top:1px solid #24262c}
+
+  /* ===== A2 三态缩略窗口 ===== */
+  .trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
+  .mapp{background:var(--sbg3);border:1px solid #2b2e34;border-radius:9px;overflow:hidden}
+  .mapp-hd{height:28px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--sbg2);border-bottom:1px solid #24262c;font-size:10.5px;color:var(--fg3)}
+  .mapp-hd .dot{width:7px;height:7px;border-radius:50%;background:var(--acc);flex-shrink:0}
+  .mapp-hd .dot.y{background:var(--warn)}
+  .mapp-hd .dot.g{background:var(--ok)}
+  .mapp-hd .r{margin-left:auto;color:var(--fg4)}
+  .mapp-bd{position:relative;height:252px;display:flex;flex-direction:column}
+  .mapp-ft{padding:7px 10px;border-top:1px solid #24262c;font-size:10.5px;color:var(--fg3);background:var(--sbg2);line-height:1.5}
+  .mapp-ft b{color:var(--fg2)}
+  .mtabs{height:28px;display:flex;align-items:flex-end;padding:0 7px;border-bottom:1px solid #24262c;flex-shrink:0}
+  .mtb{padding:0 9px;height:100%;display:flex;align-items:center;font-size:10.5px;color:var(--fg4);border-bottom:2px solid transparent;margin-bottom:-1px}
+  .mtb.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+  .mcontent{flex:1;position:relative;padding:7px;display:flex;flex-direction:column;gap:6px;min-height:0}
+  .mrow{background:var(--panel);border:1px solid var(--line2);border-radius:6px;flex-shrink:0}
+  .mrow.grow{flex:1;min-height:0}
+  .mcomp{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line3);border-radius:7px;padding:5px 7px;flex-shrink:0}
+  .mcomp .mta{flex:1;font-size:10.5px;color:var(--fg4)}
+  .mb{background:var(--acc);color:#fff;border-radius:5px;padding:2px 8px;font-size:10.5px;font-weight:600;white-space:nowrap}
+  .mpop{position:absolute;top:0;right:0;bottom:0;width:132px;background:#191a1f;border-left:1px solid var(--pur);display:flex;flex-direction:column;z-index:4;box-shadow:-12px 0 26px rgba(0,0,0,.5)}
+  .mpop-hd{height:24px;display:flex;align-items:center;gap:4px;padding:0 7px;background:#1f2027;border-bottom:1px solid #24262c;font-size:10.5px;color:var(--fg2);flex-shrink:0}
+  .mpop-hd .x{margin-left:auto;color:var(--fg4)}
+  .mpop-bd{flex:1;padding:6px;overflow:hidden}
+  .mpop-ft{border-top:1px solid #24262c;padding:5px 6px;font-size:10.5px;color:var(--fg4);line-height:1.45}
+  .mmsg{background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:4px 6px;font-size:10.5px;color:var(--fg3);margin-bottom:5px;line-height:1.45}
+  .mmsg.me{background:#1e2b41;border-color:var(--accbd);color:#d4e2f5}
+  .mrail{position:absolute;top:0;right:0;bottom:0;width:22px;background:#1f2027;border-left:1px solid var(--pur);z-index:4;display:flex;flex-direction:column;align-items:center;padding:7px 0;gap:6px}
+  .mrail .vt{writing-mode:vertical-rl;font-size:10.5px;color:var(--pur2);letter-spacing:2px}
+  .mrail .bd{width:6px;height:6px;border-radius:50%;background:var(--acc)}
+  .mrail .bx{margin-top:auto;font-size:10.5px;color:var(--fg4)}
+
+  /* ===== A4 导图 ===== */
+  .mtools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-bottom:8px;flex-shrink:0}
+  .mmind{position:relative;flex:1;min-height:0;background:#1e2026;border:1px solid var(--line2);border-radius:9px;overflow:hidden;margin-bottom:8px}
+  .mmind svg{position:absolute;inset:0;width:100%;height:100%}
+  .nd{position:absolute;background:#25272d;border:1.5px solid var(--line3);border-radius:8px;padding:6px 9px;width:148px;font-size:10.5px;z-index:2}
+  .nd .nh{font-weight:700;font-size:11px;color:var(--fg);display:flex;align-items:center;gap:5px}
+  .nd .nt{font-size:10.5px;color:var(--fg4);margin-top:3px}
+  .nd.root{border-color:var(--acc);background:#1e2a3f;width:158px}
+  .nd.sel{border-color:var(--pur);box-shadow:0 0 0 3px rgba(137,87,229,.2)}
+  .nd.hov{border-color:var(--acc2);box-shadow:0 0 0 3px rgba(75,142,247,.18)}
+  .nd .hbtns{position:absolute;top:-25px;left:0;display:flex;gap:3px;background:#20212a;border:1px solid var(--line3);border-radius:6px;padding:2px 5px;z-index:6}
+  .nd .hbtns span{font-size:10.5px;color:var(--fg3)}
+  .sdot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
+  .sdot.idle{background:#6b7076}.sdot.busy{background:var(--warn)}.sdot.done{background:var(--ok)}.sdot.err{background:var(--err)}
+  .cmenu{position:absolute;background:#20212a;border:1px solid var(--line3);border-radius:8px;padding:5px;z-index:6;min-width:152px;box-shadow:0 12px 30px rgba(0,0,0,.65)}
+  .cmenu div{font-size:10.5px;color:var(--fg3);padding:4px 8px;border-radius:4px}
+  .cmenu div.dg{color:var(--err2)}
+  .cmenu div.sp{height:1px;background:var(--line2);padding:0;margin:4px 2px}
+
+  /* ===== A5 控件盒 ===== */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .boxx{background:var(--sbg2);border:1px solid #26282e;border-radius:9px;overflow:hidden}
+  .bx-hd{padding:8px 11px;background:#1e2026;border-bottom:1px solid #26282e;font-size:11px;font-weight:600;color:var(--fg2)}
+  .bx-bd{padding:11px;min-height:112px}
+  .spec{margin-top:9px;border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:4px}
+  .spec div{display:flex;gap:8px;font-size:10.5px;color:var(--fg3)}
+  .spec div span{width:58px;color:var(--fg4);flex-shrink:0}
+  .spec div b{color:var(--fg2);font-weight:600}
+  .rcard{border:1px solid var(--warnbd);border-radius:8px;overflow:hidden;background:#1f1a0f}
+  .acard{border:1px solid var(--purbd);border-radius:8px;overflow:hidden;background:#1c1728}
+  .rc-hd{display:flex;align-items:center;gap:6px;padding:6px 10px;background:#2a2418;font-size:11px;font-weight:600;color:var(--warn2)}
+  .rc-hd .r{margin-left:auto;font-size:10.5px;color:var(--fg4);font-weight:400}
+  .rc-bd{padding:9px 10px}
+  .kv{display:grid;grid-template-columns:62px 1fr;gap:4px 8px;font-size:10.5px;color:var(--fg3);margin-bottom:4px;line-height:1.5}
+  .kv b{color:var(--fg4);font-weight:400}
+  .rv{display:grid;grid-template-columns:44px 1fr;gap:7px;font-size:10.5px;color:var(--fg3);padding:4px 0;border-bottom:1px solid #2a2535}
+  .rv:last-of-type{border-bottom:none}
+  .rn{font-weight:700}
+  .rn.ok{color:var(--ok2)}.rn.mid{color:var(--warn2)}.rn.no{color:var(--err2)}
+  .hint{font-size:10.5px;color:var(--fg4);margin-top:7px;line-height:1.55}
+
+  /* ===== B/C 板块 ===== */
+  .heat{display:flex;gap:2px;align-items:center}
+  .heat i{height:16px;border-radius:3px;display:block;width:15px}
+  .h4{background:var(--acc)}.h3{background:#2b5aa8}.h2{background:#3b4a63}.h1{background:#2c343f}.h0{background:#24262c}
+  .dia{display:flex;flex-direction:column;gap:10px}
+  .frow{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .nod{background:var(--panel);border:1px solid var(--line3);border-radius:8px;padding:7px 11px;font-size:11px;color:var(--fg3);text-align:center}
+  .nod .t{font-weight:700;color:var(--fg);display:block;font-size:11.5px;margin-bottom:2px}
+  .nod .d{font-size:10.5px;color:var(--fg4)}
+  .nod.a{border-color:#2b4a7a;background:var(--accbg)}
+  .nod.p{border-color:var(--purbd);background:#1c1728}
+  .nod.t{border-color:var(--tealbd);background:var(--tealbg)}
+  .nod.o{border-color:var(--okbd);background:var(--okbg)}
+  .nod.w{border-color:var(--warnbd);background:var(--warnbg)}
+  .nod.e{border-color:var(--errbd);background:var(--errbg)}
+  .ar{color:var(--acc2);font-size:15px;line-height:1}
+  .ar.p{color:var(--pur2)}
+  .actx{background:var(--sbg2);border:1px dashed var(--line4);border-radius:8px;padding:8px 12px;font-size:10.5px;color:var(--fg3);text-align:center;line-height:1.5}
+  .tree{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--fg3);line-height:1.8;background:var(--sbg2);border:1px solid #26282e;border-radius:8px;padding:11px 13px;overflow-x:auto;white-space:pre}
+  .tree b{color:var(--acc2)}
+  .tree i{color:var(--pur2);font-style:normal}
+  .tree u{color:var(--teal2);text-decoration:none}
+  /* 缩起态轨道由 .mrail 承担（A2 板块）；本处不再重复定义第二套 */
+  .seq{display:grid;grid-template-columns:104px 1fr 104px;gap:10px;align-items:center;margin-bottom:9px}
+  .seq .lbl{font-size:10.5px;color:var(--fg4);text-align:right}
+  .seq .ln{position:relative;height:1px;background:var(--line4)}
+  .seq .ln .mk{position:absolute;top:-4px;width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 3px rgba(47,111,235,.18)}
+  .seq .ln .txt{position:absolute;top:-22px;left:0;right:0;text-align:center;font-size:10.5px;color:var(--fg3);background:var(--sbg3);padding:0 6px;width:fit-content;margin:0 auto}
+  .seq.ret .ln .mk{background:var(--pur);box-shadow:0 0 0 3px rgba(137,87,229,.18)}
+  /* ===== C 板块收尾补丁（C1–C5 消费方新增） ===== */
+  .tree .mut { color:var(--fg4) }
+  .seqwrap { padding:16px 0 4px }
+  .pos { color:var(--ok2);font-weight:700;text-align:center }
+  .neg { color:var(--err2);font-weight:700;text-align:center }
+  .blk.c > .bh .k { background:var(--teal);color:#0d0e11 }
+  .blk.c .sec > header .no.a { background:var(--accbg,#1c2740);color:var(--acc2) }
+  .blk.c .sec > header .no.w { background:var(--warnbg,#1f1a0f);color:var(--warn2) }
+  .blk.c .sec > header .no.o { background:var(--okbg,#152418);color:var(--ok2) }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V16 · 设计图 + 需求图 + 交互逻辑 <small>dsh-director</small></h1>
+<div class="sub">
+  定位：<b>三件独立交付物。</b>设计图 = <b>高保真界面</b>（画真控件、真尺寸、真文案，不用线框代替界面）；
+  需求图 = <b>需求到界面的映射</b>；交互逻辑 = <b>导航 / 状态机 / 时序</b>。<br>
+  依据：<b>你 8 条口述（2026-09-12）</b> + <b>17 条核心要求</b> + <b>V13 R1–R8</b> + <b>V12 八视图</b> + 宿主源码取证。<br>
+  <b>与前稿的关系</b>：V13/V15 用「虚线框 + 关键词 chip」表示 R 区 —— 那是<b>标注图，不是设计图</b>，本稿改为真界面渲染。
+</div>
+
+<div class="toc">
+  <a href="#a1"><b>设计图 A1</b>总监页（R1–R8 全貌）</a>
+  <a href="#a2"><b>设计图 A2</b>总监页 · 对话弹窗三态</a>
+  <a href="#a3"><b>设计图 A3</b>对话页 + 总监弹窗</a>
+  <a href="#a4"><b>设计图 A4</b>分支导图态</a>
+  <a href="#a5"><b>设计图 A5</b>控件细节放大</a>
+</div>
+<div class="toc p">
+  <a href="#b1"><b>需求图 B1</b>17 条 → 界面落点矩阵</a>
+  <a href="#b2"><b>需求图 B2</b>分区承载热力</a>
+  <a href="#b3"><b>需求图 B3</b>覆盖度总账</a>
+</div>
+<div class="toc t">
+  <a href="#c1"><b>交互 C1</b>全局导航图</a>
+  <a href="#c2"><b>交互 C2</b>分支生命周期状态机</a>
+  <a href="#c3"><b>交互 C3</b>消息投递时序</a>
+  <a href="#c4"><b>交互 C4</b>输入路由决策树</a>
+  <a href="#c5"><b>交互 C5</b>总监治理闭环</a>
+</div>
+
+<!-- ========================================================== -->
+<div class="blk">
+  <div class="bh"><span class="k">设计图</span><h2>高保真界面</h2><span class="r">画真控件 · 真尺寸 · 真文案 ｜ 视口折算 1:1.22（1442×816 → 1180×644）</span></div>
+
+  <!-- A1 总监页 -->
+  <div class="sec" id="a1">
+    <header><span class="no">A1</span><h3>总监页 —— R1–R8 全貌（三页签之一，排在「对话」之前）</h3><span class="tag">需求 1 · 2 · 3 · 6</span></header>
+    <div class="bd">
+      <div class="app">
+        <div class="app-tb">
+          <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+          <span class="ttl">DeepSeek Harness — dsh-client-mod</span>
+          <span class="rt"><span>⌘K</span><span>⚙</span></span>
+        </div>
+        <div class="app-bd">
+          <!-- 侧栏 -->
+          <div class="sb">
+            <div class="sb-hd"><span>📁</span><span class="nm">dsh-client-mod</span><span class="ic">◆</span></div>
+            <div class="sb-acts"><span class="sb-btn pri">＋ 新会话</span><span class="sb-btn">分支</span></div>
+            <div class="sb-list">
+              <div class="sb-row on"><span class="ico">▾</span><span class="nm">dsh-client-mod</span><span class="bg">12</span></div>
+              <div class="sb-row sub"><span class="ico">💬</span><span class="nm">设计稿评审</span><span class="bg a">①</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">设计稿评审 (1)</span><span class="bg tl">⑂</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">设计稿评审 (2)</span><span class="bg tl">⑂</span></div>
+              <div class="sb-row sub"><span class="ico">💬</span><span class="nm">插件构建与安装</span></div>
+              <div class="sb-row sub"><span class="ico">💬</span><span class="nm">三页签形态对齐</span></div>
+              <div class="sb-row"><span class="ico">▸</span><span class="nm">镜辰 NetSuite</span><span class="bg">5</span></div>
+              <div class="sb-row"><span class="ico">▸</span><span class="nm">divination-engine</span><span class="bg">3</span></div>
+            </div>
+            <div class="sb-foot"><span class="dot"></span><span>插件已加载</span><span class="r">v0.1.0</span></div>
+          </div>
+
+          <!-- 主区 -->
+          <div class="mn">
+            <div class="tabs">
+              <span class="tb on">总监<span class="cnt hi">R1–R8</span></span>
+              <span class="tb">对话</span>
+              <span class="tb">轨迹</span>
+              <span class="rt"><span>🔍</span><span>⋯</span></span>
+            </div>
+
+            <div class="content">
+              <!-- R1 -->
+              <div class="cd acc">
+                <div class="rows">
+                  <span class="ch k" style="font-size:11px">📁 dsh-client-mod ▾</span>
+                  <span class="ch sm">全局级</span>
+                  <span class="ch sm">项目级 ▸ 当前</span>
+                  <span class="ch sm">文件夹级</span>
+                  <span class="ch sm">对话级</span>
+                  <span class="ch a" style="margin-left:auto">⚙ 设置</span>
+                </div>
+              </div>
+
+              <!-- R2.5 控制台 -->
+              <div class="cd pur">
+                <div class="cd-hd"><span class="no" style="color:var(--pur2);background:#2a2140;border-color:#3d2f5c">R2.5</span><span class="tt">对话控制台</span><span class="r">高频常驻 · 顺序即闭环</span></div>
+                <div class="rows">
+                  <span class="ch t">＋ 新建</span>
+                  <span class="ch e">🗑 删除</span>
+                  <span class="ch">📥 抓取</span>
+                  <span class="ch w">🔚 回结</span>
+                  <span class="ch p">🎯 审核</span>
+                  <span class="ch o">⏭ 继续</span>
+                  <span class="ch sm" style="margin-left:auto;color:var(--fg4)">待办 12 · 活跃分支 4</span>
+                </div>
+              </div>
+
+              <!-- R2 总览 -->
+              <div class="cd">
+                <div class="cd-hd"><span class="no">R2</span><span class="tt">项目总览</span><span class="r">概述 · 总揽</span></div>
+                <div class="rows" style="margin-bottom:7px">
+                  <span class="ch k">定位 · Harness 客户端插件化</span>
+                  <span class="ch k">目标 · 三页签 + 分支导图</span>
+                  <span class="ch">当前阶段 · 设计待审</span>
+                </div>
+                <div class="mets">
+                  <div class="met"><div class="v">65%</div><div class="k">待办完成率</div><div class="bar"><i style="width:65%"></i></div></div>
+                  <div class="met"><div class="v" style="color:var(--warn2)">3</div><div class="k">未闭合风险</div></div>
+                  <div class="met"><div class="v">12</div><div class="k">待办项</div></div>
+                  <div class="met"><div class="v" style="color:var(--ok2)">536</div><div class="k">验证项全绿</div></div>
+                </div>
+              </div>
+
+              <!-- R3 资源 -->
+              <div class="cd">
+                <div class="cd-hd"><span class="no">R3</span><span class="tt">智能体 / 技能</span><span class="r">依据所选模型与上下文自动安排 · 可手选</span></div>
+                <div class="rows">
+                  <span class="ch k sm">智能体</span>
+                  <span class="ch sm">🧑💻 代码</span><span class="ch sm">📄 文档</span><span class="ch sm">🔍 调研</span>
+                  <span class="ch o sm">🧪 测试 ● 运行中</span><span class="ch sm">🎯 审核</span>
+                  <span class="ch k sm">技能</span>
+                  <span class="ch t sm">🔎 搜索</span><span class="ch t sm">✍️ 写作</span><span class="ch t sm">⚙️ 重构</span>
+                  <span class="ch sm" style="margin-left:auto">模型 qwen2:7b ▾ ｜ 上下文 78%</span>
+                </div>
+              </div>
+
+              <!-- R4 | R5 | R7 -->
+              <div class="cols">
+                <div class="cd">
+                  <div class="cd-hd"><span class="no">R4</span><span class="tt">导航</span></div>
+                  <div class="rows" style="flex-direction:column;align-items:stretch">
+                    <span class="ch k">📄 文档树</span>
+                    <span class="ch">🗺️ 路线图 / 待办</span>
+                    <span class="ch">⭐ 关键文件</span>
+                    <span class="ch sm" style="color:var(--fg4);margin-top:2px">默认 186px · 可拖 60~40%</span>
+                  </div>
+                </div>
+                <div class="cd" style="min-width:0">
+                  <div class="cd-hd"><span class="no">R5</span><span class="tt">总监对话区</span><span class="r">归纳想法</span></div>
+                  <div class="msg me"><span class="av u">你</span><span class="bub">对话前面加总监页，一共三个页面</span></div>
+                  <div class="msg"><span class="av d">总</span><span class="bub"><b>已归纳</b> → 注册 <code>order:-1</code> 的 tab；R1–R8 全保留<span class="meta">建议资源：🧑💻 代码 ｜ [✅确认] [调整]</span></span></div>
+                </div>
+                <div class="cd">
+                  <div class="cd-hd"><span class="no">R7</span><span class="tt">小窗</span></div>
+                  <div class="rows" style="flex-direction:column;align-items:stretch">
+                    <span class="ch k">💬 对话</span>
+                    <span class="ch">📄 文档</span>
+                    <span class="ch">📋 详情</span>
+                    <span class="ch sm" style="color:var(--fg4);margin-top:2px">默认 168px · 可拖 240~420</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- R6 记忆 -->
+              <div class="cd">
+                <div class="cd-hd"><span class="no">R6</span><span class="tt">记忆面板</span><span class="r">hover 展开至 400px · 🔒 锁定</span></div>
+                <div class="rows">
+                  <span class="ch k sm">记忆 24</span><span class="ch sm">决策 9</span><span class="ch sm">风险 3</span>
+                  <span class="ch e sm">回结收件箱 · 2</span>
+                  <span class="ch sm" style="margin-left:auto;color:var(--fg4)">最近：弹窗形态由分屏改为浮层覆盖</span>
+                </div>
+              </div>
+
+              <!-- R8 -->
+              <div class="comp foc">
+                <span class="ch p sm">→ 焦点 ▾</span>
+                <span class="ta f">输入内容，按焦点路由提交 —— 点左侧区走总监，点右侧区走对话</span>
+                <span class="b pri">发送</span>
+              </div>
+
+              <div class="float">
+                <span class="fb">🧠 思维导图</span>
+                <span class="fb pu">◆ 总监</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">A1 · 总监页真实布局。R 区为<b>真卡片</b>（非虚线标注框）；右下角两枚浮动按钮顺序为「🧠 思维导图」在「◆ 总监」<b>之前</b>。</div>
+    </div>
+  </div>
+
+  <!-- A2 弹窗三态 -->
+  <div class="sec" id="a2">
+    <header><span class="no">A2</span><h3>总监页 · 最右侧「对话」弹窗 —— 三态并排</h3><span class="tag">需求 3 · 5 ｜ 你骂的"留占位"就在这一格</span></header>
+    <div class="bd">
+      <div class="note err">
+        <b>你第 5 条原话</b>：「点击完之后对话不铺满、留下是点击占位？都弹窗了为什么不缩回去」。
+        三格并排，注意<b>三格的底层完全一致</b>（内容都铺到右缘）—— 这是"底层永不让位"的视觉证明。
+        旧做法用的是 <code>padding-left:300px</code> 挤占，所以永远留占位、且<b>没有缩回态</b>。
+      </div>
+
+      <div class="trio">
+        <!-- ① 展开 -->
+        <div class="mapp">
+          <div class="mapp-hd"><span class="dot"></span><span>① 展开 · 322px</span><span class="r">点 ⋯ 或拖拽</span></div>
+          <div class="mapp-bd">
+            <div class="mtabs"><span class="mtb on">总监</span><span class="mtb">对话</span><span class="mtb">轨迹</span></div>
+            <div class="mcontent">
+              <div class="mrow" style="height:26px"></div>
+              <div class="mrow" style="height:38px"></div>
+              <div class="mrow" style="height:26px"></div>
+              <div class="mrow grow"></div>
+              <div class="mcomp"><span class="mta">输入…</span><span class="mb">发送</span></div>
+              <div class="mpop">
+                <div class="mpop-hd">💬 对话 · 设计稿评审<span class="x">⇥</span></div>
+                <div class="mpop-bd">
+                  <div class="mmsg me">你：R1–R8 必须全保留</div>
+                  <div class="mmsg">对话：已在改，R4/R6/R7 补回</div>
+                  <div class="mmsg">对话：正在生成设计稿…</div>
+                </div>
+                <div class="mpop-ft">在总监页直接发消息 → 送进此对话</div>
+              </div>
+            </div>
+          </div>
+          <div class="mapp-ft">底层被<b>自然遮挡</b>，关闭后即完整。R 区<b>未让位</b>。</div>
+        </div>
+
+        <!-- ② 缩起 -->
+        <div class="mapp">
+          <div class="mapp-hd"><span class="dot y"></span><span>② 缩起 · 36px</span><span class="r">点 ⇥ / 拖拽 &lt; 240</span></div>
+          <div class="mapp-bd">
+            <div class="mtabs"><span class="mtb on">总监</span><span class="mtb">对话</span><span class="mtb">轨迹</span></div>
+            <div class="mcontent">
+              <div class="mrow" style="height:26px"></div>
+              <div class="mrow" style="height:38px"></div>
+              <div class="mrow" style="height:26px"></div>
+              <div class="mrow grow"></div>
+              <div class="mcomp"><span class="mta">输入…</span><span class="mb">发送</span></div>
+              <div class="mrail"><span class="vt">对话</span><span class="bd"></span><span class="bx">⇤</span></div>
+            </div>
+          </div>
+          <div class="mapp-ft">竖边条贴右缘：竖排标题 + 未读点 + 展开钮。<b>底层几乎全露。</b></div>
+        </div>
+
+        <!-- ③ 关闭 -->
+        <div class="mapp">
+          <div class="mapp-hd"><span class="dot g"></span><span>③ 关闭 · 0px</span><span class="r">点 ✕</span></div>
+          <div class="mapp-bd">
+            <div class="mtabs"><span class="mtb on">总监</span><span class="mtb">对话</span><span class="mtb">轨迹</span></div>
+            <div class="mcontent">
+              <div class="mrow" style="height:26px"></div>
+              <div class="mrow" style="height:38px"></div>
+              <div class="mrow" style="height:26px"></div>
+              <div class="mrow grow"></div>
+              <div class="mcomp"><span class="mta">输入…</span><span class="mb">发送</span></div>
+            </div>
+          </div>
+          <div class="mapp-ft"><b>整幅铺满，零残留</b> —— 这就是"缩回去"。</div>
+        </div>
+      </div>
+
+      <div class="note ok" style="margin-top:14px;margin-bottom:0">
+        <b>尺寸规则（全稿同值）</b>：展开 <b>322px</b> ｜ 拖拽 <code>clamp(240, 46%×W)</code> ｜ 小于 240 <b>吸附为缩起</b> ｜ 缩起 <b>36px</b> ｜ 关闭 <b>0px</b> ｜ 双击中缝复位。
+        <b>切 tab 存续</b>：各页独立记忆展开态；首次进入默认<b>缩起</b>（不打扰）；轨迹页不显示弹窗与浮动按钮。
+      </div>
+    </div>
+  </div>
+
+  <!-- A3 对话页 -->
+  <div class="sec" id="a3">
+    <header><span class="no">A3</span><h3>对话页 —— 原生逻辑一字不改 + 最右侧「总监」弹窗</h3><span class="tag">需求 4</span></header>
+    <div class="bd">
+      <div class="app">
+        <div class="app-tb">
+          <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+          <span class="ttl">DeepSeek Harness — dsh-client-mod</span>
+        </div>
+        <div class="app-bd" style="height:470px">
+          <div class="sb" style="width:196px">
+            <div class="sb-hd"><span>📁</span><span class="nm">dsh-client-mod</span></div>
+            <div class="sb-list">
+              <div class="sb-row"><span class="ico">▾</span><span class="nm">dsh-client-mod</span></div>
+              <div class="sb-row sub on"><span class="ico">💬</span><span class="nm">设计稿评审</span><span class="bg a">①</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">评审 (1)</span><span class="bg tl">⑂</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">评审 (2)</span><span class="bg tl">⑂</span></div>
+              <div class="sb-row sub"><span class="ico">💬</span><span class="nm">插件构建</span></div>
+            </div>
+            <div class="sb-foot"><span class="dot"></span><span>已加载</span></div>
+          </div>
+          <div class="mn">
+            <div class="tabs">
+              <span class="tb">总监</span>
+              <span class="tb on">对话</span>
+              <span class="tb">轨迹</span>
+              <span class="rt"><span class="ch sm">⑂ 主线 ▾</span><span class="ch sm">🧠 导图</span></span>
+            </div>
+            <div class="content">
+              <div class="cd" style="flex:1;min-height:0;overflow:hidden">
+                <div class="msg me"><span class="av u">你</span><span class="bub">把总监页做回原生 tab</span></div>
+                <div class="msg"><span class="av a">AI</span><span class="bub">好的，正在注册 <code>conversation.view</code> …<span class="meta">2 分钟前</span></span></div>
+                <div class="msg"><span class="av a">AI</span><span class="bub">已注册 <code>order:-1</code>，总监页现排在「对话」之前。<span class="meta">● 已完成轮次</span></span></div>
+                <div class="msg me"><span class="av u">你</span><span class="bub">这里再帮我开个分支试试</span></div>
+                <div class="msg"><span class="av a">AI</span><span class="bub">已从本消息<i style="color:var(--teal2)">新建分支</i> → 「设计稿评审 (1)」在新会话中打开。<span class="meta">⑂ fork @ seq 18 · 8 条</span></span></div>
+              </div>
+              <div class="comp">
+                <span class="ch sm">⑂ 主线 ▾</span>
+                <span class="ta f">输入…</span>
+                <span class="ch tl sm">🔚 结束并回结</span>
+                <span class="b pri">发送</span>
+              </div>
+              <div class="float"><span class="fb">🧠 思维导图</span><span class="fb pu">◆ 总监</span></div>
+              <div class="pop tl">
+                <div class="pop-hd"><span style="color:var(--teal)">◆</span><span class="tt">总监 · dsh-client-mod</span><span class="x"><span>⇥</span></span></div>
+                <div class="pop-bd">
+                  <div class="msg"><span class="av d">总</span><span class="bub">看到你在对话里开了分支。要我为 <b>(1)</b> 派个测试智能体吗？<span class="meta">总监自有会话 · 与左侧对话数据独立</span></span></div>
+                  <div class="rows" style="margin-top:9px"><span class="ch t">🧪 测试</span><span class="ch t">🔎 审查</span><span class="ch">⏹ 先不派</span></div>
+                  <div class="rows" style="margin-top:7px"><span class="ch k sm">建议去向</span><span class="ch sm">设计稿评审 (1)</span><span class="ch sm">置信度 82%</span></div>
+                </div>
+                <div class="pop-ft"><div class="comp" style="padding:5px 7px"><span class="ch p sm">→ 总监</span><span class="ta">在对话里直接和总监说话</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">A3 · 对话页。左侧对话流 + 底部输入条 + 右侧「总监」弹窗；两弹窗<b>语义对称、数据源独立</b>（左 = 原生 session，右 = 总监自有会话）。</div>
+    </div>
+  </div>
+
+  <!-- A4 导图态 -->
+  <div class="sec" id="a4">
+    <header><span class="no">A4</span><h3>对话页 · 分支导图态（Ctrl+滚轮连续缩到 34% 的落点）</h3><span class="tag">需求 8 · 分支 = fork 血缘</span></header>
+    <div class="bd">
+      <div class="app">
+        <div class="app-tb">
+          <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+          <span class="ttl">DeepSeek Harness — dsh-client-mod ｜ 对话 · 分支导图态</span>
+        </div>
+        <div class="app-bd" style="height:430px">
+          <div class="sb" style="width:196px">
+            <div class="sb-hd"><span>📁</span><span class="nm">dsh-client-mod</span></div>
+            <div class="sb-list">
+              <div class="sb-row"><span class="ico">▾</span><span class="nm">dsh-client-mod</span></div>
+              <div class="sb-row sub on"><span class="ico">💬</span><span class="nm">设计稿评审</span><span class="bg a">①</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">评审 (1)</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">评审 (2)</span></div>
+              <div class="sb-row sub2"><span class="ico">⑂</span><span class="nm">评审 (3)</span></div>
+            </div>
+            <div class="sb-foot"><span class="dot"></span><span>flattenLineage</span><span class="r">depth 1</span></div>
+          </div>
+          <div class="mn">
+            <div class="tabs">
+              <span class="tb">总监</span>
+              <span class="tb on">对话</span>
+              <span class="tb">轨迹</span>
+              <span class="rt"><span class="ch sm k">zoom 34%</span><span class="ch sm">🔍 适应屏幕</span></span>
+            </div>
+            <div class="content" style="gap:0">
+              <div class="mtools">
+                <span class="ch k">⑂ 分支树 · 设计稿评审</span>
+                <span class="ch t">＋ 新建分支（fork）</span>
+                <span class="ch">🗂️ 折叠全部</span>
+                <span class="ch">🔍 fit</span>
+                <span style="margin-left:auto" class="rows">
+                  <span class="ch sm"><span class="sdot idle"></span>空闲</span>
+                  <span class="ch sm"><span class="sdot busy"></span>运行中</span>
+                  <span class="ch sm"><span class="sdot done"></span>已完成</span>
+                  <span class="ch sm"><span class="sdot err"></span>出错</span>
+                </span>
+              </div>
+              <div class="mmind">
+                <svg viewBox="0 0 900 300" preserveAspectRatio="none">
+                  <path d="M182,150 C215,150 215,58 252,58" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".5"/>
+                  <path d="M182,150 C215,150 215,150 252,150" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".5"/>
+                  <path d="M182,150 C215,150 215,242 252,242" stroke="#2f6feb" stroke-width="2" fill="none" opacity=".5"/>
+                  <path d="M400,58 C442,58 442,34 480,34" stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="5 4" opacity=".7"/>
+                  <path d="M400,58 C442,58 442,96 480,96" stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="5 4" opacity=".7"/>
+                  <path d="M400,242 C442,242 442,232 480,232" stroke="#39c5cf" stroke-width="1.5" fill="none" stroke-dasharray="5 4" opacity=".7"/>
+                </svg>
+                <div class="nd root" style="left:24px;top:120px">
+                  <div class="nh">🎯 设计稿评审</div><div class="nt">主线 · 进行中 · 24 条</div>
+                </div>
+                <div class="nd hov" style="left:252px;top:30px">
+                  <div class="hbtns"><span>➕</span><span>📂</span><span>📥</span><span>🎯</span><span>✂️</span><span>⋯</span></div>
+                  <div class="nh"><span class="sdot busy"></span>设计稿评审 (1)</div><div class="nt">fork @ seq 18 · 8 条</div>
+                </div>
+                <div class="nd" style="left:252px;top:122px">
+                  <div class="nh"><span class="sdot done"></span>设计稿评审 (2)</div><div class="nt">fork @ seq 18 · 5 条 · 已回结</div>
+                </div>
+                <div class="nd" style="left:252px;top:214px">
+                  <div class="nh"><span class="sdot err"></span>设计稿评审 (3)</div><div class="nt">fork @ seq 22 · 3 条</div>
+                </div>
+                <div class="nd sel" style="left:480px;top:6px">
+                  <div class="nh"><span class="sdot idle"></span>(1) 测试子分支</div><div class="nt">fork @ seq 6 · 2 条</div>
+                </div>
+                <div class="nd" style="left:480px;top:68px">
+                  <div class="nh"><span class="sdot idle"></span>(1) 审查子分支</div><div class="nt">fork @ seq 4 · 1 条</div>
+                </div>
+                <div class="nd" style="left:480px;top:204px">
+                  <div class="nh"><span class="sdot done"></span>(3) 重构子分支</div><div class="nt">fork @ seq 3 · 4 条</div>
+                </div>
+                <div class="cmenu" style="left:660px;top:110px">
+                  <div>📂 打开此对话</div>
+                  <div>➕ 从此处分支（fork）</div>
+                  <div>📥 抓取信息到总监</div>
+                  <div>🎯 送交审核</div>
+                  <div class="sp"></div>
+                  <div>🔀 合并回父 <span style="color:var(--fg4)">（建议项）</span></div>
+                  <div class="sp"></div>
+                  <div class="dg">✂️ 删除分支…</div>
+                </div>
+              </div>
+              <div class="comp">
+                <span class="ch p sm">→ 待总监路由 ▾</span>
+                <span class="ta f">「把弹窗那条占位问题也修了」</span>
+                <span class="b pu">交给总监判断</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">A4 · 分支导图。节点 = <b>原生 fork 出的新会话</b>（<code>sessions.fork</code> 已写 <code>meta.parentSession</code>，血缘数据早就有）；节点悬浮出工具条、右键出菜单、底部输入框<b>归属未定</b>先过总监路由。</div>
+    </div>
+  </div>
+
+  <!-- A5 控件细节 -->
+  <div class="sec" id="a5">
+    <header><span class="no">A5</span><h3>控件细节放大 —— tab 环 / 气泡 / 输入条 / 节点 / 回结卡 / 审核卡</h3><span class="tag">实现端照此还原</span></header>
+    <div class="bd">
+      <div class="grid2">
+        <div class="boxx">
+          <div class="bx-hd">① tab 环（三个同级同构页面）</div>
+          <div class="bx-bd">
+            <div class="tb-detail">
+              <span class="tb on">总监</span><span class="tb">对话</span><span class="tb">轨迹</span>
+            </div>
+            <div class="spec">
+              <div><span>高度</span><b>39px</b> · 下边框 1px</div>
+              <div><span>激活态</span><b>2px 蓝色下边线 + 加粗 + 换色</b></div>
+              <div><span>顺序</span>总监 <code>order:-1</code> ⇒ 在对话<b>之前</b></div>
+              <div><span>键盘</span><code>Alt+1/2/3</code></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="boxx">
+          <div class="bx-hd">② 消息气泡（原生观感）</div>
+          <div class="bx-bd">
+            <div class="msg me"><span class="av u">你</span><span class="bub">把总监页做回原生 tab</span></div>
+            <div class="msg"><span class="av a">AI</span><span class="bub">已注册 <code>order:-1</code>。<span class="meta">● 已完成轮次 · 可从本条分支</span></span></div>
+            <div class="msg"><span class="av d">总</span><span class="bub">总监消息（自有会话，绿头像）</span></div>
+          </div>
+        </div>
+
+        <div class="boxx">
+          <div class="bx-hd">③ 输入条（四种目标徽章）</div>
+          <div class="bx-bd" style="display:flex;flex-direction:column;gap:7px">
+            <div class="comp"><span class="ch p sm">→ 焦点 ▾</span><span class="ta">R8 全局输入框 · 按焦点路由</span><span class="b pri">发送</span></div>
+            <div class="comp"><span class="ch a sm">→ 对话</span><span class="ta">总监页对话弹窗 · 固定送该会话</span></div>
+            <div class="comp"><span class="ch p sm">→ 总监</span><span class="ta">对话页总监弹窗 · 固定送总监</span></div>
+            <div class="comp"><span class="ch p sm" style="border-style:dashed">→ 待路由</span><span class="ta">导图底输入 · 先出确认卡</span></div>
+          </div>
+        </div>
+
+        <div class="boxx">
+          <div class="bx-hd">④ 导图节点状态（4 态 + 悬浮 + 选中）</div>
+          <div class="bx-bd" style="display:flex;flex-direction:column;gap:8px">
+            <div class="nd" style="position:static;width:auto"><div class="nh"><span class="sdot busy"></span>运行中 · 设计稿评审 (1)</div><div class="nt">fork @ seq 18 · 8 条</div></div>
+            <div class="nd" style="position:static;width:auto"><div class="nh"><span class="sdot done"></span>已完成 · 设计稿评审 (2)</div><div class="nt">已回结 · 待审核</div></div>
+            <div class="nd" style="position:static;width:auto"><div class="nh"><span class="sdot err"></span>出错 · 设计稿评审 (3)</div><div class="nt">末轮失败</div></div>
+            <div class="nd sel" style="position:static;width:auto"><div class="nh"><span class="sdot idle"></span>选中态（紫环）· (1) 测试子分支</div></div>
+          </div>
+        </div>
+
+        <div class="boxx">
+          <div class="bx-hd">⑤ 回结卡（对话结束 → 自动回传总监）</div>
+          <div class="bx-bd">
+            <div class="rcard">
+              <div class="rc-hd"><span>🔚</span><span>回结 · 设计稿评审 (1)</span><span class="r">2 分钟前</span></div>
+              <div class="rc-bd">
+                <div class="kv"><b>产出摘要</b><span>改写设计稿；新增校验；修复 6 个真缺陷</span></div>
+                <div class="kv"><b>结论</b><span>弹窗由「分屏挤占」改为「浮层覆盖」<b>已完成</b></span></div>
+                <div class="kv"><b>未决项</b><span>① 按钮组挂载点 ② 合并回父是否保留</span></div>
+                <div class="kv"><b>文件</b><span><code>V16-设计图·需求图·交互逻辑.html</code></span></div>
+                <div class="rows" style="margin-top:8px"><span class="ch o sm">🎯 送审核</span><span class="ch sm">📥 抓取到记忆</span><span class="ch sm">📂 打开对话</span><span class="ch sm">✕ 忽略</span></div>
+              </div>
+            </div>
+            <div class="hint">触发：手动「🔚 结束并回结」／ <b>自动</b>（session 结束且末轮完成）。静默落 R6 收件箱，<b>不弹模态</b>。</div>
+          </div>
+        </div>
+
+        <div class="boxx">
+          <div class="bx-hd">⑥ 六维审核卡（三态结论 + 纠偏）</div>
+          <div class="bx-bd">
+            <div class="acard">
+              <div class="rc-hd" style="background:#241a2e;color:var(--pur2)"><span>🎯</span><span>六维审核 · 设计稿评审 (1)</span><span class="r">置信度 82%</span></div>
+              <div class="rc-bd">
+                <div class="rv"><span class="rn ok">目标</span><span>与 R2 目标一致 ✔</span></div>
+                <div class="rv"><span class="rn ok">范围</span><span>未越界 ✔</span></div>
+                <div class="rv"><span class="rn mid">质量</span><span>画面自相矛盾 ⇒ <b>已附纠偏指令</b></span></div>
+                <div class="rv"><span class="rn ok">一致</span><span>令牌继承 V13 ✔</span></div>
+                <div class="rv"><span class="rn no">风险</span><span>丢失既有内容 ⇒ <b>已回补</b></span></div>
+                <div class="rv"><span class="rn ok">交付</span><span>产物可打开 ✔</span></div>
+                <div class="rows" style="margin-top:9px"><span class="ch o sm">⏭ 继续推进</span><span class="ch sm">＋ 再开分支</span><span class="ch p sm">📦 收口归档</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================== -->
+<div class="blk b">
+  <div class="bh"><span class="k">需求图</span><h2>需求到界面 —— 逐条落点</h2><span class="r">17 条需求 × 界面落点 × 设计图编号 ｜ 无落点 = 未设计</span></div>
+
+  <div class="sec" id="b1">
+    <header><span class="no p">B1</span><h3>需求 → 界面落点矩阵（17 条）</h3><span class="tag">每条都必须能指到具体控件</span></header>
+    <div class="bd">
+      <div class="note p">
+        判据很简单：<b>每条需求都要能指到画面上的一个具体控件</b>。指不到的，就是"没设计"。
+        下表右列是<b>设计图编号</b>（对应板块 A），实现端按编号回查即可。
+      </div>
+      <div class="tscroll">
+      <table>
+        <tr>
+          <th style="width:34px">#</th><th style="width:250px">需求（你的原话 / 语义）</th>
+          <th style="width:250px">界面落点（具体控件）</th><th style="width:78px">设计图</th><th style="width:52px">判定</th>
+        </tr>
+        <tr><td>1</td><td>对话<b>前面</b>增加「总监」<b>页面</b></td><td>tab 环第 1 位（<code>order:-1</code>），与「对话」同高同构</td><td>A1 · A5①</td><td class="ok">✓</td></tr>
+        <tr><td>2</td><td>一共<b>三个页面</b>：总监 · 对话 · 轨迹</td><td>tab 环三项；轨迹页宿主原生、不碰</td><td>A1 · A3</td><td class="ok">✓</td></tr>
+        <tr><td>3</td><td>总监页最右侧「对话弹窗」，<b>点击可以缩进</b></td><td>总监页右缘浮层：展开 322 / 缩起 36 / 关闭 0</td><td>A2 三态</td><td class="ok">✓</td></tr>
+        <tr><td>4</td><td>对话页最右侧加「总监弹窗」，<b>就地对话</b></td><td>对话页右缘浮层（绿色边框区分数据源）</td><td>A3</td><td class="ok">✓</td></tr>
+        <tr><td>5</td><td>弹窗<b>不留占位</b>、<b>能缩回去</b>（你骂"什么垃圾"那条）</td><td>浮层 <code>absolute</code> 叠加，底层零让位；三态并排证伪</td><td>A2</td><td class="ok">✓</td></tr>
+        <tr><td>6</td><td>V13 的 <b>R1–R8 全保留</b>，按显示处理</td><td>R1 R2 R2.5 R3 [R4|R5|R7] R6 R8 全在，栅格 186/1fr/168</td><td>A1</td><td class="ok">✓</td></tr>
+        <tr><td>7</td><td><b>分支 = fork</b>：点击后<b>复制现有对话到新页面</b></td><td>节点 = 独立会话；气泡操作条「在新对话中分支」；节点显示 <code>fork @ seq N</code></td><td>A4 · A5④</td><td class="ok">✓</td></tr>
+        <tr><td>8</td><td>在一个对话里<b>不断缩小滚轮</b> → 展开该对话<b>所有分支</b></td><td>Ctrl+滚轮连续缩放：100% 对话流 → 62% 节点浮现 → 34% 全树</td><td>A4</td><td class="ok">✓</td></tr>
+        <tr><td>9</td><td>在导图页<b>直接输入</b> → 总监判断<b>由哪个对话执行</b></td><td>导图底部输入条（目标徽章 = 虚线「待路由」）+ 路由确认卡</td><td>A3 · A4 · C4</td><td class="ok">✓</td></tr>
+        <tr><td>10</td><td>右下角「🧠 思维导图」放在「◆ 总监」<b>前面</b></td><td>浮动按钮组，导图在左、总监在右</td><td>A1 · A3</td><td class="ok">✓</td></tr>
+        <tr><td>11</td><td>设计图页面的设置（<b>标注模式</b>）</td><td>V12 视图 5：框选 + 文字 + 关联 + 存为证据</td><td>见 V15.1 视图 13</td><td class="mid">△ 待并入</td></tr>
+        <tr><td>12</td><td>总监与对话<b>各自独立数据元</b></td><td>两弹窗边框色不同（紫 / 绿）；气泡来源标「总监自有会话」</td><td>A3</td><td class="ok">✓</td></tr>
+        <tr><td>13</td><td>总监<b>只统筹不执行</b>，且<b>有自己的对话</b></td><td>R5 总监对话区 + 弹窗 foot 固定「→ 总监」</td><td>A1 · A3 · A5③</td><td class="ok">✓</td></tr>
+        <tr><td>14</td><td>总监<b>定上下文 / 审核产出 / 防跑偏 / 纠偏</b></td><td>R3 显示「模型 + 上下文 78%」；六维审核卡 + 纠偏指令</td><td>A1 · A5⑥</td><td class="ok">✓</td></tr>
+        <tr><td>15</td><td><b>对话逻辑一字不改</b></td><td>对话页仅叠加浮层，消息流/输入框/分支全原生</td><td>A3</td><td class="ok">✓</td></tr>
+        <tr><td>16</td><td>点文件夹/项目 → 展示<b>负责该层级的总监</b></td><td>侧栏行 ◆ 角标 + 右键「查看总监」+ R1 层级徽章 4 级</td><td>A1（R1）</td><td class="ok">✓</td></tr>
+        <tr><td>17</td><td>总监对对话控制<b>极频繁</b>：新建/删除/抓取/回结/审核/继续</td><td>R2.5 常驻控制台（6 动作）+ 节点悬浮/右键 + 回结卡</td><td>A1 · A4 · A5⑤⑥</td><td class="ok">✓</td></tr>
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" id="b2">
+    <header><span class="no p">B2</span><h3>分区承载热力 —— 哪些 R 区扛了最多需求</h3><span class="tag">识别"设计重心"与"空闲区"</span></header>
+    <div class="bd">
+      <div class="note">
+        一眼看出<b>设计重心</b>：R2.5 控制台与「弹窗带」承载最多新增需求；R4/R7 保持 V13 原样（低改动）。
+        <b>热力 = 该区承载的需求条数</b>（深色格 = 无需求落点）。
+      </div>
+      <div class="tscroll">
+      <table>
+        <tr><th style="width:132px">界面分区</th><th style="width:230px">热力</th><th style="width:74px">需求数</th><th>承载的需求编号</th></tr>
+        <tr>
+          <td><b>R1 顶部栏</b></td>
+          <td><span class="heat"><i class="h2"></i><i class="h1"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td>
+          <td><b>2</b></td><td>16（层级徽章）、6（V13 原样保留）</td>
+        </tr>
+        <tr>
+          <td><b>R2 总览卡</b></td>
+          <td><span class="heat"><i class="h2"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td>
+          <td><b>1</b></td><td>6 · 14（目标与上下文作为审核基准）</td>
+        </tr>
+        <tr>
+          <td><b>R2.5 控制台</b><br><span style="color:var(--pur2);font-size:10.5px">★ 本次新增</span></td>
+          <td><span class="heat"><i class="h4"></i><i class="h4"></i><i class="h3"></i><i class="h3"></i><i class="h3"></i></span></td>
+          <td class="pu"><b>5</b></td><td>17（六动作）、7（新建分支）、9（路由入口）、14（审核入口）、16（层级切换后的动作）</td>
+        </tr>
+        <tr>
+          <td><b>R3 资源行</b></td>
+          <td><span class="heat"><i class="h3"></i><i class="h3"></i><i class="h1"></i><i class="h0"></i><i class="h0"></i></span></td>
+          <td><b>3</b></td><td>14（模型 + 上下文）、10（智能体/技能）、17（派活）</td>
+        </tr>
+        <tr><td><b>R4 导航</b></td><td><span class="heat"><i class="h1"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td><td><b>1</b></td><td>6（V13 原样，低改动）</td></tr>
+        <tr><td><b>R5 总监对话</b></td><td><span class="heat"><i class="h3"></i><i class="h3"></i><i class="h2"></i><i class="h0"></i><i class="h0"></i></span></td><td><b>3</b></td><td>13（总监有自己对话）、9（归纳）、15（不越界）</td></tr>
+        <tr><td><b>R6 记忆面板</b></td><td><span class="heat"><i class="h3"></i><i class="h2"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td><td><b>2</b></td><td>17（抓取落点）、5（回结收件箱）</td></tr>
+        <tr><td><b>R7 小窗</b></td><td><span class="heat"><i class="h1"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td><td><b>1</b></td><td>6（V13 原样，低改动）</td></tr>
+        <tr><td><b>R8 全局输入框</b></td><td><span class="heat"><i class="h2"></i><i class="h1"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td><td><b>2</b></td><td>9（路由）、13（焦点目标）</td></tr>
+        <tr>
+          <td><b>弹窗带（跨页）</b><br><span style="color:var(--pur2);font-size:10.5px">★ 本次新增</span></td>
+          <td><span class="heat"><i class="h4"></i><i class="h4"></i><i class="h3"></i><i class="h2"></i><i class="h1"></i></span></td>
+          <td class="pu"><b>4</b></td><td>3（总监页对话弹窗）、4（对话页总监弹窗）、5（不占位可缩回）、12（独立数据元）</td>
+        </tr>
+        <tr>
+          <td><b>导图态（对话页内）</b></td>
+          <td><span class="heat"><i class="h4"></i><i class="h3"></i><i class="h3"></i><i class="h2"></i><i class="h1"></i></span></td>
+          <td class="pu"><b>4</b></td><td>7（fork 血缘）、8（滚轮缩放）、9（直接输入）、17（节点控制）</td>
+        </tr>
+        <tr><td><b>浮动按钮组</b></td><td><span class="heat"><i class="h2"></i><i class="h1"></i><i class="h0"></i><i class="h0"></i><i class="h0"></i></span></td><td><b>2</b></td><td>10（顺序）、3/4（弹窗开关镜像）</td></tr>
+      </table>
+      </div>
+      <div class="cap">合计 30 处落点覆盖 17 条需求（一条需求可落在多处）。<b>零落点的区 = R4 / R7</b>，均为 V13 原样保留区。</div>
+    </div>
+  </div>
+
+  <div class="sec" id="b3">
+    <header><span class="no p">B3</span><h3>覆盖度总账 —— 还差什么</h3><span class="tag">诚实清单</span></header>
+    <div class="bd">
+      <div class="tscroll">
+      <table>
+        <tr><th style="width:120px">状态</th><th style="width:74px">条数</th><th>明细</th></tr>
+        <tr><td class="ok"><b>已落点</b></td><td class="ok"><b>16 / 17</b></td><td>需求 1–10、12–17 全部能在设计图上指到具体控件</td></tr>
+        <tr><td class="mid"><b>部分</b></td><td class="mid"><b>1 / 17</b></td><td><b>#11 设计图标注模式</b> —— 已在 V15.1 视图 13 画出，但<b>尚未并入本稿</b>的板块 A（避免本稿过长）；实现时按 V15.1 视图 13 还原</td></tr>
+        <tr><td class="no"><b>未落点</b></td><td class="no"><b>0</b></td><td>—</td></tr>
+      </table>
+      </div>
+      <div class="note warn" style="margin-top:12px;margin-bottom:0">
+        <b>两处仍悬置、需你点一下头的事</b>（我不自行处置）<br>
+        <b>① 第 5、17 条的「两者均为弹窗形式」怎么读</b> —— 本稿按「<b>tab 是页面（形态层），弹窗是页面内最右侧的辅助面板（组件层）</b>」执行，两者并存。
+        若你原意是"总监整个都用弹窗、不要 tab"，说一声，我改 A1/A2/A3。<br>
+        <b>② 导图右键里的「🔀 合并回父」</b> —— 你从未提过合并，这是从 V12 视图 7 带来的。
+        本稿已把它<b>沉到右键菜单深处并标「建议项」</b>；要删就说一声。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================== -->
+<div class="blk c">
+  <div class="bh"><span class="k">交互逻辑</span><h2>导航 · 状态机 · 时序</h2><span class="r">三页签 × 两弹窗 × 导图态 ｜ 每个动作都要有回退路径</span></div>
+
+  <div class="sec" id="c1">
+    <header><span class="no a">C1</span><h3>全局导航图 —— 三页签 × 两弹窗 × 导图态的可达关系</h3><span class="tag">无死路；任一态都能用键盘回到根</span></header>
+    <div class="bd">
+      <div class="dia">
+        <div class="frow" style="justify-content:center">
+          <span class="nod a" style="min-width:190px"><span class="t">Harness 主窗口</span><span class="d">1442 × 816 · 侧栏 280 + 内容区 1162</span></span>
+        </div>
+        <div class="actx">↓ 内容区顶部 tab 环 —— 由 slot <b>conversation.view</b> 驱动。宿主 <code>renderSlot</code> 按 <code>{ only: active.id }</code> 只渲染当前页；插件以 <code>{ id, order: -1, label }</code> 注册即接管，<b>宿主零改动</b></div>
+        <div class="frow" style="justify-content:center">
+          <span class="nod p" style="min-width:212px"><span class="t">① 总监（默认 / order -1）</span><span class="d">R1–R8 全展开 + 右侧「对话」弹窗</span></span>
+          <span class="nod" style="min-width:212px"><span class="t">② 对话（宿主原生）</span><span class="d">原生消息流 + 右侧「总监」弹窗</span></span>
+          <span class="nod" style="min-width:212px"><span class="t">③ 轨迹（宿主原生）</span><span class="d">只读审计流 · 无弹窗 / 无导图按钮</span></span>
+        </div>
+        <div class="actx">↓ 页内最右侧是一个 <b>浮动面板层</b>（<code>absolute; right:0</code>，不参与栅格、不占位）：展开 322 / 缩起 36 / 关闭 0 —— 三态循环，<b>底层永远铺满</b></div>
+        <div class="frow" style="justify-content:center">
+          <span class="nod t" style="min-width:200px"><span class="t">总监页 ⇄ 对话弹窗</span><span class="d">看对话执行 / 直接插话</span></span>
+          <span class="nod t" style="min-width:200px"><span class="t">对话页 ⇄ 总监弹窗</span><span class="d">随时问总监 / 要裁决</span></span>
+          <span class="nod" style="min-width:200px;opacity:.55"><span class="t">轨迹页 ⇄ 无面板</span><span class="d">刻意留白，保持纯审计</span></span>
+        </div>
+        <div class="actx">↓ 右下角浮动按钮组：<b>「🧠 思维导图」在「◆ 总监」之前</b>（顺序即你第 8 条要求）。导图是<b>全屏覆盖层</b>，不是第四个 tab</div>
+        <div class="frow" style="justify-content:center">
+          <span class="nod o" style="min-width:340px"><span class="t">导图态（覆盖层 · 可从任意页进入）</span><span class="d">全分支血缘树 + 节点操作 + 底部「待总监路由」输入条</span></span>
+        </div>
+      </div>
+
+      <h4>可达关系矩阵</h4>
+      <table>
+        <thead><tr><th style="width:132px">从</th><th style="width:150px">到</th><th style="width:118px">触发方式</th><th>回退路径（必须有）</th></tr></thead>
+        <tbody>
+          <tr><td>总监页</td><td>对话页</td><td class="mid"><b>Alt+2</b> / 点 tab</td><td class="ok">Alt+1 回总监页；焦点回上次停留控件</td></tr>
+          <tr><td>总监页</td><td>轨迹页</td><td class="mid"><b>Alt+3</b></td><td class="ok">Alt+1 回</td></tr>
+          <tr><td>对话页</td><td>总监页</td><td class="mid"><b>Alt+1</b></td><td class="ok">Alt+2 回；弹窗展开态<b>跨页签保活</b></td></tr>
+          <tr><td>任意页</td><td>本页弹窗展开/缩起</td><td class="mid"><b>Alt+\</b></td><td class="ok">再按一次回到上一子态（关闭→缩起→展开 三态记忆）</td></tr>
+          <tr><td>任意页</td><td>导图态</td><td class="mid"><b>Alt+M</b> / 浮动按钮</td><td class="ok"><b>Esc</b> 退导图，回到进入前的页与弹窗态（快照恢复）</td></tr>
+          <tr><td>导图态</td><td>选定分支所在页</td><td class="mid">双击节点</td><td class="ok">导图<b>不关闭</b>，在其上层预览；Esc 逐层退</td></tr>
+          <tr><td>任意态</td><td>确认卡 / 右键菜单</td><td class="mid">点击触发</td><td class="ok"><b>Esc</b> 只关浮出物、<b>不关弹窗、不切页</b></td></tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <b>键盘契约（一处集中裁决，避免与前稿冲突）</b>：<code>Alt+1/2/3</code> = 切三页签（<b>本稿新增，回收自 V14.1 的弹窗折叠键位</b>）；
+        <code>Alt+\</code> = 折叠当前页弹窗；<code>Alt+M</code> = 进出导图；<code>Esc</code> = 只退最上层浮出物。<br>
+        <b style="color:var(--warn2)">V14.1 曾把 <code>Alt+1/2/3</code> 定义成"弹窗三态" —— <b>该语义在本稿显式作废</b>，因为三页签刚需更硬（页签是主结构，弹窗是页内组件）。作废记录留在 V15.1 视图 14。</b>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" id="c2">
+    <header><span class="no p">C2</span><h3>分支生命周期状态机 —— 一分支从生到死的六跳</h3><span class="tag">每跳都落库；结束必回结；回结必过审核</span></header>
+    <div class="bd">
+      <div class="frow" style="justify-content:center;gap:4px">
+        <span class="nod" style="min-width:112px"><span class="t">S0 待命</span><span class="d">总监已派单</span></span>
+        <span class="ar">→</span>
+        <span class="nod p" style="min-width:124px"><span class="t">S1 新建分支</span><span class="d">fork() 复制上下文</span></span>
+        <span class="ar">→</span>
+        <span class="nod a" style="min-width:112px"><span class="t">S2 执行中</span><span class="d">可插话 / 可中止</span></span>
+        <span class="ar">→</span>
+        <span class="nod t" style="min-width:124px"><span class="t">S3 结束回结</span><span class="d">自动回传总监</span></span>
+        <span class="ar">→</span>
+        <span class="nod w" style="min-width:124px"><span class="t">S4 六维审核</span><span class="d">总监给判定</span></span>
+        <span class="ar">→</span>
+        <span class="nod o" style="min-width:150px"><span class="t">S5 三选一</span><span class="d">继续 / 再分支 / 归档</span></span>
+      </div>
+
+      <div class="frow" style="justify-content:center;margin-top:14px;gap:8px">
+        <span class="ch p">S5 → S2 继续推进（同一分支，追加指令）</span>
+        <span class="ch a">S5 → S1 再开分支（成为本分支的 child）</span>
+        <span class="ch o">S5 → S6 归档收口（从活跃树摘除，留痕）</span>
+        <span class="ch" style="border-color:var(--errbd);color:var(--err2)">任意态 → SX 中止（中止也回结，不留黑洞）</span>
+      </div>
+
+      <div style="height:10px"></div>
+      <div class="tree">
+<span class="mut">父会话</span> 4f3a…c1
+├─ <b>分支A</b> 「总监：拆技能表」      <i>[S6 归档]</i>
+│   ├─ <b>分支A-1</b> 「补 12 条反模式」   <i>[S2 执行中]</i>
+│   └─ <b>分支A-2</b> 「并回文档 11 稿」   <i>[S3 回结中]</i>
+└─ <b>分支B</b> 「总监：校验闸门」       <i>[S4 审核中]</i>
+    └─ <b>分支B-1</b> 「补自检坏样本」      <i>[S1 已建]</i>
+      </div>
+      <div class="note" style="margin-top:10px;margin-bottom:0">
+        <b>血缘不是新造的</b> —— 宿主 <code>dsh-session/lib/index.js</code> 在 fork 时已写入 <code>meta.parentSession</code> 与 <code>seedLength</code>；
+        <code>dsh-client-runtime/lib/client.js</code> 已把 <code>parentSessionId</code> 暴露给前端，并已有 <code>flattenLineage()</code> 建 children 映射 + <code>depth</code> 缩进（含环检测）。
+        所以上面的树是<b>消费既有数据</b>，不是新建模型。标题递增也已由 <code>increasedForkTitle()</code> 提供（支持全角括号）。
+      </div>
+
+      <h4>每跳的留痕字段</h4>
+      <table>
+        <thead><tr><th style="width:74px">跳</th><th style="width:176px">写入</th><th style="width:206px">落到哪</th><th>不可省的理由</th></tr></thead>
+        <tbody>
+          <tr><td class="mid"><b>S1</b></td><td><code>parentSession</code> / <code>seedLength</code></td><td>宿主 session meta</td><td class="ok">导图连线的唯一依据；没它树就断</td></tr>
+          <tr><td class="mid"><b>S1</b></td><td><code>directorTask</code>（派单原文）</td><td><code>dsh.director.store.*</code></td><td class="ok">审核时要知道"当初让它干什么"</td></tr>
+          <tr><td class="mid"><b>S2</b></td><td>插话与工具调用流水</td><td>宿主会话流（只读复用）</td><td>不另存，避免双真相源</td></tr>
+          <tr><td class="mid"><b>S3</b></td><td><code>resultDigest</code>（回结摘要）</td><td>总监 store</td><td class="ok">总监页「回结卡」的数据源</td></tr>
+          <tr><td class="mid"><b>S4</b></td><td><code>directorDecisions[]</code>（六维判定）</td><td>总监 store</td><td class="ok">决策可追溯 ⇒ 纠偏有据</td></tr>
+          <tr><td class="mid"><b>S5/6</b></td><td>流转动作 + 时间戳</td><td>总监 store</td><td class="ok">否则"为什么停了"无从回答</td></tr>
+          <tr><td class="mid"><b>SX</b></td><td>中止原因</td><td>总监 store</td><td class="ok">中止也回结，不留黑洞</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec" id="c3">
+    <header><span class="no t">C3</span><h3>消息投递时序 —— 两个方向，两套独立 store</h3><span class="tag">核心不变量：总监域数据不寄生在对话会话里</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>为什么必须双向分开画：</b>总监域（<code>dsh.director.store.*</code> / DB <code>dsh-director-db</code>）与宿主会话流是<b>两套物理独立的存储</b>。
+        「总监 → 对话」是<b>显式投递</b>（要选目标、要确认）；「对话 → 总监」是<b>自动回结</b>（轮次一结束就发生，不用人点）。
+        两者<b>不是同一条通道的正反方向</b> —— 若按同一通道实现，删对话会连着删总监记录。
+      </div>
+
+      <h4>方向一 · 总监 → 对话（显式投递 · 要选目标）</h4>
+      <div class="seqwrap">
+        <div class="seq"><span class="lbl">① 总监页 R4/R5</span><span class="ln"><span class="mk" style="left:2%"></span><span class="txt">选中分支节点 → 点「投递给该对话」</span></span><span class="lbl">人在操作</span></div>
+        <div class="seq"><span class="lbl">② 总监 store</span><span class="ln"><span class="mk" style="left:22%"></span><span class="txt">写 outbox 一条：{目标分支, 指令原文, 时间戳}</span></span><span class="lbl">落库先于发送</span></div>
+        <div class="seq"><span class="lbl">③ 对话弹窗</span><span class="ln"><span class="mk" style="left:42%"></span><span class="txt">读 outbox → 渲染为带「目标徽章」的气泡（来源可辨）</span></span><span class="lbl">只读消费</span></div>
+        <div class="seq"><span class="lbl">④ 你确认</span><span class="ln"><span class="mk" style="left:60%"></span><span class="txt">非破坏性且目标唯一 ⇒ 免确认；破坏性或目标多义 ⇒ 出确认卡</span></span><span class="lbl">闸门在此</span></div>
+        <div class="seq"><span class="lbl">⑤ 宿主会话</span><span class="ln"><span class="mk" style="left:80%"></span><span class="txt">调宿主发送接口 → 该分支进入 S2 执行中</span></span><span class="lbl">唯一写入口</span></div>
+        <div class="seq ret"><span class="lbl">⑥ 回结</span><span class="ln"><span class="mk" style="left:96%"></span><span class="txt">轮次结束 → 触发方向二第 1 步</span></span><span class="lbl">闭环起点</span></div>
+      </div>
+
+      <h4>方向二 · 对话 → 总监（自动回结 · 不用人点）</h4>
+      <div class="seqwrap">
+        <div class="seq"><span class="lbl">① 宿主事件</span><span class="ln"><span class="mk" style="left:2%"></span><span class="txt">轮次结束 / 中止 / 报错 —— 三类都算"结束"</span></span><span class="lbl">事件源</span></div>
+        <div class="seq"><span class="lbl">② 摘取</span><span class="ln"><span class="mk" style="left:24%"></span><span class="txt">生成 resultDigest：改了哪些文件 + 校验结果 + 未解问题 + 下一步</span></span><span class="lbl">只摘不搬</span></div>
+        <div class="seq"><span class="lbl">③ 总监 store</span><span class="ln"><span class="mk" style="left:46%"></span><span class="txt">写 inbox 一条 → 总监页「回结卡」置「待审」并亮未读点</span></span><span class="lbl">落库</span></div>
+        <div class="seq"><span class="lbl">④ 六维审核</span><span class="ln"><span class="mk" style="left:66%"></span><span class="txt">质量 / 一致 / 风险 / 交付 / 范围 / 留痕 → directorDecisions[]</span></span><span class="lbl">人机共审</span></div>
+        <div class="seq"><span class="lbl">⑤ 三选一</span><span class="ln"><span class="mk" style="left:86%"></span><span class="txt">继续推进 / 再开分支 / 收口归档</span></span><span class="lbl">决策</span></div>
+        <div class="seq ret"><span class="lbl">⑥ 转派</span><span class="ln"><span class="mk" style="left:96%"></span><span class="txt">若选"继续"或"再开分支" ⇒ 回到方向一第 1 步</span></span><span class="lbl">闭环成形</span></div>
+      </div>
+
+      <table>
+        <thead><tr><th style="width:150px">对比项</th><th style="width:230px">方向一（总监 → 对话）</th><th style="width:230px">方向二（对话 → 总监）</th><th>为什么不能合一</th></tr></thead>
+        <tbody>
+          <tr><td>触发者</td><td>人点（显式）</td><td>宿主事件（自动）</td><td class="ok">自动流不该带确认卡，否则每轮都弹一次</td></tr>
+          <tr><td>数据载体</td><td>outbox</td><td>inbox</td><td class="ok">合卡则「已发未读」和「已收未审」分不开</td></tr>
+          <tr><td>是否需确认</td><td class="mid">条件性（见 C4）</td><td class="mid">否</td><td class="ok">审核本身就是事后闸门，前置闸门会双重打断</td></tr>
+          <tr><td>写目标会话</td><td class="mid">是（唯一写入口）</td><td class="mid">否</td><td class="ok">总监只读对话流 ⇒ 删对话不伤总监记录</td></tr>
+          <tr><td>失败退路</td><td>投递失败 → 留在 outbox 并标红，可重发</td><td>摘取失败 → 仍写一条"空回结"占位，不静默丢</td><td class="ok">两头都不许出现"我不知道它结束了"</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec" id="c4">
+    <header><span class="no w">C4</span><h3>输入路由决策树 —— 四个输入框，各归各的</h3><span class="tag">同样的文字，在哪个框里打，去向必须唯一</span></header>
+    <div class="bd">
+      <div class="frow" style="gap:8px;margin-bottom:12px">
+        <span class="ch p">① 总监页 R8 输入条</span>
+        <span class="ch a">② 总监页 · 对话弹窗输入</span>
+        <span class="ch t">③ 对话页 · 总监弹窗输入</span>
+        <span class="ch o">④ 导图态 · 待总监路由输入</span>
+      </div>
+
+      <div class="tree">
+所输入文字
+├─ <b>①</b> 在 <u>总监页 R8</u> → 进<b>总监自有会话</b>（director-main），<i>不碰任何子对话</i>
+│      └─ 双向联动 L8：可@某分支把指令放上待投递栏，等你在 R4 点「投递」
+├─ <b>②</b> 在 <u>总监页 · 对话弹窗</u> → 直接给<b>该弹窗当前绑定的分支</b>
+│      ├─ 已绑定分支 ⇒ 免确认直投（目标已在弹窗标题栏显式标出）
+│      └─ 未绑定分支 ⇒ 输入条置灰 + 提示「先在 R4 选一个分支」
+├─ <b>③</b> 在 <u>对话页 · 总监弹窗</u> → 进<b>总监自有会话</b>，并自动附带当前对话 id 作为上下文引用
+│      └─ 总监答复后可一键「转派给当前对话」⇒ 落入方向一流程
+└─ <b>④</b> 在 <u>导图底部</u> → <b>目标未定</b> ⇒ 交总监路由
+       ├─ 意图理解 → 在分支树上匹配
+       ├─ 命中<b>唯一</b>分支 ⇒ 直投（气泡带「总监路由」徽章）
+       ├─ 命中<b>多个</b>分支 ⇒ 出确认卡让你点选（不允许总监替你猜）
+       └─ 命中<b>零</b>个 ⇒ 提示"新建分支"，预填本句为 initialPrompt
+      </div>
+
+      <h4>免确认 / 必确认 的判据（唯一裁决处）</h4>
+      <table>
+        <thead><tr><th style="width:190px">情形</th><th style="width:110px">是否出确认卡</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>目标唯一 + 只读动作</td><td class="pos">免确认</td><td class="ok">高频操作，每次弹卡会把人磨死</td></tr>
+          <tr><td>目标唯一 + 写动作（投递指令）</td><td class="pos">免确认</td><td class="ok">目标已在标题栏可见 ⇒ 已构成显式意图</td></tr>
+          <tr><td>目标多义（路由命中多个）</td><td class="neg">必确认</td><td class="ok">猜错 = 指令打到错分支，代价高且难察觉</td></tr>
+          <tr><td>破坏性动作（删分支 / 归档 / 中止）</td><td class="neg">必确认</td><td class="ok">不可逆；且删除是"从活跃树摘除"，需二次确认</td></tr>
+          <tr><td>跨域动作（合并回父）</td><td class="neg">必确认 + 标"建议项"</td><td class="ok">属非你提出的能力，必须显式点两次</td></tr>
+        </tbody>
+      </table>
+      <div class="note" style="margin-top:10px">
+        <b>与 V15.1 视图 14 的一致性</b>：那份规格总表列了四输入框与切 tab 存续、键盘路径、未读规则、可访问性八条。
+        本节的增量是<b>把"去向"写成一条可判定的决策链</b>（之前只写了"各归各的"，没写多义/零命中怎么落）。缺的那两支正是最容易出错的两支。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" id="c5">
+    <header><span class="no o">C5</span><h3>总监治理闭环 —— 五步一转，加上一条纠偏回路</h3><span class="tag">总监不是聊天窗，是调度器</span></header>
+    <div class="bd">
+      <div class="frow" style="justify-content:center;gap:5px">
+        <span class="nod a" style="min-width:120px"><span class="t">1 意图理解</span><span class="d">读输入 + 读全局状态</span></span>
+        <span class="ar">→</span>
+        <span class="nod a" style="min-width:118px"><span class="t">2 匹配分支</span><span class="d">对血缘树做匹配</span></span>
+        <span class="ar">→</span>
+        <span class="nod p" style="min-width:118px"><span class="t">3 拆分任务</span><span class="d">跨分支则拆子任务</span></span>
+        <span class="ar">→</span>
+        <span class="nod p" style="min-width:118px"><span class="t">4 决策</span><span class="d">直调 / 转派 / 新建</span></span>
+        <span class="ar">→</span>
+        <span class="nod t" style="min-width:118px"><span class="t">5 执行+回结</span><span class="d">落库并等待</span></span>
+        <span class="ar" style="color:var(--pur2)">↻</span>
+      </div>
+      <div class="actx" style="margin-top:12px">第 5 步的回结触发第 1 步重新读取状态 ⇒ <b>闭环</b>。这就是"总监对对话的控制非常频繁"在机制上的落点：<b>每次结束都自动回到总监</b>，不需要人去催。</div>
+
+      <h4>五步的输入 / 规则 / 输出 / 退路</h4>
+      <table>
+        <thead><tr><th style="width:96px">步</th><th style="width:196px">输入</th><th style="width:220px">判定规则</th><th>失败退路</th></tr></thead>
+        <tbody>
+          <tr><td class="mid"><b>1 意图理解</b></td><td>输入原文 + 分支树快照 + 各分支末次回结</td><td>提取目标名词，判"是问事还是派活"</td><td class="mid">判不出 ⇒ 直说"没听懂，请补充"，<b>不瞎猜</b></td></tr>
+          <tr><td class="mid"><b>2 匹配分支</b></td><td>目标名词 vs 分支标题 / 派单原文</td><td>命中 1 / 多 / 0 三档（对应 C4 三支）</td><td class="ok">多命中必确认；零命中建议新建</td></tr>
+          <tr><td class="mid"><b>3 拆分任务</b></td><td>任务是否跨多个分支</td><td>跨则拆子任务并各带 lock zone</td><td class="mid">拆不开就整单给一个分支，并标"未拆分"</td></tr>
+          <tr><td class="mid"><b>4 决策</b></td><td>匹配结果 + 任务形态</td><td>直调本域 / 转派既有分支 / 新建分支</td><td class="no">破坏性动作必过确认卡</td></tr>
+          <tr><td class="mid"><b>5 执行+回结</b></td><td>决策 + 目标分支</td><td>投递（方向一）⇒ 等回结（方向二）</td><td class="ok">投递失败留 outbox 标红可重发</td></tr>
+        </tbody>
+      </table>
+
+      <h4>纠偏回路（六维审核判不定时走这条）</h4>
+      <div class="frow" style="gap:7px">
+        <span class="nod w" style="min-width:128px"><span class="t">S4 六维判不定</span><span class="d">证据不足 / 结论矛盾</span></span>
+        <span class="ar">→</span>
+        <span class="nod a" style="min-width:150px"><span class="t">打回重做</span><span class="d">附纠偏指令，回 S2</span></span>
+        <span class="ar" style="font-size:11px">或</span>
+        <span class="nod e" style="min-width:150px"><span class="t">升级给人</span><span class="d">总监停止自决，等你裁</span></span>
+      </div>
+      <div class="note" style="margin-top:12px;margin-bottom:0">
+        <b>关键的克制</b>：总监在证据不足时<b>不许自决</b>（不许"看起来差不多就放行"）。
+        这条直接来自前几轮的实际教训 —— 画面自相矛盾却一路放行到交付。判不定时必须显式打回或升级，两条路都要留痕。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================== -->
+<div class="blk">
+  <div class="bh"><span class="k" style="background:#2b2e35;color:var(--fg2)">收尾</span><h2>三件交付物怎么用 · 以及本稿还没做的</h2></div>
+
+  <div class="sec">
+    <header><span class="no">R1</span><h3>对照使用说明</h3><span class="tag">先看设计图，再看需求图，最后看交互逻辑</span></header>
+    <div class="bd">
+      <table>
+        <thead><tr><th style="width:110px">你在问什么</th><th style="width:126px">看哪一块</th><th>它回答的问题</th></tr></thead>
+        <tbody>
+          <tr><td class="mid"><b>"长什么样"</b></td><td>板块 A · 设计图</td><td>真控件、真尺寸、真文案。可据此直接比对实现，不用再猜虚线框是什么</td></tr>
+          <tr><td class="mid"><b>"我提的 17 条落在哪"</b></td><td>板块 B · 需求图</td><td>每条需求 → 界面上具体哪个控件；没有落点 = 我没设计</td></tr>
+          <tr><td class="mid"><b>"点一下会发生什么"</b></td><td>板块 C · 交互逻辑</td><td>三页签怎么切、分支怎么生到死、消息往哪流、四个输入框各归各的</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no t">R2</span><h3>本稿还没做的（不藏）</h3><span class="tag">清单在前，逐项可追</span></header>
+    <div class="bd">
+      <table>
+        <thead><tr><th style="width:170px">事项</th><th style="width:96px">状态</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>#11 设计图标注模式并入本稿</td><td class="mid">未并入</td><td>已画在 V15.1 视图 13；本稿未重复画，避免两处真相源</td></tr>
+          <tr><td>V16 卫生四项校验</td><td class="mid">待跑</td><td>字号 ≥10.5 / 标签平衡 / LF 无 CRLF / 零反引号</td></tr>
+          <tr><td>台账登记 T-PLUG-017</td><td class="mid">待写</td><td>登记本稿落盘与结论；写后必须跑破表校验</td></tr>
+          <tr><td>docs/10 由"分屏"改"浮层"</td><td class="mid">待改</td><td>§4.1 / §4.4 / §4.6–4.8，并补 fork 血缘与三态</td></tr>
+          <tr><td>docs/11 §三 选型作废 + 加反模式</td><td class="mid">待改</td><td>C 方案（覆盖层 + 分屏）已作废，改记 A/B 反模式</td></tr>
+          <tr><td>split.js 由 padding 改为浮层挂载</td><td class="mid">待改</td><td>本稿所有画面都按"不占位"画，实现必须跟上</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="foot">
+    V16 · 设计图 + 需求图 + 交互逻辑 ｜ 单文件自包含 · 零外链 · 零反引号<br>
+    配套阅读：V13（结构基线 R1–R8）· V15.1（画面与交互审核 16+13 项）· V12（八视图素材）· V14.1（形态作废，三处内容已回收）<br>
+    取证来源：dsh-client-ui-conversation / dsh-client-runtime / dsh-session 宿主源码 + 真机 DOM 实测（1442 × 816，1:1.22 折算为 1180 × 644）
+  </div>
+</div>
+</div>
+</body>
+</html>
+
+
+
