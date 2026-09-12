@@ -12,6 +12,30 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DIR = resolve(HERE, "../../docs/50-信息中心");
 // 位置参数 = 版本前缀；默认 V14.1。用于反向证伪：node scripts/verify-design-doc.mjs V14 必须大面积失败
 const STEM = process.argv[2] || "V14.1";
+
+/* 🔴 目标版本自检（2026-09-13 新增 · 闸门纠错第 6 处）
+ *
+ * 现象：有人对 V16（设计图/需求图/交互逻辑）跑本脚本，报出**大面积 FAIL**，
+ *   读起来像"新稿退化了"，实际是**拿 V14.1 的正文当尺子去量另一份稿**。
+ * 原因：本脚本的判据全部是**按 V14.1 稿正文逐字写死**的（§1.1 十项 + §二 I1–I12
+ *   + §F 七条反向断言）。这种"字面量判据"只能服务它诞生的那一稿，
+ *   喂进别的稿不会有任何降级提示，只会一路 ❌。
+ * 正确做法：非 V14 族直接判 INVALID（exit 2，区别于 FAIL 的 exit 1）并指名
+ *   该稿真正的守护闸门 —— 用错尺子的结论**不可当真**，更不该写进审核报告。
+ * 来源：实测 2026-09-12（对 V16 跑出大量 FAIL，V16 的真闸门是仓库根
+ *   `scripts/verify-design-html.mjs`，同稿 5/5 TRUE）。
+ */
+const SUPPORTED_STEM = /^V14(\.\d+)?$/;
+if (!SUPPORTED_STEM.test(STEM)) {
+	console.log("[verify-design-doc] INVALID 目标版本 " + JSON.stringify(STEM));
+	console.log("  本脚本只服务 V14 族（判据按 V14.1 正文逐字写死，换稿即失义）。");
+	console.log("  想要的大概是这条（仓库根脚本，按文件路径校验，与版本无关）：");
+	console.log("    node scripts/verify-design-html.mjs \"docs/50-信息中心/" + STEM + "-…html\"");
+	console.log("  若确要按 V14.1 判据反向证伪旧稿，请显式传 V14 或 V14.1。");
+	console.log("  （按 V14.1 尺子量非 V14 稿，报出的 FAIL 属用错尺子，不是回归。）");
+	process.exit(2);
+}
+
 const STAMP = new Date().toISOString().replace(/[:.]/g, "-");
 
 let pass = 0;

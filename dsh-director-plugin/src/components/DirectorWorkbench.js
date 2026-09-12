@@ -216,8 +216,13 @@ export function DirectorWorkbench({ node }) {
 					: (0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "暂无消息。在下方输入并发送，总监将按 §1.2 五步预处理。" })
 			}),
 
-			/* 最近一次五步过程 */
-			lastSteps ? (0, react_jsx_runtime.jsxs)("div", { style: { marginBottom: 8 }, children: [
+		/* 最近一次五步过程
+		 * 🔴 `director-steps` 语义锚点（2026-09-13 补）：本区与 `director-messages`
+		 *   是**兄弟节点**，此前**没有 testid** ⇒ `cdp-click.mjs` 的「五步过程已展示」
+		 *   判据跑去 messages 容器的 innerText 里找「1. 整理语言」，**恒为 false**
+		 *   （不是产品没展示，是**尺子量错了容器**）。按项目纪律「可断言的语义区
+		 *   都要有 testid」，补上锚点，使闸门能按结构断言而不是按文案猜。 */
+		lastSteps ? (0, react_jsx_runtime.jsxs)("div", { style: { marginBottom: 8 }, "data-testid": "director-steps", children: [
 				(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "本次处理过程（§1.2 五步）" }),
 				lastSteps.map((s) => (0, react_jsx_runtime.jsxs)("div", { key: s.n, style: { ...S.muted, display: "flex", gap: 6 }, children: [
 					(0, react_jsx_runtime.jsx)("span", { style: S.badge, children: s.enabled ? s.grade : "关" }),

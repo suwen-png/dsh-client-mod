@@ -980,7 +980,7 @@ if (markFlowId) {
 		dimsOn = await ev("(()=>{const L=Array.from(document.querySelectorAll('[data-testid=\"dp-flow-item\"]'));"
 			+ "const e=L.find(x=>x.getAttribute('data-flow-id')===" + J(markFlowId) + ");"
 			+ "if(!e)return null;const out={};"
-			+ "e.querySelectorAll('[data-dim]').forEach(x=>{out[x.getAttribute('data-dim')]=x.getAttribute('data-on');});return out;})()");
+			+ "e.querySelectorAll('[data-flow-dim]').forEach(x=>{out[x.getAttribute('data-flow-dim')]=x.getAttribute('data-on');});return out;})()");
 		if (dimsOn) break;
 		await WAIT(100); d6Waited += 100;
 	}
@@ -1527,13 +1527,47 @@ check("G3", "🔴 处理链真的落库：总监消息数 +2（本条 user + 总
 
 await ev("(()=>{const b=document.querySelector('[data-testid=dp-r5-msg]');if(b)b.click();return 1;})()");
 await WAIT(420);
-const gBody = await ev("(()=>{const e=document.querySelector('[data-testid=dp-r5-body]');return e?(e.textContent||''):null;})()");
-check("G3b", "助手消息含**五步结论**（不是一句空回复）",
+/* 🔴 判据必须**只读最新一条**（2026-09-13 纠错）：
+ *   R5 的「总监消息」是**按会话持久化**的列表（`msgs.slice(-14)`），**跨运行累积**。
+ *   对**整段 innerText** 做正则 = 在问"历史上有没有出现过这几个字"，
+ *   而不是"**本次**这一轮产出对不对" —— 上一轮留下的消息会把结论同时污染成
+ *   假绿（`/1\./` 命中旧消息）与假红（命中旧的「全部职责已关闭」）两种相反的方向。
+ *   ⇒ 一律取 `[data-testid="dp-dir-msg"]` 的**最后一条**（那就是 G3 刚加的 assistant）。 */
+const gLast = await ev("(()=>{const l=document.querySelectorAll('[data-testid=dp-r5-body] [data-testid=dp-dir-msg]');"
+	+ "if(!l.length) return null; return String(l[l.length-1].textContent||'');})()");
+const gLastIsAssistant = typeof gLast === "string" && /^总/.test(gLast.trim());
+/* 🔴 G3b 的**前置**（2026-09-13 新增）——
+ *   `director-run` 的 assistant 正文 = "【总监分析】\n" + **启用步**的逐步结论（`reasoning`）。
+ *   若五步职责被**全部关闭**，`reasoning` 为空 ⇒ 正文退化成「（全部职责已关闭，原文直转）」
+ *   ⇒ G3b「不含五步结论」**必红**，但红的原因**不在消息内容**，而在"职责配置"这个前提不成立。
+ *
+ *   真实事故：`cdp-click.mjs` 的 I 段（翻转 5 个开关 → 保存本层 → 向上提交）把「五项全关」
+ *   **持久化**写进 `__global__` / `ws_*` 两级且从不还原（本脚本不重载页面 ⇒ 跨运行一直活着）
+ *   ⇒ 下次跑本脚本时 G3b 以「助手消息不含五步结论」的形态报红，读起来像**产品坏了**。
+ *   ⇒ 此处**先证明前提，再断言结果**（纪律 21 / 34），并把配置来源一并打进现场。 */
+const gDuty = await ev("(async () => { const D = window.__dshDuties; if (!D) return null;"
+	+ " const r = await D.resolve(null);"
+	+ " const on = D.KEYS.filter((k) => r.duties[k] && r.duties[k].enabled);"
+	+ " const dflt = D.DEFAULT();"
+	+ " return { on: on.length, keys: on, origin: r.origin.languagePolish,"
+	+ " defaultOn: D.KEYS.filter((k) => dflt[k] && dflt[k].enabled).length }; })()");
+const gOffAll = typeof gLast === "string" && /全部职责已关闭/.test(gLast);
+check("G3a", "🔴 前置：**最新一条** assistant 未被判为「全部职责已关闭」（职责配置是 G3b 的前提，不是它的结论）",
+	gComposerReady ? (gLastIsAssistant && !gOffAll) : "SKIP",
+	!gComposerReady
+		? "前置不成立（G0）"
+		: (typeof gLast !== "string"
+			? "取不到最新一条 dp-dir-msg"
+			: (gOffAll
+				? "最新一条出现「全部职责已关闭」⇒ 职责配置被关；查 window.__dshDuties（多半是别的脚本留下的持久状态）"
+				: "最新一条为 assistant 且非降级" + (gDuty ? "（全局启用 " + gDuty.on + "/5 · 默认 " + gDuty.defaultOn + "/5 · 来源 " + gDuty.origin + "）" : ""))));
+
+check("G3b", "**最新一条**助手消息含**五步结论**（不是一句空回复）",
 	gComposerReady
-		? (typeof gBody === "string" && /总监分析/.test(gBody) && /整理语言|1\./.test(gBody) && /自动审核产出|5\./.test(gBody))
+		? (typeof gLast === "string" && /总监分析/.test(gLast) && /整理语言/.test(gLast) && /自动审核产出/.test(gLast))
 		: "SKIP",
 	gComposerReady
-		? (typeof gBody === "string" ? gBody.slice(0, 120) : "取不到 r5 body")
+		? (typeof gLast === "string" ? gLast.slice(0, 140) : "取不到最新一条 dp-dir-msg")
 		: "前置不成立（G0）");
 
 /* 🔴 环境复原（G3b 用过的页签）：

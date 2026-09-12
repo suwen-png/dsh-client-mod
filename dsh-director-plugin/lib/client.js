@@ -6567,8 +6567,13 @@ window.__ModuleLoader__.load({
 								: (0, react_jsx_runtime.jsx)("div", { style: S.muted, children: "暂无消息。在下方输入并发送，总监将按 §1.2 五步预处理。" })
 						}),
 			
-						/* 最近一次五步过程 */
-						lastSteps ? (0, react_jsx_runtime.jsxs)("div", { style: { marginBottom: 8 }, children: [
+					/* 最近一次五步过程
+					 * 🔴 `director-steps` 语义锚点（2026-09-13 补）：本区与 `director-messages`
+					 *   是**兄弟节点**，此前**没有 testid** ⇒ `cdp-click.mjs` 的「五步过程已展示」
+					 *   判据跑去 messages 容器的 innerText 里找「1. 整理语言」，**恒为 false**
+					 *   （不是产品没展示，是**尺子量错了容器**）。按项目纪律「可断言的语义区
+					 *   都要有 testid」，补上锚点，使闸门能按结构断言而不是按文案猜。 */
+					lastSteps ? (0, react_jsx_runtime.jsxs)("div", { style: { marginBottom: 8 }, "data-testid": "director-steps", children: [
 							(0, react_jsx_runtime.jsx)("div", { style: S.label, children: "本次处理过程（§1.2 五步）" }),
 							lastSteps.map((s) => (0, react_jsx_runtime.jsxs)("div", { key: s.n, style: { ...S.muted, display: "flex", gap: 6 }, children: [
 								(0, react_jsx_runtime.jsx)("span", { style: S.badge, children: s.enabled ? s.grade : "关" }),
@@ -8338,7 +8343,7 @@ window.__ModuleLoader__.load({
 						h("button", { key: "r", style: { ...S.btnGhost, marginLeft: "auto" }, "data-testid": "d-review-run", disabled: busy, onClick: onRun }, "重跑审核")
 					]),
 					result
-						? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-dim": d.key, "data-status": d.status }, [
+						? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-review-dim": d.key, "data-status": d.status }, [
 							h("span", { key: "m", style: { color: DIM_COLOR[d.status], width: 14, flex: "0 0 14px" } }, DIM_MARK[d.status]),
 							h("span", { key: "l", style: { width: 62, flex: "0 0 62px", color: "#c3c8ce" } }, d.label),
 							h("span", { key: "n", style: { ...S.muted, flex: 1, minWidth: 0 } }, d.note)
@@ -13662,7 +13667,7 @@ window.__ModuleLoader__.load({
 				const seen = new Set(((flow && flow.trail) || []).map((t) => t.dim));
 				return h("span", { style: { display: "inline-flex", gap: 3, alignItems: "center" }, "data-testid": "nd-trail" },
 					[DIM.DIRECTOR, DIM.CHAT, DIM.MINDMAP, DIM.DESIGN].map((d, i) => h("span", {
-						key: d, "data-dim": d, "data-on": seen.has(d) ? "1" : "0",
+						key: d, "data-flow-dim": d, "data-on": seen.has(d) ? "1" : "0",
 						title: DIM_LABEL[d] + (seen.has(d) ? "：走过" : "：未走"),
 						style: {
 							fontSize: 9.5, padding: "0 4px", borderRadius: 3,
@@ -16666,7 +16671,7 @@ window.__ModuleLoader__.load({
 												h("div", { key: "t", style: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word" } }, clip(f.text, 110)),
 												h("div", { key: "m", style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 3 } }, [
 													...["director", "chat", "mindmap", "design"].map((d) => h("span", {
-														key: d, "data-dim": d, "data-on": ((f.trail || []).some((t) => t.dim === d)) ? "1" : "0",
+														key: d, "data-flow-dim": d, "data-on": ((f.trail || []).some((t) => t.dim === d)) ? "1" : "0",
 														title: DIM_LABEL[d] + (((f.trail || []).some((t) => t.dim === d)) ? "：走过" : "：未走"),
 														style: {
 															fontSize: 9.5, padding: "0 4px", borderRadius: 3,

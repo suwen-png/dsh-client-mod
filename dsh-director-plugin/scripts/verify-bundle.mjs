@@ -188,35 +188,20 @@ if (captured) {
 /* ── 4. 执行 factory（按官方 getStaticModules() 提供平台模块桩）──── */
 
 /**
- * 平台模块桩表 —— 严格对齐 `@deepseek-ai/dsh-client-web/lib/index.js` 的
- * `getStaticModules()`（第 165 行）返回的 10 项。
+ * 平台模块桩表 —— **唯一真相源**是 `_platform-modules.mjs`（2026-09-13 抽出）。
  *
- * 🔴 React 桩的**单一真相源**是 `_platform-stub-impl.mjs`（2026-09-12 修）。
- *   这里原先**另写了一份**极简 react（只有 useCallback / useSyncExternalStore /
- *   useState），与那份共享桩长期漂移，缺了 `Component`。后果极具误导性：
- *   产物里有 `class SafeLayer extends react.Component`（单层错误边界）⇒
- *   `react.Component` 为 undefined ⇒ factory 抛
- *   `Class extends value undefined is not a constructor or null` ⇒
- *   其后 44 项断言**全部级联失败**（window.__dshDirectorBatch5、__entry 导出批次 5…），
- *   报告读起来像「插件整个坏了」，真因只是**第二份桩少了一个基类**。
- *   而真机一直正常（同轮 verify-mindmap.mjs 真机 80/80 绿）。
- *   教训：桩这类测试基础设施也只能有一份，重复即漂移。
+ * 本段历史（保留，防再犯）：这里原先**另写了一份**极简 react
+ *   （只有 useCallback / useSyncExternalStore / useState），与共享桩长期漂移，
+ *   缺了 `Component`。后果极具误导性：产物里有
+ *   `class SafeLayer extends react.Component`（单层错误边界）⇒ `react.Component`
+ *   为 undefined ⇒ factory 抛 `Class extends value undefined is not a constructor or null`
+ *   ⇒ 其后 44 项断言**全部级联失败**，报告读起来像「插件整个坏了」，
+ *   真因只是**第二份桩少了一个基类**（真机一直正常）。
+ *   2026-09-12 只修了本文件一处；同日 `verify-install.mjs` 那份**内联桩**
+ *   又踩了**同一个坑** ⇒ 故抽成单文件，并加守护闸门
+ *   `lint-platform-stub.mjs`（断言「零内联 react 桩」）。
  */
-const reactStub = await import("./_platform-stub-impl.mjs");
-const platformStub = {
-	"react": reactStub,
-	"react/jsx-runtime": {
-		Fragment: reactStub.Fragment, jsx: reactStub.jsx, jsxs: reactStub.jsxs, jsxDEV: reactStub.jsxDEV
-	},
-	"react-dom": {},
-	"react-dom/client": { createRoot: reactStub.createRoot, hydrateRoot: reactStub.hydrateRoot },
-	"@deepseek-ai/cordis": {},
-	"@deepseek-ai/dsh-client-ui-slots": {},
-	"@deepseek-ai/dsh-client-web-react": {},
-	"@deepseek-ai/dsh-client-ui-primitives": {},
-	"@deepseek-ai/dsh-client-ui-attachment": {},
-	"@deepseek-ai/dsh-client-schema-form": {}
-};
+const { platformStub } = await import("./_platform-modules.mjs");
 const requireCalls = [];
 
 let exportsObj = null;

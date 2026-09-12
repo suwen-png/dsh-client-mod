@@ -108,7 +108,7 @@ function DimTrail({ flow }) {
 	const seen = new Set(((flow && flow.trail) || []).map((t) => t.dim));
 	return h("span", { style: { display: "inline-flex", gap: 3, alignItems: "center" }, "data-testid": "nd-trail" },
 		[DIM.DIRECTOR, DIM.CHAT, DIM.MINDMAP, DIM.DESIGN].map((d, i) => h("span", {
-			key: d, "data-dim": d, "data-on": seen.has(d) ? "1" : "0",
+			key: d, "data-flow-dim": d, "data-on": seen.has(d) ? "1" : "0",
 			title: DIM_LABEL[d] + (seen.has(d) ? "：走过" : "：未走"),
 			style: {
 				fontSize: 9.5, padding: "0 4px", borderRadius: 3,

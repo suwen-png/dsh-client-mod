@@ -1,11 +1,11 @@
 {
-  "sealedAt": "2026-09-12T17:12:56.405Z",
+  "sealedAt": "2026-09-12T17:50:40.106Z",
   "version": "V16",
   "title": "总监驾驶舱 · 三页签 + 设计图工作室（落死基线）",
   "policy": "指纹只锁会决定运行行为的东西（src/build/package.json/cordis.patch.yml/产物/设计图）。scripts/*.mjs 与 docs/*.md 属叙述层，不纳入。",
   "command": "node scripts/baseline-check.mjs   # 校验；--write 重新封存",
   "fileCount": 64,
-  "totalBytes": 1890602,
+  "totalBytes": 1891231,
   "files": {
     "src/bridge/chat-bridge.js": {
       "bytes": 17120,
@@ -32,8 +32,8 @@
       "md5": "6f284f414aca133bc753604284400931"
     },
     "src/components/DirectorDialog.js": {
-      "bytes": 49352,
-      "md5": "f66dfa04db0768e7d53e88ddab875c32"
+      "bytes": 49359,
+      "md5": "9c5b179780bf172598752f29da66dbdd"
     },
     "src/components/DirectorFlow.js": {
       "bytes": 9873,
@@ -44,12 +44,12 @@
       "md5": "8daa448e207440eb8b527cc17a86ade0"
     },
     "src/components/DirectorPage.js": {
-      "bytes": 56883,
-      "md5": "17eec70f3f716915dcfe989d66e27e79"
+      "bytes": 56888,
+      "md5": "b6790a40901b2fc9cecccc6c7a8b7b76"
     },
     "src/components/DirectorWorkbench.js": {
-      "bytes": 13142,
-      "md5": "4681cd1d1d9600b2297b7214cb1b8f63"
+      "bytes": 13426,
+      "md5": "3c84541f6cb5de94b65a473d8e1d83a5"
     },
     "src/components/FloatDock.js": {
       "bytes": 17531,
@@ -60,8 +60,8 @@
       "md5": "8c9c8f04b63b0d6f44e3ab39a091967f"
     },
     "src/components/NodeDetailPanel.js": {
-      "bytes": 19133,
-      "md5": "9487dd72a7c78fcde0914221b1994b17"
+      "bytes": 19138,
+      "md5": "0145e3af6e374a62288dfc80f4d93efc"
     },
     "src/components/OverviewDialog.js": {
       "bytes": 11604,
@@ -260,8 +260,8 @@
       "md5": "1a23d6fe791934c72e413924d144a01e"
     },
     "lib/client.js": {
-      "bytes": 964544,
-      "md5": "47a46b3b51034756584f78dead4451d8"
+      "bytes": 964872,
+      "md5": "05d5185f8b4e8424b5c53dfb9d5c0ccb"
     }
   }
 }

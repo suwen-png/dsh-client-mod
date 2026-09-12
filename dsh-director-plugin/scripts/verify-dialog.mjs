@@ -23,6 +23,18 @@
  *      一律**实调**并断言精确值。
  *   3) 每个断言输出可核验证据（实测值 / 命中位置），便于 CP 检查点取证。
  *
+ * 🔴 正确用法（2026-09-13 补写 —— 此前**没写用法**，直接 `node scripts/verify-dialog.mjs`
+ *   会崩在 `Cannot find package 'react'`：`src/mount.js` 以 ADR-001 把 react 声明为
+ *   平台冻结模块、本地不装 node_modules）：
+ *
+ *       node --import ./scripts/_platform-stub.mjs scripts/verify-dialog.mjs
+ *
+ * ⚠ 本脚本**不在基线闸门清单内**（历史脚本，批次 9 时代）。已知边界：
+ *   · H9/H10 一类「入口元素存在于 body」的断言在离线桩下**天然不成立**
+ *     （FloatDock 是 React 组件，桩只建 DOM 不渲染）⇒ 已改为契约断言，
+ *     真机断言在 `cdp-click-dialog.mjs` D1。
+ *   · 离线 JSON 产物与真机行为不完全等同 ⇒ 真机为准。
+ *
  * 退出码：0 = 全部通过；1 = 存在失败。
  */
 
@@ -223,19 +235,43 @@ globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
 
 /* ══════════════════════════════════════════════════════════════════
  * 2. 动态导入业务模块
+ *
+ * 🔴 自诊断（2026-09-13 加）：本块任一模块都可能（直接或间接）`import "react"`，
+ *   而 `react` 按 ADR-001 是**平台冻结模块**、本仓库不装 node_modules。
+ *   裸跑 `node scripts/verify-dialog.mjs` 会崩在 `Cannot find package 'react'`
+ *   —— 那个栈**看不出"其实只是少了 `--import`"**，本轮就有人因此白花时间，
+ *   且它算**用错用法**（INVALID）而不是**产品不合格**（FAIL）。
+ *   ⇒ 统一捕获并**打印正确命令 + exit 2**（与本仓库 exit 码约定一致：2 = INVALID）。
+ *   ⚠ 导入**顺序保持原样**（`mount.js` 有副作用，不许提前）。
  * ══════════════════════════════════════════════════════════════════ */
-const PDB = await import("../src/store/plugin-db.js");
-const LAYOUT = await import("../src/store/layout.js");
-const HASH = await import("../src/store/hash.js").catch(() => null); // 若不存在则忽略
-const HIER = await import("../src/store/hierarchy.js");
-const IDB = await import("../src/store/idb.js");
-const SPLIT = await import("../src/bridge/split.js");
-const CHAT = await import("../src/bridge/chat-bridge.js");
-const NAV = await import("../src/bridge/nav-hook.js");
-const ROUTE = await import("../src/logic/routing.js");
-const MOUNT = await import("../src/mount.js");
-const DIALOG = await import("../src/components/DirectorDialog.js");
+let PDB, LAYOUT, HASH, HIER, IDB, SPLIT, CHAT, NAV, ROUTE, MOUNT, DIALOG;
+try {
+	PDB = await import("../src/store/plugin-db.js");
+	LAYOUT = await import("../src/store/layout.js");
+	HASH = await import("../src/store/hash.js").catch(() => null); // 若不存在则忽略
+	HIER = await import("../src/store/hierarchy.js");
+	IDB = await import("../src/store/idb.js");
+	SPLIT = await import("../src/bridge/split.js");
+	CHAT = await import("../src/bridge/chat-bridge.js");
+	NAV = await import("../src/bridge/nav-hook.js");
+	ROUTE = await import("../src/logic/routing.js");
+	MOUNT = await import("../src/mount.js");
+	DIALOG = await import("../src/components/DirectorDialog.js");
+} catch (e) {
+	const m = String((e && e.message) || e);
+	if (/Cannot find package '(react|react-dom|react\/jsx-runtime)'/.test(m) || /ERR_MODULE_NOT_FOUND/.test(m)) {
+		console.error("[verify-dialog] INVALID 缺少**平台桩解析钩子**");
+		console.error("  `react` 按 ADR-001 是平台冻结模块，本仓库不装 node_modules ⇒ 必须带钩子运行。");
+		console.error("  正确用法：");
+		console.error("    node --import ./scripts/_platform-stub.mjs scripts/verify-dialog.mjs");
+		console.error("  （注：这与「断言失败」是两回事 —— 用错目标 ≠ 目标不合格，故 exit 2 而非 1。）");
+		process.exit(2);
+	}
+	throw e;
+}
 void HASH;
+void PDB; void LAYOUT; void HIER; void IDB; void SPLIT; void CHAT; void NAV;
+void ROUTE; void MOUNT; void DIALOG;
 
 /* ══════════════════════════════════════════════════════════════════
  * A. 数据元独立（要求 1 · docs/10 §3.4）
@@ -246,10 +282,22 @@ eq("A1 插件库名 = dsh-director-plugin-db", PDB.PLUGIN_DB_NAME, "dsh-director
 eq("A2 宿主库名 = dsh-director-db（对照）", IDB.IDB_DB_NAME, "dsh-director-db");
 ok("A3 两库不同名（物理隔离前提）", PDB.PLUGIN_DB_NAME !== IDB.IDB_DB_NAME, `${PDB.PLUGIN_DB_NAME} ≠ ${IDB.IDB_DB_NAME}`);
 ok("A4 插件库名不含宿主库名子串（改名反证）", !PDB.PLUGIN_DB_NAME.includes("dsh-director-db"), PDB.PLUGIN_DB_NAME);
-eq("A5 插件库版本 = 1（不参与宿主 v3 协商）", PDB.PLUGIN_DB_VERSION, 1);
+/* 🔴 2026-09-13 闸门纠错：插件**自有库**版本随功能追加而升（v1 → v2，新增
+ *   `directorDesigns` 以支持设计图持久化）。判据的关键**不是版本号本身**，
+ *   而是「插件库**独立编号**、不参与宿主 v3 协商」——那才是"独立数据元"的
+ *   设计目的（见 docs/10 §3.4）。故改为「≥1」，宿主版本另有 A6 紧守。 */
+ok("A5 插件库独立编号（≥1 · 不参与宿主 v3 协商）", PDB.PLUGIN_DB_VERSION >= 1, "插件库 v" + PDB.PLUGIN_DB_VERSION);
 eq("A6 宿主库版本 = 3（未被改动）", IDB.IDB_VERSION, 3);
-eq("A7 插件 6 个 object store", PDB.PDB_ALL_STORES.length, 6);
-eqArr("A8 store 名清单", [...PDB.PDB_ALL_STORES], ["directorNodes", "directorConversations", "directorPlans", "directorReviews", "directorDecisions", "directorTodos"]);
+/* 🔴 2026-09-13：store 集合是**必需集 ⊆ 实有集**，不是「恰好相等」——
+ *   批次 11/12 新增 `directorDesigns` 后，旧判据（==6 / 全等数组）双双变红。
+ *   按「有契约的可扩展」重写：必需 6 项一个都不能少，新增项如实列出。 */
+const REQUIRED_STORES = ["directorNodes", "directorConversations", "directorPlans", "directorReviews", "directorDecisions", "directorTodos"];
+const missingStores = REQUIRED_STORES.filter((s) => !PDB.PDB_ALL_STORES.includes(s));
+const extraStores = PDB.PDB_ALL_STORES.filter((s) => !REQUIRED_STORES.includes(s));
+ok("A7 插件库含 " + REQUIRED_STORES.length + " 个必需 object store（允许扩展）", missingStores.length === 0,
+	"实有 " + PDB.PDB_ALL_STORES.length + " 个" + (extraStores.length ? " · 新增: " + extraStores.join(",") : ""));
+ok("A8 必需 store 名逐项一致（新增项不破坏契约）", missingStores.length === 0,
+	missingStores.length ? "缺: " + missingStores.join(",") : PDB.PDB_ALL_STORES.join(","));
 const overlap = PDB.PDB_ALL_STORES.filter((s) => IDB.IDB_ALL_STORES.includes(s));
 eqArr("A9 与宿主 6 store 零重叠（不共用数据）", overlap, []);
 eqArr("A10 宿主 store 清单（对照）", [...IDB.IDB_ALL_STORES], ["directorStores", "directorDocs", "directorFolders", "memoryCore", "memoryDecisions", "memoryRisks"]);
@@ -350,7 +398,11 @@ const ap = SPLIT.applySplit({ paddingLeft: 100, collapsed: null });
 ok("C12 applySplit 注入成功", ap.ok === true && ap.paddingLeft === 100, JSON.stringify({ ok: ap.ok, paddingLeft: ap.paddingLeft }));
 ok("C13 应用根被打上 ROOT_ATTR", root.getAttribute(SPLIT.ROOT_ATTR) === "1", root.getAttribute(SPLIT.ROOT_ATTR));
 ok("C14 🔴 零节点移动：原生节点的 style 属性零改动", Object.keys(root.style).length === 0 && Object.keys(viewArea.style).length === 0, `root.style keys=${Object.keys(root.style).length}`);
-ok("C15 单一样式节点挂载到 head", Boolean(document.getElementById(SPLIT.SPLIT_STYLE_ID)) && head.children.length === 1, `head.children=${head.children.length}`);
+/* 2026-09-13：head 现有两个 style 节点（分屏 + 个性化令牌），"单一"是批次 9 的旧约束。
+ *   本判据真正要防的是「分屏样式**重复注入**」（多次 applySplit 累加节点）⇒ 改为按 id 计数。 */
+const splitStyleCount = head.querySelectorAll("#" + SPLIT.SPLIT_STYLE_ID).length;
+ok("C15 分屏样式节点唯一（不重复注入）", splitStyleCount === 1,
+	"分屏样式 ×" + splitStyleCount + " · head 共 " + head.children.length + " 个 style（含个性化令牌）");
 eq("C16 样式文本 = buildSplitCss(100)", document.getElementById(SPLIT.SPLIT_STYLE_ID).textContent, SPLIT.buildSplitCss(100));
 ok("C17 isSplitActive() = true", SPLIT.isSplitActive() === true, String(SPLIT.isSplitActive()));
 const st1 = SPLIT.getSplitState();
@@ -593,18 +645,34 @@ ok("H3 DirectorDialog 为组件函数", typeof DIALOG.DirectorDialog === "functi
 eq("H4 挂载宿主 id", MOUNT.DIALOG_HOST_ID, "dsh-director-dialog-host");
 eq("H5 🔴 入口按钮 id 保持旧名（既有真机脚本依赖）", MOUNT.LAUNCHER_ID, "dsh-director-hierarchy-launcher");
 eq("H6 旧浮层宿主 id 兼容保留", MOUNT.OVERLAY_HOST_ID, "dsh-director-hierarchy-overlay");
+/* 🔴 2026-09-13 闸门纠错（第 7 处）：`makeLauncher()` **已退役** —— 批次 13 把右下角
+ *   入口统一到 FloatDock 三键（🖌 设计图 / 🧠 思维导图 / ◆ 总监），此后 mount 层
+ *   永远返回 `launcher: null`（`src/mount.js:153` 显式 return null 并打日志）。
+ *   而本段 4 条断言仍按「入口由 mountHierarchy 创建」写，后果层层放大：
+ *     ① H7 要求 `mounted.launcher` 为真 ⇒ 必红；
+ *     ② H9 要求 body 里有 LAUNCHER_ID 元素 ⇒ **离线必红**（FloatDock 是 React 组件，
+ *        离线桩只创建 DOM、不渲染组件）；
+ *     ③ H10 读 `mounted.launcher.textContent` ⇒ **null 解引用 TypeError**，
+ *        整个脚本当场崩在 600 行 —— 其后的 H10b–H12、I 段、J 段**全部丢失**。
+ *        这就是「一个过期断言能把闸门打哑」：看起来是"插件坏了"，其实是尺子过期。
+ *   处置：契约断言改为「已退役 ⇒ 显式为 null」；入口**存在性与文案**断言移交真机
+ *   （`cdp-click-dialog.mjs` D1，已按语义判据断言「图标 + 文案 · 非解释性长句」）。 */
 const mounted = MOUNT.mountHierarchy({ withLauncher: true, open: false, navHook: false });
-ok("H7 mountHierarchy 返回完整契约", Boolean(mounted && mounted.host && mounted.launcher && typeof mounted.unmount === "function" && typeof mounted.show === "function" && typeof mounted.hide === "function"), `keys=${mounted ? Object.keys(mounted).join(",") : "null"}`);
+ok("H7 mountHierarchy 返回完整契约（launcher 已退役 ⇒ 显式为 null）",
+	Boolean(mounted && mounted.host && mounted.launcher === null && typeof mounted.unmount === "function" && typeof mounted.show === "function" && typeof mounted.hide === "function"),
+	`keys=${mounted ? Object.keys(mounted).join(",") : "null"} · launcher=${mounted ? String(mounted.launcher) : "?"}`);
 ok("H8 宿主节点已挂载到 body", Boolean(document.getElementById(MOUNT.DIALOG_HOST_ID)), "host 就位");
-ok("H9 入口按钮已挂载到 body", Boolean(document.getElementById(MOUNT.LAUNCHER_ID)), "launcher 就位");
-ok("H10 入口按钮文本为「总监」", mounted.launcher.textContent === "总监", mounted.launcher.textContent);
+ok("H9 🔴 入口已移交 FloatDock（mount 层不再创建 LAUNCHER_ID 元素）",
+	document.getElementById(MOUNT.LAUNCHER_ID) === null,
+	"离线桩不渲染 React 组件 ⇒ 此处本就无元素；真机由 FloatDock 提供（真机断言见 cdp-click-dialog D1）");
 /* 🔴 E-SPLIT-001 行为级反证：插件 UI 已挂载后，findChatRoot 仍必须返回宿主应用根。
  *   真机踩中：① 步扫全页 <button> 时命中插件标题栏 1 字按钮（真机 ⇤ y=8/w=24）
  *   ⇒ findChatRoot 返回插件面板 ⇒ 分屏把 padding 加到插件自己头上。 */
 const hostEl = document.getElementById(MOUNT.DIALOG_HOST_ID);
 const launcherEl = document.getElementById(MOUNT.LAUNCHER_ID);
-ok("H10b 🔴 isPluginNode 判定插件 UI 为「插件节点」", SPLIT.isPluginNode(hostEl) === true && SPLIT.isPluginNode(launcherEl) === true,
-	`host=${SPLIT.isPluginNode(hostEl)} launcher=${SPLIT.isPluginNode(launcherEl)}`);
+ok("H10b 🔴 isPluginNode 判定插件 UI 为「插件节点」",
+	SPLIT.isPluginNode(hostEl) === true && (launcherEl === null || SPLIT.isPluginNode(launcherEl) === true),
+	`host=${SPLIT.isPluginNode(hostEl)} launcher=${launcherEl === null ? "(离线未渲染 · FloatDock 提供)" : SPLIT.isPluginNode(launcherEl)}`);
 ok("H10c 🔴 宿主应用根**不**被判为插件节点（反向对照，防误杀）", SPLIT.isPluginNode(root) === false, "root=false");
 ok("H10d 🔴 插件 UI 挂载后 findChatRoot 仍返回宿主应用根（E-SPLIT-001 反证）",
 	SPLIT.findChatRoot() === root, `found=${SPLIT.findChatRoot() === root ? "root ✓" : "非 root ✗"}`);

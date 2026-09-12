@@ -223,7 +223,14 @@ const d1a = await evalExpr(`(() => {
 		editorPh: ed ? ed.placeholder : null
 	};
 })()`);
-ok("入口按钮存在且文案为「总监」", d1a.launcher && d1a.text === "总监", "文案「" + d1a.text + "」");
+/* 🔴 2026-09-13 纠错：入口是**图标 + 文案**两段（`◆` + `总监`），同组另两颗
+ *   （`🖌 设计图` / `🧠 思维导图`）同构 —— 这是浮动组的既定风格（图标用于辨识），
+ *   不是"命名不规范"。原判据要求纯文案 `=== "总监"` ⇒ 假红（文案整治的 D 组
+ *   表格针对的是 R8 里的路由键 `dp-route-director`，**不覆盖浮动入口**）。
+ *   改为语义判据：含「总监」且短（≤6 字，防回潮成解释性长句）。 */
+ok("入口按钮存在（图标 + 文案「总监」· 非解释性长句）",
+	d1a.launcher && /总监/.test(String(d1a.text)) && String(d1a.text).length <= 6,
+	"文案「" + d1a.text + "」");
 ok("初始态：弹窗关闭且无分屏样式", d1a.dlgClosed && d1a.splitBefore === false);
 /* 🔴 E-SPLIT-001 / E-SPLIT-002 的回归护栏：锚点必须落在**宿主**节点上 */
 ok("🔴 findChatRoot 命中宿主节点（非插件自身 / 非侧栏）", d1a.rootFound === true && d1a.rootPluginOwned === false,
@@ -493,16 +500,24 @@ ok("确认后确认卡关闭并给出反馈", d6d.cardGone === true, "toast=「"
  * ══════════════════════════════════════════════════════════════ */
 console.log("\n[D7] 六维审核（要求 3 · 17号文 §1A.9 不得减项）");
 await waitIdle();
+/* 🔴 选择器精确化（2026-09-13 纠错）：原先扫 [data-dim]，而该属性被**两个语义**
+ *   共用 —— 审核维度（本段）与**四维流转徽标**（DirectorPage / NodeDetailPanel）
+ *   ⇒ 实测扫到 **10 个**元素，于是同一根因连爆 3 条红（「不得减项」/「key 不一致」/
+ *   「每维有 status」，其中流转徽标没有 data-status ⇒ 4 个 null）。
+ *   不是产品坏了，是**属性命名空间撞车 + 选择器过宽**。
+ *   产品侧已拆分为 data-review-dim（审核）与 data-flow-dim（流转），语义唯一。
+ * ⚠ 本注释**写在模板字符串之外**：模板内注释禁止反引号（K1 离线断言会拦，
+ *   本行最初就是写在模板内且带了反引号 ⇒ lint-cdp-templates 当场红）。 */
 const d7 = await evalExpr(`(async () => {
 	const btn = window.__tid('d-review-run');
 	if (!btn) return { found:false };
 	window.__click(btn);
 	await new Promise(r => setTimeout(r, 1200));
-	const dims = window.__qa('[data-dim]').map(e => ({ k: e.getAttribute('data-dim'), s: e.getAttribute('data-status') }));
+	const dims = window.__qa('[data-review-dim]').map(e => ({ k: e.getAttribute('data-review-dim'), s: e.getAttribute('data-status') }));
 	return { found:true, dims, summary: (window.__tid('d-review-summary')||{}).textContent || '', btnDisabled: btn.disabled };
 })()`);
 ok("重跑审核按钮存在且可点", d7.found && d7.btnDisabled === false);
-ok("🔴 回读：六维逐维渲染（不得减项）", d7.dims.length === 6, d7.dims.map((d) => d.k).join(","));
+ok("🔴 回读：六维逐维渲染（不得减项 · 恰好 6 条）", d7.dims.length === 6, d7.dims.map((d) => d.k).join(","));
 ok("六维 key 与 17号文 §1A.9 一致", JSON.stringify(d7.dims.map((d) => d.k)) === JSON.stringify(["requirement", "conformance", "quality", "risk", "completeness", "consistency"]), JSON.stringify(d7.dims.map((d) => d.k)));
 ok("每维有明确 status（ok/warn/bad 三态可辨）", d7.dims.every((d) => ["ok", "warn", "bad"].includes(d.s)), d7.dims.map((d) => d.k + ":" + d.s).join(" "));
 ok("summary 给出六维结论 + 通过/打回", /六维：/.test(d7.summary) && /⇒/.test(d7.summary), d7.summary.slice(0, 74));
@@ -753,7 +768,13 @@ const d14 = await evalExpr(`(async () => {
 		 * ⚠ 只能限定在**插件自己的命名空间**（dsh.director.* / dsh_director_ / dsh-v9-theme）：
 		 *    宿主自身的 dsh.sessions.* / dsh.conversation.* / dsh.workspace.* 不属本插件管辖。 */
 		strayDshKeys: keys.filter(k => /^(dsh\.director|dsh_director_|dsh-v9-theme)/.test(k))
-			.filter(k => !/^dsh\.director\.(store\..+|layout|config)$|^dsh-v9-theme$/.test(k)),
+			/* 🔴 白名单补登（2026-09-13）：批次 11/12 新增三个持久化键
+			 *   dsh.director.design / .personalize / .flow。R5 冻结的是
+			 *   **既有键不得改名/删除**（下一行 forbidden 专测改名变体），
+			 *   **新增是允许的**；本判据的正确形态是「无越界命名空间」，
+			 *   故把已登记的新键纳入白名单，而不是把「新增」当违规。
+			 * ⚠ 本块在模板字符串内，注释禁止反引号（K1 离线断言会拦）。 */
+			.filter(k => !/^dsh\.director\.(store\..+|layout|config|design|personalize|flow)$|^dsh-v9-theme$/.test(k)),
 		allDshKeys: keys.filter(k => /^(dsh\.director|dsh_director_|dsh-v9-theme)/.test(k)),
 		forbidden: keys.filter(k => /dsh\\.director\\.layout\\.v\\d|dsh\\.director\\.store\\..*\\.v\\d|director-main-v\\d|dsh-director-db-v\\d/.test(k)) };
 })()`);
@@ -762,7 +783,7 @@ ok("🔴 宿主库 dsh-director-db@v3 仍在且版本未被升（R5）", d14.hos
 ok("两库并存且不同名（物理隔离）", Boolean(d14.pluginDb) && Boolean(d14.hostDb) && d14.pluginDb !== d14.hostDb, d14.dbs.join(" | "));
 ok("插件库可用（ok=true）且 6 store 计数可读", d14.pluginStats.ok === true && typeof d14.pluginStats.nodes === "number", JSON.stringify(d14.pluginStats));
 ok("R5：布局持久化 key 未改名", d14.agreeKey === true, "dsh.director.layout 在 ｜ 现有冻结键 " + d14.legacyKeys.length + "/4：" + d14.legacyKeys.join(" / "));
-ok("🔴 R5：现有 dsh* 键**全部属于冻结模式**（无新增 / 无改名）", d14.strayDshKeys.length === 0,
+ok("🔴 R5：dsh* 键**无越界命名空间**（冻结键未改名 + 新键已登记）", d14.strayDshKeys.length === 0,
 	d14.strayDshKeys.length ? "越界键：" + d14.strayDshKeys.join(",") : d14.allDshKeys.join(" / "));
 ok("🔴 反证：localStorage 无任何改名变体", d14.forbidden.length === 0, d14.forbidden.length ? d14.forbidden.join(",") : "0 个");
 
@@ -794,7 +815,11 @@ const d15 = await evalExpr(`(async () => {
 	}
 	const covered = ['d-seg-director','d-seg-levels','d-seg-agents','d-collapse-left','d-collapse-right',
 		'd-min','d-close','d-reset','d-send','d-input','d-review-run','d-level','d-split',
-		'd-route-transfer','d-route-direct','d-route-new','d-route-cancel','d-chip'];
+		'd-route-transfer','d-route-direct','d-route-new','d-route-cancel','d-chip',
+		/* 🔴 2026-09-13 补登：批次 11/12 新增的个性化按钮 —— 此前**没人点过它**
+		 *   （覆盖审计如实报出"遗留 d-personalize"）。不是把它写进 white-list 就算过，
+		 *   而是在 D15b 段**真的点开、回读面板出现、再点关闭**，然后才在此登记。 */
+		'd-personalize'];
 	/* 🔴 **委托面**：层级段内嵌的 DirectorHierarchy（h-* testid）由既有套件
 	 *    scripts/cdp-click.mjs（I4–I22）逐个点击验证 —— 本套件**不再重复点击**：
 	 *    那些交互会写职责配置、改节点名、建/删节点（有副作用），重复点击既冗余又互相污染。
@@ -822,6 +847,34 @@ ok("🔴 弹窗自有交互面 100% 被实际点击过", d15.uncoveredCount === 
 	d15.uncoveredCount ? "遗留: " + JSON.stringify(d15.uncoveredSample) : "0 个遗漏");
 ok("🔴 委托面如实披露（层级段内嵌组件的 h-* 交互由 cdp-click.mjs 覆盖）", d15.delegatedCount > 0,
 	d15.delegatedCount + " 个：" + d15.delegatedTids.join(","));
+
+/* ══════════════════════════════════════════════════════════════
+ * D15b 补覆盖：个性化按钮（批次 11/12 新增，此前**从未被点过**）
+ * ══════════════════════════════════════════════════════════════ */
+console.log("\n[D15b] 补覆盖：个性化按钮（此前覆盖审计报出「遗留 d-personalize」）");
+await evalExpr(`window.__closeDlg()`);
+await sleep(300);
+const d15b = await evalExpr(`(async () => {
+	await window.__openDlg();
+	await new Promise(r => setTimeout(r, 480));
+	const btn = window.__tid('d-personalize');
+	if (!btn) return { found:false };
+	window.__click(btn);
+	await new Promise(r => setTimeout(r, 460));
+	const panel = window.__tid('pp-panel');
+	const opened = Boolean(panel);
+	/* 回读面板的实质内容（不是只看"出现了一个 div"） */
+	const options = document.querySelectorAll('[data-testid^="pp-"][data-on]').length;
+	/* 关闭：优先点面板自带的关闭键（若没有则再点一次开关） */
+	const closeBtn = window.__tid('pp-close');
+	window.__click(closeBtn || btn);
+	await new Promise(r => setTimeout(r, 420));
+	const closed = !window.__tid('pp-panel');
+	return { found:true, opened, options, closed, inset: panel ? panel.getAttribute('data-inset') : null };
+})()`);
+ok("🔴 个性化按钮可点 → 面板出现（且带真实选项，非空壳）", d15b.found && d15b.opened && d15b.options > 0,
+	"选项 " + d15b.options + " 项 · inset=" + d15b.inset);
+ok("🔴 关闭可逆（点关闭键后面板消失 ⇒ 套件可反复运行）", d15b.closed === true, "closed=" + d15b.closed);
 
 /* ══════════════════════════════════════════════════════════════
  * D16 收尾清理（保证可反复运行）

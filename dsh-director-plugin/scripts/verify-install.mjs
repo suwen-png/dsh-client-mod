@@ -18,6 +18,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { platformStub } from "./_platform-modules.mjs";
 
 const HOME = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || "", ".dsh");
 const HOST = process.env.DSH_HOST_ANCHOR || "D:/软件安装/DeepSeek-Harness-Desktop/DeepSeek Harness/resources/host";
@@ -233,17 +234,13 @@ try {
 		const rec = loaded[0];
 		check("bundle id 正确", rec.id === PLUGIN_PKG, rec.id);
 		check("bundle factory 为函数", typeof rec.factory === "function");
-		// 平台模块桩：严格对齐官方 getStaticModules()（dsh-client-web/lib/index.js:165 的 10 项）
-		const platformStub = {
-			"react": { useCallback: () => {}, useSyncExternalStore: () => ({}) },
-			"react/jsx-runtime": {}, "react-dom": {}, "react-dom/client": {},
-			"@deepseek-ai/cordis": {},
-			"@deepseek-ai/dsh-client-ui-slots": {},
-			"@deepseek-ai/dsh-client-web-react": {},
-			"@deepseek-ai/dsh-client-ui-primitives": {},
-			"@deepseek-ai/dsh-client-ui-attachment": {},
-			"@deepseek-ai/dsh-client-schema-form": {}
-		};
+		// 平台模块桩：**唯一真相源** = `_platform-modules.mjs`（2026-09-13 抽取，顶部 import）。
+		// 🔴 本处原先**内联**了一份极简 react 桩（`{ useCallback, useSyncExternalStore }`，
+		//    缺 `Component`）⇒ 产物里的 `class SafeLayer extends react.Component` 令 factory 抛
+		//    `Class extends value undefined is not a constructor or null`，第 4 段 6 项断言
+		//    级联失败、整体判 NO，读起来像「插件坏了」，真因只是桩少一个基类。
+		//    2026-09-12 verify-bundle 已因**同一个坑**改过一次，本文件当时漏改 ⇒ 同日踩第二次。
+		//    不许再内联：`lint-platform-stub.mjs`（L2）会拦。
 		const requireCalls = [];
 		const requireStub = (name) => {
 			requireCalls.push(name);

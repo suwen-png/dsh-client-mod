@@ -14,13 +14,13 @@
 >
 > | 项 | 值 |
 > |:---|:---|
-> | 产物 | `lib/client.js` · **964,544 B** · 58 模块 · 绑定对账 **474 = 474**（185 条 import）· React 外置零打包 · `inject = ["slots","sessions"]` |
+> | 产物 | `lib/client.js` · **964,872 B** · 58 模块 · 绑定对账 **474 = 474**（185 条 import）· React 外置零打包 · `inject = ["slots","sessions"]` |
 > | 源码 | `src/**` **60 个 js · 16,838 行**，**每个文件带 `@map` 映射头** |
 > | 映射索引 | [`docs/12-源码映射索引.md`](./docs/12-源码映射索引.md)（生成器 `scripts/gen-source-map.mjs`，60 文件） |
 > | 设计稿 | [`docs/50-信息中心/V16-设计图·需求图·交互逻辑.html`](../docs/50-信息中心/V16-设计图·需求图·交互逻辑.html)（A 高保真 / B 需求图 / C 交互逻辑 / **D 设计图工作室** / **E 保存·版本·窗口安全区** / **F 思维导图元素库 18 条总账** / **G 单框控件·拖动·右侧对话·四维流转·质感与个性化**） |
 > | 本轮新增 | **批次 15** —— 总监侧输入经**五步处理真正投递到原生对话**（`data-deliver-mode` 四态 · 三通道 `host-send`/`direct`/`open-then-send` · 宿主侧第三方送达凭据 `__directChatProbe`）· **分支链路聚焦**（默认只看本分支 / 「含上一层」/ 向下游下钻）· **导图总览弹窗**（左已完成 / 右待完成 · 分文件夹 · 可点选 · 可发修正）· **右下角两颗按钮「点不中」根因修复**（提示位改常驻等高槽，消除 23px 布局漂移）· 文案与命名整治 · **闸门纠错 5 处 + 导图零跳过** · **批次 12** —— 总监页背景采用原软件的背景（六令牌桥接宿主 `--dsw-alias-*`，与原生页签**同源同值** + 正负对照）· **批次 11** —— 单框展开/折叠与可拖动 · 点框右侧展开对话（首块＝「现在在做的事」）· 四处共用的**个性化设定**面板 · **四维流转** |
-> | 基线闸门 | 静态 `TRUE`（阻塞 0 / 提示 16） · CDP 模板 `TRUE` · bundle 桩执行 **97/97** · 设计图纯函数 **49/49** · 版本层 **63/63** · 思维导图纯函数 **91/91** · 个性化+四维流转 **87/87** · 分支聚焦 **26/26** · 统筹编排 **33/33** · 设计稿卫生 **49/49** · 数据安全 **42/42** · 批次 1 **98/98** · 批次 6 **66/66** · 批次 7 **66/66** · 批次 8 **93/93** · 反证 `prove-dup-gate` 红/绿双证 · 构建 **964,544 B / 58 模块 · 474 = 474** · 指纹 `漂移=0` |
-> | 真机 | `verify-flow.mjs` **67/67 ×3 · 零跳过**（五组原话 + 总监页背景 + 浮动入口三件套 F8–F11 + **G 段真流转**）· `verify-mindmap.mjs` **100/100 ×3 · 零跳过**（本轮由 81/0/5 提升）· `verify-design-studio.mjs` **90/90 ×3（载荷逐字一致）** · `verify-register-gate.mjs` **5/5 ×3** |
+> | 基线闸门 | 静态 `TRUE`（阻塞 0 / 提示 16） · CDP 模板 `TRUE` · **平台桩唯一性 `lint-platform-stub` 9/9** · bundle 桩执行 **97/97** · 设计图纯函数 **49/49** · 版本层 **63/63** · 思维导图纯函数 **91/91** · 个性化+四维流转 **87/87** · 分支聚焦 **26/26** · 统筹编排 **33/33** · 设计稿卫生 **49/49** · 数据安全 **42/42** · 批次 1 **98/98** · 批次 6 **66/66** · 批次 7 **66/66** · 批次 8 **93/93** · **弹窗离线 `verify-dialog` 268/268** · 反证 `prove-dup-gate` 红/绿双证 · 构建 **964,872 B / 58 模块 · 474 = 474** · 指纹 `漂移=0` |
+> | 真机 | `verify-flow.mjs` **68/68 ×3 · 零跳过**（五组原话 + 总监页背景 + 浮动入口三件套 F8–F11 + **G 段真流转**）· `verify-mindmap.mjs` **100/100 ×3 · 零跳过**（本轮由 81/0/5 提升）· `verify-design-studio.mjs` **90/90 ×3（载荷逐字一致）** · `verify-register-gate.mjs` **5/5 ×3** |
 >
 > 完整命令手册见锚点文档 §二。**不要再新开版本号** —— 基线演进就地更新锚点文档 + `baseline-check.mjs --write` 重新封存。
 
@@ -110,7 +110,7 @@ dsh-director-plugin/
 │   ├── verify-data-safe.mjs  ← 数据兼容与边界安全（42 项）
 │   ├── verify-install-clean.mjs ← ★ 干净目录部署验收（双机模拟，52 项）
 │   ├── cdp-verify.mjs        ← ★ 真机运行时核查（CDP，39 项）
-│   ├── cdp-click.mjs         ← ★ 真机逐交互点击验证（66 项）
+│   ├── cdp-click.mjs         ← ★ 真机逐交互点击验证（71 项 · 含职责配置快照/复原）
 │   ├── cdp-eval.mjs          ← ★ 渲染进程任意表达式求值（调试）
 │   └── run-r3-spike.mjs      ← ★ T5 文件通道可达性探测
 ├── src/                      ← 34 个 ESM 源文件
@@ -153,14 +153,14 @@ node scripts/verify-batch8.mjs          # ⑥ 总监逻辑（职责/继承/五�
 node scripts/verify-data-safe.mjs       # ⑦ 数据兼容与边界安全（隔离反证）    42 项
 node scripts/verify-install-clean.mjs   # ⑧ 干净目录部署（双机模拟）          52 项
 node scripts/cdp-verify.mjs             # ⑨ 真机：CDP 核查渲染进程            39 项
-node scripts/cdp-click.mjs              # ＋ 真机逐交互点击验证               66 项
+node scripts/cdp-click.mjs              # ＋ 真机逐交互点击验证               71 项
 
 # 设计图 / 分支导图（2026-09-12 新增）
 node scripts/test-design-logic.mjs      # 设计图纯函数                        49 项
 node scripts/test-design-version.mjs    # 版本层纯函数                        63 项
 node scripts/test-mindmap-logic.mjs     # 思维导图纯函数（元素库 18 条自证）   69 项
 node scripts/verify-design-studio.mjs   # 真机：设计图工作室逐交互            90 项
-node scripts/verify-mindmap.mjs         # 真机：分支导图逐交互                86 项
+node scripts/verify-mindmap.mjs         # 真机：分支导图逐交互                100 项
 node scripts/baseline-check.mjs         # 基线指纹：64 文件逐字节一致
 
 # 设计稿卫生（在仓库根 D:/hermes-data/dsh-client-mod 下执行）

@@ -195,6 +195,37 @@ ok("执行逻辑面板 5 项职责开关齐全", i3b.checks === 5, "实测 " + i
 ok("三个继承操作按钮齐全", i3b.hasSave && i3b.hasSubmit && i3b.hasRestore);
 ok("对话流输入栏存在", i3b.hasInput);
 
+/* ── I0 🔴 职责配置快照（本段会**持久化写**职责，必须先留底） ──
+ *
+ * 本段 I4→I8 是一条**真实写入链**：I4 逐项翻转 5 个开关 → I6「保存本层」把当时
+ * **选中节点**的生效配置落库 → I7「向上提交」把**父节点**也写一遍 →
+ * I8「恢复继承」**只清会话节点自己那一层**。
+ *
+ * 🔴 踩过的坑（2026-09-13，真实事故）：
+ *   I6 保存时若选中的是**根节点「全局总管」**，I7 从会话向上提交又会写**工作区**级 ——
+ *   于是「五项全关」被**永久**写进 `__global__` 与 `ws_*` 两级，且**没有任何一步会还原它们**。
+ *   后果①：用户真实使用总监时五步全被跳过（正文退化成「（全部职责已关闭，原文直转）」）；
+ *   后果②：下一次跑 `verify-flow.mjs`，G3b「助手消息含五步结论」**报红** ——
+ *   读起来像产品坏了，实际是**上一轮闸门留下的持久状态**（与纪律 33「起点是否等价」同一族）。
+ *   本脚本**不重载页面**，所以这类污染会跨运行、跨脚本一直活着。
+ *
+ * 纪律依据：§八 32/33（开合型控件必须当场还原 + 断言；能**持久化**的写入更要留快照）。
+ * 做法：段前把**全树**里已有 own 配置的节点连内容一起存下，段后 ① 原样写回
+ * ② 把快照里没有、现在却有 own 的节点**清掉**（那必然是本段写脏的）③ **逐节点回读自证**。 */
+console.log("\n[I0] 职责配置快照（本段会持久化写入，先留底）");
+const dutySnap = await evalExpr(`(async () => {
+	const t = await window.__dshHierarchy.loadTree();
+	const flat = []; const walk = (n) => { flat.push(n); (n.childNodes || []).forEach(walk); };
+	walk(t);
+	const snap = [];
+	for (const n of flat) {
+		const r = await window.__dshDuties.resolve(n.id);
+		if (r.own) snap.push({ id: n.id, own: r.own });
+	}
+	return { total: flat.length, snap };
+})()`);
+console.log("  · 快照：" + dutySnap.total + " 个节点，其中 " + dutySnap.snap.length + " 个已有本层职责配置（段末会原样还原）");
+
 /* ── I4 职责开关点击 ── */
 console.log("\n[I4] 职责开关逐项点击（5 项）");
 const keys = ["languagePolish", "modelRouting", "branchSwitch", "contextFilter", "outputReview"];
@@ -310,6 +341,41 @@ if (i7.found) {
 	ok("找到会话级节点用于向上提交", false, i7.reason || "");
 }
 
+/* ── I8r 🔴 环境复原：职责配置逐节点还原（见 I0 快照里的踩坑说明） ──
+ *
+ *  没有这一步，本脚本每跑一次就把「五项全关」多写深一层 ——
+ *  既改坏用户真实配置，又让**下一个脚本**以「产品坏了」的形态报红。
+ *  ③ 是**回读自证**：还原不是"点了个按钮就算"，而是逐节点重新 resolve 后对账。 */
+console.log("\n[I8r] 环境复原：职责配置逐节点还原（本段改过的全部还原）");
+const dutyRestore = await evalExpr(`(async () => {
+	const snap = ${JSON.stringify(dutySnap.snap)};
+	const keep = new Set(snap.map((s) => s.id));
+	/* ① 快照里有的：原样写回 */
+	for (const s of snap) await window.__dshDuties.set(s.id, s.own);
+	/* ② 快照里没有、现在却有 own 的：一定是本段（I6 保存本层 / I7 向上提交）写脏的 ⇒ 清掉 */
+	const t = await window.__dshHierarchy.loadTree();
+	const flat = []; const walk = (n) => { flat.push(n); (n.childNodes || []).forEach(walk); };
+	walk(t);
+	const cleared = [];
+	for (const n of flat) {
+		if (keep.has(n.id)) continue;
+		const r = await window.__dshDuties.resolve(n.id);
+		if (r.own) { await window.__dshDuties.clear(n.id); cleared.push(n.id); }
+	}
+	/* ③ 逐节点回读自证：期望「有没有 own」与快照一致 */
+	const bad = [];
+	for (const n of flat) {
+		const r = await window.__dshDuties.resolve(n.id);
+		if (keep.has(n.id) !== Boolean(r.own)) bad.push(n.id);
+	}
+	return { restored: snap.length, cleared, bad, total: flat.length };
+})()`);
+ok("🔴 环境复原：职责配置逐节点还原（含「全局总管」与「工作区」两级 · 回读自证）",
+	dutyRestore && dutyRestore.bad.length === 0,
+	"写回 " + dutyRestore.restored + " 个 · 清除本段写脏的 " + dutyRestore.cleared.length + " 个" +
+	(dutyRestore.cleared.length ? "（" + dutyRestore.cleared.join(", ") + "）" : "") +
+	" · 对账 " + dutyRestore.total + " 节点，不一致 " + dutyRestore.bad.length);
+
 /* ── I9 总监对话流发送 ── */
 console.log("\n[I9] 总监对话流：发送消息");
 await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
@@ -317,6 +383,7 @@ const i9a = await evalExpr(`(async () => {
 	const box = window.__q('[data-testid="director-messages"]');
 	if (!box) return { found:false, reason:'消息区未渲染（总监页签是否激活？）' };
 	const before = (box.innerText||'').length;
+	const rowsBefore = box.children.length;
 	const input = window.__q('[data-testid="director-input"]');
 	if (!input) return { found:false, reason:'输入框未渲染' };
 	// React 受控输入：必须走原生 setter + input 事件，否则 React 内部 state 不同步
@@ -332,28 +399,65 @@ const i9a = await evalExpr(`(async () => {
 	await new Promise(r=>setTimeout(r,700));
 	const box1 = window.__q('[data-testid="director-messages"]');
 	const midTxt = box1 ? (box1.innerText||'') : '';
-	return { found:true, before, midLen: midTxt.length, midHasUser: /帮我把登录接口改成 JWT 鉴权/.test(midTxt) };
+	return { found:true, before, rowsBefore, midLen: midTxt.length, midHasUser: /帮我把登录接口改成 JWT 鉴权/.test(midTxt) };
 })()`);
 ok("输入框与发送按钮存在", i9a.found, i9a.reason || "");
 ok("🔴 回读：用户消息【立即上屏】（§2.3，不等执行完成）", i9a.midHasUser,
 	"点击后 700ms 内 " + i9a.before + " → " + i9a.midLen + " 字符");
 
+/* 🔴 2026-09-13 纠错：**判据必须"跑程内"，不能用页面级的"有没有这几个字"。**
+ *
+ *   本段旧写法 `done: /总监分析/.test(txt)` 只问"页面上有没有【总监分析】" ——
+ *   而**消息 store 是按 sessionId 持久化的**（本脚本不重载页面），
+ *   上一个脚本 / 上一轮留下的助手消息里**本来就有**这四个字
+ *   ⇒ 轮询**立刻**返回 ⇒ 紧接着的 I9c 在五步还没算完时就去读 `director-steps`
+ *   ⇒ `lastSteps` 还是 null ⇒ **rows = 0**，报出来像"产品没展示五步过程"。
+ *
+ *   这与 §八 纪律 33（"偶发红先查起点是否等价"）同族：**起点里混着上一轮的产物**。
+ *   正确判据（本条 user + 本条 assistant ⇒ **消息行数净增 ≥ 2**）
+ *   **且** 五步过程区已就位（`director-steps` 恰好 5 行）—— 两者都是**跑程内**证据。 */
 const i9b = await pollEval(`(() => {
 	const box = window.__q('[data-testid="director-messages"]');
 	const txt = box ? (box.innerText||'') : '';
+	const rows = box ? box.children.length : 0;
+	const steps = window.__q('[data-testid="director-steps"]');
+	const stepRows = steps ? steps.children.length - 1 : 0;
 	return {
-		done: /总监分析/.test(txt),
+		done: rows >= ${i9a.rowsBefore} + 2 && /总监分析/.test(txt) && stepRows === 5,
 		len: txt.length,
+		rows,
+		stepRows,
 		hasUser: /帮我把登录接口改成 JWT 鉴权/.test(txt),
 		hasAnalysis: /总监分析/.test(txt),
-		hasSteps: /1\\. 整理语言/.test(txt) || /5\\. 自动审核产出/.test(txt),
-		snippet: txt.slice(0,220)
+		hasSteps: stepRows === 5,
+		snippet: txt.slice(-200)
 	};
 })()`, 25000);
-ok("🔴 回读：消息已追加（文本长度增长）", i9b.len > i9a.before, i9a.before + " → " + i9b.len + " 字符");
+ok("🔴 回读：消息已追加（本条 user + 本条 assistant ⇒ 行数净增 ≥ 2）",
+	i9b.rows >= i9a.rowsBefore + 2 && i9b.len > i9a.before,
+	"行 " + i9a.rowsBefore + " → " + i9b.rows + " · 文本 " + i9a.before + " → " + i9b.len + " 字符");
 ok("消息含用户原文", i9b.hasUser);
 ok("消息含【总监分析】", i9b.hasAnalysis);
-ok("五步过程已展示", i9b.hasSteps);
+/* 🔴 2026-09-13 纠错：**尺子量错了容器**。
+ *   五步过程区（`lastSteps`）与 `director-messages` 是**兄弟节点**，
+ *   原判据（`i9b.hasSteps`）却去 messages 容器的 innerText 里找「1. 整理语言」
+ *   ⇒ **恒为 false**，读起来像「产品没展示五步」，其实产品一直展示着。
+ *   产品侧已补语义锚点 `data-testid="director-steps"`，这里改为**按结构断言**
+ *   （步骤行数 = 5），不再依赖会被文案整治改动的字符串。 */
+const i9c = await evalExpr(`(() => {
+	const box = window.__q('[data-testid="director-steps"]');
+	const msgs = window.__q('[data-testid="director-messages"]');
+	return {
+		found: Boolean(box),
+		rows: box ? box.children.length - 1 : -1,
+		txt: box ? (box.innerText||'').slice(0,240) : '',
+		msgTail: msgs ? (msgs.innerText||'').slice(-220) : ''
+	};
+})()`);
+ok("🔴 五步过程已展示（director-steps 锚点 · 恰好 5 条）", i9c.found && i9c.rows === 5,
+	"锚点" + (i9c.found ? "在场" : "缺失") + " · 步骤行 " + i9c.rows
+	+ " · 首行「" + String(i9c.txt).split("\n").filter(Boolean)[1] + "」"
+	+ " · 消息尾「" + String(i9c.msgTail).replace(/\n/g, "⏎").slice(-120) + "」");
 
 /* ── I10 自动转发 ── */
 console.log("\n[I10] 自动转发开关");
@@ -384,8 +488,13 @@ const i10b = await evalExpr(`(async () => {
 	});
 	return { steps: r.steps.length, enabled: r.steps.filter(s=>s.enabled).length, forwarded, forwardDone: r.forward.done };
 })()`);
-ok("runDirector 五步齐全", i10b.steps === 5, "5 步中启用 " + i10b.enabled + " 项（文档默认 3 项启用：整理/模型/分支）");
-ok("默认启用项数 = 3（文档 §3.1：整理语言✅调整模型✅切换分支✅）", i10b.enabled === 3);
+ok("runDirector 五步齐全", i10b.steps === 5, "5 步，启用 " + i10b.enabled + " 项");
+/* 🔴 2026-09-13 纠错（与 verify-batch8.mjs 同款过期断言）：
+ *   `duties.js` 已按 03 号文 §1.2 **五步规格**把 5 项职责全部启用（**留痕在先**），
+ *   而本行仍断言「默认启用 3 项」—— 那是「五项职责」时代的旧口径 ⇒ 假红。
+ *   上轮修 batch8 时漏改了这一处（**闸门过期族第 6 处**）⇒ 判据与 batch8 同源：
+ *   五步全启用。 */
+ok("🔴 五步全部启用（03号文 §1.2 五步规格 · 2026-09-13 纠错）", i10b.enabled === 5, "5 步中启用 " + i10b.enabled + " 项");
 ok("🔴 自动转发回调被实际触发", i10b.forwardDone === true && typeof i10b.forwarded === "string", "转发内容「" + String(i10b.forwarded).slice(0, 30) + "」");
 
 /* ── I11 树节点选择 ── */
