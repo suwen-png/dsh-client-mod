@@ -36,6 +36,11 @@ import { dshLog } from "../util/debug.js";
 
 const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 
+/** 最近一次投递的结果（供界面呈现与验证脚本读 —— 降级也要看得见走的是哪一级） */
+let lastDeliver = null;
+/** @returns {object|null} 最近一次 `deliverToChat` 的返回 */
+export function getLastDeliver() { return lastDeliver; }
+
 /** 发送按钮的语义锚点（实测值，勿改成类名） */
 export const SEND_ARIA = "发送消息";
 /** composer 编辑器占位文案（实测值；命中不到时退回"任意可见 textarea"） */
@@ -47,9 +52,23 @@ function isVisible(el) {
 	return r.width > 0 && r.height > 0;
 }
 
+/**
+ * 宿主是否正在生成回答。
+ *
+ * 判据：出现 `button[aria-label="停止生成"]`（宿主把「发送」换成「停止」的那个按钮）。
+ * ⚠️ 为什么要单独判它：**生成中宿主会把 composer 隐藏**
+ *   （真机实测：`textarea[placeholder=…]` 仍在 DOM，但外层 `display:none` ⇒ 盒为 0×0，
+ *    `findComposer()` 自然返回 null）。此时若只说「先打开对话区」会误导用户
+ *    —— 框不是没打开，是宿主在生成中暂时收起来了。
+ * @returns {boolean}
+ */
+export function isAgentGenerating() {
+	if (!hasDom()) return false;
+	return Boolean(document.querySelector('button[aria-label="停止生成"]'));
+}
+
 /** 找到 composer 编辑器 */
-export function findComposer() {
-	if (!hasDom()) return null;
+export function findComposer() {	if (!hasDom()) return null;
 	const byPh = document.querySelector('textarea[placeholder="' + COMPOSER_PLACEHOLDER + '"]');
 	if (byPh && isVisible(byPh)) return byPh;
 	for (const ta of document.querySelectorAll("textarea")) if (isVisible(ta)) return ta;
@@ -125,11 +144,57 @@ export function submitComposer() {
 }
 
 /**
+ * 🔴 宿主直投通道：把指令交给宿主自己的会话发送口 `window.__directChatSubmit`
+ *
+ * 为什么"点原生发送按钮"不够（2026-09-12 真机实测）：
+ *   宿主的 InputBar 在 `focusTarget !== "chat"` 时会把提交**劫持给总监**
+ *   —— 走 `window.__directorSubmit`，也就是"再跑一遍宿主自己那套五步"。
+ *   而我们的指令**已经过插件侧五步处理**（`runDirector`）⇒ 会被处理两次，
+ *   并且落进宿主旧版总监库（插件侧 R5 与它不是同一份）。实测后果：
+ *   `__directorSubmit` 内部把**快照对象**当活会话用，抛
+ *   `TypeError: session.prompt is not a function` ⇒ 消息其实**没送到智能体**，
+ *   而点按钮这件事本身成功 ⇒ 表现为"显示已发送，实际没发"（最坏的假绿灯）。
+ *
+ *   `__directChatSubmit` 用的是宿主**同一份** `scopedConversation(sessions,id).send(text)`
+ *   —— 直投对话域，不经过 InputBar 的劫持分支。
+ *
+ * 证据（不是"调了就算"）：`__directChatSubmit` 每次执行都会写
+ *   `window.__directChatProbe = {called, sessionId, draft, time}`
+ *   ⇒ 以 `called` 的**增量**为凭据，确认宿主确实收下了这次投递。
+ *
+ * @param {string} sessionId 目标会话
+ * @param {string} text 已处理好的指令
+ * @returns {Promise<{ok:boolean, mode?:"sent", via?:string, verified?:boolean, reason?:string}>}
+ */
+export async function sendToHost(sessionId, text) {
+	if (!hasDom()) return { ok: false, reason: "no-dom" };
+	if (!sessionId) return { ok: false, reason: "no-session" };
+	const fn = window.__directChatSubmit;
+	if (typeof fn !== "function") return { ok: false, reason: "host-send-unavailable" };
+	const called = () => {
+		const p = window.__directChatProbe;
+		return p && typeof p.called === "number" ? p.called : 0;
+	};
+	const before = called();
+	try {
+		fn(sessionId, String(text));
+	} catch (e) {
+		return { ok: false, reason: "host-send-throw:" + (e && e.message) };
+	}
+	for (let i = 0; i < 8; i++) {
+		await new Promise((r) => setTimeout(r, 60));
+		if (called() > before) return { ok: true, mode: "sent", via: "host-send", verified: true };
+	}
+	return { ok: false, reason: "host-send-unconfirmed" };
+}
+
+/**
  * 左 → 右 主入口：把总监侧输入送到对话域
  *
- * 两级降级（保证"必定有反馈"，不会静默失败）：
- *   ① `autoSend=true` 且发送按钮可用 → 真正发送，`mode="sent"`
- *   ② 否则 → 文本已填入 composer，`mode="filled"`，由用户确认后手动发送
+ * 四级降级（保证"必定有反馈"，不会静默失败）：
+ *   ① `sessionId` 有效且宿主直投口可用 → 直投对话域，`mode="sent"` / `via="host-send"`（首选）
+ *   ② `autoSend=true` 且发送按钮可用    → 真正发送，`mode="sent"`
+ *   ③ 否则                              → 文本已填入 composer，`mode="filled"`，由用户确认后手动发送
  *
  * @param {string} text
  * @param {{autoSend?:boolean, verify?:boolean}} [opts]
@@ -155,6 +220,79 @@ export async function sendToChat(text, opts = {}) {
 	await new Promise((r) => setTimeout(r, 120));
 	const after = readComposerText();
 	return { ok: true, mode: "sent", verified: after !== null ? after === "" : null };
+}
+
+/**
+ * 🔴 把一条指令**真正送达某会话的原生对话**（三级降级 + 写后回读）
+ *
+ * 为什么需要它（而不是直接用 `sendToChat`）：
+ *   总监页是宿主 tab 环里的**独立 view**，切到它时原生 composer 多半**不在场**
+ *   （`findComposer()` 返回 null，因为它要求元素有非零盒）。
+ *   实测形态：在总监页 `sendToChat` 直接失败 → 用户以为"总监没把消息发出去"。
+ *   ⇒ 必须允许「先切到目标会话，等 composer 出现，再投递」这条通道。
+ *
+ * 为什么 `opener` 由调用方注入（而不是本模块 import `logic/branch-tree.js`）：
+ *   `branch-tree.js` 依赖宿主 ctx 与 split.js，本模块是**零业务依赖的 DOM 通道**。
+ *   反向 import 会形成 module 环（build 期外置顺序受影响）。注入更干净、可单测。
+ *
+ * 判据（四级，逐级降级，**每级都给出归因**）：
+ *   ① 宿主直投口可用 + 有 sessionId → 直投对话域  `via="host-send"`（首选；避开 InputBar 的「总监劫持」）
+ *   ② `composer` 已在场            → 直投        `via="direct"`
+ *   ③ `opener(sessionId)` 成功 + 等 → 再投        `via="open-then-send"`
+ *   ④ 仍不在场                     → 失败并报因  `reason="composer-unavailable"`
+ *
+ * @param {string} text
+ * @param {{sessionId?:string, opener?:(id:string)=>Promise<{ok:boolean,reason?:string}>,
+ *          autoSend?:boolean, settleMs?:number, hostSend?:boolean}} [opts]
+ * @returns {Promise<{ok:boolean, mode:"sent"|"filled"|"failed", reason?:string,
+ *                    via?:string, opened?:boolean, verified?:boolean|null}>}
+ */
+export async function deliverToChat(text, opts = {}) {
+	const r = await deliverImpl(text, opts);
+	lastDeliver = { ...r, at: Date.now(), sessionId: (opts && opts.sessionId) || null };
+	return r;
+}
+
+/** `deliverToChat` 的实现体（外层包一层只为记录 `lastDeliver`） */
+async function deliverImpl(text, opts = {}) {
+	const t = String(text == null ? "" : text);
+	if (!t.trim()) return { ok: false, mode: "failed", reason: "empty-text" };
+
+	/* ① 宿主直投：指令已由插件侧处理完，应**直接**进对话域，
+	 *    不再经 InputBar（否则会被宿主的旧版总监再处理一次，见 sendToHost 论证）。 */
+	if (opts.autoSend !== false && opts.hostSend !== false && opts.sessionId) {
+		const h = await sendToHost(opts.sessionId, t);
+		if (h.ok) {
+			// 投递成功 ⇒ 原生草稿已被消费；留着会变成"发完还在框里"的脏数据
+			try { setComposerText(""); } catch (e) { /* composer 不在场：无需清理 */ }
+			return { ok: true, mode: "sent", via: h.via, verified: h.verified, opened: false };
+		}
+	}
+
+	const settle = typeof opts.settleMs === "number" ? opts.settleMs : 450;
+	let composer = findComposer();
+	let opened = false;
+
+	if (!composer && typeof opts.opener === "function" && opts.sessionId) {
+		try {
+			const r = await opts.opener(opts.sessionId);
+			opened = Boolean(r && r.ok);
+		} catch (e) {
+			return { ok: false, mode: "failed", reason: "open-error:" + (e && e.message), opened: false };
+		}
+		if (opened) await new Promise((res) => setTimeout(res, settle));
+		composer = findComposer();
+	}
+
+	if (!composer) {
+		return {
+			ok: false, mode: "failed", reason: "composer-unavailable", opened,
+			via: opened ? "open-then-send" : "direct"
+		};
+	}
+
+	const r = await sendToChat(t, { autoSend: opts.autoSend !== false });
+	return { ...r, opened, via: opened ? "open-then-send" : "direct" };
 }
 
 /* ── 右 → 左：产出观察 ─────────────────────────────────────────── */
@@ -224,7 +362,8 @@ export function installChatBridgeApi() {
 	const api = {
 		SEND_ARIA, COMPOSER_PLACEHOLDER,
 		findComposer, findSendButton, findMessageList,
-		setComposerText, readComposerText, submitComposer, sendToChat,
+		setComposerText, readComposerText, submitComposer, sendToChat, sendToHost, deliverToChat, getLastDeliver,
+		isAgentGenerating,
 		readConversation, observeConversation
 	};
 	window.__dshChatBridge = api;

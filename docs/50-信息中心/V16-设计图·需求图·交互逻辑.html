@@ -2592,9 +2592,104 @@
     </div>
   </div>
 
+    <div class="sec">
+      <header><span class="no p">J</span><h3>本轮<b>交互基建</b> —— 四个"看起来是功能坏了、其实是布局在动"的真因（2026-09-12 就地并入）</h3><span class="tag">同一根源：状态/坐标与真实布局对账失败</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:20%">现象（用户原话视角）</th><th style="width:40%">真因（可复现取证）</th><th>修法与固化判据</th></tr></thead>
+          <tbody>
+            <tr><td><b>右下角「发送到该对话」「交给总监」两个按钮点不中</b></td>
+                <td>提示位原为"有内容才渲染"（<code>toast ? h(div) : null</code>）。右下一列是 <code>column-reverse</code>，
+                    <b>后置兄弟即视觉底部</b>，于是提示一出现就把整条操作带<b>顶上去 23px</b>（实测 <code>btnY 628 → 605</code>，
+                    提示消失又落回）。人手指向「登记流转」时按钮已经<b>不在原位</b> —— 这才是"不好用"的物理根因，
+                    <b>不是按钮坏了</b>（探针实测真实点击命中冒泡各 1 次、库 2 → 3 条、提示正常）
+                </td>
+                <td>提示位改为<b>常驻等高占位槽</b>（恒定 23px，无提示时留空）⇒ 操作带坐标恒定。
+                    <br><b>固化</b>：闸门 <code>D5p</code> —— 出提示前后 R8 条每颗按钮的 y <b>逐像素不许变</b>
+                    （无提示 <code>r8Y=629</code> / 有提示「已定位输入框」<code>r8Y=629</code>，5 颗按钮一致）</td></tr>
+            <tr><td><b>浮动入口跟随位置偶发"永远不动"</b></td>
+                <td>跟随复量<b>只挂在 <code>requestAnimationFrame</code></b> 上。Chromium 在<b>窗口被遮挡时暂停 rAF</b>，
+                    而 e2e 时宿主窗口常在后台 ⇒ <code>mark()</code> 之后的复量整段不执行，
+                    读到 <code>before=137.6 → during=137.6</code>（同代码在真实前台 700ms 内正常跟随）
+                </td>
+                <td>复量改为<b>事件驱动</b>：<code>MutationObserver</code> 对<b>与 composer 相关</b>的变更当场复量 + <code>ResizeObserver</code> 兜底。
+                    <br><b>固化</b>：闸门 <code>F11</code> <b>先自证前提</b>——"composer 真的挪了"（顶 <code>690 → 540</code>），
+                    再判跟随值（<code>137.6 → 287.6，收敛 0ms → 137.6</code>）；不收敛允许<b>重试一次</b>并把重试打进明细</td></tr>
+            <tr><td><b>导图「折叠/展开」点了像没点</b></td>
+                <td>两处基数取错：① <code>collapsed</code> 是组件 state，含<b>旧树 / 不可见节点 id</b> ⇒
+                    <code>collapsed.size &gt; 0</code> 而 DOM 里 <code>[data-collapsed=1]</code> 为 0，走了"展开全部"分支；
+                    ② <code>toggleAll</code> 作用在<b>全部血缘行</b>上，而画布渲染的是<b>可见集</b> ⇒ 折了看不见的节点
+                </td>
+                <td>派生值只从<b>当前可见数据</b>推：<code>winRows</code> / <code>collapsedLive</code> / <code>collapsibleLive</code>，
+                    文案也由可见集决定（"本层没有可折叠的子树"是<b>可能出现的真实答案</b>，不再假装"点了"）。
+                    <br><b>纪律</b>：<b>不与可能过期的容器对账</b> —— 这是同类缺陷<b>第四次</b>出现（R5 页签 / 导图 focusId / <code>nd-panel</code> 开关 / 导图 collapsed）</td></tr>
+            <tr><td><b>点导图框没反应 / 菜单不弹</b></td>
+                <td><b>不是产品</b>：导图是可滚动画布，前段点小地图后 <code>scrollLeft ≈ 950</code>，
+                    此时量 DOM 第一个节点得到 <code>x = -934</code>，真实鼠标事件打在视口外 = 什么都没点</td>
+                <td>凡"真实几何驱动真实鼠标"的段落，必须先取<b>视口内且命中测试为自己</b>的节点（<code>focusVisibleNode()</code>）；
+                    点击前做<b>落点自检</b>（<code>elementsFromPoint</code> 栈顶必须落在目标子树内），出视口先<b>滚入</b>再点。
+                    <br><b>固化</b>：<code>C-M21 = 0</code>（本脚本全部点击、零打偏）</td></tr>
+            <tr><td><b>按钮语义与文案整治</b></td>
+                <td>「光标已送进原生对话框（目标已标为「总监」）—— 打字的还是它，不是插件自建的框」这类<b>实现细节解释</b>
+                    不该出现在按钮上；按钮/边框命名也不统一</td>
+                <td>按钮只留<b>标准动作名</b>，解释一律下沉到 <b>占位符（title）</b>；
+                    右下一列语义固定为「<b>发送到该对话</b>」= 投递到当前原生会话 / 「<b>交给总监</b>」= 走总监五步链路。
+                    <br><b>固化</b>：<code>aria-disabled</code> 跟随可用性、<code>disabled</code> 恒 <code>false</code>（点了必给反馈，不静默）</td></tr>
+          </tbody>
+        </table>
+        <div class="note"><b>一条可移植的判据（本轮第 8 条，值得抄进任何前端 e2e）：</b>
+          <br>「<b>点不中</b>」在真机上绝大多数<b>不是命中问题，而是布局在动</b> —— 先怀疑坐标过期，再怀疑遮挡，
+          最后才怀疑事件没绑上。顺序反了，就会去改 4 个本来没坏的模块。</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <header><span class="no p">K</span><h3>同步审<b>审核本身</b> —— 同日 5 处闸门过期（旧断言把"现状变了"读成"功能坏了"）</h3><span class="tag">含跳过 5 → 0：多出 19 条真断言</span></header>
+      <div class="bd">
+        <table>
+          <thead><tr><th style="width:20%">闸门</th><th style="width:32%">错在哪</th><th>新判据</th></tr></thead>
+          <tbody>
+            <tr><td><code>verify-batch1.mjs</code></td>
+                <td>断言"宿主里 <code>filteredMessages</code> 命中数 <b>== 1</b>" —— 写于"宿主还是坏的"时期，
+                    拿<b>越界引用存在</b>当健康凭据；宿主补丁落地后命中数变 0 ⇒ <b>假红</b></td>
+                <td>两侧<b>都归零</b> + 都能找到同一处修正（<code>state.messages.map((msg) =&gt;</code>）⇒ <b>双向一致性</b>（98/98）</td></tr>
+            <tr><td><code>verify-batch6.mjs</code></td>
+                <td>版本正则 <code>[6-9]</code> 是<b>单字符类</b>，产物到 <code>0.15.0-batch15</code> 后 minor / batch 都是两位数 ⇒ <b>假红</b></td>
+                <td>解析 <code>(major, minor, batch)</code> 做<b>序比较</b> + 与源码 <code>PLUGIN_VERSION</code> <b>同源交叉校验</b>（66/66）</td></tr>
+            <tr><td><code>verify-bundle.mjs</code></td>
+                <td>写死 <code>/batch15/</code> ⇒ 下次升批次<b>必假红</b></td>
+                <td>「不低于批次 15」<b>单调性闸门</b>（97/97）</td></tr>
+            <tr><td><code>verify-batch8.mjs</code></td>
+                <td>④⑤职责断言"默认禁用"，而 <code>duties.js</code> 已按 03 号文 §1.2 <b>五步规格</b>改为启用（<b>留痕在先</b>）⇒ 闸门过期</td>
+                <td>五步<b>都为 true</b>，且每步<b>显式带 <code>enabled</code></b>（93/93）</td></tr>
+            <tr><td><code>verify-mindmap.mjs</code></td>
+                <td>① 折叠探针<b>不退出聚焦</b> ⇒ 可见集只剩祖先链（非根有子节点全被排除）⇒ 探针取不到样本，两段<b>静默跳过</b>；
+                    ② "移开鼠标"目标<b>写死 (18,320)</b>，画布滚动后该点<b>正好压在节点内</b>（实测 <code>[-10,291,98,31]</code>）⇒
+                    「工具条应消失」被一个"其实还悬在节点上"的点否掉</td>
+                <td>① 段首先<b>退出聚焦</b>；② 空白点<b>按当前几何算</b>（<code>blankPoint()</code>），并补「移开前工具条确实在」<b>防平凡真</b>。
+                    <br><b>收益</b>：<b>81 / 0 / 5 → 100 / 0 / 0</b>（新增 <code>C-M14a–f</code> 右键菜单、<code>C-M15a–c</code> 悬浮工具条、
+                    <code>C-M16a</code> Esc 逐层退、<code>C-M8a–d</code> / <code>C-M8q</code> 折叠正负对照）</td></tr>
+          </tbody>
+        </table>
+        <table>
+          <thead><tr><th style="width:34%">闸门</th><th style="width:16%">结果</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>verify-flow.mjs</code></td><td class="ok">67 / 67 ×3</td><td>零跳过；含 <code>D5p</code> 零位移与 <code>F11</code> 前提自证</td></tr>
+            <tr><td><code>verify-mindmap.mjs</code></td><td class="ok">100 / 100 ×3</td><td><b>零跳过</b>（本轮由 81/0/5 提升）</td></tr>
+            <tr><td><code>verify-design-studio.mjs</code></td><td class="ok">90 / 90 ×3</td><td>载荷逐字一致</td></tr>
+            <tr><td><code>verify-register-gate.mjs</code></td><td class="ok">5 / 5 ×3</td><td>全部"等下界收敛"，并打出收敛耗时</td></tr>
+            <tr><td>构建 <code>lib/client.js</code></td><td class="ok">964,544 B</td><td>58 模块 · 474 = 474（185 import）· 装机 <code>IS_PASS: TRUE</code></td></tr>
+          </tbody>
+        </table>
+        <div class="note"><b>为什么"跳过"比"红"更危险：</b>红有人看，<b>跳过没人看</b>。
+          <code>mm-toggle</code> 这类<b>指着不存在锚点</b>的探针会让整段<b>永远静默失效</b>，报告还写出一句"本机没有可折叠项"的<b>假话</b>
+          —— 而同一份报告的另一段正在自证产品当时确实折了 1 棵子树。</div>
+      </div>
+    </div>
+
   <div class="foot">
     V16 · 设计图 + 需求图 + 交互逻辑 ｜ 单文件自包含 · 零外链 · 零反引号<br>
-    板块 A 高保真 · B 需求图 · C 交互逻辑 · <b>D 设计图工作室</b> · <b>E 保存 / 版本 / 窗口安全区 / E7 连续点击可用性</b> · <b>F 思维导图元素库（18 条总账）</b> · <b>G 单框控件 / 框可拖动 / 右侧对话 / 四维流转 / 四处个性化与质感</b> · <b>I 浮动入口（几何 / 点击穿透 / 配色 / 定位）+ 审核测试自身</b> · <b>H 总监页背景与宿主统一（令牌桥接 + 正负对照）</b>（D、E、F、G、H 均为 2026-09-12 就地并入，不新开文档）<br>
+    板块 A 高保真 · B 需求图 · C 交互逻辑 · <b>D 设计图工作室</b> · <b>E 保存 / 版本 / 窗口安全区 / E7 连续点击可用性</b> · <b>F 思维导图元素库（18 条总账）</b> · <b>G 单框控件 / 框可拖动 / 右侧对话 / 四维流转 / 四处个性化与质感</b> · <b>I 浮动入口（几何 / 点击穿透 / 配色 / 定位）+ 审核测试自身</b> · <b>H 总监页背景与宿主统一（令牌桥接 + 正负对照）</b>· <b>J 本轮交互基建（布局漂移 / 事件驱动复量 / 可见集派生）</b> · <b>K 同步审核审核本身（5 处闸门过期 · 跳过 5 → 0）</b>（D、E、F、G、H、I、J、K 均为 2026-09-12 就地并入，不新开文档）<br>
     配套阅读：V13（结构基线 R1–R8）· V15.1（画面与交互审核 16+13 项）· V12（八视图素材）· V14.1（形态作废，三处内容已回收）· <code>docs/00-统筹入口/10-当前基线-落死锚点-V16.md</code>（现状唯一权威）<br>
     取证来源：dsh-client-ui-conversation / dsh-client-runtime / dsh-session 宿主源码 + 真机 DOM 实测（1442 × 816，1:1.22 折算为 1180 × 644）<br>
     🔴 本稿的坐标、尺寸、文案均为<b>真机回读</b>（<code>getBoundingClientRect</code> / <code>getComputedStyle</code> / <code>windowControlsOverlay</code>），不是估算值 —— 改实现前请先重跑一次回读

@@ -140,9 +140,12 @@ import { MindMap, MINDMAP_ID } from "./components/MindMap.js";
 import { installPersonalizeApi, personalizeStore } from "./store/personalize.js";
 import { PersonalizePanel, PERSONALIZE_PANEL_ID } from "./components/PersonalizePanel.js";
 import { installFlowApi, flowStore, DIM, DIM_LABEL } from "./logic/flow.js";
+import { installBranchFocusApi } from "./logic/branch-focus.js";
+import { installOverviewApi } from "./logic/overview.js";
+import { installOrchestrateApi } from "./logic/orchestrate.js";
 import { NodeDetailPanel, NODE_DETAIL_ID } from "./components/NodeDetailPanel.js";
 
-export const PLUGIN_VERSION = "0.13.0-batch13";
+export const PLUGIN_VERSION = "0.15.0-batch15";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 export function installBatch1(options = {}) {
@@ -252,10 +255,19 @@ export function installBatch1(options = {}) {
 		//       它注入的是 CSS 变量与样式表，晚注入会有一帧"未套肤"的闪动。
 		window.__dshPersonalize = installPersonalizeApi();
 		window.__dshFlow = installFlowApi();
+		// ── 批次 15 分支链路聚焦 / 总览 / 统筹打分（2026-09-12 第七轮）──
+		//    需求原文：「我点击对话那么只默认显示这个分支的链路」「思维导图最上面加一个弹窗，
+		//              分为左右列」「打分起码三轮多方位评估」「打分标准也需要进行审核」
+		window.__dshBranchFocus = installBranchFocusApi();
+		window.__dshOverview = installOverviewApi();
+		window.__dshOrchestrate = installOrchestrateApi();
 	} else {
 		// 无 DOM 环境（离线测试）：仍要建立 store，保证 import 侧行为一致
 		installPersonalizeApi();
 		installFlowApi();
+		installBranchFocusApi();
+		installOverviewApi();
+		installOrchestrateApi();
 	}
 
 	// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -425,6 +437,38 @@ export function installBatch1(options = {}) {
 		reserveConsumers: ["dp-r6", "dp-r8"]
 	};
 
+	/* ── 批次 15（T-PLUG-024/026/027/028）：真流转 / 分支聚焦 / 总览 / 统筹打分 ──
+	 * 「我在总监发的消息，是否经过处理然后发给对话执行」这个**最核心基础要求**
+	 * 的可断言面：投递通道的降级级别 + 处理链落库 + 聚焦与打分的纯函数契约。 */
+	installed.deliver = {
+		/* 投递分级（顺序即优先级）：
+		 *   host-send       → 宿主直投对话域（避开 InputBar 的「总监劫持」，防二次处理）
+		 *   direct          → composer 在场，点原生发送
+		 *   open-then-send  → 先切会话，等 composer 出现再点发送
+		 *   仍不行          → 如实报因（不许静默） */
+		channels: ["host-send", "direct", "open-then-send"],
+		attr: "data-deliver-mode",
+		modes: ["idle", "sent", "filled", "failed"],
+		anchor: { send: "dp-send", router: "mm-ov-send", nodeSend: "nd-send" }
+	};
+	installed.branchFocus = {
+		attr: "data-focus-id",
+		bar: "mm-focusbar",
+		toggles: ["mm-focus-up", "mm-focus-exit"],
+		includeParentsMeans: "祖先链 ∪ 链上每一环的同级（用户语义：上一层全景）"
+	};
+	installed.overview = {
+		root: "mm-ov",
+		columns: ["mm-ov-col-done", "mm-ov-col-todo"],
+		attr: ["data-count-done", "data-count-todo", "data-sel-session"]
+	};
+	installed.orchestrate = {
+		stages: ["plan", "doc", "review", "blueprint", "test", "done"],
+		rubricDims: ["purpose", "aesthetic", "interaction", "resilience", "consistency", "verifiability"],
+		rounds: ["spec", "independent", "counter"],
+		rubricSelfAudit: true
+	};
+
 	if (typeof window !== "undefined") {
 		window.__dshDirectorBatch1 = installed;
 		window.__dshDirectorBatch2 = installed; // 批次 2 别名
@@ -439,6 +483,7 @@ export function installBatch1(options = {}) {
 		window.__dshDirectorBatch11 = installed; // 批次 11 别名（个性化设定 + 四维流转）
 		window.__dshDirectorBatch12 = installed; // 批次 12 别名（总监页背景改走宿主令牌）
 		window.__dshDirectorBatch13 = installed; // 批次 13 别名（浮动入口点击穿透 + 药丸配色随主题）
+		window.__dshDirectorBatch15 = installed; // 批次 15 别名（真流转 + 分支聚焦 + 总览 + 统筹）
 	}
 	return installed;
 }

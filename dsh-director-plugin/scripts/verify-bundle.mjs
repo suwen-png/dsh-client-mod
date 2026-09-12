@@ -464,7 +464,57 @@ check("🔴 横向占位常量确实定义在浮动组模块、并被总监页�
 	"FloatDock 有常量=" + /FLOAT_DOCK_RESERVE/.test(dockSrc) + " / DirectorPage 有 dockReserve=" + /dockReserve/.test(pageSrc));
 check("🔴 反证：浮动组模块内三颗药丸的旧浅色硬编码（#7fe3e8 / #9fc2ff / #b794f6）已清除（已剥注释 + 已按模块取块）",
 	dockSrc.length > 0 && !/#7fe3e8|#9fc2ff|#b794f6/i.test(dockSrc), null);
-check("PLUGIN_VERSION 已升到批次 13", /batch13/.test(String(entryExports?.PLUGIN_VERSION)), String(entryExports?.PLUGIN_VERSION));
+/* ⚠️ 判据写成「不低于」而不是 `=== batch13`：版本号会随批次单调前推，
+ *    钉死字面量会让**每一次新批次**都把这条老断言弄红（假红），与它要守的
+ *    「版本确实被升过、没有停在旧批次」这层意思也无关。 */
+check("PLUGIN_VERSION 不低于批次 13（版本号单调、不回退）",
+	(() => { const m = /batch(\d+)/.exec(String(entryExports?.PLUGIN_VERSION || "")); return !!m && Number(m[1]) >= 13; })(),
+	String(entryExports?.PLUGIN_VERSION));
+
+/* ── 6i 批次 15：真流转 / 分支聚焦 / 总览 / 统筹打分 ──
+ *  本批次对应「我在总监发的消息，是否经过处理然后发给对话执行」这个**最核心基础要求**。
+ *  这里只验"产物真的带了改动与契约"；运行期行为由 verify-flow.mjs 的 G 段、
+ *  verify-mindmap.mjs 的 13.5/13.6 段在真机上验。 */
+check("window.__dshDirectorBatch15 === installed（别名一致，不是另一个对象）",
+	typeof windowStub.__dshDirectorBatch15 === "object" && windowStub.__dshDirectorBatch15 === windowStub.__dshDirectorBatch1,
+	windowStub.__dshDirectorBatch15 === windowStub.__dshDirectorBatch1 ? "同一引用" : "引用不同");
+check("installed.deliver 三通道且首选项 = host-send（宿主直投，避开 InputBar 的总监劫持）",
+	(() => { const d = applied?.deliver || {};
+		return Array.isArray(d.channels) && d.channels.length === 3 && d.channels[0] === "host-send"
+		&& d.attr === "data-deliver-mode" && Array.isArray(d.modes) && d.modes.length === 4; })(),
+	JSON.stringify(applied?.deliver));
+check("installed.branchFocus / overview / orchestrate 三组契约齐备",
+	!!applied?.branchFocus?.bar && Array.isArray(applied?.overview?.columns)
+	&& Array.isArray(applied?.orchestrate?.stages) && applied.orchestrate.stages.length === 6
+	&& Array.isArray(applied?.orchestrate?.rubricDims) && applied.orchestrate.rubricDims.length === 6
+	&& applied?.orchestrate?.rubricSelfAudit === true,
+	JSON.stringify({ branchFocus: applied?.branchFocus, overview: applied?.overview, orchestrate: applied?.orchestrate }));
+
+const bridgeSrc = moduleSlice("bridge/chat-bridge.js");
+const focusSrc = moduleSlice("logic/branch-focus.js");
+const ovSrc = moduleSlice("logic/overview.js");
+const orchSrc = moduleSlice("logic/orchestrate.js");
+check("🔴 桥接模块真的实现了 host-send 通道（引用宿主 __directChatSubmit + 有送达凭据）",
+	bridgeSrc.length > 0 && /__directChatSubmit/.test(bridgeSrc) && /sendToHost/.test(bridgeSrc)
+	&& /__directChatProbe/.test(bridgeSrc),
+	"chat-bridge 片段 " + bridgeSrc.length + " 字符");
+check("🔴 三个新纯函数模块都在产物内且导出了 public API",
+	/focusRows/.test(focusSrc) && /buildOverview/.test(ovSrc) && /auditRubric/.test(orchSrc)
+	&& /RUBRIC_MAX/.test(orchSrc),
+	JSON.stringify({ focus: focusSrc.length, overview: ovSrc.length, orchestrate: orchSrc.length }));
+check("🔴 反证（回归防护）：总监页模块内 `deliver` **只有一处函数声明**",
+	/* 背景：同一作用域重复 `function` 声明是合法语法、后声明静默覆盖前者 ——
+	 * 本轮真机上正是"新版真流转被旧版记录员顶掉"，产物语法自检完全看不到。
+	 * 构建期已加 lintDuplicateFnDecl；这里再从**产物**上做一次回归反证。 */
+	(() => { const n = (pageSrc.match(/(?:async\s+)?function\s+deliver\s*\(/g) || []).length;
+		return n === 1; })(),
+	"deliver 声明数 = " + ((pageSrc.match(/(?:async\s+)?function\s+deliver\s*\(/g) || []).length));
+/* 版本号「不低于批次 15」：与上面「不低于批次 13」同属单调性闸门。
+ * 2026-09-12 纠错：原断言写死 `/batch15/`，下次升批次必假红（本日已因同类写法修掉两处）。
+ * 语义改为「batchN 数值 ≥ 15」，并交叉校验产物与源码 PLUGIN_VERSION 同源。 */
+check("PLUGIN_VERSION 不低于批次 15（单调不回退）",
+	(() => { const m = /batch(\d+)/.exec(String(entryExports?.PLUGIN_VERSION || "")); return !!m && Number(m[1]) >= 15; })(),
+	String(entryExports?.PLUGIN_VERSION));
 
 /* ── 汇总 ─────────────────────────────────────────────────── */
 

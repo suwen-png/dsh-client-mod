@@ -65,6 +65,8 @@ import {
 	visibleRows, ancestorChain, treeBounds, matchRows, degradationReason,
 	hostCapabilities, openSession, forkBranch, watchCurrentSession
 } from "../logic/branch-tree.js";
+import { focusRows, hasDownstream } from "../logic/branch-focus.js";
+import { OverviewDialog } from "./OverviewDialog.js";
 import { route, review6, DESTINATION, DESTINATION_LABEL } from "../logic/routing.js";
 import { edgePathFor, edgeStyleOf, metaLineOf, stateTitleOf, kindLabelOf, nodeBtnStyle } from "../logic/mindmap-render.js";
 import { dshLog } from "../util/debug.js";
@@ -180,6 +182,11 @@ export function MindMap({ open, onClose }) {
 	const [toast, setToast] = react.useState("");
 	const [inset, setInset] = react.useState(() => readInset());
 	const [collapsed, setCollapsed] = react.useState(() => new Set());
+	/* 分支链路聚焦（R9）：focusId=被聚焦的会话；focusUp=「含上一层」（祖先层全景） */
+	const [focusId, setFocusId] = react.useState(null);
+	const [focusUp, setFocusUp] = react.useState(false);
+	/* 总览弹窗（R10）：挂在导图最上面，独立 fixed 层 */
+	const [ovOpen, setOvOpen] = react.useState(false);
 	const [hov, setHov] = react.useState(null);
 	const [menu, setMenu] = react.useState(null);
 	const [q, setQ] = react.useState("");
@@ -326,7 +333,40 @@ export function MindMap({ open, onClose }) {
 		})
 		: baseRows;
 
-	const winRows = visibleRows(rows, collapsed);
+	/* ── 折叠计数：必须按**当前树里真的存在**的节点算 ────────────────────
+	 * 🔴 为什么不能直接用 `collapsed.size`（2026-09-12 真机定案）：
+	 *   `collapsed` 是组件 state，而本组件**不随树变化而卸载**（切会话 / 换数据后原地重渲），
+	 *   于是里面会留着**旧树的 sessionId**。此时 `collapsed.size > 0` 但渲染出来的
+	 *   `[data-collapsed=1]` 节点数是 **0** —— 两边对不上，后果是用户点「折叠全部」
+	 *   得到一句「已展开全部」而画布毫无变化（正是用户反复投诉的「点了像没点」）。
+	 *   真机证据（verify-mindmap r14/r15，同一份代码两次不同表现）：
+	 *     r15 点了之后 toast=「已展开全部」而 DOM 里 `[data-collapsed=1]` = 0；
+	 *     r14 点击后按钮文案停在「展开全部」⇒ C-M9b 红。
+	 *   这是本项目**同一类缺陷的第四次**（r5tab 页签 / 导图 focusId / nd-panel 开关 /
+	 *   本处 collapsed）：跨轮存活的组件 state，读取前必须先与当前数据对账。
+	 *   ⇒ 纪律统一为：**派生值只从当前数据推**，不读可能过期的容器。
+	 *       且必须从**当前可见的**那一份推（见下 `winRows`）—— 作用在看不见的节点上
+	 *       等于"点了没反应"，这正是用户反复投诉的形态。 */
+	/* ── 分支链路聚焦（用户需求 R9）──────────────────────────────
+	 * 「我点击对话那么只默认显示这个分支的链路，然后可以选是否包含上一层，
+	 *   如果有下一层可以往下一层走。」
+	 * 应用顺序：**先聚焦、后折叠** —— 折叠只作用于已经可见的集合，
+	 * 两套开关互不干扰（先折叠再聚焦会让"被折叠的节点"偷偷回到视野里）。 */
+	const focus = focusRows(rows, focusId, { includeParents: focusUp });
+	const focusDownOk = focusId ? hasDownstream(rows, focusId) : false;
+
+	const winRows = visibleRows(focus.rows, collapsed);
+	/* 🔴 2026-09-12 第二次定案（verify-mindmap r16/r17 C-M9a 连红）：
+	 *   上一版只把"陈旧 id"修掉了，但**基数仍然取错** —— 用的是 `rows`（全部血缘行），
+	 *   而画布渲染的是 `winRows`（聚焦 + 折叠之后**真正可见**的那一份）。
+	 *   聚焦态下 `winRows ⊊ rows`，于是「折叠全部」会去折一个**看不见的**节点：
+	 *   库里的数据对了、toast 也报了"已折叠 1 棵子树"、按钮文案翻了「展开全部」——
+	 *   **而画布上什么都没发生**。用户视角就是坏的（点了像没点）。
+	 *   实测证据：r16/r17 `{"allCollapsed":0(DOM),"allToast":"已折叠 1 棵子树",
+	 *   "collapsibleNonRoot":0}` —— DOM 里 `data-collapsed=1` 是 0，而文案说折了 1 棵。
+	 *   ⇒ 判据统一为：**动作与计数都只看 `winRows`**（所见即所折）。 */
+	const collapsedLive = winRows.filter((r) => collapsed.has(r.sessionId)).length;
+	const collapsibleLive = winRows.filter((r) => r.depth > 0 && r.childrenCount > 0).length;
 	const bounds = treeBounds(winRows);
 	const stageW = Math.max(LAYOUT.minW, bounds.x + bounds.w);
 	const stageH = Math.max(LAYOUT.minH, bounds.y + bounds.h);
@@ -459,13 +499,18 @@ export function MindMap({ open, onClose }) {
 	}
 
 	function toggleAll() {
-		const has = collapsed.size > 0;
+		/* 判据 = `collapsedLive`（**当前可见的**、真被标记的节点数），不是 `collapsed.size`
+		 *（后者可能含旧树 / 不可见节点的 id ⇒ 会走"展开全部"分支，而画布上并没有折叠）。 */
+		const has = collapsedLive > 0;
 		if (has) { setCollapsed(new Set()); say("已展开全部"); return; }
-		// 只折叠"有子且非根"的节点：根也折掉会让画布只剩一个节点，什么也看不出来
-		const ids = rows.filter((r) => r.depth > 0 && r.childrenCount > 0).map((r) => r.sessionId);
+		/* 只折叠**可见集合里**"有子且非根"的节点 —— 与画布渲染的是同一份 `winRows`。
+		 * 根也折掉会让画布只剩一个节点，什么也看不出来。
+		 * 🔴 用 `winRows` 而不是 `rows`：聚焦态下两者不等，拿 `rows` 会折到看不见的节点上，
+		 *   用户点「折叠全部」后画布毫无变化（r16/r17 C-M9a 实测）。 */
+		const ids = winRows.filter((r) => r.depth > 0 && r.childrenCount > 0).map((r) => r.sessionId);
 		setCollapsed(new Set(ids));
 		/* 「无事可做」也必须说话并说清原因 —— 用户反复投诉过「点了像没点」。 */
-		say(ids.length
+		say(collapsibleLive
 			? "已折叠 " + ids.length + " 棵子树（点框内的 ▸ 可单独展开）"
 			: "本层没有可折叠的子树（根节点不参与「折叠全部」，否则画布只剩一个节点）");
 	}
@@ -539,13 +584,18 @@ export function MindMap({ open, onClose }) {
 			}, snap.lineage ? "血缘：ctx.sessions ✔" : "血缘不可用（分组树）"),
 			h("span", { key: "c", style: S.muted, "data-testid": "mm-count" },
 				"分支 " + rows.length + " · 连线 " + (tree.edges || []).length +
-				(collapsed.size ? " · 折叠 " + collapsed.size : "") +
+				(collapsedLive ? " · 折叠 " + collapsedLive : "") +
 				(movesCount ? " · 移动 " + movesCount : "")),
 			curId ? h("span", { key: "cur", style: S.muted, "data-testid": "mm-current-chip", title: "宿主当前会话（左栏点了哪个就跟着变）" },
 				"当前会话 …" + String(curId).slice(-8)) : null,
 
 			h("button", {
-				key: "p", style: { ...S.btn, marginLeft: "auto" }, "data-testid": "mm-personalize",
+				key: "ov", style: { ...S.btn, marginLeft: "auto" }, "data-testid": "mm-overview",
+				title: "项目总览：已完成 / 待完成",
+				onClick: () => setOvOpen(true)
+			}, "▤ 总览"),
+			h("button", {
+				key: "p", style: S.btn, "data-testid": "mm-personalize",
 				title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角 / 连线（四处共用同一份）",
 				onClick: () => setPOpen((v) => !v)
 			}, "⚙ 个性化"),
@@ -576,15 +626,15 @@ export function MindMap({ open, onClose }) {
 
 			h("button", {
 				key: "ca", style: S.btn, "data-testid": "mm-collapse-all",
-				title: collapsed.size ? "展开全部子树" : "折叠全部有子的非根节点",
+				title: collapsedLive ? "展开全部子树" : "折叠全部有子的非根节点",
 				onClick: toggleAll
-			}, collapsed.size ? "🗖 展开全部" : "🗂 折叠全部"),
+			}, collapsedLive ? "🗖 展开全部" : "🗂 折叠全部"),
 
 			h("button", {
 				key: "al", style: { ...S.btn, opacity: movesCount ? 1 : 0.5 }, "data-testid": "mm-auto-layout",
 				title: movesCount ? ("把 " + movesCount + " 个被你拖过的框放回自动布局") : "当前没有拖过的框（都在自动布局位）",
 				onClick: () => {
-					if (!movesCount) { say("当前没有拖过的框 —— 都在自动布局位置（拖动任一框后本按钮才有效）"); return; }
+					if (!movesCount) { say("没有拖过的框（拖动任一框后本按钮才有效）"); return; }
 					directorLayoutStore.resetNodePos();
 					say("已归位 " + movesCount + " 个框（回到自动布局）");
 				}
@@ -625,6 +675,28 @@ export function MindMap({ open, onClose }) {
 				title: "元素覆盖度（详见 store/mindmap-schema.js MM_COVERAGE）"
 			}, "元素 " + cov.done + "/" + cov.total)
 		]),
+
+		/* ── 聚焦条（R9）：只在真正聚焦时出现，不聚焦不占位 ── */
+		focus.applied ? h("div", {
+			key: "fobar", style: { ...S.tools, paddingRight: padRight }, "data-testid": "mm-focusbar",
+			"data-focus-id": focusId || "", "data-focus-up": focusUp ? "1" : "0",
+			"data-focus-down": focusDownOk ? "1" : "0"
+		}, [
+			h("span", { key: "t", style: S.chip, "data-testid": "mm-focus-title" },
+				"聚焦 " + String((rows.find((r) => r.sessionId === focusId) || {}).title || "该分支").slice(0, 18)),
+			h("span", { key: "s", style: S.muted, "data-testid": "mm-focus-stats" },
+				"下游 " + (focus.stats.down + 1) + " · 上游 " + focus.stats.up),
+			h("button", {
+				key: "u", "data-testid": "mm-focus-up", "data-on": focusUp ? "1" : "0",
+				style: { ...S.btn, borderColor: focusUp ? "var(--dp-ac, #2f6feb)" : undefined },
+				title: "含上一层", onClick: () => setFocusUp((v) => !v)
+			}, (focusUp ? "☑" : "☐") + " 含上一层"),
+			focusDownOk ? h("span", { key: "d", style: S.muted, "data-testid": "mm-focus-down" }, "▸ 可下钻（点子节点）") : null,
+			h("button", {
+				key: "x", "data-testid": "mm-focus-exit", style: S.btn, title: "退出聚焦，显示全部",
+				onClick: () => { setFocusId(null); setFocusUp(false); say("已退出聚焦"); }
+			}, "退出聚焦")
+		]) : null,
 
 		/* ── 主区：画布 + 右侧对话面板 ── */
 		h("div", { key: "main", style: S.main }, [
@@ -691,6 +763,8 @@ export function MindMap({ open, onClose }) {
 									/* 拖过就不当点击（拖动结束时置位一拍，见 justDraggedRef） */
 									if (justDraggedRef.current) return;
 									setDetailId(r.sessionId);
+									/* 同时进入「链路聚焦」（R9）：只看这一支及其上下游 */
+									setFocusId(r.sessionId);
 								},
 								onContextMenu: (e) => {
 									e.preventDefault(); e.stopPropagation();
@@ -912,6 +986,11 @@ export function MindMap({ open, onClose }) {
 			}) : null
 		]),
 
+		/* ── 总览弹窗（R10）：导图**最上面**的独立层，不改动画布布局 ── */
+		h(OverviewDialog, {
+			key: "ov", open: ovOpen, onClose: () => setOvOpen(false), rows, onSay: (m) => say(m)
+		}),
+
 		/* ── 底部：选中分支信息 + 待路由输入 + 审核结果 ── */
 		h("div", { key: "f", style: S.foot }, [
 			h("div", { key: "info", style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, [
@@ -926,14 +1005,14 @@ export function MindMap({ open, onClose }) {
 				!caps.available ? h("span", { key: "w", style: { ...S.muted, color: "#d29922" } }, "⚠ 宿主 sessions 服务不可用 ⇒ fork / 打开 已禁用") : null
 			]),
 			h("div", { key: "in", style: { display: "flex", gap: 7, alignItems: "center" } }, [
-				h("span", { key: "c", style: S.chip }, "待总监路由"),
+				h("span", { key: "c", style: S.chip }, "路由"),
 				h("input", {
 					key: "i", style: S.input, "data-testid": "mm-input", value: draft,
-					placeholder: "直接说要做什么，总监判断该由哪个对话执行（也可用右侧面板输入到具体框）…",
+					placeholder: "输入内容，交由总监判断去向",
 					onChange: (e) => setDraft(e.target.value),
 					onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doRoute(); } }
 				}),
-				h("button", { key: "b", style: S.btnPri, "data-testid": "mm-route", onClick: doRoute }, "交给总监判断")
+				h("button", { key: "b", style: S.btnPri, "data-testid": "mm-route", title: "交由总监判断去向", onClick: doRoute }, "交由总监")
 			]),
 			routeResult ? h("div", {
 				key: "rr", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, "data-testid": "mm-route-card"

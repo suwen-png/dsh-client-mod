@@ -55,12 +55,36 @@ async function clickAt(x, y) {
 	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
 	await sleep(120);
 }
-async function clickSel(sel) {
-	const r = await rectOf(sel);
-	if (!r) return false;
-	await clickAt(r.x + r.w / 2, r.y + r.h / 2);
-	return true;
+async function clickSel(sel, tag) {
+	/* 🔴 2026-09-12 加固：**真实鼠标点击必须做落点自检**。
+	 *   本脚本全靠 `Input.dispatchMouseEvent` 打真实坐标，而"按矩形中心打"有两个天然漏洞：
+	 *     ① 坐标过期（量完之后布局又变了 —— 本项目已在 R8 条上实测过 23px 漂移）；
+	 *     ② 被遮挡（上一段留下的右侧面板 `nd-panel` / 浮层盖住框，点击打在别人身上）。
+	 *   两者都会以**产品缺陷的形态**现形：r16 的 C-M19b 报 `{bar:false,rows:15}`（点框没聚焦），
+	 *   而探针 s5 在干净状态下点同一个框是 `bar:true, fid=该会话` —— 产品是好的，是点击落空了。
+	 *   ⇒ 记名 + 重试一次：misses 收尾统一断言，既不吞掉问题，也不冤枉产品。 */
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const g = await js(`(function(){
+		  var e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;
+		  var r=e.getBoundingClientRect();
+		  var mx=Math.round(r.x+r.width/2),my=Math.round(r.y+r.height/2);
+		  var st=document.elementsFromPoint(mx,my),t=st[0]||null;
+		  return {mx:mx,my:my,w:Math.round(r.width),h:Math.round(r.height),
+		    top:t?(t.tagName.toLowerCase()+(t.getAttribute&&t.getAttribute('data-testid')?'['+t.getAttribute('data-testid')+']':'')):null,
+		    ok:!!t&&(t===e||e.contains(t)||t.contains(e))};
+		})()`);
+		if (!g) return false;
+		if (!g.ok) {
+			clickMisses.push({ sel, tag: tag || "", top: g.top, at: [g.mx, g.my], try: attempt + 1 });
+			if (attempt === 0) { await sleep(280); continue; }   // 再量一次（布局可能刚好落定）
+		}
+		await clickAt(g.mx, g.my);
+		return true;
+	}
+	return false;
 }
+/** 落点落空的记名册（收尾统一断言，见 clickSel 注释） */
+const clickMisses = [];
 async function rectOf(sel) {
 	return await js(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;var r=e.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom};})()`);
 }
@@ -106,24 +130,117 @@ async function ensureOpen() {
  *     并顺带把后面两段带崩。凡是「用真实几何驱动真实鼠标」的段落，
  *     都必须先经过这里拿到一个可信坐标。 */
 async function focusVisibleNode() {
+	/* 🔴 画布内量针做成**页面侧函数**，好让第二轮复用（2026-09-12 重构）。
+	 *   原先探针只跑一次、只靠"把 mm-body 滚回原点"来保证可见；
+	 *   而 r19/r20 的自诊断显示：归零后仍有场景里 2 颗框落在 y=978 / y=1122，
+	 *   可视区却只到 726 ⇒ 探针返回 null ⇒ C-M14/C-M15/C-M16a **连跳三段**。
+	 *   这类"框存在但不在视口"必须能自救，否则永远靠跳过掩盖。 */
 	await js(`(function(){
 	  var b = document.querySelector('[data-testid="mm-body"]');
 	  if (b) { b.scrollLeft = 0; b.scrollTop = 0; }
 	  return 1;
 	})()`);
 	await sleep(240);
-	return await js(`(function(){
+	await js(`(function(){
+	  window.__mmProbe = function(){
 	  var b = document.querySelector('[data-testid="mm-body"]');
-	  if (!b) return null;
+	  if (!b) { window.__mmFocusWhy = "没有 mm-body"; return null; }
 	  var br = b.getBoundingClientRect();
 	  var ns = Array.prototype.slice.call(document.querySelectorAll('[data-testid="mm-node"]'));
+	  /* 🔴 自诊断（2026-09-12 新增）：这段以前"跳过"时只说"画布上没有节点"，
+	   *   而现场明明有 2 个框 —— 光看那句跳过**无法分辨**是"框在视口外"、
+	   *   "被别的层压住"、还是"根本没有框"。踩过一次（r17/r18 连跳三段）就该把它做成自证的。 */
+	  var diag = { body:[Math.round(br.x),Math.round(br.y),Math.round(br.width),Math.round(br.height)],
+	               nodes: ns.length, why: "", items: [] };
 	  for (var i = 0; i < ns.length; i++) {
 	    var r = ns[i].getBoundingClientRect();
 	    var cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
-	    if (cx <= br.x + 2 || cx >= br.right - 2 || cy <= br.y + 2 || cy >= br.bottom - 2) continue;
-	    var hit = document.elementFromPoint(cx, cy);
-	    if (hit && (hit === ns[i] || ns[i].contains(hit)))
-	      return { i: i, cx: cx, cy: cy, sid: ns[i].getAttribute("data-session-id") };
+	    var inView = cx > br.x + 2 && cx < br.right - 2 && cy > br.y + 2 && cy < br.bottom - 2;
+	    var hit = inView ? document.elementFromPoint(cx, cy) : null;
+	    var hitSelf = !!(hit && (hit === ns[i] || ns[i].contains(hit)));
+	    diag.items.push({ i:i, sid:String(ns[i].getAttribute('data-session-id')).slice(-6),
+	                      at:[cx,cy], inView:inView,
+	                      top: hit ? (hit.tagName.toLowerCase() + (hit.getAttribute && hit.getAttribute('data-testid') ? '[' + hit.getAttribute('data-testid') + ']' : '')) : null,
+	                      hitSelf:hitSelf });
+	    if (inView && hitSelf) { window.__mmFocusWhy = ""; return { i: i, cx: cx, cy: cy, sid: ns[i].getAttribute("data-session-id") }; }
+	  }
+	  window.__mmFocusWhy = JSON.stringify(diag);
+	  return null;
+	  };
+	  return 1;
+	})()`);
+	let out = await js(`window.__mmProbe()`);
+	if (!out) {
+		/* 第二轮（2026-09-12 新增）：把**离视口中心最近**的那颗框 scrollIntoView 后再量一次。
+		 *   注意只滚画布内元素、不滚页面（block:'center' 也会带上最近的可滚祖先，故随后复量）。 */
+		const moved = await js(`(function(){
+		  var b = document.querySelector('[data-testid="mm-body"]');
+		  if (!b) return 0;
+		  var br = b.getBoundingClientRect();
+		  var ns = Array.prototype.slice.call(document.querySelectorAll('[data-testid="mm-node"]'));
+		  if (!ns.length) return 0;
+		  var bx = br.x + br.width / 2, by = br.y + br.height / 2;
+		  var best = null, bestD = Infinity;
+		  for (var i = 0; i < ns.length; i++) {
+		    var r = ns[i].getBoundingClientRect();
+		    var d = Math.abs(r.x + r.width / 2 - bx) + Math.abs(r.y + r.height / 2 - by);
+		    if (d < bestD) { bestD = d; best = ns[i]; }
+		  }
+		  if (!best) return 0;
+		  try { best.scrollIntoView({ block: "center", inline: "center" }); } catch (e) { best.scrollIntoView(); }
+		  window.__mmFocusWhy = "第一轮：节点全在视口外（" + bestD + "px 外），已对最近一颗执行 scrollIntoView 复量";
+		  return 1;
+		})()`);
+		if (moved) { await sleep(300); out = await js(`window.__mmProbe()`); }
+	}
+	if (!out) {
+		const why = await js(`window.__mmFocusWhy || "未知"`);
+		console.log("  · ⚠️ 取不到可用节点，自诊断：" + why);
+	}
+	return out;
+}
+
+/** 求一个**确证空白**的点：不在任何 mm-node 内、不在 mm-hoverbar 内、命中 mm-stage/mm-body 自身。
+ *
+ *  🔴 为什么必须有（2026-09-12 真因，别删）：
+ *     「鼠标移开节点 ⇒ 工具条应消失」这条前置断言原先写死常数点 **(18,320)**，
+ *     隐含假设"那点一定是空白"。但导图是**可滚动 + 可拖拽**的画布：
+ *     同一颗节点在不同运行里的 rect 会漂到 (21,318,98,31)（x 21..119）——
+ *     (18,320) 距它只有 **3px**；一旦画布滚动 160/120，节点 rect 变成
+ *     [-10,291,98,31]，(18,320) 就**压在里面**（探针 m1 实测）。
+ *     此时工具条"没消失"是**完全正确**的（指针真的还在节点上），
+ *     而断言却把它报成产品缺陷 —— 典型的"用常数坐标代表空白"的假红。
+ *     ⇒ 空白点必须**按当前几何算**，不能写死。 */
+async function blankPoint() {
+	return await js(`(function(){
+	  var hb = document.querySelector('[data-testid="mm-hoverbar"]');
+	  var ns = Array.prototype.slice.call(document.querySelectorAll('[data-testid="mm-node"]'));
+	  var b  = document.querySelector('[data-testid="mm-body"]');
+	  var br = b ? b.getBoundingClientRect()
+	             : { x: 0, y: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight };
+	  function blocked(x, y) {
+	    for (var i = 0; i < ns.length; i++) { var r = ns[i].getBoundingClientRect();
+	      if (x >= r.x && x <= r.right && y >= r.y && y <= r.bottom) return true; }
+	    if (hb) { var h = hb.getBoundingClientRect();
+	      if (x >= h.x && x <= h.right && y >= h.y && y <= h.bottom) return true; }
+	    return false;
+	  }
+	  var cands = [];
+	  for (var d = 6; d < Math.min(br.width, br.height) / 2 && cands.length < 60; d += 14) {
+	    cands.push([br.x + d, br.y + d], [br.right - d, br.y + d], [br.x + d, br.bottom - d], [br.right - d, br.bottom - d],
+	               [br.x + d, (br.y + br.bottom) / 2], [br.right - d, (br.y + br.bottom) / 2]);
+	  }
+	  for (var k = 0; k < cands.length; k++) {
+	    var x = Math.round(cands[k][0]), y = Math.round(cands[k][1]);
+	    if (x < 2 || y < 2 || x > window.innerWidth - 2 || y > window.innerHeight - 2) continue;
+	    if (blocked(x, y)) continue;
+	    var el = document.elementFromPoint(x, y);
+	    if (!el) continue;
+	    var bad = false;
+	    for (var i = 0; i < ns.length; i++) { if (ns[i] === el || ns[i].contains(el)) { bad = true; break; } }
+	    if (hb && (hb === el || hb.contains(el))) bad = true;
+	    if (bad) continue;
+	    return { x: x, y: y, hit: (el.getAttribute && el.getAttribute("data-testid")) || el.tagName.toLowerCase() };
 	  }
 	  return null;
 	})()`);
@@ -137,6 +254,28 @@ function t(id, name, cond, detail) {
 }
 function sk(id, name, why) { skip++; console.log(`  ⏭ ${id} ${name} —— 跳过：${why}`); }
 function section(s) { console.log("\n" + s); }
+
+/* ══════════ 阶段 0：清掉上位脚本可能留下的浮层 ══════════
+ * 🔴 为什么必须有（2026-09-12）：本脚本连的是**已经在跑的** Harness 实例，不重载页面。
+ *   上一套脚本（verify-flow / verify-design-studio）收尾时可能留下 fixed 浮层
+ *   （设计图工作室 / 节点详情面板），它们会**盖住导图里的框** ⇒ 真实鼠标点击打在浮层上
+ *   ⇒ 以"点了没反应"的形态报成产品缺陷（r16 的 C-M10f / C-M16b / C-M19b 就是这一类）。
+ *   ⚠️ 选择器写全 `[data-testid=...]`：传裸名会去匹配同名**标签**（恒 0），清场静默失效。 */
+for (const [sel, closer, label] of [
+	["[data-testid=nd-panel]", null, "节点详情"],
+	["#dsh-design-studio", '[data-testid="ds-close"]', "设计图工作室"]
+]) {
+	if (!(await js("!!document.querySelector(" + JSON.stringify(sel) + ")"))) continue;
+	console.log("  · 阶段 0 发现残留浮层：" + label + " ⇒ 关闭");
+	if (closer) {
+		await clickSel(closer, "阶段 0 清浮层");
+	} else {
+		await key("Escape", "Escape", 27);
+	}
+	await sleep(420);
+}
+const leftOverlays = await js("['[data-testid=nd-panel]','#dsh-design-studio'].filter(function(s){return !!document.querySelector(s);})");
+console.log("  · 阶段 0 清浮层：自检残留 " + JSON.stringify(leftOverlays));
 
 console.log("═══════════════════════════════════════════════════════════");
 console.log(" 分支导图（思维导图）· 真机端到端验证");
@@ -286,6 +425,22 @@ if (chainProbe.leafWithParent) {
 
 /* ══════════ 5. 折叠 / 展开（含「折叠入口」提示） ══════════ */
 section("【5】折叠 / 展开");
+/* 🔴 2026-09-12 第四次纠错：本段必须先**退出聚焦态**。
+ *   聚焦（R9）下可见集 = 焦点节点的**祖先链**（`focusRows(rows, focusId, {includeParents})`），
+ *   兄弟与叔伯全被排除。若焦点恰是「根的直接子节点」，可见集就只剩 根 + 它两个 ⇒
+ *   **唯一有子的可见节点是根**，而非根不参与折叠 ⇒ 探针 `usable = 0`，
+ *   C-M8a–d / C-M8q 双双被跳成"本机数据如此" —— 一句假话（本机血缘有 3 层，
+ *   探针 m1 实测 19 个节点分布在 3 列）。跳过没人看，比红更危险，所以按真因修。 */
+const focusPre5 = await js(`(function(){var b=document.querySelector('[data-testid="mm-focusbar"]');
+  return {bar:!!b, id:b?b.getAttribute('data-focus-id'):null};})()`);
+if (focusPre5 && focusPre5.bar) {
+	console.log("  · 【5】前 处于聚焦态（" + String(focusPre5.id).slice(-6) + "）⇒ 先退出聚焦：否则可见集只有祖先链，折叠探针取不到样本");
+	await clickSel('[data-testid="mm-focus-exit"]');
+	await sleep(520);
+}
+const expandableNow = await js(`Array.from(document.querySelectorAll('[data-testid="mm-node"]')).filter(function(n){
+  return n.getAttribute("data-depth") !== "0";}).length`);
+console.log("  · 【5】起点：非根可见节点 " + expandableNow + " 个（全树口径）");
 /* 🔴 2026-09-12 第三次补强：**先把折叠状态归一到「全展开」**，再测折叠。
  *   真机证据（r4 红 C-M8a/b/c + C-M9a）：`{"before":11,"after":13}` ——
  *   第一次点击**节点数变多了** ⇒ 那一击是「展开」不是「折叠」：
@@ -563,7 +718,7 @@ if (spot) {
 	} else {
 		sk("C-M14b–f", "菜单项", "菜单未弹出");
 	}
-} else { sk("C-M14a–f", "右键菜单", "画布上没有节点"); }
+} else { sk("C-M14a–f", "右键菜单", "画布上没有可用节点（自诊断已打在上一行：可分辨「有框但视口外」「被别的层压住」「根本没有框」）"); }
 
 /* ══════════ 11. 悬浮工具条 ══════════ */
 await ensureOpen();
@@ -585,11 +740,22 @@ const spot2 = (await focusVisibleNode()) || spot;
 if (spot2) {
 	/* 先移开鼠标证明工具条**会走**，再移上去证明它**会来** ——
 	 * 否则鼠标本来就在节点上（上一段刚右击过），onMouseEnter 不会再触发，
-	 * 「工具条在」有可能是上一段的残留，证明力为零。 */
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 18, y: 320 });
-	await sleep(300);
-	const hbAway = await js(`!!document.querySelector('[data-testid="mm-hoverbar"]')`);
-	t("C-M15a0", "鼠标移开节点后工具条消失（先证明它会走）", hbAway === false, hbAway);
+	 * 「工具条在」有可能是上一段的残留，证明力为零。
+	 * 🔴 2026-09-12 纠错：移开的目标点**不能写死常数**（原为 (18,320)）。
+	 *   探针 m1 实测该点在滚动后正好压在节点 rect [-10,291,98,31] 内 ⇒
+	 *   工具条不消失是**正确的**，却被判红。改为按当前几何求空白点。 */
+	const hbBefore = await js(`!!document.querySelector('[data-testid="mm-hoverbar"]')`);
+	const blank = await blankPoint();
+	t("C-M15a0a", "前置：移开前工具条确实在（否则「会消失」是平凡真）", hbBefore === true, { hbBefore });
+	if (!blank) {
+		sk("C-M15a0", "鼠标移开节点后工具条消失", "算不出确证空白点（画布被节点铺满）——自诊断已在 C-M15a0a 之前打印");
+	} else {
+		console.log("  · 移开目标：确证空白点 (" + blank.x + "," + blank.y + ") 命中 " + blank.hit + "（不在任何节点/工具条内）");
+		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: blank.x, y: blank.y });
+		await sleep(300);
+		const hbAway = await js(`!!document.querySelector('[data-testid="mm-hoverbar"]')`);
+		t("C-M15a0", "鼠标移开节点后工具条消失（先证明它会走）", hbAway === false, { hbAway, at: [blank.x, blank.y] });
+	}
 	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: spot2.cx, y: spot2.cy });
 	await sleep(320);
 	const hb = await js(`(function(){var e=document.querySelector('[data-testid="mm-hoverbar"]');return e?{id:e.getAttribute("data-hover-id"), n:e.children.length, r:e.getBoundingClientRect().height, titles:Array.from(e.children).map(function(c){return c.getAttribute("title")||"";})}:null;})()`);
@@ -605,7 +771,7 @@ if (spot2) {
 			hb.n === 7 && hbMiss.length === 0, { n: hb.n, 缺: hbMiss });
 		t("C-M15c", "工具条尺寸 > 0（可见、可点）", hb.r > 8, hb);
 	}
-} else { sk("C-M15a–c", "悬浮工具条", "画布上没有「视口内且命中自己」的节点"); }
+} else { sk("C-M15a–c", "悬浮工具条", "画布上没有「视口内且命中自己」的节点（自诊断已打在上一行）"); }
 
 /* ══════════ 12. Esc 逐层退 + toast 自动消失 ══════════ */
 await ensureOpen();
@@ -716,7 +882,7 @@ if (!inputThere) {
 	await clickSel('[data-testid="mm-route"]');
 	await sleep(350);
 	const card = await js(`(function(){var e=document.querySelector('[data-testid="mm-route-card"]');return e?e.textContent:null;})()`);
-	t("C-M17a", "输入后点「交给总监判断」出现路由卡", card !== null, card);
+	t("C-M17a", "输入后点「交由总监」出现路由卡", card !== null, card);
 	t("C-M17b", "路由卡给出建议去向 + 置信度", !!card && /建议/.test(card) && /0\.\d+/.test(card), card);
 	const btns = await js(`["mm-rt-transfer","mm-rt-direct","mm-rt-new","mm-rt-cancel"].filter(function(k){return !!document.querySelector('[data-testid="'+k+'"]');}).length`);
 	t("C-M17c", "四个去向按钮齐备（转给/直接调用/新建分支/取消）", btns === 4, btns);
@@ -725,11 +891,140 @@ if (!inputThere) {
 }
 t("C-M17d", "取消后路由卡收起", await js(`!!document.querySelector('[data-testid="mm-route-card"]')`) === false, null);
 
+/* ══════════ 13.5 分支链路聚焦（R9）══════════ */
+section("【13.5】分支链路聚焦（点会话 → 只看该链路 · 含上一层 · 退出）");
+/* 🔴 前置**归零**而不是"断言进来时没在聚焦态"（2026-09-12 实测改法）：
+ *   前面几段会真实点节点（选中即进聚焦），所以进本段时**通常已经处于聚焦态**。
+ *   旧写法 `t("C-M19a", ..., focusbar === false)` 于是必红，而且更坏的是——
+ *   它把"基线总行数"也取在**聚焦态**下（实测 `want:2`，而全量是 17），
+ *   导致 C-M19e「退出后回到全量」跟着一起红（`after:17 ≠ want:2`）：
+ *   **一个没归零的起点，会让同段两条断言一起错**。
+ *   ⇒ 正确做法：先退出聚焦（若在），再取基线。判据仍保留"归零后确实不在聚焦态"。 */
+const focusPre = await js(`(function(){var fb=document.querySelector('[data-testid="mm-focusbar"]');
+  return {bar:!!fb, fid:fb?fb.getAttribute('data-focus-id'):null};})()`);
+if (focusPre && focusPre.bar) { await clickSel('[data-testid="mm-focus-exit"]'); await sleep(500); }
+const focusNow = await js(`(function(){var fb=document.querySelector('[data-testid="mm-focusbar"]');
+  return {bar:!!fb, nodes:document.querySelectorAll('[data-testid="mm-node"]').length};})()`);
+t("C-M19a", "前置：进入本段时未在聚焦态（若已在则先归零）", focusNow.bar === false,
+	{ 进来时: focusPre, 归零后: focusNow });
+
+const fPickRaw = await focusVisibleNode();   // 滚回原点 + 确证在视口内 + 确证命中自己
+const fPick = fPickRaw ? await js(`(function(){
+  var ns=document.querySelectorAll('[data-testid="mm-node"]');
+  var total=ns.length;
+  /* 优先挑一个**非根**的框（用户场景：点的是某个对话，不是中心主题） */
+  var best=null;
+  for (var i=0;i<ns.length;i++){
+    if (parseInt(ns[i].getAttribute('data-depth'),10) > 0) { best=ns[i]; break; }
+  }
+  var e = best || ns[${fPickRaw.i}];
+  if (!e) return null;
+  var b = document.querySelector('[data-testid="mm-body"]');
+  if (!b) return null;
+  /* 目标若不在可视区 ⇒ 先把它滚进来（真实鼠标事件打在视口外等于没点） */
+  var br = b.getBoundingClientRect(), r = e.getBoundingClientRect();
+  if (r.x+r.width/2 < br.x+4 || r.x+r.width/2 > br.right-4 || r.y+r.height/2 < br.y+4 || r.y+r.height/2 > br.bottom-4) {
+    b.scrollLeft = Math.max(0, b.scrollLeft + (r.x+r.width/2 - (br.x+br.width/2)));
+    b.scrollTop  = Math.max(0, b.scrollTop  + (r.y+r.height/2 - (br.y+br.height/2)));
+    br = b.getBoundingClientRect(); r = e.getBoundingClientRect();
+  }
+  var cx = Math.round(r.x+r.width/2), cy = Math.round(r.y+r.height/2);
+  var hit = document.elementFromPoint(cx, cy);
+  return { id: e.getAttribute('data-session-id'), total: total, cx: cx, cy: cy,
+           inView: cx > br.x+2 && cx < br.right-2 && cy > br.y+2 && cy < br.bottom-2,
+           hitSelf: !!(hit && (hit===e || e.contains(hit) || hit.contains(e))),
+           hitTop: hit ? (hit.tagName.toLowerCase() + (hit.getAttribute && hit.getAttribute('data-testid') ? '['+hit.getAttribute('data-testid')+']' : '')) : null };
+})()`) : null;
+if (!fPick) {
+	t("C-M19b", "点会话 → 聚焦条", false, "画布上没有节点可点");
+	t("C-M19c", "行数收窄", false, "同上");
+	t("C-M19d", "含上一层", false, "同上");
+	t("C-M19e", "退出聚焦", false, "同上");
+} else {
+	/* 落点在视口内 + 命中自己才点（否则是"打偏"，不是产品坏 —— 见 clickSel 注释） */
+	if (!fPick.inView || !fPick.hitSelf) {
+		clickMisses.push({ sel: '[data-testid="mm-node"]', tag: "C-M19b", top: fPick.hitTop, at: [fPick.cx, fPick.cy], try: 1 });
+	}
+	await clickAt(fPick.cx, fPick.cy);
+	await sleep(420);
+	const fAfter = await js(`(function(){
+	  var bar = document.querySelector('[data-testid="mm-focusbar"]');
+	  return { bar: !!bar, fid: bar ? bar.getAttribute('data-focus-id') : null,
+	           up: bar ? bar.getAttribute('data-focus-up') : null,
+	           rows: document.querySelectorAll('[data-testid="mm-node"]').length };
+	})()`);
+	t("C-M19b", "点会话 → 出现聚焦条且 `data-focus-id` = 该会话", fAfter.bar === true && fAfter.fid === fPick.id, fAfter);
+	t("C-M19c", "聚焦后可见行数 ≤ 原行数（真的收窄了，不是只挂了个条）",
+		fAfter.rows <= fPick.total, { before: fPick.total, after: fAfter.rows });
+
+	await clickSel('[data-testid="mm-focus-up"]');
+	await sleep(420);
+	const fUp = await js(`(function(){
+	  var bar = document.querySelector('[data-testid="mm-focusbar"]');
+	  return { up: bar ? bar.getAttribute('data-focus-up') : null,
+	           rows: document.querySelectorAll('[data-testid="mm-node"]').length };
+	})()`);
+	t("C-M19d", "开「含上一层」→ 开关态 = 1 且可见行数**只增不减**",
+		fUp.up === "1" && fUp.rows >= fAfter.rows, { before: fAfter.rows, after: fUp.rows });
+
+	await clickSel('[data-testid="mm-focus-exit"]');
+	await sleep(420);
+	const fExit = await js(`(function(){
+	  return { bar: !!document.querySelector('[data-testid="mm-focusbar"]'),
+	           rows: document.querySelectorAll('[data-testid="mm-node"]').length };
+	})()`);
+	t("C-M19e", "退出聚焦 → 聚焦条消失且行数回到全量（可逆，不留残留）",
+		fExit.bar === false && fExit.rows === fPick.total, { after: fExit.rows, want: fPick.total });
+}
+
+/* ══════════ 13.6 总览弹窗（R10）══════════ */
+section("【13.6】总览弹窗（左已完成 / 右待完成 · 分文件夹 · 可点 · 可发修正）");
+t("C-M20a", "前置：总览未打开", await js(`!!document.querySelector('[data-testid="mm-ov"]')`) === false, null);
+await clickSel('[data-testid="mm-overview"]');
+await sleep(560);
+const ov = await js(`(function(){
+  var e = document.querySelector('[data-testid="mm-ov"]'); if (!e) return null;
+  var items = [].slice.call(e.querySelectorAll('[data-testid="mm-ov-item"]'));
+  return { done: +(e.getAttribute('data-count-done')||0), todo: +(e.getAttribute('data-count-todo')||0),
+           items: items.length,
+           colDone: !!e.querySelector('[data-testid="mm-ov-col-done"]'),
+           colTodo: !!e.querySelector('[data-testid="mm-ov-col-todo"]'),
+           groups: e.querySelectorAll('[data-testid="mm-ov-grp"]').length };
+})()`);
+t("C-M20b", "点「总览」→ 弹窗出现且左右两列齐备", !!ov && ov.colDone && ov.colTodo, ov);
+t("C-M20c", "🔴 两列之和 = 条目总数（分类口径对账 —— 分类散落必出这类错）",
+	!!ov && ov.done + ov.todo === ov.items, ov && { done: ov.done, todo: ov.todo, items: ov.items });
+t("C-M20d", "条目按文件夹分组（组标题数 ≥ 1）", !!ov && ov.groups >= 1, ov && ov.groups);
+
+const ovFirst = await js(`(function(){var e=document.querySelector('[data-testid="mm-ov-item"]');return e?e.getAttribute('data-session-id'):null;})()`);
+if (ovFirst) {
+	await clickSel('[data-testid="mm-ov-item"]');
+	await sleep(380);
+	const ovSel = await js(`(function(){var e=document.querySelector('[data-testid="mm-ov"]');return e?e.getAttribute('data-sel-session'):null;})()`);
+	t("C-M20e", "点条目 → `data-sel-session` 变成该条（详情区据此显示执行情况）", ovSel === ovFirst, { want: ovFirst, got: ovSel });
+	t("C-M20f", "选中后「发送修正」可点（disabled=false）",
+		await js(`(function(){var b=document.querySelector('[data-testid="mm-ov-send"]');return b?!b.disabled:null;})()`) === true, null);
+} else {
+	t("C-M20e", "点条目 → 选中", false, "弹窗内无条目");
+	t("C-M20f", "发送修正可点", false, "弹窗内无条目");
+}
+await clickSel('[data-testid="mm-ov-close"]');
+await sleep(380);
+t("C-M20g", "点 ✕ 关闭总览（不留残留）", await js(`!!document.querySelector('[data-testid="mm-ov"]')`) === false, null);
+
 /* ══════════ 14. 关闭 ══════════ */
 section("【14】关闭");
 await clickSel('[data-testid="mm-close"]');
 await sleep(400);
 t("C-M18", "点 ✕ 关闭导图层（DOM 移除）", await js(`!!document.getElementById("dsh-mindmap")`) === false, null);
+
+/* ══════════ 15. 点击质量（**测试自身的证词**，不是产品断言）══════════
+ * 为什么单列一条：本项目已经三次出现"点击落空被记成产品缺陷"（顶栏 14 键、
+ * R8 登记键 23px 漂移、本脚本 C-M19b）。把落空记名并**显式断言为 0**，
+ * 才能在下一次红的时候一眼分清"产品坏了"还是"这一击打偏了"。 */
+section("【15】点击质量（真实鼠标落点自检）");
+t("C-M21", `本脚本全部点击，落点均在目标元素子树内（不许静默打偏）`,
+	clickMisses.length === 0, clickMisses.length ? clickMisses : { misses: 0 });
 
 /* ══════════ 汇总 ══════════ */
 console.log("\n───────────────────────────────────────────────");

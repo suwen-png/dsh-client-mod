@@ -109,13 +109,28 @@ export function FloatDock(props = {}) {
 	 *        实测 rect [280,287,1154,242]）；会话里有了消息后它**落到底部**
 	 *        （实测 rect [280,690,1154,126]）。位置一变，浮动组存的 bottom 就过期了。
 	 *        这一变**既没有 `resize` 事件、也不改变根元素盒尺寸** ⇒ 光加 ResizeObserver 也接不到。
-	 *   修法：宿主没有"输入区几何变化"的订阅口 ⇒ 只能**轮询**（本项目对宿主集成的既有做法：
-	 *        verify-flow 轮询宿主 `current` 会话也是同一个理由）。500ms 一次，
-	 *        只在值真的变了才 setState ⇒ 开销是一次 `getBoundingClientRect()`，可忽略。
-	 *        同时保留 `resize` 监听与 rAF 首帧复测（窗口尺寸变化时反应更快）。
-	 *   ⚠️ 不会自激：量的是 composer 与根元素，都不是浮动组自己（它是 `position:fixed`）。 */
+	 *   修法第一版：`setInterval(measure, 500)` 轮询。
+	 *
+	 *  🔴🔴 2026-09-12 第二轮真机补漏：**500ms 固定轮询会"迟一步"** ——
+	 *   现象：切会话后**紧接着**断言，浮动组还停在旧几何 `bottom:362px`，
+	 *        而当时正确值是 `137.6px`（差 224px；362 恰好对应上一次的 composer 顶 466）。
+	 *        肉眼表现就是"按钮位置不对、压住了下面那行的按钮"。
+	 *   成因：轮询是**时间驱动**的，几何在两次轮询之间变了 ⇒ 必然存在一整拍的窗口。
+	 *   正确做法：**事件优先 + 轮询兜底**（四条触发面，任一触发即 1 帧内重算）：
+	 *     ① `MutationObserver`（body 子树，只看 `class` / `style`）—— 直接接住"宿主换 composer 类"
+	 *        （`composerHero` → 贴底，就是上面那 224px 的真实成因），这是**全新建模**不是加强轮询；
+	 *     ② `ResizeObserver`（盯 composer 自身）—— 接住高度变化（附件 / 多行输入）；
+	 *     ③ `scroll`（`capture`，滚动不冒泡 ⇒ 必须 capture）—— 接住位移；
+	 *     ④ rAF 节流的兜底复量（约 100ms 一次）—— 上面三条都接不到时仍能收敛。
+	 *   为什么用 rAF 而不是继续用 `setInterval`：所有触发面都只是 `mark()` 一个脏位，
+	 *   真正的重算在下一帧统一做 ⇒ 突发变更被合并成**每帧最多一次** `getBoundingClientRect()`。
+	 *   ⚠️ 不会自激：① 跳过发生在浮动组**内部**的变更（自己改自己的 `bottom` 会进 ① 的回调）；
+	 *     ② 值没变时 `setBottomPx` 同值 ⇒ React 直接 bail out ⇒ 不产生新的 DOM 变更。 */
 	const [bottomPx, setBottomPx] = react.useState(18);
 	react.useEffect(() => {
+		/* 量的是 composer 的**外框顶部**（真机实测：`RWZidW_composerSeat` / `_composerStack`，
+		 * 会话有消息时两者都落在 y=690，视口 816 ⇒ bottom = 816-690+12 = 138）。
+		 * 取不到、或它被藏起来（0×0）时回落 18 —— 不因宿主结构变化而崩。 */
 		const measure = () => {
 			try {
 				const c = document.querySelector('[class*="composer"]');
@@ -126,15 +141,89 @@ export function FloatDock(props = {}) {
 				setBottomPx(Math.max(18, Math.min(gap + 12, window.innerHeight - 140)));
 			} catch (e) { setBottomPx(18); }
 		};
+
+		const RAF_INTERVAL = 100;                              // ④ 兜底轮的节流间隔
+		let dirty = true, lastAt = 0, rafId = 0, ro = null, roTarget = null;
+		const mark = () => { dirty = true; };
+		const isOwn = (el) => Boolean(el && el.nodeType === 1
+			&& (el.id === FLOATDOCK_ID || (el.closest && el.closest("#" + FLOATDOCK_ID))));
+		/* 把 composer 的 ResizeObserver 挂到**当前**那个元素上（宿主会整个换掉它） */
+		const ensureRO = () => {
+			const c = document.querySelector('[class*="composer"]');
+			if (c && c !== roTarget && typeof ResizeObserver === "function") {
+				if (ro) ro.disconnect();
+				roTarget = c;
+				ro = new ResizeObserver(flush);
+				ro.observe(c);
+			}
+		};
+		/* 🔴🔴 2026-09-12 第三轮真机补漏：**复量不能只挂在 rAF 上**。
+		 *   现象（verify-flow-r19 F11）：把 composer 上移 150px 后，`expected` 已经变成 287.6，
+		 *        而浮动组的 `bottom` 在 1600ms 内**一动没动**（137.6），收敛轮次耗尽判红；
+		 *        同一份代码随后单独复跑（探针 s4）却 700ms 内正常跟随到 287.6——**偶发**。
+		 *   成因：`requestAnimationFrame` 在**窗口被遮挡/不可见时会被 Chromium 暂停**
+		 *        （宿主窗口在后台是常态：跑 e2e 时没人盯着它）。于是"mark 脏位 → 下一帧复量"
+		 *        这条链在后台窗口里**可以整段不执行** —— 而当时 DOM 变更（style）明明发生了。
+		 *   正确做法：**事件直达**。与 composer 有关的变更（它自己或它的祖先换了 class/style）
+		 *        在 MutationObserver 回调里**当场复量**，不等 rAF；rAF 只保留给
+		 *        scroll / resize / 兜底（那几类丢一两帧无所谓，下一帧还会来）。
+		 *   ⚠️ 不会自激：① 浮动组自己子树里的变更被 `isOwn` 跳过（本组件只改自己的 `bottom`；
+		 *      同值 setState 时 React 直接 bail out，根本不产生新变更）；
+		 *      ② 其余变更走原来的 `mark()`，量测频率不升反降（只对"与 composer 相关"的变更加急）。 */
+		const flush = () => {
+			if (!dirty) return;
+			dirty = false;
+			lastAt = (typeof performance !== "undefined" ? performance.now() : Date.now());
+			measure();
+			ensureRO();
+		};
+
+		const tick = (ts) => {
+			rafId = requestAnimationFrame(tick);
+			if (!dirty && ts - lastAt < RAF_INTERVAL) return;
+			dirty = false; lastAt = ts;
+			measure();
+			/* ② composer 元素可能被宿主整个换掉 ⇒ 目标变了就重挂 ResizeObserver */
+			ensureRO();
+		};
+
+		/* ① 宿主换 composer 类 / 改内联样式 —— 这是"位置变了但没事件"的真实成因。
+		 *   与 composer 相关的变更**当场复量**（见 flush 注释：后台窗口 rAF 会被暂停）。 */
+		const mo = typeof MutationObserver === "function"
+			? new MutationObserver((recs) => {
+				let touchComposer = false;
+				for (const r of recs) {
+					if (isOwn(r.target)) continue;
+					dirty = true;
+					/* 首次进来时 roTarget 还没挂上 ⇒ 也当作"相关"（只多量一次，代价可忽略） */
+					if (!roTarget || r.target === roTarget
+						|| (r.target.nodeType === 1 && r.target.contains(roTarget))) { touchComposer = true; }
+				}
+				if (touchComposer) flush();
+			})
+			: null;
+		if (mo) {
+			try { mo.observe(document.body, { attributes: true, attributeFilter: ["class", "style"], subtree: true }); }
+			catch (e) { /* body 尚未就绪：兜底轮询仍能收敛 */ }
+		}
+
+		/* ③ 滚动位移（capture：scroll 不冒泡）＋ 窗口尺寸 */
+		const onScroll = () => mark();
+		const onResize = () => mark();
+		window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+		window.addEventListener("resize", onResize);
+
 		measure();
 		const raf = requestAnimationFrame(measure);            // 首帧后再量一次（boot 期布局未定）
-		window.addEventListener("resize", measure);
-		const iv = setInterval(measure, 500);                  // 跟住 composer 的**位置变化**（见上）
+		rafId = requestAnimationFrame(tick);
 		const timers = [300, 1200, 2500].map((ms) => setTimeout(measure, ms)); // 布局稳定后复测
 		return () => {
-			window.removeEventListener("resize", measure);
-			clearInterval(iv);
+			window.removeEventListener("scroll", onScroll, { capture: true });
+			window.removeEventListener("resize", onResize);
 			cancelAnimationFrame(raf);
+			cancelAnimationFrame(rafId);
+			if (ro) ro.disconnect();
+			if (mo) mo.disconnect();
 			timers.forEach(clearTimeout);
 		};
 	}, []);

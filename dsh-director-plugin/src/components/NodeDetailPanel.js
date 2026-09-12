@@ -39,7 +39,7 @@
 import * as react from "react";
 import { currentTaskOf, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip } from "../logic/flow.js";
 import { openSession, currentSessionId } from "../logic/branch-tree.js";
-import { sendToChat, findComposer } from "../bridge/chat-bridge.js";
+import { deliverToChat } from "../bridge/chat-bridge.js";
 import { listDirectorMessages } from "../store/plugin-db.js";
 import { STATE_KINDS, NODE_KINDS } from "../store/mindmap-schema.js";
 
@@ -179,30 +179,29 @@ export function NodeDetailPanel(props) {
 	const kind = NODE_KINDS[row.kind] || NODE_KINDS.leaf;
 	const stateK = STATE_KINDS[row.state] || STATE_KINDS.idle;
 
-	/** 送到该会话：登记流转 → （非当前则先打开）→ 写入原生输入框 */
+	/** 发送到该会话：登记流转 → 投递（非当前会话时先切过去）
+	 *
+	 * 🔴 本轮修正：旧版用 `sendToChat(text, { autoSend:false })` ⇒ **只填充不发送**，
+	 *   用户点完"发送"后以为没反应（还得自己去按回车）。改走 `deliverToChat`：
+	 *   直投 → 失败则 `openSession` 切过去 + 等 composer 出现 + 重投，逐级归因。
+	 */
 	async function send() {
 		const text = draft.trim();
 		if (!text) return;
 		setBusy(true);
 		try {
 			if (props.onFlow) props.onFlow({ text, origin: DIM.MINDMAP, sessionId: sid });
-			let opened = true;
-			if (!isCurrent) {
-				const r = await openSession(sid);
-				opened = Boolean(r && r.ok);
-				if (opened) await new Promise((res) => setTimeout(res, 450));
-			}
-			const focused = findComposer();
-			const res = focused ? await sendToChat(text, { autoSend: false }) : { ok: false, mode: "failed", reason: "composer-not-found" };
+			const res = await deliverToChat(text, { sessionId: sid, opener: openSession, autoSend: true });
+			const opened = res.opened !== false;
 			if (props.onFlow) {
 				props.onFlow({
 					hopTo: DIM.CHAT, text,
-					note: res && res.ok ? "已写入原生输入框（" + (res.mode || "filled") + "）" : "未送达：" + ((res && res.reason) || "未知")
+					note: res.ok ? "已投递到原生对话（" + (res.mode || "sent") + "）" : "未送达 · " + ((res && res.reason) || "未知")
 				});
 			}
 			if (onSay) {
-				if (res && res.ok) onSay("已带入该对话的原生输入框，回车即发（" + (isCurrent ? "当前对话" : (opened ? "已切到该对话" : "⚠ 未能切到该对话")) + "）");
-				else onSay("未送达：还需打开一个对话（" + ((res && res.reason) || "composer 不可用") + "）", "warn");
+				if (res.ok) onSay(res.mode === "sent" ? "已发送到该对话" : "已填入输入框");
+				else onSay("未送达 · " + ((res && res.reason) || "未知"), "warn");
 			}
 			setDraft("");
 		} finally { setBusy(false); }
@@ -298,8 +297,7 @@ export function NodeDetailPanel(props) {
 			/* 读不到原生内容时**明确说清**，不留空白让人以为坏了 */
 			!isCurrent || String(isCurrent) !== String(sid) ? h("div", {
 				key: "caveat", style: { ...S.note, borderTop: "1px dashed var(--dp-line, #31343a)", paddingTop: 6 }, "data-testid": "nd-caveat"
-			}, "⚠ 该框不是宿主当前对话 ⇒ 它的**原生消息内容读不到**（宿主只暴露当前会话的对话 DOM）。" +
-				"下面输入框会先打开该对话、再把内容写进它的原生输入框。") : null
+			}, "非当前对话：读不到其消息内容；发送时会先切换过去。") : null
 		]),
 
 		/* ④ 输入条 —— 「点到哪里往哪里输入」 */
@@ -311,19 +309,19 @@ export function NodeDetailPanel(props) {
 			]),
 			h("textarea", {
 				key: "i", style: S.inp, "data-testid": "nd-input", value: draft, disabled: busy,
-				placeholder: "对这个对话说点什么 —— 回车带入它的原生输入框…",
+				placeholder: "输入内容，回车发送",
 				onChange: (e) => setDraft(e.target.value),
 				onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }
 			}),
 			h("div", { key: "b", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
-				h("button", { key: "s", style: { ...S.btn, ...S.btnPri, opacity: busy ? 0.6 : 1 }, "data-testid": "nd-send", disabled: busy, onClick: send },
-					busy ? "处理中…" : "送到该对话 ▸"),
+				h("button", { key: "s", style: { ...S.btn, ...S.btnPri, opacity: busy ? 0.6 : 1 }, "data-testid": "nd-send", disabled: busy, title: "发送到该对话", onClick: send },
+					busy ? "处理中…" : "发送"),
 				props.onRoute ? h("button", {
 					key: "r", style: S.btn, "data-testid": "nd-route", disabled: busy,
-					title: "把这条内容交给总监判断该由哪个对话执行（路由结果在底栏确认，不静默分发）",
+					title: "交由总监判断去向",
 					onClick: () => { const t = draft.trim(); if (!t) return; props.onRoute(t); setDraft(""); }
-				}, "交给总监判断") : null,
-				h("span", { key: "n", style: S.note }, "登记流转 → " + (isCurrent && String(isCurrent) === String(sid) ? "写入原生输入框" : "打开该对话 → 写入原生输入框"))
+				}, "交由总监") : null,
+				h("span", { key: "n", style: S.note }, isCurrent && String(isCurrent) === String(sid) ? "当前对话" : "非当前，先切换")
 			])
 		])
 	]);

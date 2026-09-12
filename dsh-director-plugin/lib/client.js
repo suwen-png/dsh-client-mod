@@ -4955,6 +4955,11 @@ window.__ModuleLoader__.load({
 			
 			const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 			
+			/** 最近一次投递的结果（供界面呈现与验证脚本读 —— 降级也要看得见走的是哪一级） */
+			let lastDeliver = null;
+			/** @returns {object|null} 最近一次 `deliverToChat` 的返回 */
+			function getLastDeliver() { return lastDeliver; }
+			
 			/** 发送按钮的语义锚点（实测值，勿改成类名） */
 			const SEND_ARIA = "发送消息";
 			/** composer 编辑器占位文案（实测值；命中不到时退回"任意可见 textarea"） */
@@ -4966,9 +4971,23 @@ window.__ModuleLoader__.load({
 				return r.width > 0 && r.height > 0;
 			}
 			
+			/**
+			 * 宿主是否正在生成回答。
+			 *
+			 * 判据：出现 `button[aria-label="停止生成"]`（宿主把「发送」换成「停止」的那个按钮）。
+			 * ⚠️ 为什么要单独判它：**生成中宿主会把 composer 隐藏**
+			 *   （真机实测：`textarea[placeholder=…]` 仍在 DOM，但外层 `display:none` ⇒ 盒为 0×0，
+			 *    `findComposer()` 自然返回 null）。此时若只说「先打开对话区」会误导用户
+			 *    —— 框不是没打开，是宿主在生成中暂时收起来了。
+			 * @returns {boolean}
+			 */
+			function isAgentGenerating() {
+				if (!hasDom()) return false;
+				return Boolean(document.querySelector('button[aria-label="停止生成"]'));
+			}
+			
 			/** 找到 composer 编辑器 */
-			function findComposer() {
-				if (!hasDom()) return null;
+			function findComposer() {	if (!hasDom()) return null;
 				const byPh = document.querySelector('textarea[placeholder="' + COMPOSER_PLACEHOLDER + '"]');
 				if (byPh && isVisible(byPh)) return byPh;
 				for (const ta of document.querySelectorAll("textarea")) if (isVisible(ta)) return ta;
@@ -5044,11 +5063,57 @@ window.__ModuleLoader__.load({
 			}
 			
 			/**
+			 * 🔴 宿主直投通道：把指令交给宿主自己的会话发送口 `window.__directChatSubmit`
+			 *
+			 * 为什么"点原生发送按钮"不够（2026-09-12 真机实测）：
+			 *   宿主的 InputBar 在 `focusTarget !== "chat"` 时会把提交**劫持给总监**
+			 *   —— 走 `window.__directorSubmit`，也就是"再跑一遍宿主自己那套五步"。
+			 *   而我们的指令**已经过插件侧五步处理**（`runDirector`）⇒ 会被处理两次，
+			 *   并且落进宿主旧版总监库（插件侧 R5 与它不是同一份）。实测后果：
+			 *   `__directorSubmit` 内部把**快照对象**当活会话用，抛
+			 *   `TypeError: session.prompt is not a function` ⇒ 消息其实**没送到智能体**，
+			 *   而点按钮这件事本身成功 ⇒ 表现为"显示已发送，实际没发"（最坏的假绿灯）。
+			 *
+			 *   `__directChatSubmit` 用的是宿主**同一份** `scopedConversation(sessions,id).send(text)`
+			 *   —— 直投对话域，不经过 InputBar 的劫持分支。
+			 *
+			 * 证据（不是"调了就算"）：`__directChatSubmit` 每次执行都会写
+			 *   `window.__directChatProbe = {called, sessionId, draft, time}`
+			 *   ⇒ 以 `called` 的**增量**为凭据，确认宿主确实收下了这次投递。
+			 *
+			 * @param {string} sessionId 目标会话
+			 * @param {string} text 已处理好的指令
+			 * @returns {Promise<{ok:boolean, mode?:"sent", via?:string, verified?:boolean, reason?:string}>}
+			 */
+			async function sendToHost(sessionId, text) {
+				if (!hasDom()) return { ok: false, reason: "no-dom" };
+				if (!sessionId) return { ok: false, reason: "no-session" };
+				const fn = window.__directChatSubmit;
+				if (typeof fn !== "function") return { ok: false, reason: "host-send-unavailable" };
+				const called = () => {
+					const p = window.__directChatProbe;
+					return p && typeof p.called === "number" ? p.called : 0;
+				};
+				const before = called();
+				try {
+					fn(sessionId, String(text));
+				} catch (e) {
+					return { ok: false, reason: "host-send-throw:" + (e && e.message) };
+				}
+				for (let i = 0; i < 8; i++) {
+					await new Promise((r) => setTimeout(r, 60));
+					if (called() > before) return { ok: true, mode: "sent", via: "host-send", verified: true };
+				}
+				return { ok: false, reason: "host-send-unconfirmed" };
+			}
+			
+			/**
 			 * 左 → 右 主入口：把总监侧输入送到对话域
 			 *
-			 * 两级降级（保证"必定有反馈"，不会静默失败）：
-			 *   ① `autoSend=true` 且发送按钮可用 → 真正发送，`mode="sent"`
-			 *   ② 否则 → 文本已填入 composer，`mode="filled"`，由用户确认后手动发送
+			 * 四级降级（保证"必定有反馈"，不会静默失败）：
+			 *   ① `sessionId` 有效且宿主直投口可用 → 直投对话域，`mode="sent"` / `via="host-send"`（首选）
+			 *   ② `autoSend=true` 且发送按钮可用    → 真正发送，`mode="sent"`
+			 *   ③ 否则                              → 文本已填入 composer，`mode="filled"`，由用户确认后手动发送
 			 *
 			 * @param {string} text
 			 * @param {{autoSend?:boolean, verify?:boolean}} [opts]
@@ -5074,6 +5139,79 @@ window.__ModuleLoader__.load({
 				await new Promise((r) => setTimeout(r, 120));
 				const after = readComposerText();
 				return { ok: true, mode: "sent", verified: after !== null ? after === "" : null };
+			}
+			
+			/**
+			 * 🔴 把一条指令**真正送达某会话的原生对话**（三级降级 + 写后回读）
+			 *
+			 * 为什么需要它（而不是直接用 `sendToChat`）：
+			 *   总监页是宿主 tab 环里的**独立 view**，切到它时原生 composer 多半**不在场**
+			 *   （`findComposer()` 返回 null，因为它要求元素有非零盒）。
+			 *   实测形态：在总监页 `sendToChat` 直接失败 → 用户以为"总监没把消息发出去"。
+			 *   ⇒ 必须允许「先切到目标会话，等 composer 出现，再投递」这条通道。
+			 *
+			 * 为什么 `opener` 由调用方注入（而不是本模块 import `logic/branch-tree.js`）：
+			 *   `branch-tree.js` 依赖宿主 ctx 与 split.js，本模块是**零业务依赖的 DOM 通道**。
+			 *   反向 import 会形成 module 环（build 期外置顺序受影响）。注入更干净、可单测。
+			 *
+			 * 判据（四级，逐级降级，**每级都给出归因**）：
+			 *   ① 宿主直投口可用 + 有 sessionId → 直投对话域  `via="host-send"`（首选；避开 InputBar 的「总监劫持」）
+			 *   ② `composer` 已在场            → 直投        `via="direct"`
+			 *   ③ `opener(sessionId)` 成功 + 等 → 再投        `via="open-then-send"`
+			 *   ④ 仍不在场                     → 失败并报因  `reason="composer-unavailable"`
+			 *
+			 * @param {string} text
+			 * @param {{sessionId?:string, opener?:(id:string)=>Promise<{ok:boolean,reason?:string}>,
+			 *          autoSend?:boolean, settleMs?:number, hostSend?:boolean}} [opts]
+			 * @returns {Promise<{ok:boolean, mode:"sent"|"filled"|"failed", reason?:string,
+			 *                    via?:string, opened?:boolean, verified?:boolean|null}>}
+			 */
+			async function deliverToChat(text, opts = {}) {
+				const r = await deliverImpl(text, opts);
+				lastDeliver = { ...r, at: Date.now(), sessionId: (opts && opts.sessionId) || null };
+				return r;
+			}
+			
+			/** `deliverToChat` 的实现体（外层包一层只为记录 `lastDeliver`） */
+			async function deliverImpl(text, opts = {}) {
+				const t = String(text == null ? "" : text);
+				if (!t.trim()) return { ok: false, mode: "failed", reason: "empty-text" };
+			
+				/* ① 宿主直投：指令已由插件侧处理完，应**直接**进对话域，
+				 *    不再经 InputBar（否则会被宿主的旧版总监再处理一次，见 sendToHost 论证）。 */
+				if (opts.autoSend !== false && opts.hostSend !== false && opts.sessionId) {
+					const h = await sendToHost(opts.sessionId, t);
+					if (h.ok) {
+						// 投递成功 ⇒ 原生草稿已被消费；留着会变成"发完还在框里"的脏数据
+						try { setComposerText(""); } catch (e) { /* composer 不在场：无需清理 */ }
+						return { ok: true, mode: "sent", via: h.via, verified: h.verified, opened: false };
+					}
+				}
+			
+				const settle = typeof opts.settleMs === "number" ? opts.settleMs : 450;
+				let composer = findComposer();
+				let opened = false;
+			
+				if (!composer && typeof opts.opener === "function" && opts.sessionId) {
+					try {
+						const r = await opts.opener(opts.sessionId);
+						opened = Boolean(r && r.ok);
+					} catch (e) {
+						return { ok: false, mode: "failed", reason: "open-error:" + (e && e.message), opened: false };
+					}
+					if (opened) await new Promise((res) => setTimeout(res, settle));
+					composer = findComposer();
+				}
+			
+				if (!composer) {
+					return {
+						ok: false, mode: "failed", reason: "composer-unavailable", opened,
+						via: opened ? "open-then-send" : "direct"
+					};
+				}
+			
+				const r = await sendToChat(t, { autoSend: opts.autoSend !== false });
+				return { ...r, opened, via: opened ? "open-then-send" : "direct" };
 			}
 			
 			/* ── 右 → 左：产出观察 ─────────────────────────────────────────── */
@@ -5143,7 +5281,8 @@ window.__ModuleLoader__.load({
 				const api = {
 					SEND_ARIA, COMPOSER_PLACEHOLDER,
 					findComposer, findSendButton, findMessageList,
-					setComposerText, readComposerText, submitComposer, sendToChat,
+					setComposerText, readComposerText, submitComposer, sendToChat, sendToHost, deliverToChat, getLastDeliver,
+					isAgentGenerating,
 					readConversation, observeConversation
 				};
 				window.__dshChatBridge = api;
@@ -5151,14 +5290,18 @@ window.__ModuleLoader__.load({
 				return api;
 			}
 			
+			exports.getLastDeliver = getLastDeliver;
 			exports.SEND_ARIA = SEND_ARIA;
 			exports.COMPOSER_PLACEHOLDER = COMPOSER_PLACEHOLDER;
+			exports.isAgentGenerating = isAgentGenerating;
 			exports.findComposer = findComposer;
 			exports.findSendButton = findSendButton;
 			exports.setComposerText = setComposerText;
 			exports.readComposerText = readComposerText;
 			exports.submitComposer = submitComposer;
+			exports.sendToHost = sendToHost;
 			exports.sendToChat = sendToChat;
+			exports.deliverToChat = deliverToChat;
 			exports.findMessageList = findMessageList;
 			exports.readConversation = readConversation;
 			exports.observeConversation = observeConversation;
@@ -5642,13 +5785,19 @@ window.__ModuleLoader__.load({
 				contextFilter: {
 					key: "contextFilter",
 					name: "上下文筛选",
-					enabled: false,
+					/* 🔴 默认改为 true（2026-09-12）：文档 §1.2 定义总监是**五步**处理，
+					 * 而默认表把第 ④⑤ 步关着 ⇒ 出厂默认与自身规格矛盾（真机实测：真流转的
+					 * 总监回复里只有 1/2/3 步，第 4/5 步被 `reasoning` 的 enabled 过滤掉）。
+					 * 两步都是 G0（零模型、零网络、永不抛错），开启不引入失败面。 */
+					enabled: true,
 					prompt: "当切换模型/分支时，筛选需要传递的上下文片段，去除无关历史，控制token量。"
 				},
 				outputReview: {
 					key: "outputReview",
 					name: "自动审核产出",
-					enabled: false,
+					/* 🔴 默认改为 true（同上）：用户核心目标里「审核」由总监统筹，
+					 * 第 ⑤ 步正是那条审核环 —— 关掉它等于核心目标默认不生效。 */
+					enabled: true,
 					prompt: "大模型返回结果后，自动审核文档/代码是否符合原始需求，不符合则标注问题并建议修正。"
 				}
 			};
@@ -12257,6 +12406,560 @@ window.__ModuleLoader__.load({
 			exports.installBranchTreeApi = installBranchTreeApi;
 		};
 
+		// ── logic/branch-focus.js ──
+		__defs["logic/branch-focus.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：分支链路聚焦（用户需求 R9：点对话只显示该链路 / 可选含上一层 / 可下钻）
+			 * 引用：用户原话（2026-09-12 第七轮）
+			 * 上游：components/MindMap.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 J）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/branch-focus.js — 分支链路聚焦（纯函数）
+			 *
+			 * ── 需求（用户原话）─────────────────────────────────────────────
+			 *   「对话会存在分支。我点击对话，那么只默认显示这个分支的链路，
+			 *     然后可以选是否包含上一层，如果有下一层可以往下一层走。
+			 *     比如对话 1,2,3,4,5 每个对话分支 a,b,c；
+			 *     我在 1 的 a 点击思维导图，那么就是进入整个 1 的上下游分支；
+			 *     然后点击上一层才是 1,2,3,4,5 全显示。」
+			 *
+			 * ── 语义拆解（三种集合，别混）────────────────────────────────
+			 *   `upstreamChain`  祖先链（**不含自身**，从根到直接父）—— 即用户说的"上一层"
+			 *   `downstreamIds`  自身 + **全部后代** —— 即用户说的"往下一层走"（可继续下钻）
+			 *   `focusRows`      最终可见行 = 下游 ∪ （可选）上游，**保持原行序**
+			 *
+			 * ── 为什么是纯函数 ──────────────────────────────────────────────
+			 *   导图渲染依赖 DOM 几何，`verify-mindmap` 只能真机跑（慢）。
+			 *   把判定逻辑抽成纯函数 ⇒ `test-branch-focus.mjs` 可离线穷举边界
+			 *   （空 id / 环 / 孤儿父 / 兄弟不在链上），真机只负责"接没接上"。
+			 *
+			 * ── 边界（每条都有离线样本）──────────────────────────────────
+			 *   · `sessionId` 为空或不在 rows 内 → **返回全部行**（不聚焦，而不是返回空 ——
+			 *     返回空会让导图突然变白，属"看起来像坏了"）
+			 *   · 环（a→b→a）→ 用 seen 集截断，不无限循环
+			 *   · 父不在 rows（父会话被删）→ 祖先链止于此，**不报错**
+			 *   · 兄弟会话（同父不同枝）→ **不属于**上下游，不含在内
+			 */
+			
+			/** sessionId → 行 的索引 */
+			function indexById(rows) {
+				const m = new Map();
+				for (const r of rows || []) if (r && r.sessionId) m.set(r.sessionId, r);
+				return m;
+			}
+			
+			/**
+			 * 祖先链（**不含自身**），从根 → 直接父排序。
+			 * @param {Array<{sessionId:string,parentSessionId?:string}>} rows
+			 * @param {string} sessionId
+			 * @returns {Array} 祖先行（远 → 近）
+			 */
+			function upstreamChain(rows, sessionId) {
+				const byId = indexById(rows);
+				const out = [];
+				const seen = new Set([sessionId]);
+				let cur = byId.get(sessionId);
+				while (cur && cur.parentSessionId && byId.has(cur.parentSessionId) && !seen.has(cur.parentSessionId)) {
+					const pid = cur.parentSessionId;
+					seen.add(pid);
+					cur = byId.get(pid);
+					out.unshift(cur);
+				}
+				return out;
+			}
+			
+			/**
+			 * 自身 + 全部后代（不含祖先、不含兄弟）。
+			 * @returns {Set<string>}
+			 */
+			function downstreamIds(rows, sessionId) {
+				const kids = new Map();
+				for (const r of rows || []) {
+					if (!r || !r.parentSessionId) continue;
+					const arr = kids.get(r.parentSessionId) || [];
+					arr.push(r.sessionId);
+					kids.set(r.parentSessionId, arr);
+				}
+				const out = new Set();
+				const stack = [sessionId];
+				while (stack.length) {
+					const id = stack.pop();
+					if (out.has(id)) continue; // 环保护
+					out.add(id);
+					for (const k of kids.get(id) || []) stack.push(k);
+				}
+				return out;
+			}
+			
+			/**
+			 * 同级节点（同一个父下的**其他**会话）。
+			 *
+			 * 🔴 为什么需要它 —— 用户原话的语义修正：
+			 *   最初把「含上一层」实现成「并入祖先链」，但用户的例子否掉了它：
+			 *   「对话 1,2,3,4,5 每个对话分支 a,b,c；我在 1 的 a 点击…然后点击上一层才是 1,2,3,4,5 全显示」
+			 *   —— 1..5 是**根**，a 是 1 的子。并入祖先链只会得到 `1, a`，
+			 *   **得不到 2,3,4,5**。用户要的是「上**一层**」＝那一层的**全景**。
+			 *   ⇒ 「含上一层」= 祖先链 ∪ 链上每一环的同级节点。
+			 */
+			function siblingIds(rows, sessionId) {
+				const byId = indexById(rows);
+				const self = byId.get(sessionId);
+				if (!self) return [];
+				const key = self.parentSessionId || "";
+				const out = [];
+				for (const r of rows || []) {
+					if (!r || r.sessionId === sessionId) continue;
+					if ((r.parentSessionId || "") === key) out.push(r.sessionId);
+				}
+				return out;
+			}
+			
+			/**
+			 * 「上一层」全景 = **祖先链** ∪ 链上每一环的同级。
+			 *
+			 * 🔴 语义由用户例子逐字校准（两处都踩过）：
+			 *   例子：「对话 1,2,3,4,5 每个对话分支 a,b,c；我在 1 的 a 点击思维导图
+			 *          那么就是进入整个 1 的上下游分支；然后点击上一层才是 1,2,3,4,5 全显示。」
+			 *   ① 第一版实现成「并入祖先链」—— 点 a 只得 `1, a`，**拿不到 2,3,4,5** ⇒ 错；
+			 *   ② 第二版对「自身 + 祖先」都取同级 —— 会把 `1-b, 1-c` 也拉进来，
+			 *      与用户列的「1,2,3,4,5」不符 ⇒ 过宽；
+			 *   ③ 现版：只对**祖先链**取同级；祖先链为空（点的就是根）时，取**自身所在层**的同级。
+			 *      ⇒ 点 a（子在 1 下）→ 上一层 = {1, 2,3,4,5}；
+			 *      ⇒ 点 1（就是根）→ 上一层 = {2,3,4,5}，与 1 的分支合并即"全显示"。
+			 *
+			 * @returns {string[]} 不含自身
+			 */
+			function upstreamPanorama(rows, sessionId) {
+				const byId = indexById(rows);
+				const anc = upstreamChain(rows, sessionId);
+				const self = byId.get(sessionId);
+				// 祖先链为空 = 点的就是根 ⇒ 用自身所在层去找同级
+				const chain = anc.length ? anc : (self ? [self] : []);
+				const out = new Set(anc.map((r) => r.sessionId));
+				for (const a of chain) for (const s of siblingIds(rows, a.sessionId)) out.add(s);
+				out.delete(sessionId);
+				return [...out];
+			}
+			
+			/**
+			 * 聚焦后的可见行。
+			 *
+			 * 可见 = **祖先链**（默认就含 —— 用户说点 a 要看到「整个 1 的上下游分支」，
+			 *        所以 1 必须在场）∪ **自身 + 全部后代** ∪ （`includeParents` 时）**上一层全景**
+			 *
+			 * @param {Array} rows `buildBranchTree().rows`
+			 * @param {string} sessionId 被点击的会话
+			 * @param {{includeParents?:boolean}} [opts]
+			 * @returns {{rows:Array, applied:boolean, stats:{self:number,up:number,down:number,total:number}}}
+			 *   `applied=false` 表示"没聚焦"（入参不合法 ⇒ 返回全量，调用方据此不显示聚焦开关）
+			 */
+			function focusRows(rows, sessionId, opts = {}) {
+				const all = Array.isArray(rows) ? rows : [];
+				const byId = indexById(all);
+				const fallback = { rows: all, applied: false, stats: { self: 0, up: 0, down: 0, total: all.length } };
+				if (!sessionId || !byId.has(sessionId)) return fallback;
+			
+				const down = downstreamIds(all, sessionId);
+				const anc = upstreamChain(all, sessionId).map((r) => r.sessionId);
+				const extra = opts.includeParents ? upstreamPanorama(all, sessionId) : [];
+				const upSet = new Set([...anc, ...extra]);
+				const keep = new Set([...down, ...upSet]);
+				return {
+					rows: all.filter((r) => keep.has(r.sessionId)),
+					applied: true,
+					stats: {
+						self: 1,
+						up: upSet.size,
+						down: down.size - 1, // 不含自身
+						total: keep.size
+					}
+				};
+			}
+			
+			/**
+			 * 某会话是否有**可下钻**的下一层（导图据此决定「下钻」是否可用）。
+			 */
+			function hasDownstream(rows, sessionId) {
+				const byId = indexById(rows);
+				for (const r of rows || []) if (r && r.parentSessionId === sessionId && byId.has(r.sessionId)) return true;
+				return false;
+			}
+			
+			/** 安装全局契约（供真机脚本调用） */
+			function installBranchFocusApi() {
+				if (typeof window === "undefined") return null;
+				const api = { indexById, upstreamChain, downstreamIds, siblingIds, upstreamPanorama, focusRows, hasDownstream };
+				window.__dshBranchFocus = api;
+				return api;
+			}
+			
+			exports.indexById = indexById;
+			exports.upstreamChain = upstreamChain;
+			exports.downstreamIds = downstreamIds;
+			exports.siblingIds = siblingIds;
+			exports.upstreamPanorama = upstreamPanorama;
+			exports.focusRows = focusRows;
+			exports.hasDownstream = hasDownstream;
+			exports.installBranchFocusApi = installBranchFocusApi;
+		};
+
+		// ── logic/overview.js ──
+		__defs["logic/overview.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总览弹窗的数据整形（R10：左已完成 / 右待完成，按文件夹+对话分类）
+			 * 引用：用户原话（2026-09-12 第七轮）
+			 * 上游：components/OverviewDialog.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 J）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/overview.js — 总览弹窗的数据整形（纯函数）
+			 *
+			 * ── 需求（用户原话）─────────────────────────────────────────────
+			 *   「思维导图最上面加一个弹窗，分为左右列。左列是目前所有完成的功能，
+			 *     右列是所有待完成的，按照文件夹、对话进行分类。这样我们随时[掌握]所有项目的情况。
+			 *     同时这个允许点击，每一条点击的时候在左侧显示具体执行完成或者正在执行的情况，
+			 *     我可以随时针对点击的部分发送消息进行修正。」
+			 *
+			 * ── 分类口径（必须写死在这里，不许各组件各判一次）────────────────
+			 *   已完成 = `state === "done"`                 ← 导图节点态（宿主/推断都算）
+			 *          或 `completed === true`              ← 宿主显式真值
+			 *   待完成 = 其余
+			 *
+			 * 🔴 为什么要单列口径：本项目已栽过一次「一个语义标在两个元素上」导致计数翻倍
+			 *   （`data-collapsed`）。分类若散落在 UI 里，两列之和 ≠ 总条数 这类错误
+			 *   会以「看起来挺合理」的形态长期存在。
+			 */
+			
+			/** 单条会话的展示态（UI 与测试共用一份判据） */
+			function isDoneRow(row) {
+				if (!row) return false;
+				return row.state === "done" || row.completed === true;
+			}
+			
+			/** 运行中（"正在执行"）—— 与 `isDoneRow` 互斥优先：运行中优先显示为进行中 */
+			function isRunningRow(row) {
+				if (!row) return false;
+				if (isDoneRow(row)) return false;
+				return row.state === "running" || row.running === true || Boolean(row.pending);
+			}
+			
+			/** 进行中标签（详情区显示用） */
+			function statusLabelOf(row) {
+				if (!row) return "未知";
+				if (isDoneRow(row)) return "已完成";
+				if (isRunningRow(row)) return row.pending ? "待确认" : "执行中";
+				return "待开始";
+			}
+			
+			function groupPush(map, folder, item) {
+				const arr = map.get(folder);
+				if (arr) arr.push(item); else map.set(folder, [item]);
+			}
+			
+			function toGroups(map) {
+				return [...map.entries()]
+					.sort((a, b) => a[0].localeCompare(b[0], "zh"))
+					.map(([folder, items]) => ({
+						folder,
+						items: items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) || String(a.title).localeCompare(String(b.title), "zh"))
+					}));
+			}
+			
+			/**
+			 * 把「会话行 + 数据源映射」整理成两列分组。
+			 *
+			 * @param {object} input
+			 * @param {Array} input.rows `buildBranchTree().rows`
+			 * @param {Array} [input.sessions] `discover().sessions`（sessionId ↔ workspaceId）
+			 * @param {Array} [input.workspaces] `discover().workspaces`（workspaceId ↔ 显示名）
+			 * @returns {{done:Array<{folder:string,items:Array}>, todo:Array<{folder:string,items:Array}>,
+			 *            counts:{done:number,todo:number,total:number}, folders:string[]}}
+			 */
+			function buildOverview(input = {}) {
+				const rows = Array.isArray(input.rows) ? input.rows : [];
+				const sessions = Array.isArray(input.sessions) ? input.sessions : [];
+				const workspaces = Array.isArray(input.workspaces) ? input.workspaces : [];
+			
+				const wsName = new Map();
+				for (const w of workspaces) if (w && w.id !== undefined) wsName.set(w.id, w.name || String(w.id));
+				const seWs = new Map();
+				for (const s of sessions) if (s && s.id) seWs.set(String(s.id), s.workspaceId);
+			
+				const doneMap = new Map();
+				const todoMap = new Map();
+				let done = 0;
+				let todo = 0;
+			
+				for (const r of rows) {
+					if (!r || !r.sessionId) continue;
+					const wsId = seWs.get(String(r.sessionId));
+					const folder = (wsId !== undefined && wsName.get(wsId)) || (wsId ? "工作区 " + String(wsId).slice(0, 8) : "未分组");
+					const item = {
+						sessionId: r.sessionId,
+						title: r.title || r.sessionId,
+						folder,
+						state: r.state,
+						statusLabel: statusLabelOf(r),
+						depth: r.depth,
+						childrenCount: r.childrenCount || 0,
+						updatedAt: r.updatedAt || 0,
+						running: isRunningRow(r),
+						done: isDoneRow(r)
+					};
+					if (item.done) { groupPush(doneMap, folder, item); done++; }
+					else { groupPush(todoMap, folder, item); todo++; }
+				}
+			
+				return {
+					done: toGroups(doneMap),
+					todo: toGroups(todoMap),
+					counts: { done, todo, total: done + todo },
+					folders: [...new Set([...doneMap.keys(), ...todoMap.keys()])].sort()
+				};
+			}
+			
+			/** 安装全局契约（供真机脚本比对） */
+			function installOverviewApi() {
+				if (typeof window === "undefined") return null;
+				const api = { buildOverview, isDoneRow, isRunningRow, statusLabelOf };
+				window.__dshOverview = api;
+				return api;
+			}
+			
+			exports.isDoneRow = isDoneRow;
+			exports.isRunningRow = isRunningRow;
+			exports.statusLabelOf = statusLabelOf;
+			exports.buildOverview = buildOverview;
+			exports.installOverviewApi = installOverviewApi;
+		};
+
+		// ── components/OverviewDialog.js ──
+		__defs["components/OverviewDialog.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总览弹窗（R10：左已完成 / 右待完成 · 按文件夹+对话分组 · 可点击 · 可发消息修正）
+			 * 引用：用户原话（2026-09-12 第七轮）
+			 * 上游：components/MindMap.js
+			 * 下游：logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/personalize.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 J）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/OverviewDialog.js — 总览弹窗（R10）
+			 *
+			 * ── 需求（用户原话）─────────────────────────────────────────────
+			 *   「思维导图最上面加一个弹窗，分为左右列。左列是目前所有完成的功能，
+			 *     右列是所有待完成的，按照文件夹、对话进行分类……
+			 *     这个允许点击，每一条点击的时候在左侧显示具体执行完成或者正在执行的情况，
+			 *     我可以随时针对点击的部分发送消息进行修正。」
+			 *
+			 * ── 三个设计决定（都不是随手定的）──────────────────────────────
+			 *  ① **分类口径只定义一次**（`logic/overview.js`）——
+			 *     本项目栽过「一个语义标在两个元素上 ⇒ 计数翻倍」，分类散落必出同类错。
+			 *  ② **点条目 = 选中，不是跳转** —— 用户要的是"在左侧显示执行情况"，
+			 *     跳走会让用户丢失全局面。选中态写进 `data-sel-session` 供断言。
+			 *  ③ **发送走 `deliverToChat`** —— 与总监页/节点面板同一条投递通道，
+			 *     避免"总览这里能发、别处发不出去"的多套真相源。
+			 */
+			
+			const react = require("react");
+			const { buildOverview } = __m("logic/overview.js");
+			const { discover } = __m("logic/discover.js");
+			const { deliverToChat } = __m("bridge/chat-bridge.js");
+			const { openSession } = __m("logic/branch-tree.js");
+			const { listDirectorMessages } = __m("store/plugin-db.js");
+			
+			const h = react.createElement;
+			const OVERVIEW_ID = "dsh-mm-overview";
+			
+			const S = {
+				backdrop: {
+					position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.42)",
+					display: "flex", alignItems: "flex-start", justifyContent: "center"
+				},
+				panel: {
+					marginTop: 54, width: "min(1080px, 94vw)", maxHeight: "78vh", display: "flex", flexDirection: "column",
+					background: "var(--dsw-alias-bg-layer-2, var(--dp-bg-1, #141519))",
+					color: "var(--dsw-alias-label-primary, var(--dp-t1, #e6e8eb))",
+					border: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #31343a))",
+					borderRadius: 12, boxShadow: "var(--dsw-shadow-lv2, 0 18px 48px rgba(0,0,0,.5))",
+					fontFamily: "inherit", overflow: "hidden"
+				},
+				hd: {
+					display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+					borderBottom: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #31343a))", flex: "0 0 auto"
+				},
+				cols: { display: "flex", gap: 0, flex: "1 1 auto", minHeight: 0 },
+				col: { flex: "1 1 50%", minWidth: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #31343a))" },
+				colLast: { flex: "1 1 50%", minWidth: 0, display: "flex", flexDirection: "column" },
+				colHd: { padding: "7px 10px", fontSize: 12.5, fontWeight: 650, borderBottom: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #31343a))" },
+				body: { flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "6px 8px" },
+				grp: { margin: "6px 0 10px" },
+				grpT: { fontSize: 11.5, fontWeight: 650, opacity: 0.72, margin: "0 2px 4px" },
+				item: (sel) => ({
+					display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", borderRadius: 7, cursor: "pointer",
+					fontSize: 12, background: sel ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
+					border: "1px solid " + (sel ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "transparent")
+				}),
+				dot: (c) => ({ width: 7, height: 7, borderRadius: "50%", background: c, flex: "0 0 auto" }),
+				ft: { flex: "0 0 auto", borderTop: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #31343a))", padding: "8px 10px" },
+				inp: {
+					width: "100%", boxSizing: "border-box", resize: "vertical", minHeight: 44, padding: "6px 8px",
+					borderRadius: 7, border: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #3d4148))",
+					background: "var(--dsw-alias-bg-layer-1, rgba(255,255,255,.03))",
+					color: "inherit", fontFamily: "inherit", fontSize: 12
+				},
+				btn: {
+					padding: "4px 10px", fontSize: 12, borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+					border: "1px solid var(--dsw-alias-border-l2, var(--dp-line, #3d4148))",
+					background: "transparent", color: "inherit"
+				},
+				btnPri: { border: "1px solid var(--dp-ac, #2f6feb)", background: "var(--dp-ac, #2f6feb)", color: "#fff" },
+				muted: { opacity: 0.6, fontSize: 11.5 }
+			};
+			
+			const STATE_COLOR = { done: "#3fb950", running: "#2f6feb", warn: "#d29922", idle: "#8b9199", info: "#d29922" };
+			
+			/**
+			 * @param {object} props
+			 * @param {boolean} props.open
+			 * @param {() => void} props.onClose
+			 * @param {Array} props.rows 会话行（`buildBranchTree().rows`）
+			 * @param {(m:string, tone?:string) => void} [props.onSay]
+			 */
+			function OverviewDialog(props) {
+				const { open, onClose, rows, onSay } = props;
+				const [data, setData] = react.useState(null);
+				const [sel, setSel] = react.useState(null);
+				const [draft, setDraft] = react.useState("");
+				const [busy, setBusy] = react.useState(false);
+				const [mode, setMode] = react.useState("idle");
+				const [msgs, setMsgs] = react.useState([]);
+			
+				/* 数据：discover（文件夹映射）+ buildOverview（分类分组）。open 时才拉，避免常驻开销。 */
+				react.useEffect(() => {
+					if (!open) return;
+					let dead = false;
+					(async () => {
+						let src = { sessions: [], workspaces: [] };
+						try { src = await discover(); } catch (e) { /* 降级：无分组信息，全部归「未分组」 */ }
+						if (dead) return;
+						setData(buildOverview({ rows, sessions: src.sessions, workspaces: src.workspaces }));
+					})();
+					return () => { dead = true; };
+				}, [open, rows]);
+			
+				/* 选中条目的"执行情况"：取该会话的总监消息（有则显示末条） */
+				react.useEffect(() => {
+					if (!sel) { setMsgs([]); return; }
+					let dead = false;
+					(async () => {
+						try {
+							const list = (await listDirectorMessages("se_" + String(sel))) || [];
+							if (!dead) setMsgs(list);
+						} catch (e) { if (!dead) setMsgs([]); }
+					})();
+					return () => { dead = true; };
+				}, [sel]);
+			
+				if (!open) return null;
+			
+				const counts = (data && data.counts) || { done: 0, todo: 0, total: 0 };
+				const selItem = (() => {
+					if (!data || !sel) return null;
+					for (const g of [...data.done, ...data.todo]) {
+						const hit = g.items.find((x) => String(x.sessionId) === String(sel));
+						if (hit) return hit;
+					}
+					return null;
+				})();
+			
+				const send = async () => {
+					const t = draft.trim();
+					if (!t || !sel) return;
+					setBusy(true);
+					try {
+						const r = await deliverToChat(t, { sessionId: sel, opener: openSession, autoSend: true });
+						setMode(r.mode === "sent" ? "sent" : (r.ok ? "filled" : "failed"));
+						if (onSay) onSay(r.ok ? (r.mode === "sent" ? "已发送修正" : "已填入输入框") : "未送达 · " + r.reason, r.ok ? "" : "warn");
+						setDraft("");
+					} finally { setBusy(false); }
+				};
+			
+				const renderCol = (title, groups, key, last) => h("div", {
+					key, style: last ? S.colLast : S.col, "data-testid": "mm-ov-col-" + key
+				}, [
+					h("div", { key: "h", style: S.colHd, "data-testid": "mm-ov-h-" + key },
+						title + " · " + (key === "done" ? counts.done : counts.todo)),
+					h("div", { key: "b", style: S.body, className: "dp-scroll", "data-testid": "mm-ov-body-" + key },
+						groups.length ? groups.map((g) => h("div", { key: g.folder, style: S.grp, "data-testid": "mm-ov-grp" }, [
+							h("div", { key: "t", style: S.grpT }, "📁 " + g.folder + "（" + g.items.length + "）"),
+							...g.items.map((it) => h("div", {
+								key: it.sessionId, style: S.item(String(it.sessionId) === String(sel)),
+								"data-testid": "mm-ov-item", "data-session-id": it.sessionId, "data-state": it.state,
+								"data-folder": it.folder,
+								onClick: () => { setSel(it.sessionId); setMode("idle"); },
+								title: it.folder + " · " + it.statusLabel
+							}, [
+								h("span", { key: "d", style: S.dot(STATE_COLOR[it.state] || STATE_COLOR.idle) }),
+								h("span", { key: "t", style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, it.title),
+								h("span", { key: "s", style: S.muted }, it.statusLabel)
+							]))
+						])) : h("div", { key: "e", style: S.muted, "data-testid": "mm-ov-empty-" + key }, "无"))
+				]);
+			
+				return h("div", {
+					id: OVERVIEW_ID, style: S.backdrop, "data-testid": "mm-ov", "data-open": "1",
+					"data-count-done": counts.done, "data-count-todo": counts.todo,
+					"data-sel-session": sel || "", "data-deliver-mode": mode,
+					onClick: (e) => { if (e.target === e.currentTarget) onClose(); }
+				}, [
+					h("div", { key: "p", style: S.panel, role: "dialog", "aria-label": "项目总览" }, [
+						h("div", { key: "hd", style: S.hd }, [
+							h("span", { key: "t", style: { fontWeight: 650, fontSize: 13 } }, "总览"),
+							h("span", { key: "c", style: S.muted }, "已完成 " + counts.done + " · 待完成 " + counts.todo + " · 合计 " + counts.total),
+							h("span", { key: "f", style: { ...S.muted, marginLeft: "auto" } }, "按文件夹分组"),
+							h("button", { key: "x", style: S.btn, "data-testid": "mm-ov-close", "aria-label": "关闭总览", title: "关闭", onClick: onClose }, "✕")
+						]),
+						h("div", { key: "c", style: S.cols }, [
+							renderCol("已完成", (data && data.done) || [], "done", false),
+							renderCol("待完成", (data && data.todo) || [], "todo", true)
+						]),
+						h("div", { key: "ft", style: S.ft, "data-testid": "mm-ov-detail" }, [
+							h("div", { key: "s", style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" } }, [
+								h("span", { key: "k", style: { fontWeight: 650, fontSize: 12 } },
+									selItem ? ("执行情况 · " + selItem.title) : "选择左侧任一条目查看执行情况"),
+								selItem ? h("span", { key: "st", style: S.muted }, "状态 " + selItem.statusLabel + " · " + selItem.folder + " · 子分支 " + selItem.childrenCount) : null,
+								selItem ? h("span", { key: "m", style: S.muted }, "总监消息 " + msgs.length) : null,
+								selItem && msgs.length ? h("span", { key: "l", style: { ...S.muted, maxWidth: "46%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+									"末条：" + String((msgs[msgs.length - 1] || {}).text || "").slice(0, 60)) : null
+							]),
+							h("textarea", {
+								key: "i", style: S.inp, "data-testid": "mm-ov-input", value: draft, disabled: busy || !sel,
+								placeholder: sel ? "输入修正内容，回车发送" : "先选一条",
+								onChange: (e) => setDraft(e.target.value),
+								onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }
+							}),
+							h("div", { key: "b", style: { display: "flex", gap: 6, marginTop: 6, alignItems: "center" } }, [
+								h("button", { key: "s", style: { ...S.btn, ...S.btnPri, opacity: busy ? 0.6 : 1 }, "data-testid": "mm-ov-send", disabled: busy || !sel, title: "发送修正到该对话", onClick: send },
+									busy ? "处理中…" : "发送修正"),
+								h("span", { key: "n", style: S.muted }, sel ? "目标 …" + String(sel).slice(-8) : "未选中")
+							])
+						])
+					])
+				]);
+			}
+			
+			__defaults["components/OverviewDialog.js"] = OverviewDialog;
+			
+			exports.OVERVIEW_ID = OVERVIEW_ID;
+			exports.OverviewDialog = OverviewDialog;
+		};
+
 		// ── logic/mindmap-render.js ──
 		__defs["logic/mindmap-render.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -12890,7 +13593,7 @@ window.__ModuleLoader__.load({
 			const react = require("react");
 			const { currentTaskOf, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip } = __m("logic/flow.js");
 			const { openSession, currentSessionId } = __m("logic/branch-tree.js");
-			const { sendToChat, findComposer } = __m("bridge/chat-bridge.js");
+			const { deliverToChat } = __m("bridge/chat-bridge.js");
 			const { listDirectorMessages } = __m("store/plugin-db.js");
 			const { STATE_KINDS, NODE_KINDS } = __m("store/mindmap-schema.js");
 			
@@ -13030,30 +13733,29 @@ window.__ModuleLoader__.load({
 				const kind = NODE_KINDS[row.kind] || NODE_KINDS.leaf;
 				const stateK = STATE_KINDS[row.state] || STATE_KINDS.idle;
 			
-				/** 送到该会话：登记流转 → （非当前则先打开）→ 写入原生输入框 */
+				/** 发送到该会话：登记流转 → 投递（非当前会话时先切过去）
+				 *
+				 * 🔴 本轮修正：旧版用 `sendToChat(text, { autoSend:false })` ⇒ **只填充不发送**，
+				 *   用户点完"发送"后以为没反应（还得自己去按回车）。改走 `deliverToChat`：
+				 *   直投 → 失败则 `openSession` 切过去 + 等 composer 出现 + 重投，逐级归因。
+				 */
 				async function send() {
 					const text = draft.trim();
 					if (!text) return;
 					setBusy(true);
 					try {
 						if (props.onFlow) props.onFlow({ text, origin: DIM.MINDMAP, sessionId: sid });
-						let opened = true;
-						if (!isCurrent) {
-							const r = await openSession(sid);
-							opened = Boolean(r && r.ok);
-							if (opened) await new Promise((res) => setTimeout(res, 450));
-						}
-						const focused = findComposer();
-						const res = focused ? await sendToChat(text, { autoSend: false }) : { ok: false, mode: "failed", reason: "composer-not-found" };
+						const res = await deliverToChat(text, { sessionId: sid, opener: openSession, autoSend: true });
+						const opened = res.opened !== false;
 						if (props.onFlow) {
 							props.onFlow({
 								hopTo: DIM.CHAT, text,
-								note: res && res.ok ? "已写入原生输入框（" + (res.mode || "filled") + "）" : "未送达：" + ((res && res.reason) || "未知")
+								note: res.ok ? "已投递到原生对话（" + (res.mode || "sent") + "）" : "未送达 · " + ((res && res.reason) || "未知")
 							});
 						}
 						if (onSay) {
-							if (res && res.ok) onSay("已带入该对话的原生输入框，回车即发（" + (isCurrent ? "当前对话" : (opened ? "已切到该对话" : "⚠ 未能切到该对话")) + "）");
-							else onSay("未送达：还需打开一个对话（" + ((res && res.reason) || "composer 不可用") + "）", "warn");
+							if (res.ok) onSay(res.mode === "sent" ? "已发送到该对话" : "已填入输入框");
+							else onSay("未送达 · " + ((res && res.reason) || "未知"), "warn");
 						}
 						setDraft("");
 					} finally { setBusy(false); }
@@ -13149,8 +13851,7 @@ window.__ModuleLoader__.load({
 						/* 读不到原生内容时**明确说清**，不留空白让人以为坏了 */
 						!isCurrent || String(isCurrent) !== String(sid) ? h("div", {
 							key: "caveat", style: { ...S.note, borderTop: "1px dashed var(--dp-line, #31343a)", paddingTop: 6 }, "data-testid": "nd-caveat"
-						}, "⚠ 该框不是宿主当前对话 ⇒ 它的**原生消息内容读不到**（宿主只暴露当前会话的对话 DOM）。" +
-							"下面输入框会先打开该对话、再把内容写进它的原生输入框。") : null
+						}, "非当前对话：读不到其消息内容；发送时会先切换过去。") : null
 					]),
 			
 					/* ④ 输入条 —— 「点到哪里往哪里输入」 */
@@ -13162,19 +13863,19 @@ window.__ModuleLoader__.load({
 						]),
 						h("textarea", {
 							key: "i", style: S.inp, "data-testid": "nd-input", value: draft, disabled: busy,
-							placeholder: "对这个对话说点什么 —— 回车带入它的原生输入框…",
+							placeholder: "输入内容，回车发送",
 							onChange: (e) => setDraft(e.target.value),
 							onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }
 						}),
 						h("div", { key: "b", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
-							h("button", { key: "s", style: { ...S.btn, ...S.btnPri, opacity: busy ? 0.6 : 1 }, "data-testid": "nd-send", disabled: busy, onClick: send },
-								busy ? "处理中…" : "送到该对话 ▸"),
+							h("button", { key: "s", style: { ...S.btn, ...S.btnPri, opacity: busy ? 0.6 : 1 }, "data-testid": "nd-send", disabled: busy, title: "发送到该对话", onClick: send },
+								busy ? "处理中…" : "发送"),
 							props.onRoute ? h("button", {
 								key: "r", style: S.btn, "data-testid": "nd-route", disabled: busy,
-								title: "把这条内容交给总监判断该由哪个对话执行（路由结果在底栏确认，不静默分发）",
+								title: "交由总监判断去向",
 								onClick: () => { const t = draft.trim(); if (!t) return; props.onRoute(t); setDraft(""); }
-							}, "交给总监判断") : null,
-							h("span", { key: "n", style: S.note }, "登记流转 → " + (isCurrent && String(isCurrent) === String(sid) ? "写入原生输入框" : "打开该对话 → 写入原生输入框"))
+							}, "交由总监") : null,
+							h("span", { key: "n", style: S.note }, isCurrent && String(isCurrent) === String(sid) ? "当前对话" : "非当前，先切换")
 						])
 					])
 				]);
@@ -13251,6 +13952,8 @@ window.__ModuleLoader__.load({
 			
 			const react = require("react");
 			const { LAYOUT, subscribeBranch, getBranchSnapshot, refreshBranchTree, visibleRows, ancestorChain, treeBounds, matchRows, degradationReason, hostCapabilities, openSession, forkBranch, watchCurrentSession } = __m("logic/branch-tree.js");
+			const { focusRows, hasDownstream } = __m("logic/branch-focus.js");
+			const { OverviewDialog } = __m("components/OverviewDialog.js");
 			const { route, review6, DESTINATION, DESTINATION_LABEL } = __m("logic/routing.js");
 			const { edgePathFor, edgeStyleOf, metaLineOf, stateTitleOf, kindLabelOf, nodeBtnStyle } = __m("logic/mindmap-render.js");
 			const { dshLog } = __m("util/debug.js");
@@ -13366,6 +14069,11 @@ window.__ModuleLoader__.load({
 				const [toast, setToast] = react.useState("");
 				const [inset, setInset] = react.useState(() => readInset());
 				const [collapsed, setCollapsed] = react.useState(() => new Set());
+				/* 分支链路聚焦（R9）：focusId=被聚焦的会话；focusUp=「含上一层」（祖先层全景） */
+				const [focusId, setFocusId] = react.useState(null);
+				const [focusUp, setFocusUp] = react.useState(false);
+				/* 总览弹窗（R10）：挂在导图最上面，独立 fixed 层 */
+				const [ovOpen, setOvOpen] = react.useState(false);
 				const [hov, setHov] = react.useState(null);
 				const [menu, setMenu] = react.useState(null);
 				const [q, setQ] = react.useState("");
@@ -13512,7 +14220,40 @@ window.__ModuleLoader__.load({
 					})
 					: baseRows;
 			
-				const winRows = visibleRows(rows, collapsed);
+				/* ── 折叠计数：必须按**当前树里真的存在**的节点算 ────────────────────
+				 * 🔴 为什么不能直接用 `collapsed.size`（2026-09-12 真机定案）：
+				 *   `collapsed` 是组件 state，而本组件**不随树变化而卸载**（切会话 / 换数据后原地重渲），
+				 *   于是里面会留着**旧树的 sessionId**。此时 `collapsed.size > 0` 但渲染出来的
+				 *   `[data-collapsed=1]` 节点数是 **0** —— 两边对不上，后果是用户点「折叠全部」
+				 *   得到一句「已展开全部」而画布毫无变化（正是用户反复投诉的「点了像没点」）。
+				 *   真机证据（verify-mindmap r14/r15，同一份代码两次不同表现）：
+				 *     r15 点了之后 toast=「已展开全部」而 DOM 里 `[data-collapsed=1]` = 0；
+				 *     r14 点击后按钮文案停在「展开全部」⇒ C-M9b 红。
+				 *   这是本项目**同一类缺陷的第四次**（r5tab 页签 / 导图 focusId / nd-panel 开关 /
+				 *   本处 collapsed）：跨轮存活的组件 state，读取前必须先与当前数据对账。
+				 *   ⇒ 纪律统一为：**派生值只从当前数据推**，不读可能过期的容器。
+				 *       且必须从**当前可见的**那一份推（见下 `winRows`）—— 作用在看不见的节点上
+				 *       等于"点了没反应"，这正是用户反复投诉的形态。 */
+				/* ── 分支链路聚焦（用户需求 R9）──────────────────────────────
+				 * 「我点击对话那么只默认显示这个分支的链路，然后可以选是否包含上一层，
+				 *   如果有下一层可以往下一层走。」
+				 * 应用顺序：**先聚焦、后折叠** —— 折叠只作用于已经可见的集合，
+				 * 两套开关互不干扰（先折叠再聚焦会让"被折叠的节点"偷偷回到视野里）。 */
+				const focus = focusRows(rows, focusId, { includeParents: focusUp });
+				const focusDownOk = focusId ? hasDownstream(rows, focusId) : false;
+			
+				const winRows = visibleRows(focus.rows, collapsed);
+				/* 🔴 2026-09-12 第二次定案（verify-mindmap r16/r17 C-M9a 连红）：
+				 *   上一版只把"陈旧 id"修掉了，但**基数仍然取错** —— 用的是 `rows`（全部血缘行），
+				 *   而画布渲染的是 `winRows`（聚焦 + 折叠之后**真正可见**的那一份）。
+				 *   聚焦态下 `winRows ⊊ rows`，于是「折叠全部」会去折一个**看不见的**节点：
+				 *   库里的数据对了、toast 也报了"已折叠 1 棵子树"、按钮文案翻了「展开全部」——
+				 *   **而画布上什么都没发生**。用户视角就是坏的（点了像没点）。
+				 *   实测证据：r16/r17 `{"allCollapsed":0(DOM),"allToast":"已折叠 1 棵子树",
+				 *   "collapsibleNonRoot":0}` —— DOM 里 `data-collapsed=1` 是 0，而文案说折了 1 棵。
+				 *   ⇒ 判据统一为：**动作与计数都只看 `winRows`**（所见即所折）。 */
+				const collapsedLive = winRows.filter((r) => collapsed.has(r.sessionId)).length;
+				const collapsibleLive = winRows.filter((r) => r.depth > 0 && r.childrenCount > 0).length;
 				const bounds = treeBounds(winRows);
 				const stageW = Math.max(LAYOUT.minW, bounds.x + bounds.w);
 				const stageH = Math.max(LAYOUT.minH, bounds.y + bounds.h);
@@ -13645,13 +14386,18 @@ window.__ModuleLoader__.load({
 				}
 			
 				function toggleAll() {
-					const has = collapsed.size > 0;
+					/* 判据 = `collapsedLive`（**当前可见的**、真被标记的节点数），不是 `collapsed.size`
+					 *（后者可能含旧树 / 不可见节点的 id ⇒ 会走"展开全部"分支，而画布上并没有折叠）。 */
+					const has = collapsedLive > 0;
 					if (has) { setCollapsed(new Set()); say("已展开全部"); return; }
-					// 只折叠"有子且非根"的节点：根也折掉会让画布只剩一个节点，什么也看不出来
-					const ids = rows.filter((r) => r.depth > 0 && r.childrenCount > 0).map((r) => r.sessionId);
+					/* 只折叠**可见集合里**"有子且非根"的节点 —— 与画布渲染的是同一份 `winRows`。
+					 * 根也折掉会让画布只剩一个节点，什么也看不出来。
+					 * 🔴 用 `winRows` 而不是 `rows`：聚焦态下两者不等，拿 `rows` 会折到看不见的节点上，
+					 *   用户点「折叠全部」后画布毫无变化（r16/r17 C-M9a 实测）。 */
+					const ids = winRows.filter((r) => r.depth > 0 && r.childrenCount > 0).map((r) => r.sessionId);
 					setCollapsed(new Set(ids));
 					/* 「无事可做」也必须说话并说清原因 —— 用户反复投诉过「点了像没点」。 */
-					say(ids.length
+					say(collapsibleLive
 						? "已折叠 " + ids.length + " 棵子树（点框内的 ▸ 可单独展开）"
 						: "本层没有可折叠的子树（根节点不参与「折叠全部」，否则画布只剩一个节点）");
 				}
@@ -13725,13 +14471,18 @@ window.__ModuleLoader__.load({
 						}, snap.lineage ? "血缘：ctx.sessions ✔" : "血缘不可用（分组树）"),
 						h("span", { key: "c", style: S.muted, "data-testid": "mm-count" },
 							"分支 " + rows.length + " · 连线 " + (tree.edges || []).length +
-							(collapsed.size ? " · 折叠 " + collapsed.size : "") +
+							(collapsedLive ? " · 折叠 " + collapsedLive : "") +
 							(movesCount ? " · 移动 " + movesCount : "")),
 						curId ? h("span", { key: "cur", style: S.muted, "data-testid": "mm-current-chip", title: "宿主当前会话（左栏点了哪个就跟着变）" },
 							"当前会话 …" + String(curId).slice(-8)) : null,
 			
 						h("button", {
-							key: "p", style: { ...S.btn, marginLeft: "auto" }, "data-testid": "mm-personalize",
+							key: "ov", style: { ...S.btn, marginLeft: "auto" }, "data-testid": "mm-overview",
+							title: "项目总览：已完成 / 待完成",
+							onClick: () => setOvOpen(true)
+						}, "▤ 总览"),
+						h("button", {
+							key: "p", style: S.btn, "data-testid": "mm-personalize",
 							title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角 / 连线（四处共用同一份）",
 							onClick: () => setPOpen((v) => !v)
 						}, "⚙ 个性化"),
@@ -13762,15 +14513,15 @@ window.__ModuleLoader__.load({
 			
 						h("button", {
 							key: "ca", style: S.btn, "data-testid": "mm-collapse-all",
-							title: collapsed.size ? "展开全部子树" : "折叠全部有子的非根节点",
+							title: collapsedLive ? "展开全部子树" : "折叠全部有子的非根节点",
 							onClick: toggleAll
-						}, collapsed.size ? "🗖 展开全部" : "🗂 折叠全部"),
+						}, collapsedLive ? "🗖 展开全部" : "🗂 折叠全部"),
 			
 						h("button", {
 							key: "al", style: { ...S.btn, opacity: movesCount ? 1 : 0.5 }, "data-testid": "mm-auto-layout",
 							title: movesCount ? ("把 " + movesCount + " 个被你拖过的框放回自动布局") : "当前没有拖过的框（都在自动布局位）",
 							onClick: () => {
-								if (!movesCount) { say("当前没有拖过的框 —— 都在自动布局位置（拖动任一框后本按钮才有效）"); return; }
+								if (!movesCount) { say("没有拖过的框（拖动任一框后本按钮才有效）"); return; }
 								directorLayoutStore.resetNodePos();
 								say("已归位 " + movesCount + " 个框（回到自动布局）");
 							}
@@ -13811,6 +14562,28 @@ window.__ModuleLoader__.load({
 							title: "元素覆盖度（详见 store/mindmap-schema.js MM_COVERAGE）"
 						}, "元素 " + cov.done + "/" + cov.total)
 					]),
+			
+					/* ── 聚焦条（R9）：只在真正聚焦时出现，不聚焦不占位 ── */
+					focus.applied ? h("div", {
+						key: "fobar", style: { ...S.tools, paddingRight: padRight }, "data-testid": "mm-focusbar",
+						"data-focus-id": focusId || "", "data-focus-up": focusUp ? "1" : "0",
+						"data-focus-down": focusDownOk ? "1" : "0"
+					}, [
+						h("span", { key: "t", style: S.chip, "data-testid": "mm-focus-title" },
+							"聚焦 " + String((rows.find((r) => r.sessionId === focusId) || {}).title || "该分支").slice(0, 18)),
+						h("span", { key: "s", style: S.muted, "data-testid": "mm-focus-stats" },
+							"下游 " + (focus.stats.down + 1) + " · 上游 " + focus.stats.up),
+						h("button", {
+							key: "u", "data-testid": "mm-focus-up", "data-on": focusUp ? "1" : "0",
+							style: { ...S.btn, borderColor: focusUp ? "var(--dp-ac, #2f6feb)" : undefined },
+							title: "含上一层", onClick: () => setFocusUp((v) => !v)
+						}, (focusUp ? "☑" : "☐") + " 含上一层"),
+						focusDownOk ? h("span", { key: "d", style: S.muted, "data-testid": "mm-focus-down" }, "▸ 可下钻（点子节点）") : null,
+						h("button", {
+							key: "x", "data-testid": "mm-focus-exit", style: S.btn, title: "退出聚焦，显示全部",
+							onClick: () => { setFocusId(null); setFocusUp(false); say("已退出聚焦"); }
+						}, "退出聚焦")
+					]) : null,
 			
 					/* ── 主区：画布 + 右侧对话面板 ── */
 					h("div", { key: "main", style: S.main }, [
@@ -13877,6 +14650,8 @@ window.__ModuleLoader__.load({
 												/* 拖过就不当点击（拖动结束时置位一拍，见 justDraggedRef） */
 												if (justDraggedRef.current) return;
 												setDetailId(r.sessionId);
+												/* 同时进入「链路聚焦」（R9）：只看这一支及其上下游 */
+												setFocusId(r.sessionId);
 											},
 											onContextMenu: (e) => {
 												e.preventDefault(); e.stopPropagation();
@@ -14098,6 +14873,11 @@ window.__ModuleLoader__.load({
 						}) : null
 					]),
 			
+					/* ── 总览弹窗（R10）：导图**最上面**的独立层，不改动画布布局 ── */
+					h(OverviewDialog, {
+						key: "ov", open: ovOpen, onClose: () => setOvOpen(false), rows, onSay: (m) => say(m)
+					}),
+			
 					/* ── 底部：选中分支信息 + 待路由输入 + 审核结果 ── */
 					h("div", { key: "f", style: S.foot }, [
 						h("div", { key: "info", style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, [
@@ -14112,14 +14892,14 @@ window.__ModuleLoader__.load({
 							!caps.available ? h("span", { key: "w", style: { ...S.muted, color: "#d29922" } }, "⚠ 宿主 sessions 服务不可用 ⇒ fork / 打开 已禁用") : null
 						]),
 						h("div", { key: "in", style: { display: "flex", gap: 7, alignItems: "center" } }, [
-							h("span", { key: "c", style: S.chip }, "待总监路由"),
+							h("span", { key: "c", style: S.chip }, "路由"),
 							h("input", {
 								key: "i", style: S.input, "data-testid": "mm-input", value: draft,
-								placeholder: "直接说要做什么，总监判断该由哪个对话执行（也可用右侧面板输入到具体框）…",
+								placeholder: "输入内容，交由总监判断去向",
 								onChange: (e) => setDraft(e.target.value),
 								onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doRoute(); } }
 							}),
-							h("button", { key: "b", style: S.btnPri, "data-testid": "mm-route", onClick: doRoute }, "交给总监判断")
+							h("button", { key: "b", style: S.btnPri, "data-testid": "mm-route", title: "交由总监判断去向", onClick: doRoute }, "交由总监")
 						]),
 						routeResult ? h("div", {
 							key: "rr", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, "data-testid": "mm-route-card"
@@ -14292,13 +15072,28 @@ window.__ModuleLoader__.load({
 				 *        实测 rect [280,287,1154,242]）；会话里有了消息后它**落到底部**
 				 *        （实测 rect [280,690,1154,126]）。位置一变，浮动组存的 bottom 就过期了。
 				 *        这一变**既没有 `resize` 事件、也不改变根元素盒尺寸** ⇒ 光加 ResizeObserver 也接不到。
-				 *   修法：宿主没有"输入区几何变化"的订阅口 ⇒ 只能**轮询**（本项目对宿主集成的既有做法：
-				 *        verify-flow 轮询宿主 `current` 会话也是同一个理由）。500ms 一次，
-				 *        只在值真的变了才 setState ⇒ 开销是一次 `getBoundingClientRect()`，可忽略。
-				 *        同时保留 `resize` 监听与 rAF 首帧复测（窗口尺寸变化时反应更快）。
-				 *   ⚠️ 不会自激：量的是 composer 与根元素，都不是浮动组自己（它是 `position:fixed`）。 */
+				 *   修法第一版：`setInterval(measure, 500)` 轮询。
+				 *
+				 *  🔴🔴 2026-09-12 第二轮真机补漏：**500ms 固定轮询会"迟一步"** ——
+				 *   现象：切会话后**紧接着**断言，浮动组还停在旧几何 `bottom:362px`，
+				 *        而当时正确值是 `137.6px`（差 224px；362 恰好对应上一次的 composer 顶 466）。
+				 *        肉眼表现就是"按钮位置不对、压住了下面那行的按钮"。
+				 *   成因：轮询是**时间驱动**的，几何在两次轮询之间变了 ⇒ 必然存在一整拍的窗口。
+				 *   正确做法：**事件优先 + 轮询兜底**（四条触发面，任一触发即 1 帧内重算）：
+				 *     ① `MutationObserver`（body 子树，只看 `class` / `style`）—— 直接接住"宿主换 composer 类"
+				 *        （`composerHero` → 贴底，就是上面那 224px 的真实成因），这是**全新建模**不是加强轮询；
+				 *     ② `ResizeObserver`（盯 composer 自身）—— 接住高度变化（附件 / 多行输入）；
+				 *     ③ `scroll`（`capture`，滚动不冒泡 ⇒ 必须 capture）—— 接住位移；
+				 *     ④ rAF 节流的兜底复量（约 100ms 一次）—— 上面三条都接不到时仍能收敛。
+				 *   为什么用 rAF 而不是继续用 `setInterval`：所有触发面都只是 `mark()` 一个脏位，
+				 *   真正的重算在下一帧统一做 ⇒ 突发变更被合并成**每帧最多一次** `getBoundingClientRect()`。
+				 *   ⚠️ 不会自激：① 跳过发生在浮动组**内部**的变更（自己改自己的 `bottom` 会进 ① 的回调）；
+				 *     ② 值没变时 `setBottomPx` 同值 ⇒ React 直接 bail out ⇒ 不产生新的 DOM 变更。 */
 				const [bottomPx, setBottomPx] = react.useState(18);
 				react.useEffect(() => {
+					/* 量的是 composer 的**外框顶部**（真机实测：`RWZidW_composerSeat` / `_composerStack`，
+					 * 会话有消息时两者都落在 y=690，视口 816 ⇒ bottom = 816-690+12 = 138）。
+					 * 取不到、或它被藏起来（0×0）时回落 18 —— 不因宿主结构变化而崩。 */
 					const measure = () => {
 						try {
 							const c = document.querySelector('[class*="composer"]');
@@ -14309,15 +15104,89 @@ window.__ModuleLoader__.load({
 							setBottomPx(Math.max(18, Math.min(gap + 12, window.innerHeight - 140)));
 						} catch (e) { setBottomPx(18); }
 					};
+			
+					const RAF_INTERVAL = 100;                              // ④ 兜底轮的节流间隔
+					let dirty = true, lastAt = 0, rafId = 0, ro = null, roTarget = null;
+					const mark = () => { dirty = true; };
+					const isOwn = (el) => Boolean(el && el.nodeType === 1
+						&& (el.id === FLOATDOCK_ID || (el.closest && el.closest("#" + FLOATDOCK_ID))));
+					/* 把 composer 的 ResizeObserver 挂到**当前**那个元素上（宿主会整个换掉它） */
+					const ensureRO = () => {
+						const c = document.querySelector('[class*="composer"]');
+						if (c && c !== roTarget && typeof ResizeObserver === "function") {
+							if (ro) ro.disconnect();
+							roTarget = c;
+							ro = new ResizeObserver(flush);
+							ro.observe(c);
+						}
+					};
+					/* 🔴🔴 2026-09-12 第三轮真机补漏：**复量不能只挂在 rAF 上**。
+					 *   现象（verify-flow-r19 F11）：把 composer 上移 150px 后，`expected` 已经变成 287.6，
+					 *        而浮动组的 `bottom` 在 1600ms 内**一动没动**（137.6），收敛轮次耗尽判红；
+					 *        同一份代码随后单独复跑（探针 s4）却 700ms 内正常跟随到 287.6——**偶发**。
+					 *   成因：`requestAnimationFrame` 在**窗口被遮挡/不可见时会被 Chromium 暂停**
+					 *        （宿主窗口在后台是常态：跑 e2e 时没人盯着它）。于是"mark 脏位 → 下一帧复量"
+					 *        这条链在后台窗口里**可以整段不执行** —— 而当时 DOM 变更（style）明明发生了。
+					 *   正确做法：**事件直达**。与 composer 有关的变更（它自己或它的祖先换了 class/style）
+					 *        在 MutationObserver 回调里**当场复量**，不等 rAF；rAF 只保留给
+					 *        scroll / resize / 兜底（那几类丢一两帧无所谓，下一帧还会来）。
+					 *   ⚠️ 不会自激：① 浮动组自己子树里的变更被 `isOwn` 跳过（本组件只改自己的 `bottom`；
+					 *      同值 setState 时 React 直接 bail out，根本不产生新变更）；
+					 *      ② 其余变更走原来的 `mark()`，量测频率不升反降（只对"与 composer 相关"的变更加急）。 */
+					const flush = () => {
+						if (!dirty) return;
+						dirty = false;
+						lastAt = (typeof performance !== "undefined" ? performance.now() : Date.now());
+						measure();
+						ensureRO();
+					};
+			
+					const tick = (ts) => {
+						rafId = requestAnimationFrame(tick);
+						if (!dirty && ts - lastAt < RAF_INTERVAL) return;
+						dirty = false; lastAt = ts;
+						measure();
+						/* ② composer 元素可能被宿主整个换掉 ⇒ 目标变了就重挂 ResizeObserver */
+						ensureRO();
+					};
+			
+					/* ① 宿主换 composer 类 / 改内联样式 —— 这是"位置变了但没事件"的真实成因。
+					 *   与 composer 相关的变更**当场复量**（见 flush 注释：后台窗口 rAF 会被暂停）。 */
+					const mo = typeof MutationObserver === "function"
+						? new MutationObserver((recs) => {
+							let touchComposer = false;
+							for (const r of recs) {
+								if (isOwn(r.target)) continue;
+								dirty = true;
+								/* 首次进来时 roTarget 还没挂上 ⇒ 也当作"相关"（只多量一次，代价可忽略） */
+								if (!roTarget || r.target === roTarget
+									|| (r.target.nodeType === 1 && r.target.contains(roTarget))) { touchComposer = true; }
+							}
+							if (touchComposer) flush();
+						})
+						: null;
+					if (mo) {
+						try { mo.observe(document.body, { attributes: true, attributeFilter: ["class", "style"], subtree: true }); }
+						catch (e) { /* body 尚未就绪：兜底轮询仍能收敛 */ }
+					}
+			
+					/* ③ 滚动位移（capture：scroll 不冒泡）＋ 窗口尺寸 */
+					const onScroll = () => mark();
+					const onResize = () => mark();
+					window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+					window.addEventListener("resize", onResize);
+			
 					measure();
 					const raf = requestAnimationFrame(measure);            // 首帧后再量一次（boot 期布局未定）
-					window.addEventListener("resize", measure);
-					const iv = setInterval(measure, 500);                  // 跟住 composer 的**位置变化**（见上）
+					rafId = requestAnimationFrame(tick);
 					const timers = [300, 1200, 2500].map((ms) => setTimeout(measure, ms)); // 布局稳定后复测
 					return () => {
-						window.removeEventListener("resize", measure);
-						clearInterval(iv);
+						window.removeEventListener("scroll", onScroll, { capture: true });
+						window.removeEventListener("resize", onResize);
 						cancelAnimationFrame(raf);
+						cancelAnimationFrame(rafId);
+						if (ro) ro.disconnect();
+						if (mo) mo.disconnect();
 						timers.forEach(clearTimeout);
 					};
 				}, []);
@@ -14784,6 +15653,308 @@ window.__ModuleLoader__.load({
 			exports.mountHierarchyOverlay = mountHierarchyOverlay;
 		};
 
+		// ── logic/orchestrate.js ──
+		__defs["logic/orchestrate.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监统筹闭环（阶段编排 + 六维打分 + 打分标准自审 + 三轮多方位评估）
+			 * 引用：用户原话（2026-09-12 第七轮）
+			 * 上游：components/DirectorPage.js, logic/director-run.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 K）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/orchestrate.js — 总监统筹闭环（纯函数）
+			 *
+			 * ── 需求（用户原话）─────────────────────────────────────────────
+			 *   「我最终核心目标为，比如我提供一个想法……文档完成之后，后续的开发文档编写，审核，
+			 *     蓝图设计，测试等等都由总监统筹。审核标准为前端审美、按钮交互，
+			 *     审核标准是为围绕核心目的进行打分判断是否满足，打分标准也需要进行审核，
+			 *     打分起码三轮多方位评估。」
+			 *   「也就是我提供一个想法，主要定时审核设计图效果就可以，有问题提给总监修改。」
+			 *
+			 * ── 三个必须分开的概念（混在一起就会退化成"跑三次同一套"）──────
+			 *   ① **阶段编排**：想法 → 文档 → 审核 → 蓝图 → 测试 → 收口（谁来产出什么、何时进下一阶段）
+			 *   ② **打分标准**：6 个维度 × 0–5 分，每档都有判据（不是"感觉不错给 4 分"）
+			 *   ③ **三轮机制**：三轮换的是**证据来源**，不是重复次数
+			 *        R1 规格符合性（对照需求文档）／ R2 独立证据源（真机截图 + DOM 回读）／
+			 *        R3 反证（构造"应该失败"的输入）
+			 *
+			 * ── 并行的一条硬要求：**打分标准自己也要被审**（用户明确要求）────────
+			 *   `auditRubric()` 三条：可达性 / 不重叠 / 可证伪。三条不全过，
+			 *   这套标准**不允许拿来打分** —— 否则分数是"看起来能区分"的数字。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、阶段编排
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const STAGE = Object.freeze({
+				PLAN: "plan",
+				DOC: "doc",
+				REVIEW: "review",
+				BLUEPRINT: "blueprint",
+				TEST: "test",
+				DONE: "done"
+			});
+			
+			/** 阶段定义：`need` = 进入本阶段需要的产出；`out` = 本阶段应产出什么 */
+			const STAGES = Object.freeze([
+				{ key: STAGE.PLAN, label: "拆解", out: "需求理解 + 任务清单", need: "想法" },
+				{ key: STAGE.DOC, label: "文档", out: "设计/开发文档（含验收判据）", need: "任务清单" },
+				{ key: STAGE.REVIEW, label: "审核", out: "六维打分 ≥ 阈值（≥3 轮）", need: "文档" },
+				{ key: STAGE.BLUEPRINT, label: "蓝图", out: "施工图 / 蓝图", need: "审核通过" },
+				{ key: STAGE.TEST, label: "测试", out: "测试计划 + 结果（含期望）", need: "蓝图" },
+				{ key: STAGE.DONE, label: "收口", out: "闭环留痕", need: "测试通过" }
+			]);
+			
+			const STAGE_ORDER = Object.freeze(STAGES.map((s) => s.key));
+			
+			/** 阶段 i 的下一阶段（末态返回自身） */
+			function nextStage(key) {
+				const i = STAGE_ORDER.indexOf(key);
+				if (i < 0) return STAGE_ORDER[0];
+				return STAGE_ORDER[Math.min(i + 1, STAGE_ORDER.length - 1)];
+			}
+			
+			/**
+			 * 能否进入下一阶段。
+			 * @param {string} current
+			 * @param {object} evidence 各阶段的产出证据（真值：字符串非空 / 数组非空 / 布尔）
+			 * @returns {{ok:boolean, next:string, reason:string, missing:string[]}}
+			 */
+			function canAdvance(current, evidence = {}) {
+				const next = nextStage(current);
+				const need = (STAGES[STAGE_ORDER.indexOf(next)] || {}).need || "";
+				const missing = [];
+				if (next === STAGE.DOC && !nonEmpty(evidence.plan)) missing.push("任务清单");
+				if (next === STAGE.REVIEW && !nonEmpty(evidence.doc)) missing.push("文档");
+				if (next === STAGE.BLUEPRINT) {
+					if (!nonEmpty(evidence.doc)) missing.push("文档");
+					if (!(evidence.score && evidence.score.passed)) missing.push("审核通过");
+				}
+				if (next === STAGE.TEST && !nonEmpty(evidence.blueprint)) missing.push("蓝图");
+				if (next === STAGE.DONE) {
+					if (!nonEmpty(evidence.blueprint)) missing.push("蓝图");
+					if (!(evidence.test && evidence.test.passed)) missing.push("测试通过");
+				}
+				return {
+					ok: missing.length === 0,
+					next,
+					reason: missing.length ? ("缺：" + missing.join("、") + "（进入「" + need + "」前需要）") : "可进入「" + next + "」",
+					missing
+				};
+			}
+			
+			function nonEmpty(v) {
+				if (v == null) return false;
+				if (Array.isArray(v)) return v.length > 0;
+				if (typeof v === "string") return v.trim().length > 0;
+				if (typeof v === "boolean") return v;
+				if (typeof v === "object") return Object.keys(v).length > 0;
+				return true;
+			}
+			
+			/**
+			 * 从一个想法生成阶段计划（总监接手的第一步）。
+			 * 纯函数：只做结构与文案，不调模型、不落库。
+			 */
+			function planFor(idea) {
+				const text = String(idea == null ? "" : idea).trim();
+				return {
+					idea: text,
+					stage: text ? STAGE.PLAN : STAGE.PLAN,
+					steps: STAGES.map((s, i) => ({
+						seq: i + 1, key: s.key, label: s.label, out: s.out, need: s.need,
+						done: false
+					})),
+					createdAt: Date.now(),
+					empty: !text
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、打分标准（6 维 × 0–5 分 · 每档有判据）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 各维度权重：用户点名的两维（审美 / 按钮交互）与核心目的同权，避免"好看就行" */
+			const RUBRIC = Object.freeze([
+				{
+					key: "purpose", label: "核心目的达成", weight: 3,
+					criterion: "5=用户原话逐条可对上并各有证据；3=主干达成但有遗漏；0=与目标无关",
+					witness: "需求条目 ↔ 实现/断言逐条对照表"
+				},
+				{
+					key: "aesthetic", label: "前端审美", weight: 2,
+					criterion: "5=颜色/圆角/阴影全部走宿主令牌、与宿主零割裂；3=局部硬编码；0=对比度 <3:1 或明显割裂",
+					witness: "真机截图 + 计算样式回读（令牌名）"
+				},
+				{
+					key: "interaction", label: "按钮与交互", weight: 3,
+					criterion: "5=每颗按钮都有真实回调且回读有证据；3=个别按钮无反馈；0=点了没反应",
+					witness: "逐按钮点击 + 状态回读断言"
+				},
+				{
+					key: "resilience", label: "边界与降级", weight: 2,
+					criterion: "5=失败可归因且有降级路径；3=只覆盖主路径；0=静默失败",
+					witness: "反证用例（空输入 / 依赖缺失 / 目标不存在）"
+				},
+				{
+					key: "consistency", label: "一致性", weight: 1,
+					criterion: "5=复用既有常量与令牌，无重复真相源；3=局部另起一套；0=同一语义两处定义",
+					witness: "grep 常量/令牌名，看是否单点"
+				},
+				{
+					key: "verifiability", label: "可验证性", weight: 2,
+					criterion: "5=有自动化断言且断言承重（改了会红）；3=有断言但可被绕过；0=无证据",
+					witness: "断开断言后必须变红（反证）"
+				}
+			]);
+			
+			const RUBRIC_MAX = RUBRIC.reduce((s, r) => s + r.weight * 5, 0); // 满分（加权）
+			
+			/**
+			 * 打分标准自审（用户明确要求「打分标准也需要进行审核」）。
+			 * 三条，全过才允许用该标准打分：
+			 *   ① 可达性：每个维度都要有 `criterion` 与 `witness`（能举出 0 分与 5 分的例子）
+			 *   ② 不重叠：`key` 唯一，且 label 两两不同（同一判据不许出现在两个维度）
+			 *   ③ 可证伪：存在能打出 0 分的输入 —— 由 criterion 里出现 `0=` 保证
+			 */
+			function auditRubric(rubric = RUBRIC) {
+				const fails = [];
+				if (!Array.isArray(rubric) || !rubric.length) return { ok: false, fails: ["标准为空"] };
+			
+				const keys = new Set();
+				for (const r of rubric) {
+					if (!r || !r.key) { fails.push("存在无 key 的维度"); continue; }
+					if (keys.has(r.key)) fails.push("key 重复：" + r.key);
+					keys.add(r.key);
+					if (!r.criterion || !String(r.criterion).trim()) fails.push(r.key + " 缺 criterion（不可达性）");
+					if (!r.witness || !String(r.witness).trim()) fails.push(r.key + " 缺 witness（无证据来源）");
+					if (!/0\s*=/.test(String(r.criterion || ""))) fails.push(r.key + " 未定义 0 分（不可证伪）");
+					if (!(r.weight > 0)) fails.push(r.key + " 权重非正");
+				}
+				const labels = rubric.map((r) => r && r.label);
+				if (new Set(labels).size !== labels.length) fails.push("label 重复（维度重叠）");
+				return { ok: fails.length === 0, fails };
+			}
+			
+			/**
+			 * 打分。`values` = { [key]: 0..5 }，缺项按 0 计并在 `missing` 里报出（不静默算满/算零）。
+			 * @returns {{total:number, max:number, ratio:number, passed:boolean, threshold:number,
+			 *            dims:Array<{key,label,score,weight,points,criterion}>, missing:string[],
+			 *            rubricOk:boolean, rubricFails:string[]}}
+			 */
+			function score(valueObj = {}, opts = {}) {
+				const threshold = typeof opts.threshold === "number" ? opts.threshold : 0.7;
+				const rubric = opts.rubric || RUBRIC;
+				const audit = auditRubric(rubric);
+				const missing = [];
+				let total = 0;
+				const dims = rubric.map((r) => {
+					const raw = valueObj[r.key];
+					if (raw === undefined || raw === null) missing.push(r.key);
+					const s = clampScore(raw);
+					const points = s * r.weight;
+					total += points;
+					return { key: r.key, label: r.label, score: s, weight: r.weight, points, criterion: r.criterion };
+				});
+				const ratio = RUBRIC_MAX ? total / RUBRIC_MAX : 0;
+				return {
+					total, max: RUBRIC_MAX, ratio,
+					threshold,
+					/* 🔴 标准没通过自审时，**一律不判通过** —— 否则分数是"看起来能区分"的数字 */
+					passed: audit.ok && missing.length === 0 && ratio >= threshold,
+					dims, missing,
+					rubricOk: audit.ok, rubricFails: audit.fails
+				};
+			}
+			
+			function clampScore(v) {
+				const n = Number(v);
+				if (!Number.isFinite(n)) return 0;
+				return Math.max(0, Math.min(5, Math.round(n)));
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、三轮多方位评估（换证据源，不是重复跑）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const ROUNDS = Object.freeze([
+				{
+					n: 1, key: "spec", label: "规格符合性",
+					method: "逐条对照需求文档（用户原话 → 可测判据）",
+					evidence: "需求条目 ↔ 实现/断言对照表",
+					failsIf: "存在没有任何实现或断言承接的需求条目"
+				},
+				{
+					n: 2, key: "independent", label: "独立证据源",
+					method: "**不引用第 1 轮的断言**，改用真机截图 + 计算样式回读 + 与实现不同源的探针",
+					evidence: "截图（放大可读）/ DOM 属性回读 / 独立探针输出",
+					failsIf: "第 2 轮只是把第 1 轮的断言又跑一遍（证据同源 ⇒ 同错同绿）"
+				},
+				{
+					n: 3, key: "counter", label: "反证",
+					method: "构造「应该失败」的输入，断言它**确实失败且原因正确**",
+					evidence: "反证用例 + 实际返回的 reason",
+					failsIf: "反证用例没有失败，或失败原因与预期不符"
+				}
+			]);
+			
+			/**
+			 * 三轮汇总。`results` = [{n, ok, note}]。
+			 * @returns {{rounds:Array, passed:boolean, failed:Array, distinctEvidence:boolean, note:string}}
+			 */
+			function summarizeRounds(results = []) {
+				const byN = new Map((results || []).map((r) => [Number(r && r.n), r]));
+				const rounds = ROUNDS.map((d) => {
+					const got = byN.get(d.n);
+					return { ...d, ok: Boolean(got && got.ok), note: (got && got.note) || "" };
+				});
+				const failed = rounds.filter((r) => !r.ok).map((r) => r.n);
+				/* 三轮必须**各跑过**且证据不同源。只跑了两轮却报"三轮通过"是本模块要防的假绿。 */
+				const ran = rounds.filter((r) => byN.has(r.n)).length;
+				const evSet = new Set(rounds.filter((r) => byN.has(r.n)).map((r) => (byN.get(r.n) || {}).evidence || ""));
+				return {
+					rounds,
+					passed: failed.length === 0 && ran >= 3,
+					failed,
+					distinctEvidence: (byN.get(2) || {}).evidence !== (byN.get(1) || {}).evidence,
+					/* 提示语优先报"轮数不够"——只跑两轮时的首要问题是**没跑满**，
+					 * 而不是"第 3 轮没过"（那是看轮数的视角，会让人以为跑过了但失败）。 */
+					note: ran < 3
+						? ("只跑了 " + ran + " 轮（要求 ≥3）" + (failed.length ? "；未过：" + failed.join("、") : ""))
+						: (failed.length ? ("未通过轮次：" + failed.join("、")) : "三轮通过")
+				};
+			}
+			
+			/** 安装全局契约 */
+			function installOrchestrateApi() {
+				if (typeof window === "undefined") return null;
+				const api = {
+					STAGE, STAGES, STAGE_ORDER, nextStage, canAdvance, planFor,
+					RUBRIC, RUBRIC_MAX, auditRubric, score,
+					ROUNDS, summarizeRounds
+				};
+				window.__dshOrchestrate = api;
+				return api;
+			}
+			
+			exports.STAGE = STAGE;
+			exports.STAGES = STAGES;
+			exports.STAGE_ORDER = STAGE_ORDER;
+			exports.nextStage = nextStage;
+			exports.canAdvance = canAdvance;
+			exports.planFor = planFor;
+			exports.RUBRIC = RUBRIC;
+			exports.RUBRIC_MAX = RUBRIC_MAX;
+			exports.auditRubric = auditRubric;
+			exports.score = score;
+			exports.ROUNDS = ROUNDS;
+			exports.summarizeRounds = summarizeRounds;
+			exports.installOrchestrateApi = installOrchestrateApi;
+		};
+
 		// ── components/DirectorPage.js ──
 		__defs["components/DirectorPage.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -14847,12 +16018,16 @@ window.__ModuleLoader__.load({
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { loadTree, getBreadcrumb, LEVEL_LABEL, LEVEL, GLOBAL_NODE_ID, countByLevel } = __m("store/hierarchy.js");
 			const { onHierarchyChange } = __m("util/bus.js");
-			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos } = __m("store/plugin-db.js");
+			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos, listReviews } = __m("store/plugin-db.js");
 			const { route, DESTINATION, DESTINATION_LABEL, review6 } = __m("logic/routing.js");
-			const { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession } = __m("logic/branch-tree.js");
+			const { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession } = __m("logic/branch-tree.js");
 			const { dshLog } = __m("util/debug.js");
+			const { runDirector } = __m("logic/director-run.js");
+			const { loadDirectorConfig } = __m("config/model.js");
+			const { resolveDuties } = __m("store/duty-config.js");
+			const { planFor, auditRubric, RUBRIC, RUBRIC_MAX, summarizeRounds } = __m("logic/orchestrate.js");
 			const { flowStore, currentTaskOf, flowLine, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip, flowStats } = __m("logic/flow.js");
-			const { findComposer, readComposerText } = __m("bridge/chat-bridge.js");
+			const { findComposer, readComposerText, deliverToChat, isAgentGenerating } = __m("bridge/chat-bridge.js");
 			const { personalizeStore } = __m("store/personalize.js");
 			/* 浮动按钮组的横向占位（几何真相在 FloatDock.js，此处只消费）—— 见下方 dockReserve 注释 */
 			const { FLOAT_DOCK_RESERVE } = __m("components/FloatDock.js");
@@ -14902,8 +16077,11 @@ window.__ModuleLoader__.load({
 				{ level: LEVEL.SESSION, label: "对话级" }
 			]);
 			
-			/** R2.5 六动作（设计稿 A1：顺序即闭环） */
+			/** R2.5 六动作（设计稿 A1：顺序即闭环）
+			 *  🔴 第七轮新增「统筹」——「我提供一个想法……后续的开发文档编写、审核、蓝图设计、测试
+			 *     等等都由总监统筹」。它是**起点动作**（输入想法 → 出阶段计划），故排在最前。 */
 			const CONSOLE_ACTIONS = Object.freeze([
+				{ key: "plan", icon: "🧭", label: "统筹", tone: "accent2" },
 				{ key: "new", icon: "＋", label: "新建", tone: "accent" },
 				{ key: "del", icon: "🗑", label: "删除", tone: "danger" },
 				{ key: "grab", icon: "📥", label: "抓取", tone: "" },
@@ -15020,6 +16198,7 @@ window.__ModuleLoader__.load({
 				const [msgs, setMsgs] = react.useState([]);
 				const [todos, setTodos] = react.useState([]);
 				const [stats, setStats] = react.useState(null);
+				const [reviews, setReviews] = react.useState([]);
 				const [branch, setBranch] = react.useState(() => getBranchSnapshot());
 				const [r4tab, setR4tab] = react.useState("docs");
 				const [r5tab, setR5tab] = react.useState("flow");
@@ -15029,6 +16208,15 @@ window.__ModuleLoader__.load({
 				const [pOpen, setPOpen] = react.useState(false);
 				const [curId, setCurId] = react.useState(null);
 				const [composerOk, setComposerOk] = react.useState(false);
+				/* 执行态（本轮新增 · 真流转）。deliverMode 是**投递结果**，进 data-* 供断言读 ——
+				 * 界面上只显示一个短词，归因细节走属性，不占版面（用户要求「不用多余的解释」）。 */
+				const [busy, setBusy] = react.useState(false);
+				const [deliverMode, setDeliverMode] = react.useState("idle"); // idle|sent|filled|failed
+				/* 走的是哪一级投递通道（host-send / direct / open-then-send / 失败原因）——
+				 * 降级必须看得见，否则「显示已发送」可能只是点到了按钮而没送达 */
+				const [deliverVia, setDeliverVia] = react.useState("");
+				const [runGrade, setRunGrade] = react.useState("");           // G0/G1 组合，来自五步
+				const msgsRef = react.useRef([]);
 				const toastTimer = react.useRef(null);
 			
 				const nodeId = st.activeNodeId || GLOBAL_NODE_ID;
@@ -15042,8 +16230,15 @@ window.__ModuleLoader__.load({
 					try {
 						setTree(await loadTree());
 						setCrumbs(await getBreadcrumb(nodeId));
-						setMsgs((await listDirectorMessages(nodeId)) || []);
+						const list = (await listDirectorMessages(nodeId)) || [];
+						/* 同步 ref：runDirector 要在**上屏前**读「本条之前的上下文」，
+						 * 若用 state 会拿到闭包里的旧值（少一轮）。 */
+						msgsRef.current = list;
+						setMsgs(list);
 						setTodos((await listTodos(nodeId)) || []);
+						/* 问题记录（R5「工作顺序 / 待完成清单 / 问题记录 全部实时更新」）：
+						 * 源 = 未通过的审核 + 节点风险。两个源都取自真实库，不编数。 */
+						setReviews((await listReviews(nodeId)) || []);
 						setStats(await pluginDbStats());
 					} catch (e) { /* 数据层异常不影响 UI */ }
 				}, [nodeId]);
@@ -15053,9 +16248,20 @@ window.__ModuleLoader__.load({
 				react.useEffect(() => { refreshBranchTree().catch(() => { }); return subscribeBranch(setBranch); }, []);
 				/* 跟随宿主当前会话（左栏点会话插件收不到事件 ⇒ 轮询单字段） */
 				react.useEffect(() => watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); }), []);
-				/* 原生 composer 是否可用（决定焦点条上的按钮是真能做还是写明原因） */
+				/* 原生 composer 是否可用 —— ⚠️ 只用来**显示状态**，不用来**禁用按钮**。
+				 *
+				 * 🔴 2026-09-12 真机补漏：原先「登记流转」写成 `disabled: !composerOk`，
+				 *   而 `composerOk` 是 **1.2 秒轮询**出来的布尔量 ⇒ 两种坏结果：
+				 *     ① 明明能点，按钮却是死的（最多 1.2 秒）——用户感受到的正是他抱怨的
+				 *        "按钮点击不好用"；真机 e2e 也因此在 D5 偶发「R5 0 → 0」。
+				 *     ② 明明不能点，按钮却亮着 —— 「点了没反应」，比①更差。
+				 *   正确做法：**按钮永远可点，真值在点击那一刻读**（`registerNative` 本来就
+				 *   会如实回话：输入框不可见 / 输入框为空）。
+				 *   "读真值"的能力不该交给一个 1.2 秒前的快照去 gate —— 这跟 execution-standards
+				 *   §3.4「写后回读校验」是同一条道理：**断言态必须来自现取，不能来自缓存**。
+				 * 轮询缩短到 400ms：仅影响 `data-composer` / `aria-disabled` 这两个**提示**位的准度。 */
 				react.useEffect(() => {
-					const t = setInterval(() => setComposerOk(Boolean(findComposer())), 1200);
+					const t = setInterval(() => setComposerOk(Boolean(findComposer())), 400);
 					setComposerOk(Boolean(findComposer()));
 					return () => clearInterval(t);
 				}, []);
@@ -15080,6 +16286,9 @@ window.__ModuleLoader__.load({
 				const now = currentTaskOf({ node: nowRow, flow: latest, flowList: sessionFlows, msgs });
 				const todoDone = todos.filter((t) => t.done === true || t.status === "done").length;
 				const todoRate = todos.length ? Math.round((todoDone / todos.length) * 100) : 0;
+				/* 问题记录（R5）：未通过的审核 + 节点风险 —— 两个源都是真实库，不编数 */
+				const problems = reviews.filter((r) => r && r.pass === false).length
+					+ ((node && node.risks) ? node.risks.length : 0);
 				const inset = readInset();
 			
 				/* 浮动按钮组（FloatDock）是 `position:fixed` 贴在页面右下角的，横跨右侧
@@ -15092,38 +16301,145 @@ window.__ModuleLoader__.load({
 				const dockReserve = st.floatDockOpen === false ? 0 : FLOAT_DOCK_RESERVE;
 			
 				/* ── 动作 ── */
-				/** 把光标送进宿主原生 composer（"用原本的对话框"） */
-				function focusNative(why) {
+				/** 定位原生输入框（"用原本的对话框"；本页不自建输入框） */
+				function focusNative() {
 					const ed = findComposer();
-					if (!ed) { say("未找到原生输入框：请切到「对话」tab 或让它可见后再试（插件不自己造一个输入框）"); return false; }
+					if (!ed) { say("输入框不可用"); return false; }
 					try { ed.focus(); if (typeof ed.setSelectionRange === "function") ed.setSelectionRange(ed.value.length, ed.value.length); } catch (e) { /* 只读元素 */ }
-					say("光标已送进原生对话框" + (why ? "（" + why + "）" : "") + " —— 打字的还是它，不是插件自建的框");
+					say("已定位输入框");
 					return true;
 				}
 			
-				/** 切换"输入送到哪个域"，并顺手聚焦原生框（"点到哪里往哪里输入"） */
+				/** 切换"输入送到哪个域"（"点到哪里往哪里输入"） */
 				function pickTarget(dim) {
 					directorLayoutStore.setFocusTarget(dim === DIM.DIRECTOR ? "director" : "chat");
-					focusNative("目标已标为「" + DIM_LABEL[dim] + "」");
+					focusNative();
 				}
 			
-				/** 把原生输入框里已有的内容登记为一条流转（读真值，不编） */
+				/** 把输入框里已有的内容登记为一条流转（读真值，不编） */
 				function registerNative() {
 					const txt = readComposerText();
-					if (txt === null) { say("读不到原生输入框（它当前不可见）—— 请先切到「对话」tab"); return; }
-					if (!String(txt).trim()) { say("原生输入框是空的 —— 没有东西可登记（不登记空内容）"); return; }
+					if (txt === null) { say("输入框不可见"); return; }
+					if (!String(txt).trim()) { say("输入框为空"); return; }
 					const dim = st.focusTarget === "director" ? DIM.DIRECTOR : DIM.CHAT;
-					flowStore.push(String(txt).trim(), { origin: dim, sessionId: flowSession, note: "从原生对话框登记（R8 焦点条）" });
-					say("已登记为流转：起点「" + DIM_LABEL[dim] + "」· " + String(txt).trim().length + " 字符");
+					flowStore.push(String(txt).trim(), { origin: dim, sessionId: flowSession, note: "R8 登记" });
+					say("已登记流转 · " + String(txt).trim().length + " 字符");
+				}
+			
+				/** `runDirector` 需要的 store 适配器 —— 把 plugin-db 的消息面包装成 {getState,addMessage,setStatus} */
+				function pageStore() {
+					return {
+						/* 语义：本条**之前**的上下文。故读 ref 而不是 state（state 是本帧的闭包快照） */
+						getState: () => ({ messages: msgsRef.current }),
+						addMessage: (m) => appendDirectorMessage(nodeId, { role: m.role, text: m.content, parsed: m.parsed }),
+						setStatus: (s) => dshLog("director-page", "run-status=" + s)
+					};
+				}
+			
+				/** 投递结果 → 一句短提示（**归因细节走 data-*，不占版面**） */
+				function deliverToast(d) {
+					if (d.mode === "sent") return "已发送到对话";
+					if (d.mode === "filled") return "已填入输入框";
+					return "未送达 · " + (d.reason || "未知");
+				}
+			
+				/** 执行：**经总监五步处理 → 真正投递到对话**（本轮核心链路）
+				 *
+				 * 旧版（已废）：只 `appendDirectorMessage` + `route` + `flowStore.push` —— 记录员，不是执行中枢。
+				 * 新版：① 立即上屏（由 runDirector 内部完成，且在两处模型调用之前）
+				 *       ② 五步处理       ③ 处理链落库（`parsed`）  ④ 真投递  ⑤ 两跳流转登记
+				 *
+				 * 三条铁律：
+				 *   · 用户消息**先上屏**（本地模型单次超时 60s，串行最多 3 次 —— 不能让用户干等）
+				 *   · 投递结果写进 `data-deliver-mode`（界面不解释，测试可断言）
+				 *   · 失败必须有可见原因，不许静默（§4.3 降级底线）
+				 */
+				async function deliver(text) {
+					/* 原生框**不在场**与"在场但为空"是两回事，且"不在场"还要再分两种：
+					 *   · 宿主**生成中**会把 composer 收起来（判据：出现「停止生成」按钮）
+					 *     ⇒ 说「对话生成中」；说「先打开对话区」会让人以为是界面没打开。
+					 *   · 真的没有对话区（视图被切走）⇒ 说「先打开对话区」。
+					 *   最后才是"你没写东西"。混成一句会让人以为框坏了。 */
+					if (text === null) { say(isAgentGenerating() ? "对话生成中，稍后再试" : "先打开对话区"); return; }
+					const t = String(text || "").trim();
+					if (!t) { say("请输入内容"); return; }
+					if (busy) { say("上一条正在处理"); return; }
+					setBusy(true);
+					setDeliverMode("idle");
+					try {
+						const cfg = loadDirectorConfig();
+						const duties = (await resolveDuties(nodeId)).duties;
+			
+						let r;
+						try {
+							r = await runDirector({
+								sessionId: flowSession, userText: t, store: pageStore(), duties, config: cfg,
+								autoForward: false
+							});
+						} catch (e) {
+							await refresh();
+							setDeliverMode("failed");
+							say("处理失败 · " + ((e && e.message) || "未知"));
+							return;
+						}
+						setRunGrade(r.steps.some((s) => s.grade === "G1") ? "G1" : "G0");
+			
+						/* R2.5 建议去向：原生产者是那份**已删的旧 `deliver`**，删除后该卡片会变成
+						 * 永远不出现的死 UI。此处把生产者接回新版链路（处理完成后给出建议去向，
+						 * 供你改投 / 纠偏）—— 一份数据一个生产者，不留不可达界面。 */
+						setRouteResult(route(t, { nodes: flatNodes(), currentNodeId: nodeId }));
+			
+						/* ④ 投递的是**处理后的指令**，不是原文 —— 这正是用户要的"经过处理然后发给对话执行" */
+						const d = await deliverToChat(r.instruction, { sessionId: flowSession, opener: openSession });
+						setDeliverMode(d.mode === "sent" ? "sent" : (d.ok ? "filled" : "failed"));
+						setDeliverVia(d.via || d.reason || "");
+			
+						/* ⑤ 两跳流转：总监（已处理）→ 对话（已投递/未投递） */
+						const f = flowStore.push(t, { origin: DIM.DIRECTOR, sessionId: flowSession, note: "总监页执行" });
+						if (f) {
+							flowStore.move(f.flowId, DIM.DIRECTOR, "总监已处理", { status: "routed" });
+							if (d.ok) flowStore.move(f.flowId, DIM.CHAT, "已投递到对话", { status: "running", target: flowSession });
+						}
+						await refresh();
+						say(deliverToast(d));
+					} finally {
+						setBusy(false);
+					}
 				}
 			
 				/** 控制台动作：有真接口的做真事，没有的**写明缺什么**（不做假按钮） */
 				async function consoleAct(key) {
-					if (key === "new") {
-						say("新建分支请用导图的「＋ 新建分支」（宿主 sessions.fork）；纯新建会话由宿主左栏「＋ 新会话」负责 —— 插件不重复造一个假入口");
+					/* 🧭 统筹：输入想法 → 生成 6 阶段计划 + 打分标准自审（用户核心目标：总监控制一切）
+					 * 「我提供一个想法……后续的开发文档编写、审核、蓝图设计、测试等等都由总监统筹」
+					 * 「审核标准……打分标准也需要进行审核，打分起码三轮多方位评估」 */
+					if (key === "plan") {
+						const idea = String(readComposerText() || "").trim();
+						if (!idea) { say("请先输入想法"); return; }
+						const plan = planFor(idea);
+						const audit = auditRubric();
+						const rounds = summarizeRounds([]); // 尚未评估 → 三轮全待跑（如实显示，不预填通过）
+						const lines = plan.steps.map((s) => s.seq + ". " + s.label + " → " + s.out).join("\n");
+						/* 🔴 只列**标准**（维度/权重/满分），不预填分值 ——
+						 *    分数必须来自评估证据；在这里编一个"看起来合理"的数字，
+						 *    正是本项目反复强调的"假数字比空数字更坏"。 */
+						const dims = RUBRIC.map((r) => r.label + "(" + r.weight + ")").join(" · ");
+						await appendDirectorMessage(nodeId, {
+							role: "assistant",
+							text: "【统筹计划】\n" + lines
+								+ "\n\n打分维度：" + dims + " · 满分 " + RUBRIC_MAX
+								+ "\n打分标准自审：" + (audit.ok ? "通过（可达/不重叠/可证伪）" : "未通过：" + audit.fails.join("；"))
+								+ "\n三轮评估：" + rounds.note,
+							parsed: { kind: "orchestrate-plan", plan, rubricOk: audit.ok, rubricFails: audit.fails }
+						});
+						await refresh();
+						say(audit.ok ? "已生成统筹计划（6 阶段）" : "计划已生成 · 打分标准自审未通过");
 						return;
 					}
-					if (key === "del") { say("删除分支不可用：宿主 sessions 服务未暴露删除接口（取证：SessionRuntime 成员表只有 create/fork/open/search/refresh）"); return; }
+					if (key === "new") {
+						say("新建分支请用导图的「＋ 新建分支」");
+						return;
+					}
+					if (key === "del") { say("删除分支不可用：宿主未提供删除接口"); return; }
 					if (key === "grab") {
 						const txt = readComposerText();
 						if (txt === null) { say("抓取失败：读不到原生对话输入框（当前不可见）"); return; }
@@ -15149,7 +16465,7 @@ window.__ModuleLoader__.load({
 						return;
 					}
 					if (key === "next") {
-						if (!latest) { say("没有可继续的流转 —— 先在原生对话框写一句，再点「登记为流转」"); return; }
+						if (!latest) { say("先在原生对话框写一句，再点「登记为流转」"); return; }
 						flowStore.move(latest.flowId, DIM.CHAT, "继续：送到对话继续执行", { status: "routed", target: flowSession });
 						say("已把最新流转送到「对话」维度继续");
 						return;
@@ -15157,21 +16473,19 @@ window.__ModuleLoader__.load({
 					say("未知动作：" + key);
 				}
 			
-				/** 把一条流转"转给该对话"（真送达：打开会话 + 写入原生输入框） */
-				async function deliver(text) {
-					const t = String(text || "").trim();
-					if (!t) { say("没有可送的内容"); return; }
-					await appendDirectorMessage(nodeId, { kind: "需求澄清", text: t, role: "user" });
+				/** 层级树 → 扁平节点表（`route()` 的入参）
+				 *
+				 * ⚠️ 这里**曾经**是第二个 `async function deliver`（旧版"记录员"，只 append + route + push）。
+				 *    同名 `function` 声明在同一作用域**合法**且**后声明者静默覆盖前者** ⇒ 新版真流转链路
+				 *    被旧版整条顶掉，真机表现为「点执行没反应 + 只多一条 user 消息」（2026-09-12 G 段三红）。
+				 *    旧版已删，本文件对 `deliver` 只保留**一处**声明；该类的复发由构建期
+				 *    `lintDuplicateFnDecl`（build/build.mjs）拦截。
+				 */
+				function flatNodes() {
 					const flat = [];
 					const walk = (n) => { flat.push({ id: n.id, name: n.name, level: n.level }); (n.childNodes || []).forEach(walk); };
 					if (tree) walk(tree);
-					const r = route(t, { nodes: flat, currentNodeId: nodeId });
-					setRouteResult(r);
-					const f = flowStore.push(t, { origin: DIM.DIRECTOR, sessionId: flowSession, note: "总监页 R2.5 发出" });
-					if (f) flowStore.move(f.flowId, DIM.DIRECTOR, "已由总监整理，待确认去向", { status: "routed" });
-					await refresh();
-					say("总监已整理，待你确认去向");
-					dshLog("director-page", "R2.5 路由建议 " + r.decision.destination);
+					return flat;
 				}
 			
 				/** 确认路由去向：把该会话最新流转推进到「对话」维度（**不静默分发** —— 必须先有人确认） */
@@ -15192,7 +16506,10 @@ window.__ModuleLoader__.load({
 				return h("div", {
 					id: DIRECTOR_PAGE_ID, style: S.root, "data-testid": "dp-root", className: "dp-textured",
 					"data-focus-target": st.focusTarget, "data-flow-session": flowSession || "", "data-composer": composerOk ? "1" : "0",
-					"data-texture": pz.texture
+					"data-texture": pz.texture,
+					/* 执行链路的**可断言面**（界面只显示短词，归因走属性 —— 用户要求「不用多余的解释」） */
+					"data-deliver-mode": deliverMode, "data-deliver-via": deliverVia,
+					"data-busy": busy ? "1" : "0", "data-run-grade": runGrade || ""
 				}, [
 					/* ── R1 顶部栏（设计稿 A1：📁 名称 ▾ + 层级 chips + 右上 ⚙） ── */
 					h("div", { key: "r1", style: { ...S.r1, paddingRight: Math.max(9, inset + 9) }, "data-testid": "dp-r1" }, [
@@ -15340,6 +16657,10 @@ window.__ModuleLoader__.load({
 										? (sessionFlows.length
 											? sessionFlows.slice(-20).reverse().map((f) => h("div", {
 												key: f.flowId, "data-testid": "dp-flow-item", "data-flow-id": f.flowId, "data-origin": f.origin, "data-status": f.status,
+												/* `data-session-id`：让"这条属于哪个会话"在 DOM 上可读 ——
+												 * 真机脚本靠它证明「R5 显示的就是刚登记的那条」，而不是靠数条数（数条数
+												 * 在"会话里有别的流转"时会误判）。 */
+												"data-session-id": f.sessionId || "",
 												style: { border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #212429)", borderRadius: "var(--dp-radius-sm, 5px)", padding: "5px 7px", marginBottom: 5 }
 											}, [
 												h("div", { key: "t", style: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word" } }, clip(f.text, 110)),
@@ -15366,7 +16687,7 @@ window.__ModuleLoader__.load({
 												h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 												h("div", { key: "b", style: S.bub }, m.text)
 											]))
-											: h("div", { key: "e", style: S.muted, "data-testid": "dp-r5-empty" }, "尚无总监消息。在 R8 焦点条把原生输入登记为流转后，总监的整理结果会出现在这里。")))
+											: h("div", { key: "e", style: S.muted, "data-testid": "dp-r5-empty" }, "尚无总监消息")))
 							])),
 			
 						/* R7 详情 / 产出物 / 六维审核 */
@@ -15409,6 +16730,11 @@ window.__ModuleLoader__.load({
 								h("span", { key: "d" }, "决策 " + ((stats && stats.decisions) || 0)),
 								h("span", { key: "m" }, "记忆项 " + ((node && node.decisions ? node.decisions.length : 0) + (node && node.docs ? node.docs.length : 0))),
 								h("span", { key: "rk", style: { color: (node && node.risks && node.risks.length) ? "#d29922" : "inherit" } }, "风险 " + ((node && node.risks) ? node.risks.length : 0)),
+								h("span", {
+									key: "pb", "data-testid": "dp-db-problems",
+									style: { color: problems ? "#e5534b" : "inherit" },
+									title: "问题记录：未通过的审核 + 节点风险"
+								}, "问题 " + problems),
 								h("span", { key: "td" }, "回结收件箱 · " + todos.filter((t) => t.done !== true).length),
 								h("span", { key: "rec", style: { marginLeft: "auto" }, title: "最近一次层级变更" },
 									"最近：" + clampText((node && node.meta && node.meta.updatedAt) ? new Date(node.meta.updatedAt).toLocaleString() : "（无变更记录）", 30))
@@ -15418,36 +16744,41 @@ window.__ModuleLoader__.load({
 					/* ── R8 焦点条（**不再自建输入框** —— 用户：「不要这个对话框 用原本的对话框」） ──
 					 * 右端按浮动按钮组宽度留白（见 dockReserve 注释）—— 否则最右的「交给总监整理」整颗被压住 */
 					h("div", { key: "r8", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "7px " + (9 + dockReserve) + "px 7px 9px", borderTop: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto", background: "var(--dp-bg-1, transparent)" }, "data-testid": "dp-r8" }, [
-						h("span", { key: "l", style: { ...S.muted, minWidth: 52 } }, "输入目标"),
+						h("span", { key: "l", style: { ...S.muted, minWidth: 30 } }, "目标"),
 						h("button", {
 							key: "fd", "data-testid": "dp-route-director", "data-on": st.focusTarget === "director" ? "1" : "0",
 							style: { ...S.btn, borderColor: st.focusTarget === "director" ? "var(--dp-ac-line, rgba(137,87,229,.45))" : "var(--dp-line, #3d4148)", color: st.focusTarget === "director" ? "var(--dp-ac, #b794f6)" : "var(--dp-t3, #8b9199)" },
-							title: "点到哪里就往哪里输入：选「总监」后，本条登记为总监维度",
+							title: "输入目标：总监",
 							onClick: () => pickTarget(DIM.DIRECTOR)
-						}, "◆ 总监" + (st.focusTarget === "director" ? " ●" : "")),
+						}, "总监" + (st.focusTarget === "director" ? " ●" : "")),
 						h("button", {
 							key: "fc", "data-testid": "dp-route-chat", "data-on": st.focusTarget === "chat" ? "1" : "0",
 							style: { ...S.btn, borderColor: st.focusTarget === "chat" ? "var(--dp-ac-line, rgba(47,111,235,.5))" : "var(--dp-line, #3d4148)", color: st.focusTarget === "chat" ? "var(--dp-ac, #79a8ff)" : "var(--dp-t3, #8b9199)" },
-							title: "点到哪里就往哪里输入：选「对话」后，本条登记为对话维度",
+							title: "输入目标：对话",
 							onClick: () => pickTarget(DIM.CHAT)
-						}, "💬 对话" + (st.focusTarget === "chat" ? " ●" : "")),
+						}, "对话" + (st.focusTarget === "chat" ? " ●" : "")),
 			
 						h("button", {
 							key: "fo", style: S.btn, "data-testid": "dp-focus-native", "aria-disabled": composerOk ? "false" : "true",
-							title: composerOk ? "把光标送进宿主原生对话框（本页不再自建输入框）" : "当前读不到宿主原生对话框：请切到「对话」tab 或让它可见",
-							onClick: () => focusNative("目标：" + (st.focusTarget === "director" ? "总监" : "对话"))
-						}, "⌨ 聚焦原生对话框" + (composerOk ? "" : "（不可用）")),
+							title: "定位到原生输入框",
+							onClick: () => focusNative()
+						}, "定位输入框"),
 			
 						h("button", {
-							key: "rg", style: S.btn, "data-testid": "dp-register-flow", disabled: !composerOk,
-							title: composerOk ? "读原生输入框当前内容，登记成一条四维流转（读真值，空内容不登记）" : "原生输入框不可见 ⇒ 读不到内容",
+							key: "rg", style: S.btn, "data-testid": "dp-register-flow",
+							"aria-disabled": composerOk ? "false" : "true",
+							title: composerOk ? "把输入框里这句话登记为一条流转" : "输入框当前不可见：登记会告诉你原因（按钮不禁用）",
 							onClick: registerNative
-						}, "📥 登记为流转"),
+						}, "登记流转"),
 			
 						h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-r8-note" },
-							"输入在**原生对话框**（页面底部）；这里只负责标目标与登记流转。当前会话 " + (flowSession ? ("…" + String(flowSession).slice(-8)) : "未定位")),
+							flowSession ? "会话 …" + String(flowSession).slice(-8) : "未定位会话"),
 			
-						h("button", { key: "s", style: { ...S.btn, background: "var(--dp-ac, #2f6bdd)", borderColor: "var(--dp-ac, #2f6bdd)", color: "#fff" }, "data-testid": "dp-send", onClick: () => deliver(readComposerText() || "") }, "交给总监整理")
+						h("button", {
+							key: "s", style: { ...S.btn, background: "var(--dp-ac, #2f6bdd)", borderColor: "var(--dp-ac, #2f6bdd)", color: "#fff", opacity: busy ? 0.65 : 1 },
+							"data-testid": "dp-send", disabled: busy, title: "经总监处理并发送到对话",
+							onClick: () => deliver(readComposerText())
+						}, busy ? "处理中…" : "执行")
 					]),
 			
 					/* 路由确认卡（V16 C4：目标多义必确认 —— 不静默分发） */
@@ -15462,12 +16793,25 @@ window.__ModuleLoader__.load({
 						h("button", { key: "x", style: S.btn, "data-testid": "dp-rt-cancel", onClick: () => setRouteResult(null) }, "取消")
 					]) : null,
 			
-					toast ? h("div", {
+					/* 提示位（**常驻等高占位**，不是「有内容才渲染」）────────────────────────
+					 * 🔴 为什么必须常驻（2026-09-12 真机定案 · 用户原话「两个按钮点击不好用」）：
+					 *   本页是**底部锚定**的列布局，这一行排在 R8 焦点条**之后**。原先写成
+					 *   `toast ? h(div) : null` ⇒ 一旦出提示，整条 R8 会被顶上去 **23px**
+					 *   （实测 `btnY` 628 → 605，提示消失又落回 628，可复现）。
+					 *   后果不是「难看」，是**点不中**：用户点「⌨ 定位输入框」→ 弹出提示 →
+					 *   手指顺势移向「📥 登记流转」，而那颗按钮已经不在原来的位置了。
+					 *   真机证据（verify-flow-r19 D5）：命中自检通过（读坐标时确实在按钮上），
+					 *   真实鼠标事件落下时按钮已漂走 ⇒ 处理器没进、库 0 条、toast=null。
+					 *   ⇒ 常驻一个等高槽：**布局不随提示变化**。
+					 *     空时**不带 `dp-toast` testid**（"没有提示"的语义与原先一致，测试读到的仍是 null）。 */
+					h("div", {
 						key: "toast", style: {
-							padding: "0 9px 7px", color: "var(--dp-ac, #79a8ff)", fontSize: "calc(11.5px * var(--dp-font,1))",
-							display: "flex", gap: 6, alignItems: "center"
-						}, "data-testid": "dp-toast", onClick: () => setToast("")
-					}, toast) : null,
+							height: "23px", padding: "0 9px", color: "var(--dp-ac, #79a8ff)",
+							fontSize: "calc(11.5px * var(--dp-font,1))", display: "flex", gap: 6, alignItems: "center",
+							overflow: "hidden"
+						},
+						...(toast ? { "data-testid": "dp-toast", title: "点击可清除", onClick: () => setToast("") } : {})
+					}, toast || ""),
 			
 					/* 个性化面板（右上角；四处共用同一组件与同一份设定） */
 					h(PersonalizePanel, { key: "pp", open: pOpen, onClose: () => setPOpen(false), inset: inset, top: 40, scope: "总监页" })
@@ -15643,9 +16987,12 @@ window.__ModuleLoader__.load({
 			const { installPersonalizeApi, personalizeStore } = __m("store/personalize.js");
 			const { PersonalizePanel, PERSONALIZE_PANEL_ID } = __m("components/PersonalizePanel.js");
 			const { installFlowApi, flowStore, DIM, DIM_LABEL } = __m("logic/flow.js");
+			const { installBranchFocusApi } = __m("logic/branch-focus.js");
+			const { installOverviewApi } = __m("logic/overview.js");
+			const { installOrchestrateApi } = __m("logic/orchestrate.js");
 			const { NodeDetailPanel, NODE_DETAIL_ID } = __m("components/NodeDetailPanel.js");
 			
-			const PLUGIN_VERSION = "0.13.0-batch13";
+			const PLUGIN_VERSION = "0.15.0-batch15";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
 			function installBatch1(options = {}) {
@@ -15755,10 +17102,19 @@ window.__ModuleLoader__.load({
 					//       它注入的是 CSS 变量与样式表，晚注入会有一帧"未套肤"的闪动。
 					window.__dshPersonalize = installPersonalizeApi();
 					window.__dshFlow = installFlowApi();
+					// ── 批次 15 分支链路聚焦 / 总览 / 统筹打分（2026-09-12 第七轮）──
+					//    需求原文：「我点击对话那么只默认显示这个分支的链路」「思维导图最上面加一个弹窗，
+					//              分为左右列」「打分起码三轮多方位评估」「打分标准也需要进行审核」
+					window.__dshBranchFocus = installBranchFocusApi();
+					window.__dshOverview = installOverviewApi();
+					window.__dshOrchestrate = installOrchestrateApi();
 				} else {
 					// 无 DOM 环境（离线测试）：仍要建立 store，保证 import 侧行为一致
 					installPersonalizeApi();
 					installFlowApi();
+					installBranchFocusApi();
+					installOverviewApi();
+					installOrchestrateApi();
 				}
 			
 				// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -15928,6 +17284,38 @@ window.__ModuleLoader__.load({
 					reserveConsumers: ["dp-r6", "dp-r8"]
 				};
 			
+				/* ── 批次 15（T-PLUG-024/026/027/028）：真流转 / 分支聚焦 / 总览 / 统筹打分 ──
+				 * 「我在总监发的消息，是否经过处理然后发给对话执行」这个**最核心基础要求**
+				 * 的可断言面：投递通道的降级级别 + 处理链落库 + 聚焦与打分的纯函数契约。 */
+				installed.deliver = {
+					/* 投递分级（顺序即优先级）：
+					 *   host-send       → 宿主直投对话域（避开 InputBar 的「总监劫持」，防二次处理）
+					 *   direct          → composer 在场，点原生发送
+					 *   open-then-send  → 先切会话，等 composer 出现再点发送
+					 *   仍不行          → 如实报因（不许静默） */
+					channels: ["host-send", "direct", "open-then-send"],
+					attr: "data-deliver-mode",
+					modes: ["idle", "sent", "filled", "failed"],
+					anchor: { send: "dp-send", router: "mm-ov-send", nodeSend: "nd-send" }
+				};
+				installed.branchFocus = {
+					attr: "data-focus-id",
+					bar: "mm-focusbar",
+					toggles: ["mm-focus-up", "mm-focus-exit"],
+					includeParentsMeans: "祖先链 ∪ 链上每一环的同级（用户语义：上一层全景）"
+				};
+				installed.overview = {
+					root: "mm-ov",
+					columns: ["mm-ov-col-done", "mm-ov-col-todo"],
+					attr: ["data-count-done", "data-count-todo", "data-sel-session"]
+				};
+				installed.orchestrate = {
+					stages: ["plan", "doc", "review", "blueprint", "test", "done"],
+					rubricDims: ["purpose", "aesthetic", "interaction", "resilience", "consistency", "verifiability"],
+					rounds: ["spec", "independent", "counter"],
+					rubricSelfAudit: true
+				};
+			
 				if (typeof window !== "undefined") {
 					window.__dshDirectorBatch1 = installed;
 					window.__dshDirectorBatch2 = installed; // 批次 2 别名
@@ -15942,6 +17330,7 @@ window.__ModuleLoader__.load({
 					window.__dshDirectorBatch11 = installed; // 批次 11 别名（个性化设定 + 四维流转）
 					window.__dshDirectorBatch12 = installed; // 批次 12 别名（总监页背景改走宿主令牌）
 					window.__dshDirectorBatch13 = installed; // 批次 13 别名（浮动入口点击穿透 + 药丸配色随主题）
+					window.__dshDirectorBatch15 = installed; // 批次 15 别名（真流转 + 分支聚焦 + 总览 + 统筹）
 				}
 				return installed;
 			}

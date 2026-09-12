@@ -380,8 +380,69 @@ function lintUndefinedComponents(id, code) {
 	);
 }
 
-/** DFS 后序 → 拓扑序（被依赖者先定义） */
-function visit(abs) {
+/**
+ * 静态检查：**同一作用域内重复的函数声明**。
+ *
+ * 为何必须有：同名 `function` 声明落在同一作用域是**合法语法** —— 后声明的**静默覆盖**前一个。
+ * 打包器只跟着 import 走、语法自检也只验合法性，因此这类缺陷**一路放行到运行时**，
+ * 表现却是「点按钮没反应 / 数据不对」这种最难归因的形态。
+ * 该缺陷 2026-09-12 真实发生过：`DirectorPage` 里 `async function deliver` 被声明两次，
+ * 新增的「五步处理 → 真投递」版被旧版「记录员」整条顶掉 ⇒ 真机 G 段三红（mode 恒 idle、
+ * 消息只 +1、正文是 user 原文）。排查成本高，故与 `lintUndefinedComponents` 同法前移到构建期。
+ *
+ * 实现：单遍扫描，跳过注释 / 字符串 / 模板 / 正则字面量后按 `{}` 维护**作用域栈**；
+ * 每个 `function NAME` 记 `(当前作用域 id, NAME)`，重复即失败。
+ * 注意作用域 id 用「入栈序号」而非缩进 —— 缩进相同但分属兄弟作用域的同名函数是合法的，
+ * 按缩进判会误报。
+ */
+function lintDuplicateFnDecl(id, code) {
+	const seen = new Map(); // `${scopeId}|${name}` → 首次声明所在行
+	const stack = [0];
+	let scopeSeq = 0;
+	let i = 0;
+	let prev = ""; // 上一个有效字符：用来判定 `/` 是正则字面量还是除号
+	const n = code.length;
+	const regexAllowed = "(,=:[!&|?{};+-*%^~<>";
+
+	while (i < n) {
+		const c = code[i];
+		if (c === "/" && code[i + 1] === "/") { const j = code.indexOf("\n", i); i = j < 0 ? n : j; continue; }
+		if (c === "/" && code[i + 1] === "*") { const j = code.indexOf("*/", i + 2); i = j < 0 ? n : j + 2; continue; }
+		if (c === "\"" || c === "'" || c === "`") {
+			i++;
+			while (i < n) { if (code[i] === "\\") { i += 2; continue; } if (code[i] === c) { i++; break; } i++; }
+			prev = c; continue;
+		}
+		if (c === "/" && (prev === "" || regexAllowed.indexOf(prev) >= 0)) {
+			i++;
+			while (i < n) { if (code[i] === "\\") { i += 2; continue; } if (code[i] === "/") { i++; break; } i++; }
+			while (i < n && /[a-z]/.test(code[i])) i++; // 正则标志位
+			prev = "/"; continue;
+		}
+		if (c === "{") { scopeSeq++; stack.push(scopeSeq); prev = c; i++; continue; }
+		if (c === "}") { if (stack.length > 1) stack.pop(); prev = c; i++; continue; }
+		if (code.startsWith("function", i) && !/[A-Za-z0-9_$]/.test(code[i - 1] || "")) {
+			const m = /^function\s*\*?\s*([A-Za-z0-9_$]+)/.exec(code.slice(i, i + 96));
+			if (m) {
+				const key = stack[stack.length - 1] + "|" + m[1];
+				const line = code.slice(0, i).split("\n").length;
+				if (seen.has(key)) {
+					throw new Error(
+						`[build] ${id}: 同一作用域内**重复的函数声明** \`${m[1]}\`（第 ${seen.get(key)} 行 与 第 ${line} 行）\n` +
+						`  后者会静默覆盖前者 ⇒ 运行时行为与预期不符，而语法自检不会报错。\n` +
+						`  修正：删掉或重命名其中一个（通常是「旧版已废」的那份没删干净）。`
+					);
+				}
+				seen.set(key, line);
+			}
+			i += 8; prev = "n"; continue;
+		}
+		if (!/\s/.test(c)) prev = c;
+		i++;
+	}
+}
+
+/** DFS 后序 → 拓扑序（被依赖者先定义） */function visit(abs) {
 	if (modules.has(abs)) return;
 	if (visiting.has(abs)) throw new Error(`[build] 检测到循环依赖：${moduleId(abs)}`);
 	visiting.add(abs);
@@ -390,6 +451,7 @@ function visit(abs) {
 	const exportNames = collectExportNames(raw);
 	const { code, deps } = transform(abs, raw);
 	lintUndefinedComponents(moduleId(abs), code);
+	lintDuplicateFnDecl(moduleId(abs), code);
 
 	modules.set(abs, { id: moduleId(abs), code, deps, exportNames });
 	for (const d of deps) visit(d.abs);

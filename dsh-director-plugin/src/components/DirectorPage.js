@@ -59,14 +59,18 @@ import * as react from "react";
 import { directorLayoutStore } from "../store/layout.js";
 import { loadTree, getBreadcrumb, LEVEL_LABEL, LEVEL, GLOBAL_NODE_ID, countByLevel } from "../store/hierarchy.js";
 import { onHierarchyChange } from "../util/bus.js";
-import { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos } from "../store/plugin-db.js";
+import { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos, listReviews } from "../store/plugin-db.js";
 import { route, DESTINATION, DESTINATION_LABEL, review6 } from "../logic/routing.js";
-import { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession } from "../logic/branch-tree.js";
+import { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession } from "../logic/branch-tree.js";
 import { dshLog } from "../util/debug.js";
+import { runDirector } from "../logic/director-run.js";
+import { loadDirectorConfig } from "../config/model.js";
+import { resolveDuties } from "../store/duty-config.js";
+import { planFor, auditRubric, RUBRIC, RUBRIC_MAX, summarizeRounds } from "../logic/orchestrate.js";
 import {
 	flowStore, currentTaskOf, flowLine, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip, flowStats
 } from "../logic/flow.js";
-import { findComposer, readComposerText } from "../bridge/chat-bridge.js";
+import { findComposer, readComposerText, deliverToChat, isAgentGenerating } from "../bridge/chat-bridge.js";
 import { personalizeStore } from "../store/personalize.js";
 /* 浮动按钮组的横向占位（几何真相在 FloatDock.js，此处只消费）—— 见下方 dockReserve 注释 */
 import { FLOAT_DOCK_RESERVE } from "./FloatDock.js";
@@ -116,8 +120,11 @@ const LEVEL_CHIPS = Object.freeze([
 	{ level: LEVEL.SESSION, label: "对话级" }
 ]);
 
-/** R2.5 六动作（设计稿 A1：顺序即闭环） */
+/** R2.5 六动作（设计稿 A1：顺序即闭环）
+ *  🔴 第七轮新增「统筹」——「我提供一个想法……后续的开发文档编写、审核、蓝图设计、测试
+ *     等等都由总监统筹」。它是**起点动作**（输入想法 → 出阶段计划），故排在最前。 */
 const CONSOLE_ACTIONS = Object.freeze([
+	{ key: "plan", icon: "🧭", label: "统筹", tone: "accent2" },
 	{ key: "new", icon: "＋", label: "新建", tone: "accent" },
 	{ key: "del", icon: "🗑", label: "删除", tone: "danger" },
 	{ key: "grab", icon: "📥", label: "抓取", tone: "" },
@@ -234,6 +241,7 @@ export function DirectorPage() {
 	const [msgs, setMsgs] = react.useState([]);
 	const [todos, setTodos] = react.useState([]);
 	const [stats, setStats] = react.useState(null);
+	const [reviews, setReviews] = react.useState([]);
 	const [branch, setBranch] = react.useState(() => getBranchSnapshot());
 	const [r4tab, setR4tab] = react.useState("docs");
 	const [r5tab, setR5tab] = react.useState("flow");
@@ -243,6 +251,15 @@ export function DirectorPage() {
 	const [pOpen, setPOpen] = react.useState(false);
 	const [curId, setCurId] = react.useState(null);
 	const [composerOk, setComposerOk] = react.useState(false);
+	/* 执行态（本轮新增 · 真流转）。deliverMode 是**投递结果**，进 data-* 供断言读 ——
+	 * 界面上只显示一个短词，归因细节走属性，不占版面（用户要求「不用多余的解释」）。 */
+	const [busy, setBusy] = react.useState(false);
+	const [deliverMode, setDeliverMode] = react.useState("idle"); // idle|sent|filled|failed
+	/* 走的是哪一级投递通道（host-send / direct / open-then-send / 失败原因）——
+	 * 降级必须看得见，否则「显示已发送」可能只是点到了按钮而没送达 */
+	const [deliverVia, setDeliverVia] = react.useState("");
+	const [runGrade, setRunGrade] = react.useState("");           // G0/G1 组合，来自五步
+	const msgsRef = react.useRef([]);
 	const toastTimer = react.useRef(null);
 
 	const nodeId = st.activeNodeId || GLOBAL_NODE_ID;
@@ -256,8 +273,15 @@ export function DirectorPage() {
 		try {
 			setTree(await loadTree());
 			setCrumbs(await getBreadcrumb(nodeId));
-			setMsgs((await listDirectorMessages(nodeId)) || []);
+			const list = (await listDirectorMessages(nodeId)) || [];
+			/* 同步 ref：runDirector 要在**上屏前**读「本条之前的上下文」，
+			 * 若用 state 会拿到闭包里的旧值（少一轮）。 */
+			msgsRef.current = list;
+			setMsgs(list);
 			setTodos((await listTodos(nodeId)) || []);
+			/* 问题记录（R5「工作顺序 / 待完成清单 / 问题记录 全部实时更新」）：
+			 * 源 = 未通过的审核 + 节点风险。两个源都取自真实库，不编数。 */
+			setReviews((await listReviews(nodeId)) || []);
 			setStats(await pluginDbStats());
 		} catch (e) { /* 数据层异常不影响 UI */ }
 	}, [nodeId]);
@@ -267,9 +291,20 @@ export function DirectorPage() {
 	react.useEffect(() => { refreshBranchTree().catch(() => { }); return subscribeBranch(setBranch); }, []);
 	/* 跟随宿主当前会话（左栏点会话插件收不到事件 ⇒ 轮询单字段） */
 	react.useEffect(() => watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); }), []);
-	/* 原生 composer 是否可用（决定焦点条上的按钮是真能做还是写明原因） */
+	/* 原生 composer 是否可用 —— ⚠️ 只用来**显示状态**，不用来**禁用按钮**。
+	 *
+	 * 🔴 2026-09-12 真机补漏：原先「登记流转」写成 `disabled: !composerOk`，
+	 *   而 `composerOk` 是 **1.2 秒轮询**出来的布尔量 ⇒ 两种坏结果：
+	 *     ① 明明能点，按钮却是死的（最多 1.2 秒）——用户感受到的正是他抱怨的
+	 *        "按钮点击不好用"；真机 e2e 也因此在 D5 偶发「R5 0 → 0」。
+	 *     ② 明明不能点，按钮却亮着 —— 「点了没反应」，比①更差。
+	 *   正确做法：**按钮永远可点，真值在点击那一刻读**（`registerNative` 本来就
+	 *   会如实回话：输入框不可见 / 输入框为空）。
+	 *   "读真值"的能力不该交给一个 1.2 秒前的快照去 gate —— 这跟 execution-standards
+	 *   §3.4「写后回读校验」是同一条道理：**断言态必须来自现取，不能来自缓存**。
+	 * 轮询缩短到 400ms：仅影响 `data-composer` / `aria-disabled` 这两个**提示**位的准度。 */
 	react.useEffect(() => {
-		const t = setInterval(() => setComposerOk(Boolean(findComposer())), 1200);
+		const t = setInterval(() => setComposerOk(Boolean(findComposer())), 400);
 		setComposerOk(Boolean(findComposer()));
 		return () => clearInterval(t);
 	}, []);
@@ -294,6 +329,9 @@ export function DirectorPage() {
 	const now = currentTaskOf({ node: nowRow, flow: latest, flowList: sessionFlows, msgs });
 	const todoDone = todos.filter((t) => t.done === true || t.status === "done").length;
 	const todoRate = todos.length ? Math.round((todoDone / todos.length) * 100) : 0;
+	/* 问题记录（R5）：未通过的审核 + 节点风险 —— 两个源都是真实库，不编数 */
+	const problems = reviews.filter((r) => r && r.pass === false).length
+		+ ((node && node.risks) ? node.risks.length : 0);
 	const inset = readInset();
 
 	/* 浮动按钮组（FloatDock）是 `position:fixed` 贴在页面右下角的，横跨右侧
@@ -306,38 +344,145 @@ export function DirectorPage() {
 	const dockReserve = st.floatDockOpen === false ? 0 : FLOAT_DOCK_RESERVE;
 
 	/* ── 动作 ── */
-	/** 把光标送进宿主原生 composer（"用原本的对话框"） */
-	function focusNative(why) {
+	/** 定位原生输入框（"用原本的对话框"；本页不自建输入框） */
+	function focusNative() {
 		const ed = findComposer();
-		if (!ed) { say("未找到原生输入框：请切到「对话」tab 或让它可见后再试（插件不自己造一个输入框）"); return false; }
+		if (!ed) { say("输入框不可用"); return false; }
 		try { ed.focus(); if (typeof ed.setSelectionRange === "function") ed.setSelectionRange(ed.value.length, ed.value.length); } catch (e) { /* 只读元素 */ }
-		say("光标已送进原生对话框" + (why ? "（" + why + "）" : "") + " —— 打字的还是它，不是插件自建的框");
+		say("已定位输入框");
 		return true;
 	}
 
-	/** 切换"输入送到哪个域"，并顺手聚焦原生框（"点到哪里往哪里输入"） */
+	/** 切换"输入送到哪个域"（"点到哪里往哪里输入"） */
 	function pickTarget(dim) {
 		directorLayoutStore.setFocusTarget(dim === DIM.DIRECTOR ? "director" : "chat");
-		focusNative("目标已标为「" + DIM_LABEL[dim] + "」");
+		focusNative();
 	}
 
-	/** 把原生输入框里已有的内容登记为一条流转（读真值，不编） */
+	/** 把输入框里已有的内容登记为一条流转（读真值，不编） */
 	function registerNative() {
 		const txt = readComposerText();
-		if (txt === null) { say("读不到原生输入框（它当前不可见）—— 请先切到「对话」tab"); return; }
-		if (!String(txt).trim()) { say("原生输入框是空的 —— 没有东西可登记（不登记空内容）"); return; }
+		if (txt === null) { say("输入框不可见"); return; }
+		if (!String(txt).trim()) { say("输入框为空"); return; }
 		const dim = st.focusTarget === "director" ? DIM.DIRECTOR : DIM.CHAT;
-		flowStore.push(String(txt).trim(), { origin: dim, sessionId: flowSession, note: "从原生对话框登记（R8 焦点条）" });
-		say("已登记为流转：起点「" + DIM_LABEL[dim] + "」· " + String(txt).trim().length + " 字符");
+		flowStore.push(String(txt).trim(), { origin: dim, sessionId: flowSession, note: "R8 登记" });
+		say("已登记流转 · " + String(txt).trim().length + " 字符");
+	}
+
+	/** `runDirector` 需要的 store 适配器 —— 把 plugin-db 的消息面包装成 {getState,addMessage,setStatus} */
+	function pageStore() {
+		return {
+			/* 语义：本条**之前**的上下文。故读 ref 而不是 state（state 是本帧的闭包快照） */
+			getState: () => ({ messages: msgsRef.current }),
+			addMessage: (m) => appendDirectorMessage(nodeId, { role: m.role, text: m.content, parsed: m.parsed }),
+			setStatus: (s) => dshLog("director-page", "run-status=" + s)
+		};
+	}
+
+	/** 投递结果 → 一句短提示（**归因细节走 data-*，不占版面**） */
+	function deliverToast(d) {
+		if (d.mode === "sent") return "已发送到对话";
+		if (d.mode === "filled") return "已填入输入框";
+		return "未送达 · " + (d.reason || "未知");
+	}
+
+	/** 执行：**经总监五步处理 → 真正投递到对话**（本轮核心链路）
+	 *
+	 * 旧版（已废）：只 `appendDirectorMessage` + `route` + `flowStore.push` —— 记录员，不是执行中枢。
+	 * 新版：① 立即上屏（由 runDirector 内部完成，且在两处模型调用之前）
+	 *       ② 五步处理       ③ 处理链落库（`parsed`）  ④ 真投递  ⑤ 两跳流转登记
+	 *
+	 * 三条铁律：
+	 *   · 用户消息**先上屏**（本地模型单次超时 60s，串行最多 3 次 —— 不能让用户干等）
+	 *   · 投递结果写进 `data-deliver-mode`（界面不解释，测试可断言）
+	 *   · 失败必须有可见原因，不许静默（§4.3 降级底线）
+	 */
+	async function deliver(text) {
+		/* 原生框**不在场**与"在场但为空"是两回事，且"不在场"还要再分两种：
+		 *   · 宿主**生成中**会把 composer 收起来（判据：出现「停止生成」按钮）
+		 *     ⇒ 说「对话生成中」；说「先打开对话区」会让人以为是界面没打开。
+		 *   · 真的没有对话区（视图被切走）⇒ 说「先打开对话区」。
+		 *   最后才是"你没写东西"。混成一句会让人以为框坏了。 */
+		if (text === null) { say(isAgentGenerating() ? "对话生成中，稍后再试" : "先打开对话区"); return; }
+		const t = String(text || "").trim();
+		if (!t) { say("请输入内容"); return; }
+		if (busy) { say("上一条正在处理"); return; }
+		setBusy(true);
+		setDeliverMode("idle");
+		try {
+			const cfg = loadDirectorConfig();
+			const duties = (await resolveDuties(nodeId)).duties;
+
+			let r;
+			try {
+				r = await runDirector({
+					sessionId: flowSession, userText: t, store: pageStore(), duties, config: cfg,
+					autoForward: false
+				});
+			} catch (e) {
+				await refresh();
+				setDeliverMode("failed");
+				say("处理失败 · " + ((e && e.message) || "未知"));
+				return;
+			}
+			setRunGrade(r.steps.some((s) => s.grade === "G1") ? "G1" : "G0");
+
+			/* R2.5 建议去向：原生产者是那份**已删的旧 `deliver`**，删除后该卡片会变成
+			 * 永远不出现的死 UI。此处把生产者接回新版链路（处理完成后给出建议去向，
+			 * 供你改投 / 纠偏）—— 一份数据一个生产者，不留不可达界面。 */
+			setRouteResult(route(t, { nodes: flatNodes(), currentNodeId: nodeId }));
+
+			/* ④ 投递的是**处理后的指令**，不是原文 —— 这正是用户要的"经过处理然后发给对话执行" */
+			const d = await deliverToChat(r.instruction, { sessionId: flowSession, opener: openSession });
+			setDeliverMode(d.mode === "sent" ? "sent" : (d.ok ? "filled" : "failed"));
+			setDeliverVia(d.via || d.reason || "");
+
+			/* ⑤ 两跳流转：总监（已处理）→ 对话（已投递/未投递） */
+			const f = flowStore.push(t, { origin: DIM.DIRECTOR, sessionId: flowSession, note: "总监页执行" });
+			if (f) {
+				flowStore.move(f.flowId, DIM.DIRECTOR, "总监已处理", { status: "routed" });
+				if (d.ok) flowStore.move(f.flowId, DIM.CHAT, "已投递到对话", { status: "running", target: flowSession });
+			}
+			await refresh();
+			say(deliverToast(d));
+		} finally {
+			setBusy(false);
+		}
 	}
 
 	/** 控制台动作：有真接口的做真事，没有的**写明缺什么**（不做假按钮） */
 	async function consoleAct(key) {
-		if (key === "new") {
-			say("新建分支请用导图的「＋ 新建分支」（宿主 sessions.fork）；纯新建会话由宿主左栏「＋ 新会话」负责 —— 插件不重复造一个假入口");
+		/* 🧭 统筹：输入想法 → 生成 6 阶段计划 + 打分标准自审（用户核心目标：总监控制一切）
+		 * 「我提供一个想法……后续的开发文档编写、审核、蓝图设计、测试等等都由总监统筹」
+		 * 「审核标准……打分标准也需要进行审核，打分起码三轮多方位评估」 */
+		if (key === "plan") {
+			const idea = String(readComposerText() || "").trim();
+			if (!idea) { say("请先输入想法"); return; }
+			const plan = planFor(idea);
+			const audit = auditRubric();
+			const rounds = summarizeRounds([]); // 尚未评估 → 三轮全待跑（如实显示，不预填通过）
+			const lines = plan.steps.map((s) => s.seq + ". " + s.label + " → " + s.out).join("\n");
+			/* 🔴 只列**标准**（维度/权重/满分），不预填分值 ——
+			 *    分数必须来自评估证据；在这里编一个"看起来合理"的数字，
+			 *    正是本项目反复强调的"假数字比空数字更坏"。 */
+			const dims = RUBRIC.map((r) => r.label + "(" + r.weight + ")").join(" · ");
+			await appendDirectorMessage(nodeId, {
+				role: "assistant",
+				text: "【统筹计划】\n" + lines
+					+ "\n\n打分维度：" + dims + " · 满分 " + RUBRIC_MAX
+					+ "\n打分标准自审：" + (audit.ok ? "通过（可达/不重叠/可证伪）" : "未通过：" + audit.fails.join("；"))
+					+ "\n三轮评估：" + rounds.note,
+				parsed: { kind: "orchestrate-plan", plan, rubricOk: audit.ok, rubricFails: audit.fails }
+			});
+			await refresh();
+			say(audit.ok ? "已生成统筹计划（6 阶段）" : "计划已生成 · 打分标准自审未通过");
 			return;
 		}
-		if (key === "del") { say("删除分支不可用：宿主 sessions 服务未暴露删除接口（取证：SessionRuntime 成员表只有 create/fork/open/search/refresh）"); return; }
+		if (key === "new") {
+			say("新建分支请用导图的「＋ 新建分支」");
+			return;
+		}
+		if (key === "del") { say("删除分支不可用：宿主未提供删除接口"); return; }
 		if (key === "grab") {
 			const txt = readComposerText();
 			if (txt === null) { say("抓取失败：读不到原生对话输入框（当前不可见）"); return; }
@@ -363,7 +508,7 @@ export function DirectorPage() {
 			return;
 		}
 		if (key === "next") {
-			if (!latest) { say("没有可继续的流转 —— 先在原生对话框写一句，再点「登记为流转」"); return; }
+			if (!latest) { say("先在原生对话框写一句，再点「登记为流转」"); return; }
 			flowStore.move(latest.flowId, DIM.CHAT, "继续：送到对话继续执行", { status: "routed", target: flowSession });
 			say("已把最新流转送到「对话」维度继续");
 			return;
@@ -371,21 +516,19 @@ export function DirectorPage() {
 		say("未知动作：" + key);
 	}
 
-	/** 把一条流转"转给该对话"（真送达：打开会话 + 写入原生输入框） */
-	async function deliver(text) {
-		const t = String(text || "").trim();
-		if (!t) { say("没有可送的内容"); return; }
-		await appendDirectorMessage(nodeId, { kind: "需求澄清", text: t, role: "user" });
+	/** 层级树 → 扁平节点表（`route()` 的入参）
+	 *
+	 * ⚠️ 这里**曾经**是第二个 `async function deliver`（旧版"记录员"，只 append + route + push）。
+	 *    同名 `function` 声明在同一作用域**合法**且**后声明者静默覆盖前者** ⇒ 新版真流转链路
+	 *    被旧版整条顶掉，真机表现为「点执行没反应 + 只多一条 user 消息」（2026-09-12 G 段三红）。
+	 *    旧版已删，本文件对 `deliver` 只保留**一处**声明；该类的复发由构建期
+	 *    `lintDuplicateFnDecl`（build/build.mjs）拦截。
+	 */
+	function flatNodes() {
 		const flat = [];
 		const walk = (n) => { flat.push({ id: n.id, name: n.name, level: n.level }); (n.childNodes || []).forEach(walk); };
 		if (tree) walk(tree);
-		const r = route(t, { nodes: flat, currentNodeId: nodeId });
-		setRouteResult(r);
-		const f = flowStore.push(t, { origin: DIM.DIRECTOR, sessionId: flowSession, note: "总监页 R2.5 发出" });
-		if (f) flowStore.move(f.flowId, DIM.DIRECTOR, "已由总监整理，待确认去向", { status: "routed" });
-		await refresh();
-		say("总监已整理，待你确认去向");
-		dshLog("director-page", "R2.5 路由建议 " + r.decision.destination);
+		return flat;
 	}
 
 	/** 确认路由去向：把该会话最新流转推进到「对话」维度（**不静默分发** —— 必须先有人确认） */
@@ -406,7 +549,10 @@ export function DirectorPage() {
 	return h("div", {
 		id: DIRECTOR_PAGE_ID, style: S.root, "data-testid": "dp-root", className: "dp-textured",
 		"data-focus-target": st.focusTarget, "data-flow-session": flowSession || "", "data-composer": composerOk ? "1" : "0",
-		"data-texture": pz.texture
+		"data-texture": pz.texture,
+		/* 执行链路的**可断言面**（界面只显示短词，归因走属性 —— 用户要求「不用多余的解释」） */
+		"data-deliver-mode": deliverMode, "data-deliver-via": deliverVia,
+		"data-busy": busy ? "1" : "0", "data-run-grade": runGrade || ""
 	}, [
 		/* ── R1 顶部栏（设计稿 A1：📁 名称 ▾ + 层级 chips + 右上 ⚙） ── */
 		h("div", { key: "r1", style: { ...S.r1, paddingRight: Math.max(9, inset + 9) }, "data-testid": "dp-r1" }, [
@@ -554,6 +700,10 @@ export function DirectorPage() {
 							? (sessionFlows.length
 								? sessionFlows.slice(-20).reverse().map((f) => h("div", {
 									key: f.flowId, "data-testid": "dp-flow-item", "data-flow-id": f.flowId, "data-origin": f.origin, "data-status": f.status,
+									/* `data-session-id`：让"这条属于哪个会话"在 DOM 上可读 ——
+									 * 真机脚本靠它证明「R5 显示的就是刚登记的那条」，而不是靠数条数（数条数
+									 * 在"会话里有别的流转"时会误判）。 */
+									"data-session-id": f.sessionId || "",
 									style: { border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #212429)", borderRadius: "var(--dp-radius-sm, 5px)", padding: "5px 7px", marginBottom: 5 }
 								}, [
 									h("div", { key: "t", style: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word" } }, clip(f.text, 110)),
@@ -580,7 +730,7 @@ export function DirectorPage() {
 									h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 									h("div", { key: "b", style: S.bub }, m.text)
 								]))
-								: h("div", { key: "e", style: S.muted, "data-testid": "dp-r5-empty" }, "尚无总监消息。在 R8 焦点条把原生输入登记为流转后，总监的整理结果会出现在这里。")))
+								: h("div", { key: "e", style: S.muted, "data-testid": "dp-r5-empty" }, "尚无总监消息")))
 				])),
 
 			/* R7 详情 / 产出物 / 六维审核 */
@@ -623,6 +773,11 @@ export function DirectorPage() {
 					h("span", { key: "d" }, "决策 " + ((stats && stats.decisions) || 0)),
 					h("span", { key: "m" }, "记忆项 " + ((node && node.decisions ? node.decisions.length : 0) + (node && node.docs ? node.docs.length : 0))),
 					h("span", { key: "rk", style: { color: (node && node.risks && node.risks.length) ? "#d29922" : "inherit" } }, "风险 " + ((node && node.risks) ? node.risks.length : 0)),
+					h("span", {
+						key: "pb", "data-testid": "dp-db-problems",
+						style: { color: problems ? "#e5534b" : "inherit" },
+						title: "问题记录：未通过的审核 + 节点风险"
+					}, "问题 " + problems),
 					h("span", { key: "td" }, "回结收件箱 · " + todos.filter((t) => t.done !== true).length),
 					h("span", { key: "rec", style: { marginLeft: "auto" }, title: "最近一次层级变更" },
 						"最近：" + clampText((node && node.meta && node.meta.updatedAt) ? new Date(node.meta.updatedAt).toLocaleString() : "（无变更记录）", 30))
@@ -632,36 +787,41 @@ export function DirectorPage() {
 		/* ── R8 焦点条（**不再自建输入框** —— 用户：「不要这个对话框 用原本的对话框」） ──
 		 * 右端按浮动按钮组宽度留白（见 dockReserve 注释）—— 否则最右的「交给总监整理」整颗被压住 */
 		h("div", { key: "r8", style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "7px " + (9 + dockReserve) + "px 7px 9px", borderTop: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto", background: "var(--dp-bg-1, transparent)" }, "data-testid": "dp-r8" }, [
-			h("span", { key: "l", style: { ...S.muted, minWidth: 52 } }, "输入目标"),
+			h("span", { key: "l", style: { ...S.muted, minWidth: 30 } }, "目标"),
 			h("button", {
 				key: "fd", "data-testid": "dp-route-director", "data-on": st.focusTarget === "director" ? "1" : "0",
 				style: { ...S.btn, borderColor: st.focusTarget === "director" ? "var(--dp-ac-line, rgba(137,87,229,.45))" : "var(--dp-line, #3d4148)", color: st.focusTarget === "director" ? "var(--dp-ac, #b794f6)" : "var(--dp-t3, #8b9199)" },
-				title: "点到哪里就往哪里输入：选「总监」后，本条登记为总监维度",
+				title: "输入目标：总监",
 				onClick: () => pickTarget(DIM.DIRECTOR)
-			}, "◆ 总监" + (st.focusTarget === "director" ? " ●" : "")),
+			}, "总监" + (st.focusTarget === "director" ? " ●" : "")),
 			h("button", {
 				key: "fc", "data-testid": "dp-route-chat", "data-on": st.focusTarget === "chat" ? "1" : "0",
 				style: { ...S.btn, borderColor: st.focusTarget === "chat" ? "var(--dp-ac-line, rgba(47,111,235,.5))" : "var(--dp-line, #3d4148)", color: st.focusTarget === "chat" ? "var(--dp-ac, #79a8ff)" : "var(--dp-t3, #8b9199)" },
-				title: "点到哪里就往哪里输入：选「对话」后，本条登记为对话维度",
+				title: "输入目标：对话",
 				onClick: () => pickTarget(DIM.CHAT)
-			}, "💬 对话" + (st.focusTarget === "chat" ? " ●" : "")),
+			}, "对话" + (st.focusTarget === "chat" ? " ●" : "")),
 
 			h("button", {
 				key: "fo", style: S.btn, "data-testid": "dp-focus-native", "aria-disabled": composerOk ? "false" : "true",
-				title: composerOk ? "把光标送进宿主原生对话框（本页不再自建输入框）" : "当前读不到宿主原生对话框：请切到「对话」tab 或让它可见",
-				onClick: () => focusNative("目标：" + (st.focusTarget === "director" ? "总监" : "对话"))
-			}, "⌨ 聚焦原生对话框" + (composerOk ? "" : "（不可用）")),
+				title: "定位到原生输入框",
+				onClick: () => focusNative()
+			}, "定位输入框"),
 
 			h("button", {
-				key: "rg", style: S.btn, "data-testid": "dp-register-flow", disabled: !composerOk,
-				title: composerOk ? "读原生输入框当前内容，登记成一条四维流转（读真值，空内容不登记）" : "原生输入框不可见 ⇒ 读不到内容",
+				key: "rg", style: S.btn, "data-testid": "dp-register-flow",
+				"aria-disabled": composerOk ? "false" : "true",
+				title: composerOk ? "把输入框里这句话登记为一条流转" : "输入框当前不可见：登记会告诉你原因（按钮不禁用）",
 				onClick: registerNative
-			}, "📥 登记为流转"),
+			}, "登记流转"),
 
 			h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-r8-note" },
-				"输入在**原生对话框**（页面底部）；这里只负责标目标与登记流转。当前会话 " + (flowSession ? ("…" + String(flowSession).slice(-8)) : "未定位")),
+				flowSession ? "会话 …" + String(flowSession).slice(-8) : "未定位会话"),
 
-			h("button", { key: "s", style: { ...S.btn, background: "var(--dp-ac, #2f6bdd)", borderColor: "var(--dp-ac, #2f6bdd)", color: "#fff" }, "data-testid": "dp-send", onClick: () => deliver(readComposerText() || "") }, "交给总监整理")
+			h("button", {
+				key: "s", style: { ...S.btn, background: "var(--dp-ac, #2f6bdd)", borderColor: "var(--dp-ac, #2f6bdd)", color: "#fff", opacity: busy ? 0.65 : 1 },
+				"data-testid": "dp-send", disabled: busy, title: "经总监处理并发送到对话",
+				onClick: () => deliver(readComposerText())
+			}, busy ? "处理中…" : "执行")
 		]),
 
 		/* 路由确认卡（V16 C4：目标多义必确认 —— 不静默分发） */
@@ -676,12 +836,25 @@ export function DirectorPage() {
 			h("button", { key: "x", style: S.btn, "data-testid": "dp-rt-cancel", onClick: () => setRouteResult(null) }, "取消")
 		]) : null,
 
-		toast ? h("div", {
+		/* 提示位（**常驻等高占位**，不是「有内容才渲染」）────────────────────────
+		 * 🔴 为什么必须常驻（2026-09-12 真机定案 · 用户原话「两个按钮点击不好用」）：
+		 *   本页是**底部锚定**的列布局，这一行排在 R8 焦点条**之后**。原先写成
+		 *   `toast ? h(div) : null` ⇒ 一旦出提示，整条 R8 会被顶上去 **23px**
+		 *   （实测 `btnY` 628 → 605，提示消失又落回 628，可复现）。
+		 *   后果不是「难看」，是**点不中**：用户点「⌨ 定位输入框」→ 弹出提示 →
+		 *   手指顺势移向「📥 登记流转」，而那颗按钮已经不在原来的位置了。
+		 *   真机证据（verify-flow-r19 D5）：命中自检通过（读坐标时确实在按钮上），
+		 *   真实鼠标事件落下时按钮已漂走 ⇒ 处理器没进、库 0 条、toast=null。
+		 *   ⇒ 常驻一个等高槽：**布局不随提示变化**。
+		 *     空时**不带 `dp-toast` testid**（"没有提示"的语义与原先一致，测试读到的仍是 null）。 */
+		h("div", {
 			key: "toast", style: {
-				padding: "0 9px 7px", color: "var(--dp-ac, #79a8ff)", fontSize: "calc(11.5px * var(--dp-font,1))",
-				display: "flex", gap: 6, alignItems: "center"
-			}, "data-testid": "dp-toast", onClick: () => setToast("")
-		}, toast) : null,
+				height: "23px", padding: "0 9px", color: "var(--dp-ac, #79a8ff)",
+				fontSize: "calc(11.5px * var(--dp-font,1))", display: "flex", gap: 6, alignItems: "center",
+				overflow: "hidden"
+			},
+			...(toast ? { "data-testid": "dp-toast", title: "点击可清除", onClick: () => setToast("") } : {})
+		}, toast || ""),
 
 		/* 个性化面板（右上角；四处共用同一组件与同一份设定） */
 		h(PersonalizePanel, { key: "pp", open: pOpen, onClose: () => setPOpen(false), inset: inset, top: 40, scope: "总监页" })

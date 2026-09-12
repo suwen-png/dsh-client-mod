@@ -57,17 +57,27 @@ ok("src/logic/duties.js 存在", existsSync(P.duties), size(P.duties) + " B");
 ok("DUTY_KEYS 恰为文档 5 项且顺序一致",
 	has(S.duties, /languagePolish[\s\S]{0,80}modelRouting[\s\S]{0,80}branchSwitch[\s\S]{0,80}contextFilter[\s\S]{0,80}outputReview/));
 
-// 默认开关严格按文档：整理语言✅ 调整模型✅ 切换分支✅ 上下文筛选⬜ 自动审核⬜
 const blockOf = (k) => {
 	const re = new RegExp(k + ":\\s*\\{[\\s\\S]{0,600}?\\n\\t\\},?");
 	const m = String(S.duties).match(re);
 	return m ? m[0] : "";
 };
+/* 默认开关：**五步全开**（2026-09-12 修订）。
+ * 🔴 为什么从"④⑤默认关"改成"④⑤默认开"（不是放宽，是纠错，两处留痕可核对）：
+ *   ① 文档 §1.2 把总监定义成**五步**处理，而旧默认表把第 ④⑤ 步关着
+ *      ⇒ **出厂默认与自身规格矛盾**；
+ *   ② 真机实测（verify-flow G3b）：真流转里总监的回复只有 1/2/3 步，
+ *      第 4/5 步被 `enabled` 过滤掉 ⇒ 用户核心目标「审核由总监统筹」默认不生效。
+ *   ③ 两步都是 G0（零模型、零网络、永不抛错），开启不引入失败面。
+ *   故本段断言改为"**每一步都必须显式声明 enabled**，且五步都为 true"——
+ *   既守住"不能与非规格矛盾"，也守住"这个开关必须显式存在"（防止将来悄悄删掉字段）。 */
 ok("「整理语言」默认启用", /enabled:\s*true/.test(blockOf("languagePolish")));
 ok("「调整模型」默认启用", /enabled:\s*true/.test(blockOf("modelRouting")));
 ok("「切换分支」默认启用", /enabled:\s*true/.test(blockOf("branchSwitch")));
-ok("「上下文筛选」默认禁用（文档 §3.1 ⬜）", /enabled:\s*false/.test(blockOf("contextFilter")));
-ok("「自动审核产出」默认禁用（文档 §3.1 ⬜）", /enabled:\s*false/.test(blockOf("outputReview")));
+ok("「上下文筛选」默认启用（文档 §1.2 五步规格 · 2026-09-12 纠错）", /enabled:\s*true/.test(blockOf("contextFilter")));
+ok("「自动审核产出」默认启用（同上 · 审核环由总监统筹）", /enabled:\s*true/.test(blockOf("outputReview")));
+ok("五项职责都**显式**带 enabled 字段（防将来被悄悄删掉 ⇒ 开关语义不明）",
+	["languagePolish", "modelRouting", "branchSwitch", "contextFilter", "outputReview"].every((k) => /enabled:\s*(true|false)/.test(blockOf(k))));
 
 // prompt 逐字采用文档原文（各取文档原句的特征片段）
 ok("prompt：整理语言 = 文档原文", has(S.duties, /把用户的口语化需求整理为精确、无歧义的技术指令/));

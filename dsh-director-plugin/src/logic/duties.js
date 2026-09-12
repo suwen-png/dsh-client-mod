@@ -75,13 +75,19 @@ export const DEFAULT_DUTIES = {
 	contextFilter: {
 		key: "contextFilter",
 		name: "上下文筛选",
-		enabled: false,
+		/* 🔴 默认改为 true（2026-09-12）：文档 §1.2 定义总监是**五步**处理，
+		 * 而默认表把第 ④⑤ 步关着 ⇒ 出厂默认与自身规格矛盾（真机实测：真流转的
+		 * 总监回复里只有 1/2/3 步，第 4/5 步被 `reasoning` 的 enabled 过滤掉）。
+		 * 两步都是 G0（零模型、零网络、永不抛错），开启不引入失败面。 */
+		enabled: true,
 		prompt: "当切换模型/分支时，筛选需要传递的上下文片段，去除无关历史，控制token量。"
 	},
 	outputReview: {
 		key: "outputReview",
 		name: "自动审核产出",
-		enabled: false,
+		/* 🔴 默认改为 true（同上）：用户核心目标里「审核」由总监统筹，
+		 * 第 ⑤ 步正是那条审核环 —— 关掉它等于核心目标默认不生效。 */
+		enabled: true,
 		prompt: "大模型返回结果后，自动审核文档/代码是否符合原始需求，不符合则标注问题并建议修正。"
 	}
 };

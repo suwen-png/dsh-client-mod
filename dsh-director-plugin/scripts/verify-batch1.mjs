@@ -241,9 +241,18 @@ check("🔴 E1 反证：代码区零 filteredMessages 引用", fmUseHits === 0, 
 check("🔴 E1 修正已落地：state.messages.map", flowCode.includes("state.messages.map((msg) =>"), "已改用 state.messages");
 check("E1 迁移期修正已标注（防回退）", flowSrc.includes("迁移期修正") && flowSrc.includes("越界引用"), "文件头论证齐全");
 
-// 🔴 宿主侧反证：确认该缺陷在宿主中确实存在（取证链闭环）
+// 🔴 宿主侧反证 → **双向一致性闸门**（2026-09-12 纠错）
+//   原断言写于「宿主还是坏的」时期，凭据是 `filteredMessages` 全文件命中 1 次（越界使用点、零定义）。
+//   宿主补丁已落地（`state.messages.map((msg) =>`）⇒ 命中数由 1 变 0，旧断言把「缺陷已修」读成 FAIL。
+//   正确语义：**两侧都必须零 `filteredMessages`，且都能找到同一处修正** —— 这才是取证链闭环。
 const hostFmAll = (hostSrc.match(/filteredMessages/g) || []).length;
-check("🔴 宿主缺陷取证：filteredMessages 全文件仅 1 处（即使用点，零定义）", hostFmAll === 1, `宿主命中 ${hostFmAll} 次（预期 1，仅使用点）`);
+check("🔴 宿主侧反证：filteredMessages 归零（越界引用已被宿主补丁消除）", hostFmAll === 0, `宿主命中 ${hostFmAll} 次（预期 0）`);
+check("🔴 宿主修正已落地：state.messages.map", hostSrc.includes("state.messages.map((msg) =>"), "宿主与插件同一处修正");
+check(
+	"🔴 双向一致性：插件与宿主的消息渲染口径一致（同为零越界引用）",
+	fmUseHits === 0 && hostFmAll === 0,
+	`插件 ${fmUseHits} 次 / 宿主 ${hostFmAll} 次（两者均须为 0）`,
+);
 
 // ── 汇总（程序化求和）──
 const passed = results.filter((r) => r.pass).length;

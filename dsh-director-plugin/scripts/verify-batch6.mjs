@@ -112,8 +112,26 @@ ok("产物含 __dshHierarchy 契约", has(BUNDLE, /__dshHierarchy/));
 ok("产物含 __dshSummarize 契约", has(BUNDLE, /__dshSummarize/));
 ok("产物含批次 6 契约字段", has(BUNDLE, /hierarchyApi/) && has(BUNDLE, /summarizeApi/) && has(BUNDLE, /hierarchyMounted/));
 ok("产物含批次 6 别名 __dshDirectorBatch6", has(BUNDLE, /__dshDirectorBatch6/));
-// 版本号随批次递增（batch6 → batch7…），断言「不低于 batch6」而非写死，避免每次升级都误报
-ok("产物版本号不低于 0.6.0-batch6", has(BUNDLE, /0\.[6-9]\.0-batch[6-9]/));
+// 版本号随批次递增（batch6 → batch7…batch15），断言「不低于 0.6.0-batch6」而非写死。
+// 2026-09-12 纠错：原正则 `/0\.[6-9]\.0-batch[6-9]/` 的 `[6-9]` 是**单字符**，只能匹配
+//   6/7/8/9；产物已到 `0.15.0-batch15` ⇒ minor=15、batch=15 都不是单字符 ⇒ 假红（闸门过期）。
+//   改为解析 (major, minor, batch) 数值后做序比较，任何未来版本都不会再误报。
+const verOf = (src) => {
+	const m = (src || "").match(/(\d+)\.(\d+)\.(\d+)-batch(\d+)/);
+	return m ? { major: +m[1], minor: +m[2], patch: +m[3], batch: +m[4] } : null;
+};
+const bv = verOf(BUNDLE);
+const MIN_V = { major: 0, minor: 6, patch: 0, batch: 6 };
+const geMin = !!bv && (bv.major > MIN_V.major
+	|| (bv.major === MIN_V.major
+		&& (bv.minor > MIN_V.minor || (bv.minor === MIN_V.minor && bv.batch >= MIN_V.batch))));
+ok("产物版本号不低于 0.6.0-batch6", geMin,
+	bv ? `实测 ${bv.major}.${bv.minor}.${bv.patch}-batch${bv.batch}（下界 ${MIN_V.major}.${MIN_V.minor}.${MIN_V.patch}-batch${MIN_V.batch}）` : "未找到版本号字面量");
+// 交叉校验：产物版本必须与源码唯一真相源 src/client-entry.js 的 PLUGIN_VERSION 逐字一致
+const SRC_VER = verOf(read(P.entry));
+ok("产物版本 == 源码 PLUGIN_VERSION（唯一真相源）",
+	!!bv && !!SRC_VER && bv.major === SRC_VER.major && bv.minor === SRC_VER.minor && bv.batch === SRC_VER.batch,
+	`源码 ${SRC_VER ? `${SRC_VER.major}.${SRC_VER.minor}.${SRC_VER.patch}-batch${SRC_VER.batch}` : "未找到"} / 产物 ${bv ? `${bv.major}.${bv.minor}.${bv.patch}-batch${bv.batch}` : "未找到"}`);
 ok("挂载入口含浮层兜底", has(BUNDLE, /dsh-director-hierarchy-overlay/));
 ok("挂载含宿主 slot 尝试（conversation.view）", has(BUNDLE, /conversation\.view/));
 

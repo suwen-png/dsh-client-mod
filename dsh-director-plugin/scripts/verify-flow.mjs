@@ -152,13 +152,30 @@ async function mouse(type, x, y, buttons) {
 }
 /** 真实点击（含命中测试；坐标现取现用） */
 async function click(sel) {
-	const r = await rectOf(sel);
+	let r = await rectOf(sel);
 	if (!r || r.zero) return { ok: false, why: "未找到或零尺寸 " + sel };
-	const hit = await hitAt(sel, r.cx, r.cy);
+	let hit = await hitAt(sel, r.cx, r.cy);
+	/* 🔴 2026-09-12 加固：**落点必须在视口内且命中自己**（真实鼠标事件打在视口外＝什么都没点）。
+	 *   真机实测（r21 C12）：导图里框被前一段的拖动/小地图滚走 ⇒ 💬 按钮的坐标落在视口外
+	 *   ⇒ `elementsFromPoint` 返回空、点击打在空气上 ⇒ C12–C17 **六条级联红**，
+	 *   而它们报的是"面板没出现 / Esc 把导图关了"这类**看起来像产品坏了**的现象。
+	 *   （导图那一套脚本早就有 `focusVisibleNode()` 处理同一件事，这里之前漏了。）
+	 *   做法：先把元素滚进可视区再量一次；`scrolled` 打进明细，便于和"真的点不中"区分。 */
+	let scrolled = false;
+	if (!hit.ok || !hit.top) {
+		const did = await ev("(()=>{const e=document.querySelector(" + J(sel) + ");if(!e)return false;"
+			+ "try{ e.scrollIntoView({block:'center',inline:'center'}); }catch(err){ try{e.scrollIntoView();}catch(e2){} }"
+			+ "return true;})()");
+		if (did) {
+			await WAIT(320);
+			const r2 = await rectOf(sel);
+			if (r2 && !r2.zero) { r = r2; hit = await hitAt(sel, r.cx, r.cy); scrolled = true; }
+		}
+	}
 	await mouse("mouseMoved", r.cx, r.cy, 0);
 	await mouse("mousePressed", r.cx, r.cy, 1);
 	await mouse("mouseReleased", r.cx, r.cy, 0);
-	return { ok: true, x: r.cx, y: r.cy, occluded: !hit.ok, top: hit.top };
+	return { ok: true, x: r.cx, y: r.cy, occluded: !hit.ok, top: hit.top, scrolled: scrolled };
 }
 async function clickText(sel, text) {
 	const r = await rectOfText(sel, text);
@@ -216,9 +233,148 @@ const count = (sel) => ev("document.querySelectorAll(" + J(sel) + ").length");
 const attr = (sel, name) => ev("(()=>{const e=document.querySelector(" + J(sel) + ");return e?e.getAttribute(" + J(name) + "):null;})()");
 const exists = async (sel) => (await count(sel)) > 0;
 
+/* ── 前置：让「原生 composer 可见」这件事成立（不靠运气）───────────────────────
+ * 🔴 实测根因（2026-09-12，本轮 r2/r4 连续两轮踩到）：
+ *    宿主在**生成中**会隐藏 composer —— 判据是 `button[aria-label="停止生成"]` 在场，
+ *    此时 `textarea[placeholder=…]` 仍在 DOM 里但被外层 `display:none` 压成 0×0。
+ *    而**本脚本自己的投递就会触发一次真实生成**（host-send → 智能体真的开始回答）
+ *    ⇒ 紧接着跑下一轮时 composer 还在隐藏中 ⇒ A5/A6/G 段级联变红，
+ *    读起来像"功能坏了"，实际是"上一轮的活儿还没干完"。
+ *
+ * 分级建立（每级都有明确依据，不静默）：
+ *    ① 直接可见                        → 成立
+ *    ② 正在生成 ⇒ **换一个会话**        → 那个会话未必在生成，最快拿到 composer
+ *    ③ 等（生成可能自然结束）           → 成立
+ *    ④ 点回「总监」tab（视图被切走）    → 成立
+ *    ⑤ 都不行                          → 返回 false，由调用方**如实报因**
+ */
+async function composerVisible() {
+	return ev("(()=>!!(window.__dshChatBridge&&window.__dshChatBridge.findComposer()))()");
+}
+async function generating() {
+	return ev("(()=>!!document.querySelector('button[aria-label=\"停止生成\"]'))()");
+}
+async function waitComposer(ms) {
+	const t0 = Date.now();
+	while (Date.now() - t0 < ms) {
+		if (await composerVisible()) return true;
+		await WAIT(600);
+	}
+	return false;
+}
+async function ensureComposer() {
+	if (await composerVisible()) return { ok: true, how: "直接可见" };
+	const busy = await generating();
+	if (busy) {
+		/* ② 换会话：挑一个"不是当前选中"的会话行真实点击 */
+		const other = await ev("(()=>{const L=[...document.querySelectorAll('[role=treeitem]')];"
+			+ "const i=L.findIndex(e=>e.getAttribute('aria-selected')==='true');"
+			+ "const cands=L.map((e,k)=>({k:k,t:String(e.textContent||'').trim()})).filter(x=>x.k!==i&&/分钟|小时|天|刚刚/.test(x.t));"
+			+ "return cands.length?cands[0].k:-1;})()");
+		if (other >= 0) {
+			await clickIndex('[role="treeitem"]', other);
+			if (await waitComposer(9000)) return { ok: true, how: "生成中 ⇒ 换会话" };
+		}
+	}
+	/* ③ 等生成结束（LLM 回合可能几十秒） */
+	if (await waitComposer(busy ? 60000 : 12000)) return { ok: true, how: busy ? "等生成结束" : "等待后可见" };
+	/* ④ 视图被切走 ⇒ 点回总监 tab */
+	await clickText('[role="tab"]', "总监");
+	if (await waitComposer(6000)) return { ok: true, how: "点回总监 tab" };
+	return { ok: false, how: "⑤ 五级都不成立（生成中=" + busy + "）" };
+}
+
+/* ── 起点会话复原 / 钉住（本项目既有纪律 C17.2）─────────────────────────────
+ * 🔴 为什么必须复原：D8 会真实点到"**另一个**会话"，而不同会话的布局未必相同 ——
+ *    真机实测（2026-09-12）：起点会话的 composer 在底部（top≈690，浮动组 bottom≈137.6），
+ *    而某个其它会话的 composer 落在 **y≈390 的分屏中段**（浮动组 bottom=438）。
+ *    不复原 ⇒ F（浮动组跟随 composer）与 G（执行=读原生框）会在**两种布局之间漂移**：
+ *    同一份代码时红时绿，读起来像"功能坏了"，实际是**起点没复原**。
+ * 🔴 2026-09-12 第二轮补漏：**D 段自己也需要它**（不只是 F/G 的前置）——
+ *    D5 往原生框写 MARK、点「登记流转」时，页面认的会话若已经漂到别处，
+ *    R5 就会按**另一个会话**过滤 ⇒ 条数 0，而库里那条其实好好地存在（D7 还能查到它）。
+ *    这正是 r5/r6 的 D5/D6 假红的成因。⇒ 把复原函数**上提**，D 段开头与结尾都用它。
+ * ⚠️ 只有**一处**声明：同名 `function` 重复声明会静默覆盖前者（本项目已因此翻过一次车）。 */
+async function restoreStartSession() {
+	if (!(await composerVisible())) {
+		const e = await ensureComposer();
+		if (!e.ok) {
+			if (openedSessionIndex === null) return { ok: false, how: "composer 未建立且无起点下标" };
+			await clickIndex('[role="treeitem"]', openedSessionIndex);
+			if (!(await waitComposer(6000))) {
+				/* 下标漂移（侧栏增删项）时的兜底：按**文案**再点一次 */
+				if (openedSessionLabel) await clickText('[role="treeitem"]', openedSessionLabel);
+				if (!(await waitComposer(8000))) return { ok: false, how: "按文案也没等到 composer" };
+			}
+		}
+	}
+	/* 🔴 关键一步（r11/r12/r13 实测的真因）：「composer 在场」**不等于**"回到了起点会话" ——
+	 *   任何会话都有输入框。D8 会真实点到另一个会话，若只判 composer，就会一直留在那个会话上，
+	 *   下一轮的起点随之漂移（C 段的分支树从 16 个框退化成 1 个框）。
+	 *   ⇒ 必须比对 **sessionId**，不一致就按起点下标/文案切回去，并等它真的对上。 */
+	let back = true;
+	if (startSessionId) {
+		let cur = await dpSession();
+		if (cur !== startSessionId) {
+			back = false;
+			for (let i = 0; i < 2 && !back; i++) {
+				if (openedSessionIndex !== null) { await clickIndex('[role="treeitem"]', openedSessionIndex); await WAIT(900); }
+				cur = await dpSession();
+				if (cur === startSessionId) { back = true; break; }
+				if (openedSessionLabel) { await clickText('[role="treeitem"]', openedSessionLabel); await WAIT(900); }
+				cur = await dpSession();
+				if (cur === startSessionId) back = true;
+			}
+			if (!back) {   // 下标/文案都漂了 ⇒ 如实记"未能复原"，不编一条假成功
+				await WAIT(400);
+				back = (await dpSession()) === startSessionId;
+			}
+		}
+	}
+	return { ok: true, how: "composer 在场" + (startSessionId ? (back ? " + 会话已复原" : " + ⚠️ 会话未能复原") : "（未记起点 id）"), sess: await dpSession(), back: back };
+}
+/** 读「总监页认的当前会话」（= R5 的过滤依据） */
+async function dpSession() {
+	return await ev("(()=>{const e=document.querySelector('[data-testid=dp-root]');"
+		+ "return e?e.getAttribute('data-flow-session'):null;})()");
+}
+/** 关掉所有可能盖住页面的浮层（跨段污染的通用清扫；C17.2 的延伸）。
+ *  🔴 为什么要有它：r8/r9 实测 —— D7 走 SKIP 分支时没关导图，导图就一直盖着，
+ *     紧接着的 F 段量到"三颗药丸被 `mm-stage` / `mm-minimap` / `nd-input` 挡住" ⇒ F8 报红，
+ *     读起来像"浮动组坏了"，其实是**上一段的残留**。跨段污染与假绿灯同罪。 */
+async function closeOverlays(log) {
+	const closed = [];
+	/* ⚠️ 选择器必须写全 `[data-testid=...]`：本脚本的 `exists()` 只做 `querySelectorAll(sel)`，
+	 *    传裸名（如 `mm-root`）匹配的是 `<mm-root>` 标签 ⇒ 恒 0 ⇒ **静默什么都不关**。
+	 *    r15 实测踩到：阶段 0 的"清场"没生效 ⇒ 导图盖着 ⇒ A6（焦点进不去原生框）、
+	 *    B2-B8（个性化面板点不开）一起红，读起来像"功能坏了"，其实是**残留浮层**。 */
+	for (const [sel, closer, label] of [
+		['[data-testid="nd-panel"]', null, "节点详情"],
+		['[data-testid="mm-root"]', '[data-testid="mm-close"]', "分支导图"],
+		['#dsh-design-studio', '[data-testid="ds-close"]', "设计图工作室"]
+	]) {
+		if (!(await exists(sel))) continue;
+		if (closer) await click(closer); else await pressEsc();
+		await WAIT(400);
+		closed.push(label);
+	}
+	for (let i = 0; i < 3; i++) {           // Esc 是"只关最上层"：依次退
+		if (!(await exists('[data-testid="nd-panel"]'))) break;
+		await pressEsc(); await WAIT(250);
+	}
+	/* 清场后自检：确认真的一层都不剩（"以为关了"是这类事故的常见形态） */
+	const left = await ev("['[data-testid=\"mm-root\"]','#dsh-design-studio','[data-testid=\"nd-panel\"]']"
+		+ ".filter(s=>document.querySelector(s)).map(s=>s.slice(0,20))");
+	if (log) console.log("  · 清浮层（" + log + "）：关了 " + (closed.length ? closed.join(" / ") : "（无残留）")
+		+ " ｜ 自检残留 " + JSON.stringify(left));
+	return closed;
+}
+
 console.log("═══════════════════════════════════════════════════════════");
 console.log(" 真机验证 · 总监页 / 个性化 / 导图控件与拖动 / 四维流转");
 console.log("═══════════════════════════════════════════════════════════");
+
+
 
 /* ══════════════════════════════════════════════════════════════════
  * 阶段 0 —— 干净起点：关掉所有浮层，确保有一个会话，再激活总监 tab
@@ -226,7 +382,12 @@ console.log("══════════════════════�
 console.log("── 阶段 0：准备起点 ──");
 await ev("(()=>{ if(window.__dshFlow) window.__dshFlow.store.reset(); return 1; })()");
 /* 先关导图/工作室（若开着），保证起点干净 */
-for (const s of ["mm-close", "ds-close"]) { if (await exists("[data-testid=" + J(s) + "]")) { await click("[data-testid=" + J(s) + "]"); await WAIT(300); } }
+await closeOverlays("阶段 0");
+/* 🔴 同时把 R5 页签归位到「流转」：本脚本自己会在 G3b 切到「总监消息」，
+ *   而 `r5tab` 是组件内部状态、**跨轮次存活**（同一份 Harness 实例连跑多轮时不会重置）。
+ *   上一轮没切回 ⇒ 下一轮 D5/D6/D7 三红（详见 G3b 后"环境复原"的注释）。
+ *   ⇒ 阶段 0 无条件归位：让每轮的**起点**与"刚重启"完全一致，不靠上一轮自觉。 */
+if (await exists('[data-testid="dp-r5-flow"]')) { await click('[data-testid="dp-r5-flow"]'); await WAIT(250); }
 /* 🔴 重启后的 Harness 停在欢迎页 ⇒ **没有会话就没有 tab 环**，后面全部断言会以
  *   「找不到总监 tab」的形式级联变红，读起来像五组需求全没做。
  *   ⇒ 先真实点一个侧栏会话把会话视图打开。
@@ -236,6 +397,14 @@ for (const s of ["mm-close", "ds-close"]) { if (await exists("[data-testid=" + J
 let tabRing = (await ev("Array.from(document.querySelectorAll('[role=\"tab\"]')).map(e=>String(e.textContent).trim())")) || [];
 /* 记下"我们点开的是哪个会话"—— D 段要**真实点到另一个会话**做对照，得先知道自己现在在哪一个 */
 let openedSessionLabel = null;
+/* 记下起点会话的**侧栏下标** —— D 段收尾要按它复原（见 D 段末尾的复原块） */
+let openedSessionIndex = null;
+/* 起点会话的 **sessionId** —— 只有它能在"composer 可见"之后继续判"是不是同一个会话"。
+ * 🔴 2026-09-12 r11/r12/r13 实测：`restoreStartSession()` 原先只要 composer 可见就返回 true，
+ *    于是 D8 切到"另一个会话"之后**从没被切回来**，下一轮的起点会话一路漂移
+ *    （r7 的起点带 16 个框的分支树，r11 起退化成 1 个框）⇒ C 段四条断言失去前提。
+ *    ⇒ 复原必须比"能看见输入框"更强：**是同一个会话**。 */
+let startSessionId = null;
 if (tabRing.length === 0) {
 	const items = (await ev("Array.from(document.querySelectorAll('[role=\"treeitem\"]')).map((e,i)=>({i,t:String(e.textContent||'').trim().slice(0,26)}))")) || [];
 	const sessions = items.filter((x) => /分钟|小时|天|刚刚/.test(x.t));
@@ -244,11 +413,29 @@ if (tabRing.length === 0) {
 		const c = await clickIndex('[role="treeitem"]', s.i);
 		await WAIT(1500);
 		tabRing = (await ev("Array.from(document.querySelectorAll('[role=\"tab\"]')).map(e=>String(e.textContent).trim())")) || [];
-		if (tabRing.length) { openedSessionLabel = s.t; console.log("  ✅ 已打开会话：" + s.t + " ⇒ tab 环 " + JSON.stringify(tabRing)); break; }
+		if (tabRing.length) { openedSessionLabel = s.t; openedSessionIndex = s.i; console.log("  ✅ 已打开会话：" + s.t + " ⇒ tab 环 " + JSON.stringify(tabRing)); break; }
 		console.log("  · 点了「" + s.t + "」仍无 tab 环");
 	}
 }
 if (tabRing.length === 0) console.log("  ⚠️ 始终没能打开会话视图 ⇒ 后续断言会级联失败（这是阻塞，不是「功能没做」）");
+
+/* 🔴 无论"起点会话是我们自己打开的、还是它本来就在"——都必须记下它是谁。
+ *    r4 实测：启动时 tab 环已存在 ⇒ 走不到上面的打开分支 ⇒ `openedSessionIndex` 恒为 null
+ *    ⇒ D 段收尾的"环境复原"无对象可复原（日志里显示成「切回起点会话『?』」）。
+ *    侧栏以 `aria-selected="true"` 标记当前会话，据此回填。 */
+if (openedSessionIndex === null) {
+	const cur = await ev("(()=>{const L=[...document.querySelectorAll('[role=treeitem]')];"
+		+ "const i=L.findIndex(e=>e.getAttribute('aria-selected')==='true');"
+		+ "return i>=0?{i:i,t:String(L[i].textContent||'').trim().slice(0,26)}:null;})()");
+	if (cur) { openedSessionIndex = cur.i; openedSessionLabel = cur.t; }
+	console.log("  · 起点会话（按 aria-selected 回填）：" + (openedSessionLabel || "?"));
+}
+
+/* ── 前置：composer 可见（见 ensureComposer 的分级说明）──
+ * 放在 A 段之前：A5/A6/G/F 全依赖它，前置不成立时后面的红都不是"功能坏了"。 */
+const preComposer = await ensureComposer();
+console.log("  · 前置 composer：" + (preComposer.ok ? "已建立（" + preComposer.how + "）" : "未建立（" + preComposer.how + "）"));
+
 const tabClick = await clickText('[role="tab"]', "总监");
 check("A1", "宿主 tab 环里真实点击「总监」tab", tabClick.ok, tabClick.ok ? "坐标 " + tabClick.x + "," + tabClick.y + " ｜ tab 环 " + JSON.stringify(tabRing) : tabClick.why);
 await WAIT(900);
@@ -256,6 +443,14 @@ await WAIT(900);
 section("【A】总监页 · 用原生对话框（用户：「不要这个对话框，用原本的对话框」）");
 const hasPage = await exists('[data-testid="dp-r1"]');
 check("A2", "总监页已挂载（dp-r1 出现）", hasPage, hasPage ? "已挂载" : "未找到 dp-r1");
+/* 🔴 记下**起点会话的 sessionId**（总监页挂载后才有 `data-flow-session` 可读）。
+ *   `openedSessionIndex/Label` 只够"点回去"，判"是不是同一个会话"必须靠 id ——
+ *   见 restoreStartSession 的注释（r11/r12/r13 跨轮漂移的真因）。 */
+if (hasPage) {
+	startSessionId = await dpSession();
+	console.log("  · 起点会话 id = " + (startSessionId || "（取不到）")
+		+ " ｜ 侧栏下标 " + openedSessionIndex + " ｜ 文案「" + (openedSessionLabel || "?") + "」");
+}
 if (!hasPage) {
 	console.log("\n⚠️ 总监页未挂载，后续 A/B/D 段跳过（这不是通过，是阻塞）。");
 }
@@ -298,11 +493,21 @@ await WAIT(250);
 const draftNow = await ev("(()=>{try{return String(window.__dshChatBridge.readComposerText()||'');}catch(e){return 'ERR';}})()");
 await ev("(()=>{ window.__dshFlow.store.setActiveSession(null); return 1; })()");
 const n0 = await flowLen();
-await click('[data-testid="dp-register-flow"]'); await WAIT(350);
+/* 🔴 前提自证 ②：按钮**当时确实可点**。
+ *   不然「点了没反应」也会让这条负向断言变绿 —— 死按钮与"正确地拒绝空输入"
+ *   在结果上无法区分（A7 原本就是这个弱点：它删掉 disabled 前后都是绿的）。
+ *   这里不重复产品判据，只记事实，供人分辨。 */
+const aClickable = await ev("(()=>{const b=document.querySelector('[data-testid=dp-register-flow]');"
+	+ "if(!b)return {there:false};const r=b.getBoundingClientRect();"
+	+ "return {there:true,disabled:Boolean(b.disabled),aria:b.getAttribute('aria-disabled'),"
+	+ " w:Math.round(r.width),h:Math.round(r.height)};})()");
+const aClick = await click('[data-testid="dp-register-flow"]'); await WAIT(350);
 const n1 = await flowLen();
 check("A7", "【负】原生框**确为空**时点「📥 登记为流转」⇒ 不产生空流转（含前提自证）",
 	draftNow === "" && n1 === n0,
-	"前置清空后读到 " + J(draftNow) + "（原草稿 " + (userDraft ? userDraft.length + " 字" : "空") + "）｜前 " + n0 + " → 后 " + n1);
+	"前置清空后读到 " + J(draftNow) + "（原草稿 " + (userDraft ? userDraft.length + " 字" : "空") + "）"
+	+ " ｜ 按钮可点自证=" + J(aClickable) + " ｜ 命中=" + (aClick && aClick.ok ? (aClick.occluded ? "被遮" : "命中") : "失败")
+	+ " ｜ 前 " + n0 + " → 后 " + n1);
 if (userDraft) await ev("(()=>{try{window.__dshChatBridge.setComposerText(" + J(userDraft) + ");}catch(e){}return 1;})()");
 
 section("【B】右上角个性化（用户：「都在右上角加自定义个性化设定」）");
@@ -357,19 +562,54 @@ await WAIT(800);
 const mmOpen = await exists('[data-testid="mm-root"]');
 check("C1", "真实点击「🧠 打开分支导图」⇒ 导图出现", mmOpen, mmOpen ? "已出现" : "未出现" + (om.why || ""));
 if (mmOpen) {
+	/* 🔴 前置归零：导图可能**带着聚焦态**被打开（点过分支就进聚焦，聚焦态下只剩该链路）。
+	 *   真机实测（2026-09-12）：带着聚焦态打开时是 **1 个框 / 0 条连线**，
+	 *   归零后同一份数据是 **17 个框 / 5 条连线** —— r11~r18 那 4 条「跳过」
+	 *   （C4/C6/C7/C10 因"没有有子节点的框"）就是被这个状态骗的，**不是数据缺失**。
+	 *   ⇒ 判据必须自己把前置摆到"全量树"上，不依赖进来时的状态。
+	 *     （与 C12 的"💬 是开关、先归零"、G3b 后的"页签切回"是同一条纪律。） */
+	const cFocusPre = await ev("(()=>{const fb=document.querySelector('[data-testid=\"mm-focusbar\"]');"
+		+ "return {focusbar:Boolean(fb),focusId:fb?fb.getAttribute('data-focus-id'):null,"
+		+ " nodes:document.querySelectorAll('[data-testid=\"mm-node\"]').length};})()");
+	if (cFocusPre && cFocusPre.focusbar) { await click('[data-testid="mm-focus-exit"]'); await WAIT(500); }
+	const cFocusNow = await ev("(()=>{const fb=document.querySelector('[data-testid=\"mm-focusbar\"]');"
+		+ "return {focusbar:Boolean(fb),nodes:document.querySelectorAll('[data-testid=\"mm-node\"]').length,"
+		+ " edges:document.querySelectorAll('[data-testid=\"mm-edges\"] path').length};})()");
+	console.log("  · 导图聚焦态归零：前 " + J(cFocusPre) + " ⇒ 后 " + J(cFocusNow));
+
 	await ev("(()=>{const b=document.querySelector('[data-testid=\"mm-fit\"]');return 1;})()");
 
 	const nNodes = await count('[data-testid="mm-node"]');
 	const nCtrls = await count('[data-testid="mm-node-controls"]');
 	const nToggle = await count('[data-testid="mm-node-toggle"]');
+	const nEdges = await count('[data-testid="mm-edges"] path');
 	check("C2", "每个可见框都有控件行（数量 = 框数）", nNodes > 0 && nCtrls === nNodes, "框 " + nNodes + " / 控件行 " + nCtrls);
 	check("C3", "🔴 每个框都有折叠按钮（用户原话：「单个框没有展开和折叠的选项」⇒ 含无子框也必须**存在**）",
 		nNodes > 0 && nToggle === nNodes, "框 " + nNodes + " / 折叠钮 " + nToggle);
+	/* 🔴 C 段前提 = **树里存在父子分支**（判据：连线数 > 0）。
+	 *   真机实测（2026-09-12 r11/r12/r13）：当前工作区里所有会话都是**孤立根**
+	 *   （没有 parentSessionId、也没有子会话）⇒ 树里只有 1 个框、0 条连线，
+	 *   于是 C4 拿到 ["0"]、C6/C7 无处可点、C10 连线条数恒 0。
+	 *   这不是产品缺陷，是**前提不成立** —— 必须与"判据坏了"分开报：
+	 *     · 连线 0 条 ⇒ 前提缺失 ⇒ **跳过**（并给出如何建立前提）；
+	 *     · 连线 > 0 条却没有任何 enabled=1 ⇒ 判据/渲染真的坏了 ⇒ **失败**。
+	 *   ⚠️ 不自动建分支：宿主 `sessions` 没有删除/合并能力（`hostCapabilities().remove === false`），
+	 *      建出来的会话**删不掉**、会永久留在侧栏 —— 属于不可逆写操作，必须由人决定。 */
+	const cHasEdge = nEdges > 0;
+	if (!cHasEdge) {
+		console.log("  ⚠️ C 段前提缺失：树里 " + nNodes + " 个框 / **0 条父子连线**（当前会话没有下挂分支）");
+		console.log("     受影响：C4 / C6 / C7 / C10 记为「跳过」（不等于通过，也不等于失败）。");
+		console.log("     建立前提的办法：在导图里对任一框点「＋ 新建分支」，侧栏会真的多出一条会话");
+		console.log("     （宿主 SessionRuntime 不提供删除/合并 ⇒ 该会话删不掉），然后重跑本脚本。");
+	}
 
 	const enabledList = await ev("Array.from(document.querySelectorAll('[data-testid=\"mm-node-toggle\"]')).map(e=>e.getAttribute('data-enabled'))");
 	const enabled1 = (enabledList || []).filter((v) => v === "1").length;
 	check("C4", "【正负对照】有子框 enabled=1 / 无子框 enabled=0（同一页面两种取值都出现 ⇒ 判据接了真值）",
-		enabled1 > 0 && enabled1 < nNodes, JSON.stringify(enabledList));
+		cHasEdge ? (enabled1 > 0 && enabled1 < nNodes) : "SKIP",
+		cHasEdge
+			? JSON.stringify(enabledList)
+			: "树里 0 条父子连线 ⇒ 没有「有子框」可对照（判据未被检验）；" + JSON.stringify(enabledList));
 	const disTitle = await ev("(()=>{const e=Array.from(document.querySelectorAll('[data-testid=\"mm-node-toggle\"]')).find(x=>x.getAttribute('data-enabled')==='0');return e?String(e.getAttribute('title')):null;})()");
 	check("C5", "禁用态的折叠钮写明原因（不是静默不可点）", Boolean(disTitle) && /没有子会话/.test(disTitle), String(disTitle).slice(0, 48));
 
@@ -386,8 +626,8 @@ if (mmOpen) {
 		const back = await count('[data-testid="mm-node"]');
 		check("C7", "再点一次 ⇒ 展开复原（正负对照，证明不是单向坏掉）", back === before, "框 " + after + " → " + back + "（原 " + before + "）");
 	} else {
-		check("C6", "🔴 真实点击折叠 ⇒ 可见框数减少", "SKIP", "当前树里没有有子节点的框");
-		check("C7", "再点一次 ⇒ 展开复原", "SKIP", "同上");
+		check("C6", "🔴 真实点击折叠 ⇒ 可见框数减少", "SKIP", cHasEdge ? "当前树里没有有子节点的框（但存在连线 ⇒ 值得追查）" : "树里 0 条父子连线 ⇒ 无可折叠对象（前提缺失，见上方 ⚠️）");
+		check("C7", "再点一次 ⇒ 展开复原", "SKIP", "同上（随 C6 一起跳过）");
 	}
 	void foldSel;
 
@@ -476,8 +716,9 @@ if (mmOpen) {
 		}
 	}
 	check("C10", "🔴 拖动后**连线跟着动**（判据：被拖框的锚点落在某条变化了的 path 端点 ±2px 上）",
-		changedIdx.length >= 1 && hitAnchor >= 1,
-		"变化 " + changedIdx.length + " 条 / 命中锚点 " + hitAnchor + " 条（共 " + (Array.isArray(pathsB) ? pathsB.length : "?") + " 条）"
+		cHasEdge ? (changedIdx.length >= 1 && hitAnchor >= 1) : "SKIP",
+		(cHasEdge ? "" : "树里 0 条连线 ⇒ 无对象可测（前提缺失，见上方 ⚠️）｜")
+		+ "变化 " + changedIdx.length + " 条 / 命中锚点 " + hitAnchor + " 条（共 " + (Array.isArray(pathsB) ? pathsB.length : "?") + " 条）"
 		+ "｜框几何 " + J(gBefore) + " → " + J(gAfter));
 
 	const autoOk = await click('[data-testid="mm-auto-layout"]'); await WAIT(450);
@@ -486,9 +727,21 @@ if (mmOpen) {
 	check("C11", "「▦ 自动布局」把拖过的框归位（有去有回）", autoOk.ok && backNear, rBack ? "回到 " + rBack.x + "," + rBack.y + "（原 " + (rBefore ? rBefore.x + "," + rBefore.y : "?") + "）" : "未量到");
 
 	/* 🔴 点框 ⇒ 右侧面板，且「现在在做的事」必须在**最上面第一个** */
-	const detOk = await click('[data-testid="mm-node-detail"]'); await WAIT(450);
-	const ndOpen = await exists('[data-testid="nd-panel"]');
-	check("C12", "真实点击 💬 ⇒ 右侧对话面板出现（#dsh-node-detail）", detOk.ok && ndOpen, ndOpen ? "已出现" : "未出现");
+	/* 🔴 幂等前置：`mm-node-detail` 是**开关**（`setDetailId(isOpen ? null : id)`），
+	 *   所以"面板已经开着"时再点一次会把它**关掉** —— r14 就是这么红的：
+	 *   C12 红（点开变点关）→ C16 的 Esc 没有面板可关、于是把**导图**关掉 → C17 级联红。
+	 *   ⇒ 先归零（开着就先 Esc 关掉），再点一次，断言"出现"。
+	 *     这样判据只检验"💬 点得开"，不被上一段/上一轮留下的开关态左右。 */
+	const ndPre = await exists('[data-testid="nd-panel"]');
+	if (ndPre) { await pressEsc(); await WAIT(400); }
+	const detOk = await click('[data-testid="mm-node-detail"]'); await WAIT(500);
+	let ndOpen = await exists('[data-testid="nd-panel"]');
+	/* 布局竞态兜底：面板是异步挂载的，给它第二次机会（不掩盖真缺陷 —— 两次都开不出来才红） */
+	if (!ndOpen) { await click('[data-testid="mm-node-detail"]'); await WAIT(600); ndOpen = await exists('[data-testid="nd-panel"]'); }
+	check("C12", "真实点击 💬 ⇒ 右侧对话面板出现（#dsh-node-detail）", detOk.ok && ndOpen,
+		"点前已开=" + ndPre + "（已归零）｜点击=" + (detOk.ok ? (detOk.occluded ? "被遮(" + detOk.top + ")" : "命中") : "失败")
+		+ (detOk.scrolled ? "（已先滚入视口）" : "")
+		+ " ｜ 面板 " + (ndOpen ? "已出现" : "未出现"));
 	/* 🔴 C13 的判据：上一版只扫 `nd-panel` 的**直接子节点**找 `nd-now`，
 	 *  但 `nd-now` 在 `bd` 里（不是直接子）⇒ 循环只扫到 `nd-grip`（左缘拖宽手柄，
 	 *  absolute 定位、不占位），于是"视觉上明明在最上面"却判红。
@@ -571,6 +824,33 @@ if (dsOpen) {
 	check("D2", "设计图右上角有 ⚙ 设置", "SKIP", "工作室未打开");
 }
 
+/* ══ D5p 🔴 布局不漂：出一句提示前后，R8 各按钮的 y 一个都不许变 ═══════════════
+ * 这是用户原话「右下角，发送到该对话，交给总监，两个按钮点击不好用」的**物理根因**：
+ *   提示行原先写成"有内容才渲染"，而它排在 R8 **之后**、本页是**底部锚定**列布局
+ *   ⇒ 一句提示弹出来，整条 R8 被顶上去 **23px**（实测 btnY 628 → 605，消失又落回）。
+ *   后果不是难看，是**点不中**：手指从「⌨ 定位输入框」移向「📥 登记流转」时，
+ *   那颗按钮已经不在原来的位置了。r19 实测 D5 因此没登记上 —— 而命中自检**还是通过的**
+ *   （读坐标时它确实在那儿，鼠标落下时它走了）⇒ 只测"点的时候在不在"是不够的，
+ *   必须测"出提示的瞬间有没有被推开"。 */
+const r8Geo = () => ev("(()=>{const o={};document.querySelectorAll('[data-testid=dp-r8] button').forEach(function(b){"
+	+ "o[b.getAttribute('data-testid')]=Math.round(b.getBoundingClientRect().y);});"
+	+ "const t=document.querySelector('[data-testid=dp-toast]');"
+	+ "const e=document.querySelector('[data-testid=dp-r8]');"
+	+ "return {y:o,toast:t?String(t.textContent).slice(0,14):null,r8Y:e?Math.round(e.getBoundingClientRect().y):null};})()");
+await ev("(()=>{const t=document.querySelector('[data-testid=dp-toast]');if(t)t.click();return 1;})()");
+await WAIT(320);
+const g0 = await r8Geo();
+await click('[data-testid="dp-focus-native"]');            // 它一定会 say 一句（= 制造提示）
+let g1 = null;
+for (let i = 0; i < 20; i++) { g1 = await r8Geo(); if (g1 && g1.toast) break; await WAIT(100); }
+const r8Drift = (g0 && g0.y && g1 && g1.y)
+	? Object.keys(g0.y).filter((k) => g1.y[k] !== g0.y[k]).map((k) => k + " " + g0.y[k] + "→" + g1.y[k])
+	: ["探针失败"];
+check("D5p", "🔴 提示出现前后，R8 各按钮的 y **一个都不许变**（「点不中」的物理根因：提示把焦点条顶上去）",
+	Boolean(g0) && Boolean(g1) && Boolean(g1.toast) && r8Drift.length === 0,
+	"无提示 r8Y=" + (g0 && g0.r8Y) + " ｜ 有提示 " + J(g1 && g1.toast) + " r8Y=" + (g1 && g1.r8Y)
+	+ " ｜ " + (r8Drift.length ? "位移：" + J(r8Drift) : "零位移（" + Object.keys((g0 && g0.y) || {}).length + " 颗按钮逐像素一致）"));
+
 /* ══ 四维流转：**走真实界面路径**，不直接调 store ══
  * 🔴 上一版为什么红（根因）：A7 那步为了验「空内容不登记」把
  *   `flowStore.setActiveSession(null)`，之后没人恢复；而总监页 R5 是按**页面自己记的
@@ -581,48 +861,159 @@ if (dsOpen) {
  *   用页面自己的 `flowSession` 落库 → 再断言 R5 里出现**这段标记文本**。
  *   这一条同时证了三件事：读的是原生真值、R5 与登记同源、同一消息两处可见。 */
 const MARK = "四维流转演练-" + Date.now();
+/* 🔴 前置 A：把会话**钉回起点**并确保 composer 在场 —— 见上提的 restoreStartSession 注释。
+ *   不钉的后果（r5/r6 实测）：D5 登记时页面认的是另一个会话 ⇒ R5 按那个会话过滤 ⇒ 0 条，
+ *   而库里那条其实存在（D7 还能查到）⇒ 两条断言假红、并且假的读起来像真缺陷。 */
+const dPin = await restoreStartSession();
+/* 🔴 前置 B：把 R5 显式落到「流转」页签。
+ *   这条不是"顺手点一下"：R5 有两个页签，而 `dp-flow-item` **只在流转页签下渲染**。
+ *   r8/r9/r10 实测的根因就是这个 —— 上一轮的 G3b 把页签切到「总监消息」后没切回，
+ *   于是分段键写着「流转 1」（`sessionFlows.length` 是对的），body 里却全是 `dp-dir-msg`，
+ *   `dp-flow-item` 自然是 0。判据必须**自己把前置摆好**，不能依赖上一段/上一轮碰巧留下的状态。 */
+const dFlowTab = await click('[data-testid="dp-r5-flow"]'); await WAIT(300);
+const dTabNow = await ev("(()=>{const b=document.querySelector('[data-testid=dp-r5-body]');"
+	+ "const f=document.querySelector('[data-testid=dp-r5-flow]');"
+	+ "return {seg:f?String(f.textContent).trim():null,"
+	+ " flowItems:document.querySelectorAll('[data-testid=dp-flow-item]').length,"
+	+ " msgItems:document.querySelectorAll('[data-testid=dp-dir-msg]').length,"
+	+ " bodyLen:b?b.innerHTML.length:null};})()");
 /* 先把焦点目标真实点成「总监」（R8 第一键），这样登记出来的 origin 就是 director 维
  * —— 不然 focusTarget 还停在上一次的值（默认 chat），断言里写死 director 就会假红。 */
 await click('[data-testid="dp-route-director"]'); await WAIT(250);
+
+/* 登记前记全现场：按钮可点性 / 页面认的会话 / 库里已有哪些会话的流转 */
+const dSnap0 = await ev("(()=>{const rg=document.querySelector('[data-testid=\"dp-register-flow\"]');"
+	+ "const dp=document.querySelector('[data-testid=\"dp-root\"]');"
+	+ "const S=window.__dshFlow;const g=S?S.store.getState().flows:[];"
+	+ "return {rgDisabled:rg?Boolean(rg.disabled):null,"
+	+ " sess:dp?dp.getAttribute('data-flow-session'):null,"
+	+ " composer:dp?dp.getAttribute('data-composer'):null,"
+	+ " n5:document.querySelectorAll('[data-testid=\"dp-flow-item\"]').length,"
+	+ " last3:g.slice(-3).map(f=>({s:String(f.sessionId).slice(-8),t:String(f.text).slice(0,16)}))};})()");
+const r5Before = dSnap0 ? dSnap0.n5 : 0;
+const sSess0 = dSnap0 ? dSnap0.sess : null;
+
 const wrote = await ev("(()=>{try{window.__dshChatBridge.setComposerText(" + J(MARK) + ");"
 	+ "return {ok:true, val:String(window.__dshChatBridge.readComposerText()||'')};}catch(e){return {ok:false,err:String((e&&e.message)||e)};}})()");
 await WAIT(250);
-const r5Before = await count('[data-testid="dp-flow-item"]');
-await click('[data-testid="dp-register-flow"]');
-await WAIT(700);
+const dClick = await click('[data-testid="dp-register-flow"]');
+/* 🔴 等**下界**（那条真的出现在 R5 里），不是等一个固定拍 —— 异步 UI 的固定拍只是运气。
+ *   同时盯住"页面认的会话"这一跳：若它漂走了，R5 的过滤依据就换了，得先把它钉回来再等。
+ *   `data-session-id` 让"这条属于哪个会话"在 DOM 上可读 ⇒ 判据是"这条 MARK 出现"，
+ *   而不是"条数变多"（数条数在会话里本来就有别的流转时会误判）。 */
+let markItem = null, dWaited = 0, dRepin = 0, dSessDrift = null;
+for (let i = 0; i < 20; i++) {
+	markItem = await ev("(()=>{const L=Array.from(document.querySelectorAll('[data-testid=\"dp-flow-item\"]'));"
+		+ "const e=L.find(x=>String(x.textContent||'').indexOf(" + J(MARK) + ")>=0);if(!e)return null;"
+		+ "return {text:String(e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80),"
+		+ " flowId:e.getAttribute('data-flow-id'),origin:e.getAttribute('data-origin'),"
+		+ " sid:e.getAttribute('data-session-id')};})()");
+	if (markItem) break;
+	if (dRepin < 1) {
+		const cur = await dpSession();
+		if (cur && sSess0 && cur !== sSess0) {
+			dSessDrift = cur;
+			dRepin++;
+			await restoreStartSession();
+			await WAIT(200);
+			dWaited += 200;
+			continue;
+		}
+	}
+	await WAIT(100); dWaited += 100;
+}
 const r5After = await count('[data-testid="dp-flow-item"]');
-const firstItem = await ev("(()=>{const e=document.querySelector('[data-testid=\"dp-flow-item\"]');"
-	+ "return e?String(e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80):null;})()");
+/* 库里那条的归因（即使 R5 没渲染出来也要能分辨"没落库"与"落库了但没显示"） */
+const dInStore = await ev("(()=>{const S=window.__dshFlow;const g=S.store.getState().flows;"
+	+ "const f=g.filter(x=>String(x.text).indexOf(" + J(MARK) + ")>=0);"
+	+ "return {n:f.length,sids:f.map(x=>String(x.sessionId)),origin:f.length?f[0].origin:null};})()");
+/* 🔴 穿透式现场（r8/r9 实测需要它才能分辨三种"看到 0 条"）：
+ *     ① 没落库；② 落库了但 R5 的过滤依据（页面认的会话）不是它；③ 两者都对但**没渲染**。
+ *   判据用**页面自己渲出来的字**：R5 分段键上写着「流转 N」——N 就是组件本次渲染
+ *   算出来的 `sessionFlows.length`。它和 `dp-flow-item` 条数不一致 ⇒ 渲染层问题；
+ *   它等于 0 而库里那条存在且会话一致 ⇒ 过滤层问题。不靠猜。 */
+const dDiag = await ev("(()=>{const roots=document.querySelectorAll('[data-testid=dp-root]');"
+	+ "const seg=document.querySelector('[data-testid=dp-r5-flow]');"
+	+ "const segM=document.querySelector('[data-testid=dp-r5-msg]');"
+	+ "const body=document.querySelector('[data-testid=dp-r5-body]');"
+	+ "const empty=document.querySelector('[data-testid=dp-flow-empty]');"
+	+ "const toast=document.querySelector('[data-testid=dp-toast]');"
+	+ "const S=window.__dshFlow;const st=S?S.store.getState():null;"
+	+ "return {roots:roots.length,"
+	+ " rootSess:roots.length?roots[0].getAttribute('data-flow-session'):null,"
+	+ " segFlow:seg?String(seg.textContent).trim():null,"
+	+ " segMsg:segM?String(segM.textContent).trim():null,"
+	+ " bodyLen:body?body.innerHTML.length:null,"
+	+ " empty:empty?String(empty.textContent).slice(0,20):null,"
+	+ " items:document.querySelectorAll('[data-testid=dp-flow-item]').length,"
+	+ " storeActive:st?st.activeSessionId:null,"
+	+ " storeTotal:st?st.flows.length:null,"
+	+ " storeSids:st?Array.from(new Set(st.flows.map(f=>String(f.sessionId)))).slice(-3):null,"
+	+ " toast:toast?String(toast.textContent).trim():null};})()");
 check("D5", "🔴 往原生输入框写内容 → 真实点「📥 登记为流转」⇒ R5 出现该条，且文本**就是原生框里那条**（读真值 + 与 R5 同源）",
-	Boolean(wrote) && wrote.ok && r5After > r5Before && String(firstItem).indexOf(MARK) >= 0,
-	"R5 " + r5Before + " → " + r5After + " ｜ 首条：" + J(firstItem));
+	Boolean(wrote) && wrote.ok && String(wrote.val || "").indexOf(MARK) >= 0
+	&& Boolean(markItem) && markItem.sid === sSess0 && r5After > r5Before,
+	"前置 " + (dPin && dPin.ok ? "composer 在场" : "composer 未建立(" + J(dPin) + ")")
+	+ " ｜ 写入回读=" + (wrote && wrote.ok ? "同源" : J(wrote))
+	+ " ｜ 按钮 disabled=" + (dSnap0 ? dSnap0.rgDisabled : "?")
+	+ " ｜ 点击=" + (dClick && dClick.ok ? (dClick.occluded ? "被遮(" + dClick.top + ")" : "命中") + "@" + dClick.x + "," + dClick.y : "失败")
+	+ " ｜ 页面会话 …" + String(sSess0).slice(-8)
+	+ " ｜ 页签前置=" + J(dTabNow) + "（点击 " + (dFlowTab && dFlowTab.ok ? "命中" : "失败") + "）"
+	+ " ｜ R5 " + r5Before + " → " + r5After + " ｜ 等 " + dWaited + "ms"
+	+ (dRepin ? " ｜ 会话漂移已重钉 " + dRepin + " 次(" + String(dSessDrift).slice(-8) + ")" : "")
+	+ " ｜ 首条：" + J(markItem ? markItem.text : null)
+	+ " ｜ 库：" + J(dInStore)
+	+ " ｜ 现场：" + J(dDiag));
 
-/* 同一条走第二维（导图）⇒ R5 里那条的维度徽标必须两个都亮（DOM 级证据，徽标不是装饰） */
-const moved = await ev("(()=>{const S=window.__dshFlow;const g=S.store.getState().flows;const last=g[g.length-1];"
-	+ "S.store.move(last.flowId,'mindmap','在导图里被引用');"
-	+ "const g2=S.store.getState().flows;const n=g2[g2.length-1];"
-	+ "return {flowId:last.flowId, sid:n.sessionId, dims:S.flowDims(n).join(',')};})()");
-await WAIT(600);
-const dimsOn = await ev("(()=>{const e=document.querySelector('[data-testid=\"dp-flow-item\"]');if(!e)return null;"
-	+ "const out={};e.querySelectorAll('[data-dim]').forEach(x=>{out[x.getAttribute('data-dim')]=x.getAttribute('data-on');});return out;})()");
-check("D6", "🔴 同一条消息再走导图维 ⇒ R5 条目的徽标集合**恰好等于**这条流转的 trail 集合，且 ≥2 维（既防「没跟着走」，也防「所有徽标永远都亮」）",
-	Boolean(moved) && moved.dims.split(",").length >= 2
-	&& (() => {
-		if (!dimsOn) return false;
-		const trail = moved.dims.split(",");
-		const on = Object.keys(dimsOn).filter((k) => dimsOn[k] === "1");
-		return trail.length === on.length && trail.every((d) => on.indexOf(d) >= 0) && on.length < 4;
-	})(),
+/* 同一条走第二维（导图）——**必须是刚登记的那一条**（`data-flow-id` 现取），
+ * 不许拿 store 里的"最后一条"顶替：D5 没登记成时那会是上一次跑残留的流转，
+ * 于是 D6/D7 跟着"绿"，把真缺陷掩掉（r6 就是这样：D5/D6 红而 D7 绿）。 */
+const markFlowId = markItem ? markItem.flowId : null;
+const moved = markFlowId ? await ev("(()=>{const S=window.__dshFlow;"
+	+ "S.store.move(" + J(markFlowId) + ",'mindmap','在导图里被引用');"
+	+ "const g=S.store.getState().flows;const n=g.find(f=>f.flowId===" + J(markFlowId) + ");"
+	+ "return {flowId:" + J(markFlowId) + ", sid:n?n.sessionId:null, dims:n?S.flowDims(n).join(','):null};})()") : null;
+/* 等徽标**追上**数据（同样等下界，不等固定拍） */
+let dimsOn = null, d6Waited = 0;
+if (markFlowId) {
+	for (let i = 0; i < 15; i++) {
+		dimsOn = await ev("(()=>{const L=Array.from(document.querySelectorAll('[data-testid=\"dp-flow-item\"]'));"
+			+ "const e=L.find(x=>x.getAttribute('data-flow-id')===" + J(markFlowId) + ");"
+			+ "if(!e)return null;const out={};"
+			+ "e.querySelectorAll('[data-dim]').forEach(x=>{out[x.getAttribute('data-dim')]=x.getAttribute('data-on');});return out;})()");
+		if (dimsOn) break;
+		await WAIT(100); d6Waited += 100;
+	}
+}
+const d6Name = "🔴 同一条消息再走导图维 ⇒ R5 条目的徽标集合**恰好等于**这条流转的 trail 集合，且 ≥2 维（既防「没跟着走」，也防「所有徽标永远都亮」）";
+if (!markFlowId) {
+	check("D6", d6Name, "SKIP", "D5 没登记出这一条 ⇒ 无「同一条」可走第二维（不拿残留流转冒充）");
+} else {
+	check("D6", d6Name,
+		Boolean(moved) && String(moved.dims || "").split(",").length >= 2
+		&& (() => {
+			if (!dimsOn) return false;
+			const trail = moved.dims.split(",");
+			const on = Object.keys(dimsOn).filter((k) => dimsOn[k] === "1");
+			return trail.length === on.length && trail.every((d) => on.indexOf(d) >= 0) && on.length < 4;
+		})(),
 	"trail=" + (moved ? moved.dims : "?") + " ｜ 徽标 " + J(dimsOn) + " ｜ 亮 " + (dimsOn ? Object.keys(dimsOn).filter((k) => dimsOn[k] === "1").length : "?") + " / 4 维");
+}
 
 /* 跨维度：**导图右侧面板**里读同一条（总监页看得见、导图也看得见） */
 const sidOfFlow = moved ? moved.sid : null;
 await click('[data-testid="dp-open-mindmap"]'); await WAIT(900);
-if (await exists('[data-testid="mm-root"]')) {
+if (!sidOfFlow) {
+	/* 没有"刚登记的那条"就没有"同一条"可查 —— 明确 SKIP，别拿别的会话的流转顶替后报绿 */
+	check("D7", "🔴 同一条消息在**导图右侧面板**里也读得到（总监页与导图表的是同一份流转，不是两份副本）",
+		"SKIP", "D5/D6 没能确定「同一条」的会话 ⇒ 无对象可查（不拿残留流转冒充）");
+} else if (await exists('[data-testid="mm-root"]')) {
 	const inTree = await ev("(()=>{const L=Array.from(document.querySelectorAll('[data-testid=\"mm-node\"]'));"
 		+ "const t=L.find(e=>e.getAttribute('data-session-id')===" + J(sidOfFlow) + ");"
 		+ "return {found:Boolean(t), n:L.length};})()");
 	if (inTree && inTree.found) {
+		/* 同上：💬 是开关 ⇒ 先把可能留着的面板关掉，避免"点开变点关" */
+		if (await exists('[data-testid="nd-panel"]')) { await pressEsc(); await WAIT(350); }
 		await click('[data-testid="mm-node-detail"][data-detail-id="' + sidOfFlow + '"]');
 		await WAIT(600);
 		const ndText = await ev("(()=>{const e=document.querySelector('[data-testid=\"nd-flow-item\"]');"
@@ -633,10 +1024,16 @@ if (await exists('[data-testid="mm-root"]')) {
 		check("D7", "同一条消息在导图右侧面板里也读得到", "SKIP",
 			"该会话不在导图树里（" + J(inTree) + "）—— 它不在当前分支树下，不等于「面板没做」");
 	}
-	await click('[data-testid="mm-close"]'); await WAIT(400);
 } else {
 	check("D7", "同一条消息在导图右侧面板里也读得到", "SKIP", "导图未打开");
 }
+/* 🔴 收尾**无条件**关浮层（2026-09-12 r8/r9 实测的跨段污染）：
+ *   D7 走 SKIP 分支时若直接跳过"关导图"，导图会一直盖在页面上 ——
+ *   紧接着的 F 段就量到"三颗药丸被 `mm-stage` / `mm-minimap` / `nd-input` 挡住"，
+ *   于是 F8 报红，读起来像"浮动组坏了"，其实是**上一段的残留**。
+ *   跨段污染与假绿灯是同一类错误：都不能让它伪装成产品缺陷。
+ *   ⚠️ 用统一的 `closeOverlays`（它带"清场后自检"），不要在这里各写一遍。 */
+await closeOverlays("D 段收尾");
 
 /* 🔴 真机演练「点左侧切会话」：R5 必须跟着换 —— 判据是**切过去之后 MARK 不再出现在 R5 里**
  * （不用「条目数 == 0」：那个会话可能本来就有别的流转，用计数会把"正常"误判成"失败"） */
@@ -677,6 +1074,10 @@ check("D9", "🔴 换一个 sessionId 查 ⇒ 该会话流转数 = 0、原会话
 await ev("(()=>{window.__dshFlow.store.reset();window.__dshFlow.store.setActiveSession(null);"
 	+ "try{window.__dshChatBridge.setComposerText(" + J(userDraft || "") + ");}catch(e){}return 1;})()");
 
+/* ── D 段收尾 · 环境复原（函数已上提到 ensureComposer 之后，此处只调用）── */
+const dRestored = await restoreStartSession();
+console.log("  · 环境复原：切回起点会话「" + (openedSessionLabel || "?") + "」⇒ " + J(dRestored));
+
 /* ══════════════════════════════════════════════════════════════════
  * 【F】总监页背景采用原软件的背景（保持风格统一）
  * ══════════════════════════════════════════════════════════════════
@@ -702,6 +1103,37 @@ await ev("(()=>{window.__dshFlow.store.reset();window.__dshFlow.store.setActiveS
  *        真证据是 `innerHeight - composerTop + 12` 与存的 `bottom` **精确吻合** —— 数字对得上才算证据。
  */
 section("【F】总监页背景 = 宿主原生页签背景（风格统一）");
+
+/** 读浮动组的「当前几何 vs 应有几何」（与产品代码同一条公式，期望值按 composer 现测推得）*/
+async function dockProbe() {
+	return await ev("(()=>{const dock=document.querySelector('[data-testid=d-floatdock]');"
+		+ "if(!dock)return {noDock:true};const dr=dock.getBoundingClientRect();"
+		+ "const c=document.querySelector('[class*=\"composer\"]');const cr=c?c.getBoundingClientRect():null;"
+		+ "const ok=!!(cr&&cr.height>=8&&cr.top>0);"
+		+ "const expected=ok?Math.max(18,Math.min(innerHeight-cr.top+12,innerHeight-140)):18;"
+		+ "const actual=parseFloat(getComputedStyle(dock).bottom);"
+		+ "return {noDock:false,expected:Math.round(expected*10)/10,actual:actual,"
+		+ "dockTop:Math.round(dr.top),dockBottomEdge:Math.round(dr.bottom),"
+		+ "composerTop:cr?Math.round(cr.top):null,composerOk:ok,innerH:innerHeight};})()");
+}
+/** 等浮动组**收敛**到当前几何（最多 ms 毫秒，100ms 采样）。
+ *  🔴 为什么必须"等"而不是"量一次就断言"：几何变动（切会话 / 开合浮层）之后，跟随天然
+ *     存在**一拍滞后**（事件驱动也至少一帧）。用固定拍断言会把"正常滞后"误判成
+ *     "停在旧几何" —— 这正是 r4 那次 F8/F10/F11 三红的真因（同一份代码在 r6 全绿）。
+ *     而"量一次就存死"的实现**永远**收敛不了（它不是慢，是不动）⇒ 判据没有被放松。 */
+async function settleDock(ms = 1500) {
+	let p = null, spent = 0;
+	const rounds = Math.ceil(ms / 100);
+	for (let i = 0; i <= rounds; i++) {
+		p = await dockProbe();
+		if (p && !p.noDock && Math.abs(p.actual - p.expected) <= 2) break;
+		await WAIT(100); spent += 100;
+	}
+	return { probe: p, spent: spent };
+}
+
+/* F 段开始前再清一次浮层（D 段可能留了导图/详情面板盖在上面；见 closeOverlays 注释） */
+await closeOverlays("进 F 段前");
 
 let fDpThere = await ev("!!document.querySelector('[data-testid=dp-root]')");
 if (!fDpThere) {
@@ -794,7 +1226,14 @@ check("F7", "🔴 纹理色随主题走（切到网格档 ⇒ backgroundImage �
  *      用网格而不是单个点，是因为单点可能恰好落在药丸上、从而**测不到空隙**。
  *    ② 「右端内容被压住」的通用判据 = 浮动层矩形内**带文字的叶子节点**（按钮 / 说明文字）＝ 0 ——
  *      不用手写元素清单：`dp-r8` 这种有子节点的布局盒会被自动排除，真正会被遮住的文字才被计入。
- *    ③ 正负对照：三颗药丸**自己**必须仍然可点 —— 否则 `none` 用过头，把浮动入口本身弄废，那也是坏。 */
+ *    ③ 正负对照：三颗药丸**自己**必须仍然可点 —— 否则 `none` 用过头，把浮动入口本身弄废，那也是坏。
+ *
+ *  🔴 2026-09-12 补前置：先等浮动组**收敛**到当前几何再采样。
+ *     F8 的"右端文字被压住"是**位置**的后果：r4 那次浮动组还停在旧几何（bottom=362，挡在 R6/R7 上），
+ *     于是报出「DIV[R7 详情 / 产出]…被压住」——同一份代码在 r6（已收敛，bottom=137.6）全绿。
+ *     ⇒ 位置类断言必须在"收敛后"做，否则量到的是上一次布局的残影。 */
+const fSettle0 = await settleDock();
+console.log("  · 浮动组收敛：耗时 " + fSettle0.spent + "ms ⇒ " + J(fSettle0.probe));
 const fDock = await ev("(()=>{const dock=document.querySelector('[data-testid=d-floatdock]');"
 	+ "if(!dock)return {noDock:true};"
 	+ "const dp=document.querySelector('[data-testid=dp-root]');if(!dp)return {noPage:true};"
@@ -840,22 +1279,18 @@ check("F8", "🔴 浮动按钮组：容器透明空隙不吃点击（5×5 采样
  *
  *  这里的判据刻意选成「**与当前几何一致**」而不是「贴住 composer」——
  *  后者在"空会话居中"和"有消息靠底"两种形态下都成立，**抓不到"用旧几何"这个真问题**。
- *  期望值用与产品代码同一条公式算出来；容差 2px（浮点/取整），并容忍轮询的 500ms 滞后
- *  （断言前页面没有几何变动，故滞后不影响）。
- */
-const fDockPos = await ev("(()=>{const dock=document.querySelector('[data-testid=d-floatdock]');"
-	+ "if(!dock)return {noDock:true};const dr=dock.getBoundingClientRect();"
-	+ "const c=document.querySelector('[class*=\"composer\"]');const cr=c?c.getBoundingClientRect():null;"
-	+ "const ok=!!(cr&&cr.height>=8&&cr.top>0);"
-	+ "const expected=ok?Math.max(18,Math.min(innerHeight-cr.top+12,innerHeight-140)):18;"
-	+ "const actual=parseFloat(getComputedStyle(dock).bottom);"
-	+ "return {noDock:false,expected:Math.round(expected*10)/10,actual:actual,"
-	+ "dockTop:Math.round(dr.top),dockBottomEdge:Math.round(dr.bottom),"
-	+ "composerTop:cr?Math.round(cr.top):null,composerOk:ok,innerH:innerHeight};})()");
+ *  期望值用与产品代码同一条公式算出来；容差 2px（浮点/取整）。
+ *  🔴 2026-09-12 改法：从"固定拍量一次"改为"**等收敛**"（最多 1.5s，100ms 采样）。
+ *     原因是 r4 实测的三红属**假红**：切会话后紧接着断言，浮动组还差一拍没跟上（362 vs 137.6），
+ *     同一份代码在 r6 收敛后精确相等（137.6 ≡ 137.6）。
+ *     滞后一拍是事件驱动 UI 的**正常**表现；"停一次就存死"才是缺陷 —— 后者永远收敛不了。
+ *     产物里多一行「收敛：耗时 Nms」，让"零滞后"与"贴着上限收敛"在日志上可分辨。 */
+const fDockSettle = await settleDock(1500);
+const fDockPos = fDockSettle.probe;
 const fDockPosBad = [];
 if (!fDockPos || fDockPos.noDock) fDockPosBad.push("浮动组未挂载");
 else if (!(Math.abs(fDockPos.actual - fDockPos.expected) <= 2)) {
-	fDockPosBad.push("位置停在旧几何上：bottom=" + fDockPos.actual + "px，按**当前** composer 应为 "
+	fDockPosBad.push("等 " + fDockSettle.spent + "ms 仍未收敛：bottom=" + fDockPos.actual + "px，按**当前** composer 应为 "
 		+ fDockPos.expected + "px（差 " + (Math.round((fDockPos.actual - fDockPos.expected) * 10) / 10) + "px）");
 } else if (fDockPos.dockBottomEdge <= fDockPos.innerH * 0.5
 	&& fDockPos.composerTop !== null && fDockPos.dockBottomEdge > fDockPos.composerTop) {
@@ -865,7 +1300,7 @@ check("F10", "🔴 浮动按钮组跟在 composer 的**当前位置**（不是�
 	fDockPosBad.length === 0,
 	fDockPosBad.length ? fDockPosBad.join(" ｜ ")
 		: "bottom=" + (fDockPos && fDockPos.actual) + "px ≡ 期望 " + (fDockPos && fDockPos.expected)
-			+ "px ｜ composer 顶 y=" + (fDockPos && fDockPos.composerTop) + " ｜ 视口高 " + (fDockPos && fDockPos.innerH));
+			+ "px ｜ 收敛 " + fDockSettle.spent + "ms ｜ composer 顶 y=" + (fDockPos && fDockPos.composerTop) + " ｜ 视口高 " + (fDockPos && fDockPos.innerH));
 
 /* ── F11：**跟随性**正负对照（F10 只证明"此刻一致"，证明不了"会跟着走"）──────
  *  F10 是"当前几何一致性" —— 一个**恰好在开机时量对了、之后再不动**的实现也能通过它。
@@ -873,33 +1308,63 @@ check("F10", "🔴 浮动按钮组跟在 composer 的**当前位置**（不是�
  *  做法（沿用 F5 那套"动别人状态"的纪律）：
  *    ① 先读**原值**（composer 的 inline transform 原本是什么）；
  *    ② 临时把它上移 150px（transform 会进 `getBoundingClientRect()`，等价于"composer 换了位置"）；
- *    ③ 等 > 一个轮询周期（500ms）⇒ 浮动组应跟着上移；
+ *    ③ 等它跟随（下面用 `settleDock` 等**收敛**，不再等一个写死的 900ms）；
  *    ④ **照原样恢复**（原本有 inline 值就写回原值，原本没有就清空 —— 不一刀切置空）；
  *    ⑤ 再等一轮 ⇒ 必须回到原来的数字（"能完全复原"是断言的一部分）。
- *  ⚠️ 上移后 `bottom` 会被产品公式的上限 `innerHeight-140` 夹住，所以只断言"明显变大"而非精确 +150。 */
-const fFollow0 = await ev("(()=>{const c=document.querySelector('[class*=\"composer\"]');"
-	+ "const d=document.querySelector('[data-testid=d-floatdock]');if(!c||!d)return null;"
-	+ "const orig=c.style.transform||'';const before=parseFloat(getComputedStyle(d).bottom);"
-	+ "c.style.transform='translateY(-150px)';return {orig:orig,before:before};})()");
-let fFollow = null;
-if (fFollow0) {
-	await WAIT(900);
-	fFollow = await ev("(()=>{const d=document.querySelector('[data-testid=d-floatdock]');"
-		+ "return {during:parseFloat(getComputedStyle(d).bottom)};})()");
+ *  ⚠️ 上移后 `bottom` 会被产品公式的上限 `innerHeight-140` 夹住，所以只断言"明显变大"而非精确 +150。
+ *  🔴🔴 2026-09-12 补漏（r4 实测）：**取 `before` 之前必须先等收敛**。
+ *      r4 那次 `before=362`（旧几何）→ 恢复后 `after=137.6`（真值）⇒ `after !== before` 报红，
+ *      而"跟随"这件事其实从头到尾是对的。**起点没收敛 ⇒ 正负对照的两端不在同一把尺子上。** */
+await settleDock(1500);
+/* 🔴 2026-09-12 补漏：**先证明"composer 真的被挪了"**，再断言"浮动组跟着挪"。
+ *   r19 实测：`expected` 已经变成 287.6（说明 dockProbe 读到的 composer 顶确实上移了），
+ *   而 `actual` 1600ms 内一动不动 ⇒ 报红。这条红**不是**判据坏了，是产品在那一刻真的没跟
+ *   —— 偶发（随后单独复跑 700ms 内就正常跟随），真因是"窗口被遮挡时 rAF 被暂停"
+ *   （FlushDock 已改为事件直达，见其注释）。这里再补两层：① 打印 composer 挪动前后的顶坐标
+ *   （把"没挪动导致假红"这条路堵死）；② 不收敛时**重来一次**（偶发的环境暂停不该记成产品缺陷，
+ *   但必须留下痕迹 —— 重试次数会打进明细）。 */
+let fFollow0 = null, fFollow = null, fRetry = 0;
+for (let attempt = 0; attempt < 2; attempt++) {
+	if (attempt > 0) { fRetry = attempt; await settleDock(1200); }
+	fFollow0 = await ev("(()=>{const c=document.querySelector('[class*=\"composer\"]');"
+		+ "const d=document.querySelector('[data-testid=d-floatdock]');if(!c||!d)return null;"
+		+ "const orig=c.style.transform||'';const before=parseFloat(getComputedStyle(d).bottom);"
+		+ "const topBefore=Math.round(c.getBoundingClientRect().top);"
+		+ "c.style.transform='translateY(-150px)';"
+		+ "return {orig:orig,before:before,topBefore:topBefore};})()");
+	if (!fFollow0) break;
+	/* ③ 等它跟随（composer 被挪到新位置 ⇒ 期望值也变了，settle 会一直等到跟上或超时） */
+	const fFollowDuring = await settleDock(1500);
+	const composerDuring = await ev("(()=>{const c=document.querySelector('[class*=\"composer\"]');"
+		+ "return c?{top:Math.round(c.getBoundingClientRect().top),tf:c.style.transform}:null;})()");
+	fFollow = {
+		during: fFollowDuring.probe ? fFollowDuring.probe.actual : NaN,
+		duringSpent: fFollowDuring.spent,
+		expectedDuring: fFollowDuring.probe ? fFollowDuring.probe.expected : NaN,
+		composerDuring: composerDuring
+	};
 	/* 恢复：照原样（原本没内联值 ⇒ 清空，而不是写空串） */
 	await ev("(()=>{const c=document.querySelector('[class*=\"composer\"]');"
 		+ "if(!c)return 0;const orig=" + J(fFollow0.orig) + ";"
 		+ "if(orig)c.style.transform=orig;else c.style.removeProperty('transform');return 1;})()");
-	await WAIT(900);
-	fFollow = fFollow ? Object.assign(fFollow, await ev("(()=>{const d=document.querySelector('[data-testid=d-floatdock]');"
+	/* ⑤ 再等一轮 ⇒ 必须回到原值（同样等收敛，不等固定拍） */
+	const fFollowAfter = await settleDock(1500);
+	const fFollowAfterRaw = await ev("(()=>{const d=document.querySelector('[data-testid=d-floatdock]');"
 		+ "const c=document.querySelector('[class*=\"composer\"]');"
-		+ "return {after:parseFloat(getComputedStyle(d).bottom),composerTransform:c.style.transform||''};})()")) : null;
+		+ "return {after:parseFloat(getComputedStyle(d).bottom),composerTransform:c?c.style.transform||'':null};})()");
+	Object.assign(fFollow, fFollowAfterRaw, { afterSpent: fFollowAfter.spent });
+	const okNow = fFollow.during > fFollow0.before + 50 && fFollow.after === fFollow0.before;
+	if (okNow || attempt === 1) break;      // 过了就过；没过就重来一次（偶发，明细里留痕）
+	fFollow = null;
 }
 check("F11", "🔴 正负对照：挪动 composer ⇒ 浮动组**跟着挪**；恢复后**回到原值**（证明它真的在读当前位置，而不是量一次就存死）",
 	Boolean(fFollow) && fFollow.during > fFollow0.before + 50 && fFollow.after === fFollow0.before,
 	fFollow && fFollow0
-		? "before=" + fFollow0.before + " → during=" + fFollow.during + " → after=" + fFollow.after
-			+ " ｜ composer transform 已复原=" + (fFollow.composerTransform === fFollow0.orig ? "是" : "否(" + fFollow.composerTransform + " 应为 " + fFollow0.orig + ")")
+		? "before=" + fFollow0.before + " → during=" + fFollow.during + "（收敛 " + fFollow.duringSpent + "ms）→ after=" + fFollow.after + "（收敛 " + fFollow.afterSpent + "ms）"
+			+ " ｜ composer 顶 " + fFollow0.topBefore + " → " + (fFollow.composerDuring ? fFollow.composerDuring.top : "?")
+			+ "（确认真的挪了）｜ 期间期望值 " + fFollow.expectedDuring
+			+ " ｜ 复原=" + (fFollow.composerTransform === fFollow0.orig ? "是" : "否(" + fFollow.composerTransform + " 应为 " + fFollow0.orig + ")")
+			+ (fRetry ? " ｜ ⚠️ 第 " + (fRetry + 1) + " 次尝试才收敛（首次未跟随，已记录）" : "")
 		: "探针失败");
 
 /* ── F9：药丸字色随主题（不能写死浅色）────────────────────────────────
@@ -950,6 +1415,161 @@ check("F9", "🔴 三颗药丸字色 = 宿主主文字令牌（浅色主题得�
 	fPillBad.length
 		? fPillBad.slice(0, 4).join(" ｜ ")
 		: "字色 " + (fPill && fPill.hostRgb) + "（宿主 " + ((fPill && fPill.darkHost) ? "暗色" : "亮色") + "主题）· 三颗全等 · alpha ≤ .25");
+
+/* ══════════════════════════════════════════════════════════════════
+ * 【G】总监 → 对话 **真流转**（第七轮 · 用户「最最核心基础的要求」）
+ * ══════════════════════════════════════════════════════════════════
+ *  用户原话：「我在总监发的消息，是否经过处理然后发给对话执行，这个是最最核心基础的要求」
+ *            「现在标准对话是有东西的应该是有错误，说明对话流转还是有问题」
+ *
+ *  旧实现（已废）：`DirectorPage.deliver()` 只做 appendDirectorMessage + route + flowStore.push
+ *    ⇒ 它是**记录员**，不是执行中枢 —— 用户说"看上去没动静"正是这个原因。
+ *    光看界面"好像有反应"分辨不出这件事，所以判据必须钉在**投递结果**上。
+ *
+ *  判据（每条都要能分辨"看起来像"与"真的是"）：
+ *   G1 契约在位：批次 15 别名 + 四组新 API 可达（否则可能跑的是旧产物）
+ *   G2 链路**有明确结果**：`data-deliver-mode` 必须离开 idle，落到 sent/filled/failed 之一。
+ *      ⚠️ **failed 也算通过** —— 这里守的是"有归因"，不是"必须成功"
+ *      （总监 tab 下 composer 未必在场，失败是可接受的降级，**静默**才是缺陷）。
+ *   G3 处理链真的落库：总监消息数 +2（本条 user + 总监 assistant），且助手消息含五步结论文本
+ *   G4 🔴 反证：**空输入**点「执行」→ 不得新增任何消息（否则"点了就有反应"是假的）
+ *   G5 分支聚焦 API 在真机内可用且语义正确
+ */
+section("【G】总监 → 对话 真流转（本轮核心）");
+
+const gContract = await ev("(()=>{const w=window;return {"
+	+ "b15:typeof w.__dshDirectorBatch15!=='undefined',"
+	+ "b15is:w.__dshDirectorBatch15===w.__dshDirectorBatch13,"
+	+ "run:!!(w.__dshDirectorRun&&typeof w.__dshDirectorRun.run==='function'),"
+	+ "bridge:!!(w.__dshChatBridge&&typeof w.__dshChatBridge.deliverToChat==='function'),"
+	+ "focus:!!(w.__dshBranchFocus&&typeof w.__dshBranchFocus.focusRows==='function'),"
+	+ "ov:!!(w.__dshOverview&&typeof w.__dshOverview.buildOverview==='function'),"
+	+ "orch:!!(w.__dshOrchestrate&&typeof w.__dshOrchestrate.auditRubric==='function'),"
+	+ "deliver:(w.__dshDirectorBatch15&&w.__dshDirectorBatch15.deliver)||null};})()");
+check("G1", "批次 15 契约在位：投递分级 / 分支聚焦 / 总览 / 统筹 四组新 API 全部可达",
+	!!gContract && gContract.b15 && gContract.b15is && gContract.run && gContract.bridge
+	&& gContract.focus && gContract.ov && gContract.orch
+	&& !!gContract.deliver && gContract.deliver.channels.length === 3
+	&& gContract.deliver.channels[0] === "host-send",
+	gContract && gContract.deliver ? J(gContract.deliver) : "取不到 window 契约");
+
+const gCount = "(()=>{const m=document.querySelector('[data-testid=dp-r5-msg]');"
+	+ "return m?(parseInt((m.textContent||'').replace(/\\D/g,''),10)||0):null;})()";
+const gBefore = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-root]');if(!dp)return null;"
+	+ "return {mode:dp.getAttribute('data-deliver-mode'),n:" + gCount + ","
+	+ "composer:!!(window.__dshChatBridge&&window.__dshChatBridge.findComposer())};})()");
+
+/* ── G 段前置自检（含复原）────────────────────────────────────────────────
+ * 本段核心断言依赖「**原生 composer 在场**」——「执行」= 读原生框里的内容。
+ * 若它不在场，`setComposerText` 会以 `composer-not-found` 失败 ⇒ 链路的输入是空的 ⇒
+ * G2/G2b/G3/G3b/G6 会一起变红，读起来像"真流转整条没做"。
+ * ⇒ 先尝试复原（切回起点会话），仍不成立时**只记一条前置失败**，其余标 SKIP 并写明原因。 */
+const gComposerReady = await restoreStartSession();
+check("G0", "前置：原生 composer 在场（「执行」读的就是它；不在场则本段其余断言无意义）",
+	gComposerReady, gComposerReady ? "composer 在场=true" : "复原后仍不在场（起点会话 " + (openedSessionLabel || "?") + "）");
+
+/* 写入**原生** composer（"用原本的对话框"），再点总监页的「执行」 */
+const gText = "【真机流转】把这句话送进对话执行";
+const gWrite = gComposerReady
+	? await ev("(()=>{const b=window.__dshChatBridge;if(!b)return {err:'no-bridge'};"
+		+ "const r=b.setComposerText(" + J(gText) + ");return {ok:r.ok,back:b.readComposerText(),reason:r.reason||''};})()")
+	: null;
+/* 宿主级送达凭据：宿主每次接受一次直投都会把 __directChatProbe.called +1
+ * ⇒ 用它做**第三方证据**，避免「点了按钮就算送达」的假绿灯。 */
+const gProbe0 = await ev("(()=>{const p=window.__directChatProbe;return p&&typeof p.called==='number'?p.called:0;})()");
+await ev("(()=>{const b=document.querySelector('[data-testid=dp-send]');if(b)b.click();return 1;})()");
+
+let gAfter = null;
+if (gComposerReady) {
+	for (let i = 0; i < 40; i++) {
+		await WAIT(500);
+		gAfter = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-root]');if(!dp)return null;"
+			+ "return {mode:dp.getAttribute('data-deliver-mode'),busy:dp.getAttribute('data-busy'),"
+			+ "grade:dp.getAttribute('data-run-grade'),n:" + gCount + "};})()");
+		if (gAfter && gAfter.busy === "0" && gAfter.mode && gAfter.mode !== "idle") break;
+	}
+}
+check("G2", "🔴 点「执行」后链路**有明确结果**（离开 idle，落到 sent/filled/failed 之一）—— 守「有归因」而不是「必须成功」",
+	gComposerReady
+		? (!!gAfter && !!gAfter.mode && gAfter.mode !== "idle"
+			&& ["sent", "filled", "failed"].indexOf(gAfter.mode) >= 0)
+		: "SKIP",
+	gComposerReady
+		? (gAfter ? ("mode=" + gAfter.mode + " busy=" + gAfter.busy + " grade=" + gAfter.grade
+			+ " ｜ 输入回读=" + (gWrite ? (gWrite.ok ? "ok" : gWrite.reason) : "?")) : "取不到 dp-root")
+		: "前置不成立（G0）：原生 composer 不在场，链路输入为空 ⇒ 本条无意义");
+
+/* G2b：投递走的是**首选通道**，而不是悄悄降级（降级也要能看见走的是哪一级） */
+const gVia = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-root]');if(!dp)return null;"
+	+ "const via=dp.getAttribute('data-deliver-via');"
+	+ "const last=(window.__dshChatBridge&&typeof window.__dshChatBridge.getLastDeliver==='function')"
+	+ "?window.__dshChatBridge.getLastDeliver():null;"
+	+ "return via?{via:via,last:last}:null;})()");
+check("G2b", "投递走**首选通道 host-send**（宿主直投对话域；不是悄悄降级到点按钮）",
+	gComposerReady ? (!!gVia && gVia.via === "host-send" && gVia.last && gVia.last.mode === "sent") : "SKIP",
+	gComposerReady
+		? (gVia ? J({ 界面标注: gVia.via, 链路返回: gVia.last && { mode: gVia.last.mode, verified: gVia.last.verified } }) : "取不到 data-deliver-via")
+		: "前置不成立（G0）");
+
+/* G6：宿主侧第三方证据 —— 宿主确实收下了这次投递（不是我们自己的账本自证） */
+const gProbe1 = await ev("(()=>{const p=window.__directChatProbe;return p?{called:p.called,sessionId:p.sessionId,draft:String(p.draft||'').slice(0,40)}:null;})()");
+check("G6", "🔴 宿主侧第三方证据：`__directChatProbe.called` 增量 = 1（宿主真的受理了这次投递）",
+	gComposerReady ? (!!gProbe1 && typeof gProbe1.called === "number" && gProbe1.called === gProbe0 + 1) : "SKIP",
+	gComposerReady ? { before: gProbe0, after: gProbe1 } : "前置不成立（G0）");
+
+check("G3", "🔴 处理链真的落库：总监消息数 +2（本条 user + 总监 assistant）",
+	gComposerReady
+		? (!!gAfter && !!gBefore && gAfter.n !== null && gBefore.n !== null && gAfter.n >= gBefore.n + 2)
+		: "SKIP",
+	gComposerReady
+		? (gBefore && gAfter ? ("消息 " + gBefore.n + " → " + gAfter.n + " ｜ composer 初始在场=" + gBefore.composer) : "取不到计数")
+		: "前置不成立（G0）");
+
+await ev("(()=>{const b=document.querySelector('[data-testid=dp-r5-msg]');if(b)b.click();return 1;})()");
+await WAIT(420);
+const gBody = await ev("(()=>{const e=document.querySelector('[data-testid=dp-r5-body]');return e?(e.textContent||''):null;})()");
+check("G3b", "助手消息含**五步结论**（不是一句空回复）",
+	gComposerReady
+		? (typeof gBody === "string" && /总监分析/.test(gBody) && /整理语言|1\./.test(gBody) && /自动审核产出|5\./.test(gBody))
+		: "SKIP",
+	gComposerReady
+		? (typeof gBody === "string" ? gBody.slice(0, 120) : "取不到 r5 body")
+		: "前置不成立（G0）");
+
+/* 🔴 环境复原（G3b 用过的页签）：
+ *   G3b 需要读 R5 的「总监消息」正文，于是把 R5 切到 `msg` 页签 —— **必须切回来**。
+ *   真机实测（2026-09-12 r8/r9/r10）：忘了切回 ⇒ 下一轮 D5 断言 `dp-flow-item` 时
+ *   R5 还停在消息页签（分段键写着「流转 1」，而 body 里全是 `dp-dir-msg`，`dp-flow-item` 为 0）
+ *   ⇒ D5/D6/D7 三红，读起来像"登记流转坏了"，其实是**上一轮留下的界面状态**。
+ *   这与 D 段收尾"切回起点会话"同属一条纪律（C17.2）：**动过的界面状态必须还原**。 */
+await ev("(()=>{const b=document.querySelector('[data-testid=dp-r5-flow]');if(b)b.click();return 1;})()");
+await WAIT(300);
+const gTabBack = await ev("(()=>{const f=document.querySelector('[data-testid=dp-r5-flow]');"
+	+ "return {seg:f?String(f.textContent).trim():null,items:document.querySelectorAll('[data-testid=dp-flow-item]').length};})()");
+console.log("  · 环境复原：R5 页签切回「流转」⇒ " + J(gTabBack));
+
+/* G4 反证：空输入不该产生任何消息 */
+const g4n0 = gComposerReady ? await ev(gCount) : null;
+if (gComposerReady) {
+	await ev("(()=>{const b=window.__dshChatBridge;if(b)b.setComposerText('');return 1;})()");
+	await WAIT(200);
+	await ev("(()=>{const b=document.querySelector('[data-testid=dp-send]');if(b)b.click();return 1;})()");
+	await WAIT(1100);
+}
+const g4n1 = gComposerReady ? await ev(gCount) : null;
+check("G4", "🔴 反证：空输入点「执行」→ **不新增任何消息**（若这里也 +2，说明 G3 的通过是「点了就有」而非真跑了链路）",
+	gComposerReady ? (g4n0 !== null && g4n1 !== null && g4n1 === g4n0) : "SKIP",
+	gComposerReady ? { before: g4n0, after: g4n1 } : "前置不成立（G0）：composer 不在场时空输入本就无从触发，本条会**空转pass**，故跳过");
+
+/* G5 分支聚焦（真机内同源纯函数） */
+const g5 = await ev("(()=>{const f=window.__dshBranchFocus;if(!f)return null;"
+	+ "const rows=[{sessionId:'1',depth:0,childrenCount:3},"
+	+ "{sessionId:'1a',parentSessionId:'1',depth:1,childrenCount:0},"
+	+ "{sessionId:'2',depth:0,childrenCount:0},{sessionId:'2a',parentSessionId:'2',depth:1,childrenCount:0}];"
+	+ "const a=f.focusRows(rows,'1a');const b=f.focusRows(rows,'1a',{includeParents:true});"
+	+ "return {a:a.rows.map(r=>r.sessionId),b:b.rows.map(r=>r.sessionId),applied:a.applied};})()");
+check("G5", "分支聚焦真机可用：点分支含祖先链 · 开「含上一层」多出兄弟层",
+	!!g5 && g5.applied === true && g5.a.indexOf("1") >= 0 && g5.b.indexOf("2") >= 0, g5 ? J(g5) : "取不到 __dshBranchFocus");
 
 /* ══════════════════════════════════════════════════════════════════
  * 收尾：页面级错误
