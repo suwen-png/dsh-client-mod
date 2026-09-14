@@ -359,7 +359,10 @@ t("C3", "四处的 scope 文案齐备且互不相同（e2e 据此确认「这一
 	(() => { const got = PAGES.map(([f, scope]) => { const s = SRC(f); return s.indexOf('scope: "' + scope + '"') >= 0 ? scope : null; });
 		return got.every(Boolean) && new Set(got).size === 4; })(), PAGES.map(([f, scope]) => [f, scope]));
 t("C4", "四处都带质感类 dp-textured（否则选了纹理也没地方显）",
-	sources.every(([, s]) => /className:\s*"dp-textured"/.test(s)), null);
+	/* 2026-09-14 修（闸门过期）：原判据写死 className **恰好等于** `"dp-textured"`，而 V17 给两个浮层
+	 * 补了过渡类（`className: "dp-textured dp-overlay-in"`）⇒ 正则失配、假红（读起来像"产品丢了质感类"）。
+	 * 改成「值里含 dp-textured 这个词」，并用 (?<![-\w]) / (?![-\w]) 拦住 `dp-textured-xxx` 这类前缀相似名。 */
+	sources.every(([, s]) => /className:\s*"[^"]*(?<![-\w])dp-textured(?![-\w])[^"]*"/.test(s)), null);
 t("C5", "🔴 四个质感元素的背景必须是 backgroundColor 长写 —— 简写会把 background-image 重置，纹理静默失效（本轮真实踩坑）",
 	PAGES.every(([f, , key, bg]) => styleBlock(SRC(f), key).indexOf(bg) >= 0), PAGES.map(([f, , key, bg]) => [f, key, bg]));
 t("C6", "🔴 反证（按块精确，且已剥注释）：质感元素自己那个样式块里**不得**残留 background 简写",

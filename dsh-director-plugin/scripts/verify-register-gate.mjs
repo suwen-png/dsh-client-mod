@@ -20,14 +20,28 @@
  *     （原本有内联 display 就写回原值，原本没有就 removeProperty）—— 不一刀切清空。
  *
  * 用法：node scripts/verify-register-gate.mjs   （需 Harness 开着 --remote-debugging-port=9222）
- * 退出码：0 全绿 / 1 有失败
+ * 退出码：0 全绿 / 1 真失败 / 2 INVALID（用错用法或目标 —— 含"CDP 连不上"）
  */
 const PORT = 9222;
 const WAIT = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const pages = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json();
+/* 2026-09-14 补（纪律 43：用法陷阱必须自诊断）：
+ * 原先 CDP 没开时直接抛 `TypeError: fetch failed` + ECONNREFUSED 崩栈 ⇒ 读起来像"脚本坏了"，
+ * 实际只是 Harness 没运行。用错目标判 INVALID(2)，不判 FAIL(1)。 */
+let pages;
+try {
+	pages = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json();
+} catch (e) {
+	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
+	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
+	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
+	console.error("    1) powershell -File scripts/restart-harness.ps1   （推荐，见该脚本头注的遮挡检测根因）");
+	console.error("       或 env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \"D:/软件安装/DeepSeek-Harness-Desktop/DeepSeek Harness\" --remote-debugging-port=9222 &");
+	console.error("    2) node scripts/verify-register-gate.mjs");
+	process.exit(2);
+}
 const page = pages.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
-if (!page) { console.error("未找到页面目标（Harness 是否开着 9222？）"); process.exit(1); }
+if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let seq = 0; const pending = new Map();
