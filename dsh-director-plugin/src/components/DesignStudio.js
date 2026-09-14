@@ -60,6 +60,7 @@ import {
 	renameDoc, duplicateDoc, getVersionState
 } from "../store/design.js";
 import { dshLog } from "../util/debug.js";
+import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
 /* 窗口控件安全区 —— 根治「设计图的关闭按钮和标准软件的关闭按钮重叠了」。
  * 详见 util/safe-area.js 头注（含真机取证的 137px 数字）。 */
 import { readInset, watchInset } from "../util/safe-area.js";
@@ -254,7 +255,9 @@ const S = {
 	},
 	/** 重命名输入框：占位与它替换掉的 <select> 同宽，避免提交后布局跳动 */
 	nameInput: {
-		width: 200, height: 26, boxSizing: "border-box", padding: "0 8px", fontSize: 11.5, borderRadius: 5,
+		/* T-A4 修复 C16.4/C16.2：必须 flex:0 0 auto —— select 有此声明保持 200px，
+		 * input 缺了它会在顶栏空间紧张时被 flex 压缩到 154px ⇒ 改名切换整栏位移 46px */
+		width: 200, flex: "0 0 auto", height: 26, boxSizing: "border-box", padding: "0 8px", fontSize: 11.5, borderRadius: 5,
 		border: "1px solid #8957e5", background: "#212429", color: "#e8eaed"
 	},
 	/** 导出兜底浮层：位于右下、避开顶栏安全区与底栏对话区 */
@@ -406,6 +409,25 @@ export function DesignStudio({ open, onClose }) {
 	const [draft, setDraft] = react.useState("");
 	const [pending, setPending] = react.useState(null);
 	const [toast, setToast] = react.useState("");
+	/* V17 P3：跨界面流转同步反馈 —— 工作室打开期间，别的维度把消息送到设计图时轻提示 */
+	const flowSnap = react.useSyncExternalStore(
+		(fn) => flowStore.subscribe(fn),
+		() => flowStore.getState(),
+		() => flowStore.getState()
+	);
+	const dsSyncSeenRef = react.useRef(lastFlowIdFor(flowSnap.flows, DIM.DESIGN));
+	react.useEffect(() => {
+		const flows = flowSnap.flows;
+		const latest = lastFlowIdFor(flows, DIM.DESIGN);
+		if (!open) { dsSyncSeenRef.current = latest; return; } // 关闭期只追基线不提示，避免一打开弹旧账
+		if (latest && latest !== dsSyncSeenRef.current) {
+			dsSyncSeenRef.current = latest;
+			const f = flows.find((x) => x.flowId === latest);
+			if (f && flowOrigin(f) && flowOrigin(f) !== DIM.DESIGN) setToast("已同步到设计图");
+		} else if (!latest) {
+			dsSyncSeenRef.current = null;
+		}
+	}, [flowSnap, open]);
 	const [scale, setScale] = react.useState(1);
 	/* 版本面板开合 · 顶栏右侧安全区宽度 · 重命名输入态（null = 不在重命名） */
 	const [verOpen, setVerOpen] = react.useState(false);
@@ -416,6 +438,31 @@ export function DesignStudio({ open, onClose }) {
 	const [exportText, setExportText] = react.useState(null);
 	/* 右上角「⚙ 个性化」开合。🔴 与上面几条同样**必须排在 early return 之前**（React Hooks 规则）。 */
 	const [pOpen, setPOpen] = react.useState(false);
+	/* V17 P2-2：顶栏响应式 —— 窗口宽度 <1500 时次要按钮（复制/重载框架/导出）收入「更多」菜单。
+	 * 阈值取 1500：顶栏按钮多，实测 1441 宽度下全平铺会溢出安全区 43px（C15.3/C15.5），
+	 * 且溢出导致版本按钮被 flex 压缩、C16.10 负对照失效。这三个是低频动作，收入菜单合理。 */
+	const [narrow, setNarrow] = react.useState(() => typeof window !== "undefined" && window.innerWidth < 1500);
+	const [moreOpen, setMoreOpen] = react.useState(false);
+	/* V17 审校补漏：「更多」菜单除 mouseleave 外，再支持点击外部 / Esc 关闭（鼠标不经过菜单边界也能收起） */
+	react.useEffect(() => {
+		if (!moreOpen) return undefined;
+		const onDown = (e) => {
+			const t = e.target;
+			if (t && t.closest && t.closest('[data-testid="ds-more"],[data-testid="ds-more-menu"]')) return;
+			setMoreOpen(false);
+		};
+		const onKey = (e) => { if (e.key === "Escape") { // 菜单打开时 Esc 只关菜单：截获并阻止冒泡到工作室全局 Esc（否则会连带关闭整张工作室）
+			e.stopImmediatePropagation(); e.preventDefault(); setMoreOpen(false); } };
+		document.addEventListener("pointerdown", onDown, true);
+		document.addEventListener("keydown", onKey, true);
+		return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey, true); };
+	}, [moreOpen]);
+	react.useEffect(() => {
+		if (typeof window === "undefined") return;
+		const onResize = () => setNarrow(window.innerWidth < 1500);
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, []);
 	const dragRef = react.useRef(null);
 	const gridRef = react.useRef(null);
 	const wrapRef = react.useRef(null);
@@ -487,6 +534,8 @@ export function DesignStudio({ open, onClose }) {
 	 */
 	const onElPointerDown = (e, el, mode) => {
 		e.stopPropagation();
+		// 🔴 同 MindMap：阻止原生文本选择/原生拖拽把渲染主线程挂进桌面壳原生交互状态机
+		e.preventDefault();
 		setSelected(el.id);
 		dragRef.current = {
 			mode, id: el.id, x0: e.clientX, y0: e.clientY,
@@ -757,7 +806,7 @@ export function DesignStudio({ open, onClose }) {
 		id: STUDIO_ID, style: S.root, "data-testid": "ds-root", role: "dialog", "aria-label": "设计图工作室",
 		/* 质感类：个性化里的三档纹理由 store/personalize.js 注入的样式表按
 		 * `html[data-dp-texture=...] .dp-textured` 命中（伪元素 / background-image **无法**用 inline 写）。 */
-		className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
+		className: "dp-textured dp-overlay-in", "data-personalize-open": pOpen ? "1" : "0"
 	}, [
 		/* ══ 顶栏（D1 · 四区 + 安全区）══════════════════════════════════════════
 		 * 🔴 安全区 —— 修用户报的「设计图的关闭按钮和标准软件的关闭按钮重叠了」：
@@ -777,6 +826,8 @@ export function DesignStudio({ open, onClose }) {
 		h("div", {
 			key: "top", style: { ...S.top, paddingRight: Math.max(10, inset + 10) }, "data-testid": "ds-top"
 		}, [
+			/* ── 域标识（V17 P0：用户始终知道自己在哪个域） ── */
+			h("span", { key: "dom", style: { fontSize: "calc(10.5px * var(--dp-font))", fontWeight: 600, color: "#7fe3e8", marginRight: 4, letterSpacing: ".3px", whiteSpace: "nowrap" }, "data-testid": "ds-domain" }, "◈ 设计图"),
 			/* ── ① 保存：**按钮即状态** ────────────────────────────────────────
 			 * 脏（有未保存改动）= 主色实心「● 保存」（最需要被看见）
 			 * 净（已保存）    = 绿色描边「✓ 已保存 vN」
@@ -823,12 +874,23 @@ export function DesignStudio({ open, onClose }) {
 				onClick: nameDraft == null ? onRenameStart : onRenameCancel
 			}, "✎ 改名"),
 			h("button", { key: "n", style: S.btn, "data-testid": "ds-new", "aria-label": "新建设计图", title: "新建一张设计图（自带标准框架 20 元素）", onClick: onNewDoc }, "＋ 新建图"),
-			h("button", { key: "cp", style: S.btn, "data-testid": "ds-dup-doc", "aria-label": "复制设计图", title: "复制这张设计图（内容带走，版本历史不带）", onClick: onDuplicateDoc }, "⧉ 复制"),
-			/* 🔴 标签必须**区别于图名**：本按钮原写作「↺ 标准框架」，而左上选择器显示的图名正是
-			 *    「标准框架 · 三页签（20）」⇒ 同屏出现两个「标准框架」，一个是要打开的图、
-			 *    一个是会覆盖内容的动作，用户无法区分。改为「重载框架」= 动作导向 + 与图名脱钩。 */
-			h("button", { key: "f", style: S.btn, "data-testid": "ds-frame", "aria-label": "重载标准框架", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: onLoadFrame }, "↺ 重载框架"),
-			h("button", { key: "ex", style: S.btn, "data-testid": "ds-export", "aria-label": "导出设计图 JSON", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: onExportJson }, "导出"),
+			/* V17 P2-2：窄窗口时复制/重载框架/导出收入「更多」菜单 */
+			narrow ? h("div", { key: "more", style: { position: "relative", display: "inline-block" } }, [
+				h("button", { key: "mb", style: S.btn, "data-testid": "ds-more", "aria-label": "更多操作", "aria-expanded": moreOpen, onClick: (e) => { e.stopPropagation(); setMoreOpen((v) => !v); } }, "更多 ▾"),
+				moreOpen ? h("div", {
+					key: "menu", style: { position: "absolute", top: "100%", left: 0, zIndex: 50, background: "#212429", border: "1px solid #3d4148", borderRadius: 6, padding: "4px 0", minWidth: 130, boxShadow: "0 6px 20px rgba(0,0,0,.4)" },
+					"data-testid": "ds-more-menu",
+					onMouseLeave: () => setMoreOpen(false)
+				}, [
+					h("button", { key: "cp", style: { ...S.btn, display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 0 }, "data-testid": "ds-dup-doc", title: "复制这张设计图（内容带走，版本历史不带）", onClick: (e) => { e.stopPropagation(); setMoreOpen(false); onDuplicateDoc(); } }, "⧉ 复制"),
+					h("button", { key: "f", style: { ...S.btn, display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 0 }, "data-testid": "ds-frame", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: (e) => { e.stopPropagation(); setMoreOpen(false); onLoadFrame(); } }, "↺ 重载框架"),
+					h("button", { key: "ex", style: { ...S.btn, display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 0 }, "data-testid": "ds-export", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: (e) => { e.stopPropagation(); setMoreOpen(false); onExportJson(); } }, "导出 JSON")
+				]) : null
+			]) : [
+				h("button", { key: "cp", style: S.btn, "data-testid": "ds-dup-doc", "aria-label": "复制设计图", title: "复制这张设计图（内容带走，版本历史不带）", onClick: onDuplicateDoc }, "⧉ 复制"),
+				h("button", { key: "f", style: S.btn, "data-testid": "ds-frame", "aria-label": "重载标准框架", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: onLoadFrame }, "↺ 重载框架"),
+				h("button", { key: "ex", style: S.btn, "data-testid": "ds-export", "aria-label": "导出设计图 JSON", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: onExportJson }, "导出")
+			],
 			/* 危险动作只保留一个（删图）。原文案「🗑」是**彩色 emoji**，与同排的单色字形
 			 * （✎ / ⧉ / ↺）割裂；且 emoji 不继承 currentColor ⇒ btnDanger 的红色对它无效。
 			 * 改文字后颜色与描边真正生效，红=危险 的语义才传得到。

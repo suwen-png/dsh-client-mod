@@ -383,7 +383,10 @@ const i9a = await evalExpr(`(async () => {
 	const box = window.__q('[data-testid="director-messages"]');
 	if (!box) return { found:false, reason:'消息区未渲染（总监页签是否激活？）' };
 	const before = (box.innerText||'').length;
-	const rowsBefore = box.children.length;
+	// 🔴 消息条数用 pre 子元素计数，不能用 children.length：
+	// messages 为空时产品渲染 1 个「暂无消息…」占位 div（无 pre），此时 children.length=1 会让
+	// 「净增 ≥2」基线虚高 1（空起点 占位1 → user+assistant 2，2-1=1 假红）；每条真消息都含一个 pre。
+	const rowsBefore = box.querySelectorAll('pre').length;
 	const input = window.__q('[data-testid="director-input"]');
 	if (!input) return { found:false, reason:'输入框未渲染' };
 	// React 受控输入：必须走原生 setter + input 事件，否则 React 内部 state 不同步
@@ -419,7 +422,7 @@ ok("🔴 回读：用户消息【立即上屏】（§2.3，不等执行完成）
 const i9b = await pollEval(`(() => {
 	const box = window.__q('[data-testid="director-messages"]');
 	const txt = box ? (box.innerText||'') : '';
-	const rows = box ? box.children.length : 0;
+	const rows = box ? box.querySelectorAll('pre').length : 0;   // 真消息条数（排除「暂无消息」占位 div）
 	const steps = window.__q('[data-testid="director-steps"]');
 	const stepRows = steps ? steps.children.length - 1 : 0;
 	return {

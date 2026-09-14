@@ -71,7 +71,7 @@ const S = {
 	nowT: { fontSize: "calc(12px * var(--dp-font,1))", fontWeight: 650, marginBottom: 3, wordBreak: "break-word", lineHeight: 1.5 },
 	nowD: { fontSize: "calc(11px * var(--dp-font,1))", color: "var(--dp-t2, #c3c8ce)", lineHeight: 1.55, wordBreak: "break-word" },
 	badge: {
-		fontSize: "calc(9.5px * var(--dp-font,1))", padding: "0 5px", borderRadius: "var(--dp-radius-sm, 5px)",
+		fontSize: "calc(10.5px * var(--dp-font,1))", padding: "0 5px", borderRadius: "var(--dp-radius-sm, 5px)",
 		border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #1c1e23)", color: "var(--dp-t3, #8b9199)"
 	},
 	secT: {
@@ -83,7 +83,7 @@ const S = {
 		borderRadius: "var(--dp-radius, 8px)", padding: "6px 8px", marginBottom: 5
 	},
 	itemT: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word", color: "var(--dp-t1, #e8eaed)" },
-	itemM: { fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
+	itemM: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
 	ft: {
 		flex: "0 0 auto", borderTop: "1px solid var(--dp-line, #31343a)", padding: 9,
 		display: "flex", flexDirection: "column", gap: 6, background: "var(--dp-bg-0, #0b0c0e)"
@@ -100,7 +100,7 @@ const S = {
 		background: "var(--dp-bg-2, #1c1e23)", color: "var(--dp-t2, #c3c8ce)", whiteSpace: "nowrap"
 	},
 	btnPri: { background: "var(--dp-ac, #2f6feb)", borderColor: "var(--dp-ac, #2f6feb)", color: "#fff" },
-	note: { fontSize: "calc(10px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 }
+	note: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 }
 };
 
 /** 维度足迹小标签（四个维度都在，走过的点亮 —— "同一消息在几个维度流转"一眼可见） */
@@ -111,7 +111,7 @@ function DimTrail({ flow }) {
 			key: d, "data-flow-dim": d, "data-on": seen.has(d) ? "1" : "0",
 			title: DIM_LABEL[d] + (seen.has(d) ? "：走过" : "：未走"),
 			style: {
-				fontSize: 9.5, padding: "0 4px", borderRadius: 3,
+				fontSize: 10.5, padding: "0 4px", borderRadius: 3,
 				border: "1px solid " + (seen.has(d) ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
 				background: seen.has(d) ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
 				color: seen.has(d) ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)",
@@ -272,7 +272,7 @@ export function NodeDetailPanel(props) {
 							key: "tr", style: { ...S.itemM, marginTop: 2 },
 							title: (f.trail || []).map((t) => DIM_LABEL[t.dim] + "：" + (t.note || "-")).join("\n")
 						}, (f.trail || []).map((t, i) => h("span", {
-							key: i, style: { fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)" }
+							key: i, style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)" }
 						}, (i ? " → " : "") + DIM_ICON[t.dim] + (t.note ? clip(t.note, 22) : DIM_LABEL[t.dim])))) : null
 					]))
 					: h("div", { key: "e", style: S.note, "data-testid": "nd-flow-empty" },

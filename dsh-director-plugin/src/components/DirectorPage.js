@@ -199,7 +199,7 @@ const S = {
 	msg: { display: "flex", gap: 6, marginBottom: 6, fontSize: "calc(11.5px * var(--dp-font,1))" },
 	av: (k) => ({
 		width: 18, height: 18, flex: "0 0 18px", borderRadius: "var(--dp-radius-sm, 5px)",
-		display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, fontWeight: 700,
+		display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700,
 		background: k === "user" ? "var(--dp-ac-soft, rgba(47,111,235,.18))" : "var(--dp-ac2-soft, rgba(137,87,229,.22))",
 		color: k === "user" ? "var(--dp-ac, #79a8ff)" : "var(--dp-ac2, #b794f6)"
 	}),
@@ -210,7 +210,7 @@ const S = {
 	},
 	muted: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 },
 	src: {
-		fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #6f757d)",
+		fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #6f757d)",
 		borderTop: "1px dashed var(--dp-line, #31343a)", marginTop: 6, paddingTop: 4, lineHeight: 1.5
 	}
 };
@@ -251,6 +251,10 @@ export function DirectorPage() {
 	const [pOpen, setPOpen] = react.useState(false);
 	const [curId, setCurId] = react.useState(null);
 	const [composerOk, setComposerOk] = react.useState(false);
+	/* V17 P2-1：R2/R4/R6 区域可折叠（CSS display 控制，不改 DOM 结构） */
+	// V17 P2：折叠态持久化到 layout store（跨会话保留，首次默认全展开），不再用易失的本地 state
+	const collapsed = st.sectionCollapsed || { r2: false, r4: false, r6: false };
+	const toggleCollapse = (key) => directorLayoutStore.setSectionCollapsed(key, !collapsed[key]);
 	/* 执行态（本轮新增 · 真流转）。deliverMode 是**投递结果**，进 data-* 供断言读 ——
 	 * 界面上只显示一个短词，归因细节走属性，不占版面（用户要求「不用多余的解释」）。 */
 	const [busy, setBusy] = react.useState(false);
@@ -590,12 +594,12 @@ export function DirectorPage() {
 		/* ── R2.5 对话控制台（六动作 + 计数） ── */
 		h("div", { key: "r2", style: { padding: "7px 9px 0", display: "flex", flexDirection: "column", gap: 7 } }, [
 			h("div", { key: "b", style: S.sec, "data-testid": "dp-r25" }, [
-				h("div", { key: "t", style: S.blkT }, [
-					"R2.5 对话控制台",
+				h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r2"), "data-testid": "dp-r2-toggle" }, [
+					(collapsed.r2 ? "▶ " : "▼ ") + "R2.5 对话控制台",
 					h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } },
 						"血缘：" + (branch.lineage ? "已连接" : "降级") + " ｜ 顺序即闭环")
 				]),
-				h("div", { key: "c", style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
+				h("div", { key: "c", style: { display: collapsed.r2 ? "none" : "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
 					...CONSOLE_ACTIONS.map((a) => h("button", {
 						key: a.key, style: {
 							...S.btn,
@@ -608,14 +612,14 @@ export function DirectorPage() {
 					h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-console-counts" },
 						"待办 " + todos.length + " · 活跃分支 " + activeBranches + " · 流转 " + fStats.total +
 						(fStats.multiDim ? "（跨维 " + fStats.multiDim + "）" : "")),
-					h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.setMindmap(true) }, "🧠 打开分支导图"),
-					h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.setDesignStudio(true) }, "🖌 打开设计图"),
+					h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.toggleOverlay("mindmap") }, "🧠 打开分支导图"),
+					h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.toggleOverlay("design") }, "🖌 打开设计图"),
 					h("button", { key: "s", style: S.btn, "data-testid": "dp-sync", onClick: () => { refresh(); refreshBranchTree(); say("已刷新数据"); } }, "↻ 同步")
 				])
 			]),
 
 			/* ── R2 项目总览（定位 / 目标 / 当前阶段 + 四指标卡） ── */
-			h("div", { key: "a", style: S.sec, "data-testid": "dp-r2" }, [
+			h("div", { key: "a", style: { ...S.sec, display: collapsed.r2 ? "none" : undefined }, "data-testid": "dp-r2" }, [
 				h("div", { key: "t", style: S.blkT }, ["R2 项目总览", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "概述 · 总揽 · 每个数字都标数据源")]),
 				h("div", { key: "c", style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 7 } }, [
 					h("span", { key: "p", style: S.chip }, "定位 · " + clampText((node && node.meta && node.meta.positioning) || "未填写（层级节点 meta.positioning）", 40)),
@@ -650,14 +654,15 @@ export function DirectorPage() {
 			/* R4 项目导航 */
 			h("div", { key: "r4", style: S.col, "data-testid": "dp-r4" },
 				h("div", { key: "s", style: S.sec }, [
-					h("div", { key: "t", style: S.blkT }, "R4 项目导航"),
-					h("div", { key: "seg", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
+					h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r4"), "data-testid": "dp-r4-toggle" },
+						(collapsed.r4 ? "▶ " : "▼ ") + "R4 项目导航"),
+					h("div", { key: "seg", style: { display: collapsed.r4 ? "none" : "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
 						R4_TABS.map((tb) => h("button", {
 							key: tb.key, style: S.seg(r4tab === tb.key), "data-testid": "dp-r4-" + tb.key,
 							"aria-selected": r4tab === tb.key, role: "tab",
 							onClick: () => setR4tab(tb.key)
 						}, tb.label))),
-					h("div", { key: "b", style: S.muted, "data-testid": "dp-r4-body" }, R4_BODY[r4tab])
+					h("div", { key: "b", style: { ...S.muted, display: collapsed.r4 ? "none" : undefined }, "data-testid": "dp-r4-body" }, R4_BODY[r4tab])
 				])),
 
 			/* R5 当前会话的流转 + 总监消息 */
@@ -712,7 +717,7 @@ export function DirectorPage() {
 											key: d, "data-flow-dim": d, "data-on": ((f.trail || []).some((t) => t.dim === d)) ? "1" : "0",
 											title: DIM_LABEL[d] + (((f.trail || []).some((t) => t.dim === d)) ? "：走过" : "：未走"),
 											style: {
-												fontSize: 9.5, padding: "0 4px", borderRadius: 3,
+												fontSize: 10.5, padding: "0 4px", borderRadius: 3,
 												border: "1px solid " + (((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
 												background: ((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
 												color: ((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)", opacity: ((f.trail || []).some((t) => t.dim === d)) ? 1 : 0.6
@@ -765,8 +770,16 @@ export function DirectorPage() {
 		 * 右端按浮动按钮组宽度留白（见 dockReserve 注释）—— 否则「最近：…」会被压在药丸下面 */
 		h("div", { key: "r6", style: { padding: "0 " + (9 + dockReserve) + "px 7px 9px" } },
 			h("div", { style: S.sec, "data-testid": "dp-r6" }, [
-				h("div", { key: "t", style: S.blkT }, ["R6 记忆面板 · 独立数据元", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "库 " + ((stats && stats.name) || "—"))]),
-				h("div", { key: "k", style: { ...S.muted, display: "flex", gap: 12, flexWrap: "wrap" } }, [
+				h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r6"), "data-testid": "dp-r6-toggle" },
+					[(collapsed.r6 ? "▶ " : "▼ ") + "R6 记忆面板 · 独立数据元",
+					// V17 P2：折叠时标题直接给摘要（不必展开就能看到关键计数）
+					collapsed.r6 ? h("span", {
+						key: "sum", "data-testid": "dp-r6-summary",
+						style: { marginLeft: 8, color: "var(--dp-t2, #c3c8ce)", fontWeight: 400, fontSize: "calc(10.5px * var(--dp-font,1))" }
+					}, "节点 " + ((stats && stats.nodes) || 0) + " · 消息 " + ((stats && stats.conversations) || 0)
+						+ " · 决策 " + ((stats && stats.decisions) || 0) + " · 风险 " + ((node && node.risks) ? node.risks.length : 0)) : null,
+					h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "库 " + ((stats && stats.name) || "—"))]),
+				h("div", { key: "k", style: { ...S.muted, display: collapsed.r6 ? "none" : "flex", gap: 12, flexWrap: "wrap" } }, [
 					h("span", { key: "n", "data-testid": "dp-db-nodes" }, "节点 " + ((stats && stats.nodes) || 0)),
 					h("span", { key: "c", "data-testid": "dp-db-msgs" }, "消息 " + ((stats && stats.conversations) || 0)),
 					h("span", { key: "r" }, "审核 " + ((stats && stats.reviews) || 0)),

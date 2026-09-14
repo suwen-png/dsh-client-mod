@@ -73,7 +73,7 @@ import { dshLog } from "../util/debug.js";
 import { readInset, watchInset } from "../util/safe-area.js";
 import { readConversation } from "../bridge/chat-bridge.js";
 import { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } from "../store/mindmap-schema.js";
-import { flowStore } from "../logic/flow.js";
+import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
 import { directorLayoutStore } from "../store/layout.js";
 import { personalizeStore } from "../store/personalize.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
@@ -87,6 +87,9 @@ const TOAST_MS = 2400;
 /** 画布缩放范围 */
 const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 3;
+/** 「适应屏幕」的可读性下限：超长链不再为塞进全部节点而无限缩小（33 节点链会缩到 22%，节点成蚂蚁、💬 按钮点不中）；
+ *  低于此值就停在 30%，放不下的方向交给滚动 —— 与主流画布工具一致，保证节点可读、控件可点。 */
+const FIT_MIN = 0.3;
 /** 判定"这是在拖，不是在点"的位移阈值（px）—— 低于它仍算点击（打开右侧对话） */
 const DRAG_SLOP = 4;
 
@@ -112,8 +115,11 @@ const S = {
 	main: { flex: 1, minHeight: 0, display: "flex", overflow: "hidden" },
 	canvasWrap: { flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", overflow: "hidden" },
 	body: { flex: 1, minHeight: 0, position: "relative", overflow: "auto", background: "var(--dp-bg-0, #0b0c0e)" },
-	stageWrap: { position: "relative" },
-	stage: { position: "relative", transformOrigin: "top left" },
+	// 居中不用 flex（flex 的 center/safe-center 在内容窄于视口时会凭空造出横向可滚动区，小地图点击会跳进空白）；
+	// 改为 block + 渲染时按视口与内容包围盒动态算 margin（见 stageWrap），内容大于视口时 margin 归零、正常双向滚动。
+	// overflow:hidden 裁掉内部 stage 按 minW/minH 预留、却落在可见包围盒之外的绘制空白，使其不贡献假滚动。
+	stageWrap: { position: "relative", overflow: "hidden" },
+	stage: { position: "relative", transformOrigin: "top left", userSelect: "none", WebkitUserSelect: "none" },
 	/* ── 节点 ──
 	 * 四型配色来自 NODE_KINDS[kind].accent；选中/悬停只改"描边与光晕"，不改底色。 */
 	node: (sel, hov, kind, dragging) => {
@@ -126,6 +132,7 @@ const S = {
 			borderRadius: "var(--dp-radius, 8px)", padding: "5px 8px 5px 9px",
 			cursor: dragging ? "grabbing" : "grab", color: "var(--dp-t1, #e6e8ec)",
 			boxShadow: dragging ? "var(--dp-shadow, 0 10px 30px rgba(0,0,0,.45))" : sel ? "0 0 0 3px var(--dp-ac-soft, rgba(47,111,235,.16))" : hov ? "0 0 0 3px rgba(75,142,247,.16)" : "none",
+			userSelect: "none", WebkitUserSelect: "none",
 			display: "flex", flexDirection: "column", gap: 3, overflow: "visible",
 			zIndex: dragging ? 9 : sel ? 5 : 1
 		};
@@ -252,6 +259,45 @@ export function MindMap({ open, onClose }) {
 		return () => clearTimeout(t);
 	}, [open]);
 
+	/* 视口尺寸变化时刷新 view（驱动 stageWrap 的居中 margin 跟随重算），不依赖用户滚动/再点适应 */
+	react.useEffect(() => {
+		if (!open) return undefined;
+		const el = bodyRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return undefined;
+		const ro = new ResizeObserver(() => { syncView(); });
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [open]);
+
+	/* V17 P3：跨界面流转同步反馈 —— 导图覆盖层打开期间，别的维度把一条消息送到思维导图时
+	 * 轻提示「已同步到思维导图」（自己发起的不提示；首次挂载把历史当已读，不翻旧账）。 */
+	const syncSeenRef = react.useRef(lastFlowIdFor(flowSnap.flows, DIM.MINDMAP));
+	react.useEffect(() => {
+		const flows = flowSnap.flows;
+		const latest = lastFlowIdFor(flows, DIM.MINDMAP);
+		if (!open) { syncSeenRef.current = latest; return; } // 关闭期（组件隐藏不卸载）只追基线、不提示，避免一打开就弹旧账
+		if (latest && latest !== syncSeenRef.current) {
+			syncSeenRef.current = latest;
+			const f = flows.find((x) => x.flowId === latest);
+			if (f && flowOrigin(f) && flowOrigin(f) !== DIM.MINDMAP) say("已同步到思维导图");
+		} else if (!latest) {
+			syncSeenRef.current = null;
+		}
+	}, [flowSnap, open]);
+
+	/* V17 P2 发现性：首次打开导图给一次操作引导（只点真实存在的操作：悬浮工具条 / 右键菜单），localStorage 只提示一次 */
+	react.useEffect(() => {
+		if (!open) return undefined;
+		let shown = false;
+		try { shown = localStorage.getItem("dsh.director.mm.hint.shown") === "1"; } catch (e) { /* 隐私模式每次提示可接受 */ }
+		if (shown) return undefined;
+		const t = setTimeout(() => {
+			try { localStorage.setItem("dsh.director.mm.hint.shown", "1"); } catch (e) { /* 忽略 */ }
+			say("悬浮节点出快捷工具条 · 右键节点看全部操作");
+		}, 650);
+		return () => clearTimeout(t);
+	}, [open]);
+
 	react.useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
 	/* 键盘：Esc 逐层退（个性化 → 菜单 → 右侧面板 → 导图）· Ctrl+0/=/- 缩放 · Ctrl+F 搜索 */
@@ -368,8 +414,22 @@ export function MindMap({ open, onClose }) {
 	const collapsedLive = winRows.filter((r) => collapsed.has(r.sessionId)).length;
 	const collapsibleLive = winRows.filter((r) => r.depth > 0 && r.childrenCount > 0).length;
 	const bounds = treeBounds(winRows);
-	const stageW = Math.max(LAYOUT.minW, bounds.x + bounds.w);
-	const stageH = Math.max(LAYOUT.minH, bounds.y + bounds.h);
+	// treeBounds 的 w/h 用 min(minW/minH, …) 做了**封顶**（其注释本意是"节点超出要撑大"，实现却夹了上限），
+	// 33 节点链式树逻辑高约 2708 > minH 1600 时 bounds 会偏小。这里按 winRows 重算**未封顶**的真实内容尺寸，
+	// 保证长树底部节点装得进 stage/wrap（否则 overflow:hidden 会裁掉、滚不到）。bounds 仍保留给 doFit 缩放比例。
+	let realMaxX = 0, realMaxY = 0;
+	for (const rr of winRows) {
+		realMaxX = Math.max(realMaxX, rr.x + LAYOUT.nodeW);
+		realMaxY = Math.max(realMaxY, rr.y + LAYOUT.nodeH);
+	}
+	const contentW = Math.max(bounds.x + bounds.w, realMaxX + LAYOUT.pad);
+	const contentH = Math.max(bounds.y + bounds.h, realMaxY + LAYOUT.pad);
+	const stageW = Math.max(LAYOUT.minW, contentW);
+	const stageH = Math.max(LAYOUT.minH, contentH);
+	// 滚动/居中容器贴合**真实可见包围盒**（不顶 minW、也不被 minH 封顶）：窄长树 fit 后由动态 margin 居中，
+	// 长树放大后底部节点仍可滚入视口。绘制舞台 stageW/H 保留 minW 兜底（SVG 连线/小地图整棵树缩略用）。
+	const wrapW = Math.max(contentW, 320);
+	const wrapH = Math.max(contentH, 240);
 	const matches = matchRows(rows, q);
 	const chain = ancestorChain(rows, sel);
 	const caps = hostCapabilities();
@@ -389,6 +449,8 @@ export function MindMap({ open, onClose }) {
 		if (toastTimer.current) clearTimeout(toastTimer.current);
 		toastTimer.current = setTimeout(() => setToast(""), TOAST_MS);
 	}
+
+
 
 	/* ── 视野同步（小地图用；滚动/缩放后量一次） ── */
 	function syncView() {
@@ -420,13 +482,16 @@ export function MindMap({ open, onClose }) {
 		if (!el || !winRows.length) { if (!silent) say("没有可适应的节点"); return; }
 		const cw = el.clientWidth, ch = el.clientHeight;
 		if (!cw || !ch) { if (!silent) say("画布尚未布局完成，请稍后再试"); return; }
-		const next = Math.max(ZOOM_MIN, Math.min(1.4, Math.min(cw / bounds.w, ch / bounds.h) * 0.96));
+		// 用**未封顶**的真实内容尺寸 contentW/H 算缩放（bounds.h 被 minH 封顶会让长树 fit 后仍溢出）；
+		// 但不低于 FIT_MIN：超长链保留可读性，放不下的方向滚动而非无限缩小。
+		const next = Math.max(FIT_MIN, Math.min(1.4, Math.min(cw / contentW, ch / contentH) * 0.96));
 		setK(next);
 		requestAnimationFrame(() => {
 			const e2 = bodyRef.current;
 			if (!e2) return;
-			e2.scrollLeft = Math.max(0, bounds.x * next - 8);
-			e2.scrollTop = Math.max(0, bounds.y * next - 8);
+			// 内容缩放后放得下 ⇒ 滚动归零，交给动态 margin 居中；被 FIT_MIN 夹住仍放不下才滚到包围盒左上
+			e2.scrollLeft = contentW * next <= cw ? 0 : Math.max(0, bounds.x * next - 8);
+			e2.scrollTop = contentH * next <= ch ? 0 : Math.max(0, bounds.y * next - 8);
 			syncView();
 			if (!silent) say("已适应：可见 " + winRows.length + " 个节点 · " + Math.round(next * 100) + "%");
 		});
@@ -570,12 +635,13 @@ export function MindMap({ open, onClose }) {
 		id: MINDMAP_ID, style: S.root, "data-testid": "mm-root", role: "dialog", "aria-label": "分支导图",
 		"data-inset": inset, "data-lineage": snap.lineage ? "1" : "0", "data-source": snap.source || "none",
 		"data-detail": detailId ? "1" : "0", "data-moved": String(movesCount), "data-edge": pz.edge,
-		className: "dp-textured",
+		className: "dp-textured dp-overlay-in",
 		onClick: () => { if (menu) setMenu(null); }
 	}, [
 		/* ── 顶栏（⚙ 个性化 + ✕ 都落在窗口控件安全区左侧） ── */
 		h("div", { key: "t", style: { ...S.top, paddingRight: padRight }, "data-testid": "mm-top" }, [
 			h("span", { key: "a", style: { fontWeight: 650 } }, "🧠 分支导图"),
+			h("span", { key: "dom", className: "dp-domain map", "data-testid": "mm-domain" }, "❖ 导图"),
 			h("span", {
 				key: "s", style: S.chip, "data-testid": "mm-source",
 				title: snap.lineage
@@ -705,7 +771,11 @@ export function MindMap({ open, onClose }) {
 					key: "b", style: S.body, ref: bodyRef, "data-testid": "mm-body", className: "dp-scroll",
 					onScroll: syncView, onPointerDown: () => { if (menu) setMenu(null); }
 				},
-				h("div", { key: "w", style: { ...S.stageWrap, width: stageW * k, height: stageH * k } }, [
+				h("div", { key: "w", style: {
+					...S.stageWrap, width: wrapW * k, height: wrapH * k,
+					marginLeft: Math.max(0, (view.cw - wrapW * k) / 2),
+					marginTop: Math.max(0, (view.ch - wrapH * k) / 2)
+				} }, [
 					h("div", {
 						key: "s", style: { ...S.stage, width: stageW, height: stageH, transform: "scale(" + k + ")" },
 						"data-testid": "mm-stage", "data-zoom": k
@@ -754,6 +824,8 @@ export function MindMap({ open, onClose }) {
 								/* 拖动：在框体上按下即进入拖动（控件自己 stopPropagation，不会误触） */
 								onPointerDown: (e) => {
 									if (e.button !== 0) return;
+									// 🔴 阻止原生文本选择/原生拖拽把主线程挂进桌面壳原生交互状态机（见 S.node userSelect 注释）
+									e.preventDefault();
 									dragRef.current = { id: r.sessionId, sx: e.clientX, sy: e.clientY, ox: r.x, oy: r.y, moved: false, title: r.title };
 									setSel(r.sessionId);
 								},
@@ -788,7 +860,7 @@ export function MindMap({ open, onClose }) {
 								]),
 								/* 第 2 行：有据徽标（取不到就不写"未知"，退回深度） */
 								h("div", {
-									key: "r2", style: { fontSize: "calc(10px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+									key: "r2", style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 									"data-testid": "mm-node-meta"
 								}, metaLineOf(r) + (r.moved ? " · 已移动" : "")),
 								/* 第 3 行：**单框控件**（用户：「单个框没有展开和折叠的选项」）
@@ -841,6 +913,8 @@ export function MindMap({ open, onClose }) {
 										onPointerDown: (e) => {
 											e.stopPropagation();
 											if (e.button !== 0) return;
+											// 🔴 同节点框：阻止原生文本选择/原生拖拽挂起主线程
+											e.preventDefault();
 											dragRef.current = { id: r.sessionId, sx: e.clientX, sy: e.clientY, ox: r.x, oy: r.y, moved: false, title: r.title };
 											setSel(r.sessionId);
 										}
@@ -848,7 +922,7 @@ export function MindMap({ open, onClose }) {
 									/* 当前会话标记 */
 									r.isCurrent ? h("span", {
 										key: "cu", "data-testid": "mm-current", style: {
-											fontSize: 9, padding: "0 4px", borderRadius: 3,
+											fontSize: 10.5, padding: "0 4px", borderRadius: 3,
 											background: "var(--dp-ac-soft, rgba(47,111,235,.2))", border: "1px solid var(--dp-ac-line, rgba(47,111,235,.5))",
 											color: "var(--dp-ac, #9fc2ff)"
 										}
@@ -857,7 +931,7 @@ export function MindMap({ open, onClose }) {
 								/* 折叠时显示隐藏的子树规模（不是"什么都没有"） */
 								collapsed.has(r.sessionId) ? h("span", {
 									key: "gh", "data-testid": "mm-ghost", style: {
-										position: "absolute", right: -22, top: LAYOUT.nodeH / 2 - 9, fontSize: 9.5,
+										position: "absolute", right: -22, top: LAYOUT.nodeH / 2 - 9, fontSize: 10.5,
 										padding: "1px 5px", borderRadius: 4, background: "var(--dp-bg-2, #20212a)",
 										border: "1px dashed var(--dp-line, #4c525c)", color: "var(--dp-t3, #8b9199)"
 									}
@@ -915,7 +989,7 @@ export function MindMap({ open, onClose }) {
 					}, [
 						h("span", { key: "i" }, it.icon),
 						h("span", { key: "l" }, it.label),
-						!it.enabled ? h("span", { key: "n", style: { marginLeft: "auto", fontSize: 9.5, color: "var(--dp-t3, #4c525c)" } }, "未接通") : null
+						!it.enabled ? h("span", { key: "n", style: { marginLeft: "auto", fontSize: 10.5, color: "var(--dp-t3, #4c525c)" } }, "未接通") : null
 					])))) : null
 				])
 			),
@@ -933,8 +1007,8 @@ export function MindMap({ open, onClose }) {
 					const box = e.currentTarget.getBoundingClientRect();
 					const rx = (e.clientX - box.left) / box.width;
 					const ry = (e.clientY - box.top) / box.height;
-					el.scrollLeft = Math.max(0, rx * stageW * k - el.clientWidth / 2);
-					el.scrollTop = Math.max(0, ry * stageH * k - el.clientHeight / 2);
+					el.scrollLeft = Math.max(0, rx * wrapW * k - el.clientWidth / 2);
+					el.scrollTop = Math.max(0, ry * wrapH * k - el.clientHeight / 2);
 					syncView();
 				}
 			}, [
@@ -954,10 +1028,10 @@ export function MindMap({ open, onClose }) {
 					key: "vp", "data-testid": "mm-minimap-vp",
 					style: {
 						position: "absolute",
-						left: (view.sl / (stageW * k)) * 100 + "%",
-						top: (view.st / (stageH * k)) * 100 + "%",
-						width: ((view.cw || 0) / (stageW * k)) * 100 + "%",
-						height: ((view.ch || 0) / (stageH * k)) * 100 + "%",
+						left: (view.sl / (wrapW * k)) * 100 + "%",
+						top: (view.st / (wrapH * k)) * 100 + "%",
+						width: ((view.cw || 0) / (wrapW * k)) * 100 + "%",
+						height: ((view.ch || 0) / (wrapH * k)) * 100 + "%",
 						border: "1px solid var(--dp-ac, #9fc2ff)", background: "var(--dp-ac-soft, rgba(47,111,235,.12))"
 					}
 				})

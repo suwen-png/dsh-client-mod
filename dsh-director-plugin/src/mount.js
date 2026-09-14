@@ -73,17 +73,20 @@ const h = react.createElement;
 class SafeLayer extends react.Component {
 	constructor(props) {
 		super(props);
-		this.state = { err: null };
+		this.state = { err: null, showDetail: false, retries: 0 };
 		this.reset = this.reset.bind(this);
 	}
-	static getDerivedStateFromError(err) { return { err }; }
+	static getDerivedStateFromError(err) { return { err, showDetail: false }; } // 不清 retries：保留累计重试次数，否则"崩溃→重试→再崩"会反复归零、永远到不了 giveUp 阈值
 	componentDidCatch(err) {
 		try { dshLog("shell", "层「" + this.props.name + "」渲染异常已隔离（其余层不受影响）: " + ((err && err.message) || err)); } catch (_) {}
 	}
-	reset() { this.setState({ err: null }); }
+	reset() { this.setState((s) => ({ err: null, showDetail: false, retries: (s.retries || 0) + 1 })); }
+	toggleDetail() { this.setState((s) => ({ showDetail: !s.showDetail })); }
 	render() {
 		if (!this.state.err) return this.props.children;
 		const msg = String((this.state.err && this.state.err.message) || this.state.err);
+		const retries = this.state.retries || 0;
+		const giveUp = retries >= 3; // V17 3.7：连续重试 3 次仍失败 ⇒ 明确指引重启
 		return h("div", {
 			style: {
 				position: "fixed", left: 14, bottom: 14, zIndex: 2147483000, maxWidth: 460,
@@ -93,8 +96,15 @@ class SafeLayer extends react.Component {
 			},
 			"data-testid": "d-layer-error"
 		}, [
-			h("div", { key: "t", style: { fontWeight: 700, marginBottom: 3 } }, "⚠ 插件层「" + this.props.name + "」异常（已隔离）"),
-			h("div", { key: "m", style: { color: "#f5b7b1", wordBreak: "break-word" } }, msg),
+			h("div", { key: "t", style: { fontWeight: 700, marginBottom: 3 } }, "⚠ 插件层「" + this.props.name + "」出了点小问题（已隔离，其余层不受影响）"),
+			h("div", { key: "d" }, h("button", {
+				key: "dt", type: "button", "data-testid": "d-layer-detail-toggle",
+				style: { background: "none", border: "none", padding: 0, color: "#d4a0a0", cursor: "pointer", fontSize: 10.5, textDecoration: "underline" },
+				onClick: this.toggleDetail
+			}, this.state.showDetail ? "收起技术详情 ▴" : "查看技术详情 ▾")),
+			this.state.showDetail ? h("div", { key: "m", "data-testid": "d-layer-detail", style: { color: "#f5b7b1", wordBreak: "break-word", marginTop: 3 } }, msg) : null,
+			h("div", { key: "h", style: { marginTop: 4, fontSize: 10.5, color: giveUp ? "#ff9a92" : "#d4a0a0", fontWeight: giveUp ? 700 : 400 } },
+				giveUp ? ("已重试 " + retries + " 次仍未恢复，请重启 Harness（重启后其余数据不丢失）") : "其余层不受影响 · 若重试无效请重启 Harness"),
 			h("button", {
 				key: "r", type: "button",
 				style: { marginTop: 6, padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, border: "1px solid rgba(248,81,73,.5)", background: "rgba(248,81,73,.18)", color: "#ffd9d5" },

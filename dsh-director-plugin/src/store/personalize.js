@@ -215,6 +215,14 @@ export function pCssText() {
 	L.push("@keyframes dp-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--dp-ac-soft);}50%{opacity:.65;box-shadow:0 0 0 4px var(--dp-ac-soft);}}");
 	L.push(".dp-rise{animation:dp-rise .18s ease-out;}");
 	L.push("@keyframes dp-rise{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}");
+	// V17 P1：三浮层统一入场过渡（140ms 淡入 + 轻微放大；只做入场，出场随互斥切换直接卸载，避免延迟卸载状态机）
+	L.push(".dp-overlay-in{animation:dp-overlay-in .14s ease-out;}");
+	L.push("@keyframes dp-overlay-in{from{opacity:0;transform:scale(.985);}to{opacity:1;transform:scale(1);}}");
+	// ⑤ 四界面域标识（V17 P0：用户始终知道自己在哪个域）
+	L.push(".dp-domain{display:inline-flex;align-items:center;gap:4px;font-size:calc(10.5px * var(--dp-font));font-weight:600;padding:2px 7px;border-radius:var(--dp-radius-sm);letter-spacing:.3px;white-space:nowrap;line-height:1.4;}");
+	L.push(".dp-domain.dir{background:rgba(47,111,235,.14);border:1px solid rgba(47,111,235,.35);color:#8ab4f8;}");
+	L.push(".dp-domain.design{background:rgba(57,197,207,.12);border:1px solid rgba(57,197,207,.32);color:#7fe3e8;}");
+	L.push(".dp-domain.map{background:rgba(137,87,229,.14);border:1px solid rgba(137,87,229,.35);color:#c9a8ff;}");
 	//
 	// ② 总监页跟随宿主主题（背景 / 文字 / 边框 / 阴影）
 	//

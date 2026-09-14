@@ -101,18 +101,25 @@ export async function directorProcess(sessionId, userText, store, t, onForward) 
 			let docsSummary = "";
 			try {
 				if (typeof window !== "undefined" && window.__dshDocsIndex && window.__dshDocsIndex.docs) {
-					var docs = window.__dshDocsIndex.docs;
-					docsSummary = "项目文档库: 共" + docs.length + "篇文档";
+					// T-PLUG-030 修复：__dshDocsIndex.docs 是 **map 对象**（key=相对路径，value={content,dir,name,size}），
+					// 不是数组 —— 原代码直接 docs.length / docs.filter 导致「共undefined篇文档」+ TypeError 被空 catch 吞掉。
+					var docsMap = window.__dshDocsIndex.docs;
+					var docsArr = Object.keys(docsMap).map(function (p) {
+						var v = docsMap[p] || {};
+						return { path: p, name: v.name || p, dir: v.dir || "", content: v.content || "", size: v.size || 0 };
+					});
+					var docTotal = window.__dshDocsIndex.docCount || docsArr.length;
+					docsSummary = "项目文档库: 共" + docTotal + "篇文档";
 					// 简单关键词匹配，取最相关的3篇文档标题
 					var keywords = userText.toLowerCase().split(/\s+/).filter(function(w) { return w.length > 1; });
-					var relevant = docs.filter(function(d) {
-						return keywords.some(function(k) { return (d.title || "").toLowerCase().indexOf(k) !== -1 || (d.content || "").toLowerCase().indexOf(k) !== -1; });
+					var relevant = docsArr.filter(function(d) {
+						return keywords.some(function(k) { return (d.name || "").toLowerCase().indexOf(k) !== -1 || (d.content || "").toLowerCase().indexOf(k) !== -1; });
 					}).slice(0, 3);
 					if (relevant.length > 0) {
-						docsSummary += "\n相关文档:\n" + relevant.map(function(d) { return "- " + d.title + (d.docType ? " (" + d.docType + ")" : ""); }).join("\n");
+						docsSummary += "\n相关文档:\n" + relevant.map(function(d) { return "- " + d.name + (d.dir ? " (" + d.dir + ")" : ""); }).join("\n");
 					}
 				}
-			} catch (e) {}
+			} catch (e) { if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("process", "docs summary failed: " + (e && e.message)); }
 			var memorySection = projectMemory ? "\n\n## 项目记忆\n" + projectMemory : "";
 			var docsSection = docsSummary ? "\n\n## " + docsSummary : "";
 			const localPrompt = `你是一个AI助手总监，负责管理和指导项目开发。请基于项目记忆和文档上下文，分析以下用户输入，整理语言并给出执行建议。${memorySection}${docsSection}\n\n## 历史对话\n${history}\n\n## 用户输入\n${userText}\n\n请输出：\n1. 整理后的指令（简洁明确）\n2. 任务类型判断（代码开发/系统设计/资料调研/文本整理/日常对话）\n3. 模型建议（deepseek-chat/deepseek-coder等）\n4. 简要推理过程（结合项目记忆和文档上下文）`;

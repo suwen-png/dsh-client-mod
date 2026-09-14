@@ -769,12 +769,13 @@ const d14 = await evalExpr(`(async () => {
 		 *    宿主自身的 dsh.sessions.* / dsh.conversation.* / dsh.workspace.* 不属本插件管辖。 */
 		strayDshKeys: keys.filter(k => /^(dsh\.director|dsh_director_|dsh-v9-theme)/.test(k))
 			/* 🔴 白名单补登（2026-09-13）：批次 11/12 新增三个持久化键
-			 *   dsh.director.design / .personalize / .flow。R5 冻结的是
+			 *   dsh.director.design / .personalize / .flow；批次 17（V17 P2 导图首次引导）
+			 *   再增 dsh.director.mm.hint.shown（只提示一次的标记）。R5 冻结的是
 			 *   **既有键不得改名/删除**（下一行 forbidden 专测改名变体），
 			 *   **新增是允许的**；本判据的正确形态是「无越界命名空间」，
 			 *   故把已登记的新键纳入白名单，而不是把「新增」当违规。
 			 * ⚠ 本块在模板字符串内，注释禁止反引号（K1 离线断言会拦）。 */
-			.filter(k => !/^dsh\.director\.(store\..+|layout|config|design|personalize|flow)$|^dsh-v9-theme$/.test(k)),
+			.filter(k => !/^dsh\.director\.(store\..+|layout|config|design|personalize|flow|mm\.hint\.shown)$|^dsh-v9-theme$/.test(k)),
 		allDshKeys: keys.filter(k => /^(dsh\.director|dsh_director_|dsh-v9-theme)/.test(k)),
 		forbidden: keys.filter(k => /dsh\\.director\\.layout\\.v\\d|dsh\\.director\\.store\\..*\\.v\\d|director-main-v\\d|dsh-director-db-v\\d/.test(k)) };
 })()`);

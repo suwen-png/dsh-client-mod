@@ -37,6 +37,9 @@ ws.addEventListener("message", (ev) => {
 	if (m.id !== undefined && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result); }
 });
 const send = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); });
+/* fire-and-forget：本 Electron 环境 Input 事件**响应**稳定延迟约 5s、事件本身立即送达
+ * （Runtime.evaluate 仅 2ms）。坐标/键盘事件绝不能 await 响应，否则一次点击要 15s 且时序断言被拖垮。 */
+const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify({ id, method, params })); };
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
 
@@ -49,10 +52,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function clickAt(x, y) {
 	const X = Math.round(x), Y = Math.round(y);
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: X, y: Y });
-	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 });
+	emit("Input.dispatchMouseEvent", { type: "mouseMoved", x: X, y: Y });
+	emit("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 });
 	await sleep(40);
-	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
+	emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
 	await sleep(120);
 }
 async function clickSel(sel, tag) {
@@ -74,12 +77,17 @@ async function clickSel(sel, tag) {
 		    ok:!!t&&(t===e||e.contains(t)||t.contains(e))};
 		})()`);
 		if (!g) return false;
-		if (!g.ok) {
-			clickMisses.push({ sel, tag: tag || "", top: g.top, at: [g.mx, g.my], try: attempt + 1 });
-			if (attempt === 0) { await sleep(280); continue; }   // 再量一次（布局可能刚好落定）
+		if (g.ok) { await clickAt(g.mx, g.my); return true; }
+		/* 落空：本轮先不记名 —— 首次落空可经 scrollIntoView 复中（真人也是滚到再点），
+		 * 只有两次尝试后仍点不中才在循环外记为真"打偏"。 */
+		if (attempt === 0) {
+			await js(`(function(){var e=document.querySelector(${JSON.stringify(sel)});`
+				+ `if(e&&e.scrollIntoView){try{e.scrollIntoView({block:"center",inline:"center"});}catch(_){e.scrollIntoView();}}return 1;})()`);
+			await sleep(300);
+			continue;
 		}
-		await clickAt(g.mx, g.my);
-		return true;
+		/* 第二次仍落空 ⇒ 这才是真打偏，记名册 */
+		clickMisses.push({ sel, tag: tag || "", top: g.top, at: [g.mx, g.my], try: attempt + 1 });
 	}
 	return false;
 }
@@ -90,9 +98,9 @@ async function rectOf(sel) {
 }
 async function key(k, code, vk) {
 	const base = { key: k, code, windowsVirtualKeyCode: vk || 0, nativeVirtualKeyCode: vk || 0 };
-	await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+	emit("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
 	await sleep(25);
-	await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+	emit("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 	await sleep(120);
 }
 /** 现场勘察：每一段开头打一行「页面当时到底还在不在」。
@@ -626,12 +634,27 @@ if (firstTitle) {
 section("【8】小地图");
 const miniRect = await rectOf('[data-testid="mm-minimap"]');
 if (miniRect) {
-	await clickSel('[data-testid="mm-zoom-in"]'); await sleep(200);
-	const sl0 = await js(`document.querySelector('[data-testid="mm-body"]').scrollLeft`);
-	await clickAt(miniRect.x + miniRect.w * 0.9, miniRect.y + miniRect.h * 0.2);
+	/* 🔴 确定前置，避免端点 clamp 假红（2026-09-13 纠错）：
+	 *   旧版只「放大 1 次 → 点 (0.9,0.2) → 看 scrollLeft 变没变」。实测 fit 态放大 1 次后
+	 *   横向仅溢出约 138px，而放大居中会把这 138px 一次滚到右端；此时再点小地图右侧，
+	 *   scrollLeft 被 clamp 在同一最大值（纵向其实跳了），判据却只读横向 ⇒ 假红 [138.4,138.4]。
+	 *   做法：放大到横纵溢出都 >250px（一般 1-2 次），再把视野归到 (0,0)，点右下角 (0.9,0.9)，
+	 *   横纵都应大幅跳走（>100px）。判据同时锁死「前置真的有溢出」与「横纵都跳够幅度」。 */
+	for (let zi = 0; zi < 4; zi++) {
+		const ov = await js(`(function(){var b=document.querySelector('[data-testid="mm-body"]');return {x:b.scrollWidth-b.clientWidth,y:b.scrollHeight-b.clientHeight};})()`);
+		if (ov.x > 250 && ov.y > 250) break;
+		await clickSel('[data-testid="mm-zoom-in"]'); await sleep(180);
+	}
+	await js(`var b=document.querySelector('[data-testid="mm-body"]');b.scrollLeft=0;b.scrollTop=0;`);
+	await sleep(200);
+	const before12 = await js(`(function(){var b=document.querySelector('[data-testid="mm-body"]');return {sl:b.scrollLeft,st:b.scrollTop,ox:b.scrollWidth-b.clientWidth,oy:b.scrollHeight-b.clientHeight};})()`);
+	await clickAt(miniRect.x + miniRect.w * 0.9, miniRect.y + miniRect.h * 0.9);
 	await sleep(320);
-	const sl1 = await js(`document.querySelector('[data-testid="mm-body"]').scrollLeft`);
-	t("C-M12a", "点击小地图后视野发生跳转（scrollLeft 变化）", sl0 !== sl1, [sl0, sl1]);
+	const after12 = await js(`(function(){var b=document.querySelector('[data-testid="mm-body"]');return {sl:b.scrollLeft,st:b.scrollTop};})()`);
+	const canX12 = before12.ox > 250, canY12 = before12.oy > 250;
+	t("C-M12a", "点小地图右下角后，每个真有溢出(>250)的维度都大幅跳转（链式窄树横向无空白溢出属正常，只断言纵向；宽树两维都断言）",
+		(canX12 || canY12) && (!canX12 || after12.sl > before12.sl + 100) && (!canY12 || after12.st > before12.st + 100),
+		{ before: before12, after: after12, canX: canX12, canY: canY12 });
 	const vp = await rectOf('[data-testid="mm-minimap-vp"]');
 	t("C-M12b", "视野框尺寸 > 0（不是塌成一条线）", vp && vp.w > 1 && vp.h > 1, vp);
 } else { sk("C-M12a/C12b", "小地图", "未找到小地图元素"); }
@@ -690,11 +713,11 @@ if (spot) {
 	const cx = spot.cx, cy = spot.cy;
 	console.log("  · 右键目标：node#" + spot.i + " sid=" + String(spot.sid).slice(-6) +
 		" → 点 (" + cx + "," + cy + ")（已确证在视口内且命中测试为自己）");
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy });
+	emit("Input.dispatchMouseEvent",{ type: "mouseMoved", x: cx, y: cy });
 	await sleep(130);
-	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button: "right", clickCount: 1, buttons: 2 });
+	emit("Input.dispatchMouseEvent",{ type: "mousePressed", x: cx, y: cy, button: "right", clickCount: 1, buttons: 2 });
 	await sleep(60);
-	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: cx, y: cy, button: "right", clickCount: 1, buttons: 0 });
+	emit("Input.dispatchMouseEvent",{ type: "mouseReleased", x: cx, y: cy, button: "right", clickCount: 1, buttons: 0 });
 	await sleep(300);
 	await state("【10】右键后");
 	const menuOk = await js(`!!document.querySelector('[data-testid="mm-ctxmenu"]')`);
@@ -751,12 +774,12 @@ if (spot2) {
 		sk("C-M15a0", "鼠标移开节点后工具条消失", "算不出确证空白点（画布被节点铺满）——自诊断已在 C-M15a0a 之前打印");
 	} else {
 		console.log("  · 移开目标：确证空白点 (" + blank.x + "," + blank.y + ") 命中 " + blank.hit + "（不在任何节点/工具条内）");
-		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: blank.x, y: blank.y });
+		emit("Input.dispatchMouseEvent",{ type: "mouseMoved", x: blank.x, y: blank.y });
 		await sleep(300);
 		const hbAway = await js(`!!document.querySelector('[data-testid="mm-hoverbar"]')`);
 		t("C-M15a0", "鼠标移开节点后工具条消失（先证明它会走）", hbAway === false, { hbAway, at: [blank.x, blank.y] });
 	}
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: spot2.cx, y: spot2.cy });
+	emit("Input.dispatchMouseEvent",{ type: "mouseMoved", x: spot2.cx, y: spot2.cy });
 	await sleep(320);
 	const hb = await js(`(function(){var e=document.querySelector('[data-testid="mm-hoverbar"]');return e?{id:e.getAttribute("data-hover-id"), n:e.children.length, r:e.getBoundingClientRect().height, titles:Array.from(e.children).map(function(c){return c.getAttribute("title")||"";})}:null;})()`);
 	t("C-M15a", "悬停节点出现悬浮工具条（真实 mouseMoved 到节点中心）", hb !== null, hb);
@@ -785,11 +808,11 @@ section("【12】Esc 逐层退 与 toast 自动消失");
  * 上一版就是因为依赖残留、菜单在第 11 段被耗掉，C-M16a 只剩一条 sk() 跳过。 */
 const escSpot = await focusVisibleNode();
 if (escSpot) {
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: escSpot.cx, y: escSpot.cy });
+	emit("Input.dispatchMouseEvent",{ type: "mouseMoved", x: escSpot.cx, y: escSpot.cy });
 	await sleep(120);
-	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: escSpot.cx, y: escSpot.cy, button: "right", clickCount: 1, buttons: 2 });
+	emit("Input.dispatchMouseEvent",{ type: "mousePressed", x: escSpot.cx, y: escSpot.cy, button: "right", clickCount: 1, buttons: 2 });
 	await sleep(60);
-	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: escSpot.cx, y: escSpot.cy, button: "right", clickCount: 1, buttons: 0 });
+	emit("Input.dispatchMouseEvent",{ type: "mouseReleased", x: escSpot.cx, y: escSpot.cy, button: "right", clickCount: 1, buttons: 0 });
 	await sleep(280);
 	const menuUp = await js(`!!document.querySelector('[data-testid="mm-ctxmenu"]')`);
 	t("C-M16a0", "前置：右键重新开出菜单（防「平凡真」——没有菜单就验不了第一层）", menuUp === true, menuUp);

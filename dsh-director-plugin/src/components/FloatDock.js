@@ -35,6 +35,7 @@
 
 import * as react from "react";
 import { directorLayoutStore } from "../store/layout.js";
+import { flowStore, lastFlowIdFor as lastFlowId, hasNewFlowFor as hasNewForDim } from "../logic/flow.js";
 import { dshLog } from "../util/debug.js";
 
 const h = react.createElement;
@@ -66,6 +67,7 @@ export const FLOAT_DOCK_RESERVE = 108;
  *     所以读不到 `dp-root` 上桥接出来的 `--dp-*`（会静默落 fallback）。
  *     宿主令牌定义在 `body` 上，可被本图层继承 ⇒ 直接用它才是同源。 */
 const BTN = {
+	position: "relative",
 	display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5,
 	borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap", backdropFilter: "blur(4px)",
 	boxShadow: "var(--dsw-shadow-lv1, 0 4px 14px rgba(0,0,0,.32))", fontFamily: "inherit",
@@ -78,6 +80,8 @@ const V = {
 	mindmap: { border: "1px solid rgba(47,111,235,.5)", background: "rgba(47,111,235,.16)" },
 	director: { border: "1px solid rgba(137,87,229,.5)", background: "rgba(137,87,229,.18)" }
 };
+/* V17 P3 跨界面流转未读点：lastFlowId / hasNewForDim 复用 logic/flow.js 单一真相源，
+ * 首次挂载把历史流转全视为已读，浮层打开即已读，关闭期间到达的新流转点亮小红点。 */
 
 /**
  * 浮动按钮组。
@@ -91,6 +95,36 @@ export function FloatDock(props = {}) {
 		() => directorLayoutStore.getState(),
 		() => directorLayoutStore.getState()
 	);
+	/* V17 P3：订阅四维流转，计算每个浮层按钮的未读小红点 */
+	const flows = react.useSyncExternalStore(
+		(fn) => flowStore.subscribe(fn),
+		() => flowStore.getState().flows,
+		() => flowStore.getState().flows
+	);
+	const seenRef = react.useRef(null);
+	if (seenRef.current === null) {
+		// 首次挂载：历史流转全部视为已读（不为旧数据亮点）
+		seenRef.current = { design: lastFlowId(flows, "design"), mindmap: lastFlowId(flows, "mindmap"), director: lastFlowId(flows, "director") };
+	}
+	const [, bump] = react.useReducer((x) => x + 1, 0);
+	// 浮层处于打开态 ⇒ 到达它的流转立即已读（打开期间也持续清）
+	react.useEffect(() => {
+		const s = seenRef.current; let changed = false;
+		if (st.designStudioOpen && s.design !== lastFlowId(flows, "design")) { s.design = lastFlowId(flows, "design"); changed = true; }
+		if (st.mindmapOpen && s.mindmap !== lastFlowId(flows, "mindmap")) { s.mindmap = lastFlowId(flows, "mindmap"); changed = true; }
+		if (st.dialogOpen && s.director !== lastFlowId(flows, "director")) { s.director = lastFlowId(flows, "director"); changed = true; }
+		if (changed) bump();
+	}, [st.designStudioOpen, st.mindmapOpen, st.dialogOpen, flows]);
+	const unread = {
+		design: !st.designStudioOpen && hasNewForDim(flows, "design", seenRef.current.design),
+		mindmap: !st.mindmapOpen && hasNewForDim(flows, "mindmap", seenRef.current.mindmap),
+		director: !st.dialogOpen && hasNewForDim(flows, "director", seenRef.current.director)
+	};
+	/** 未读小红点（inline-flex 药丸右上角；testid 供真机断言） */
+	const dot = (dim) => unread[dim] ? h("span", {
+		key: "unread", "data-testid": "d-unread-" + dim,
+		style: { position: "absolute", top: -3, right: -3, width: 8, height: 8, borderRadius: "50%", background: "#f85149", border: "1.5px solid var(--dsw-bg-2,#1c1f24)", boxSizing: "border-box" }
+	}) : null;
 	/* ── 自适应避让原生输入区（2026-09-12 审美调优）──────────────────
 	 * 现象：固定 `bottom:18 / right:18` 时，浮动组与宿主 composer 的「发送」按钮、
 	 *       「1 轮 · 1 步」统计文字**重叠**（真机截图可见），既遮挡又难读。
@@ -229,12 +263,9 @@ export function FloatDock(props = {}) {
 	}, []);
 	if (st.floatDockOpen === false) return null;
 
-	const openDesign = props.onOpenDesign || (() => { directorLayoutStore.setDesignStudio(true); dshLog("design", "浮动入口：打开设计图工作室"); });
-	const openMindmap = props.onOpenMindmap || (() => { directorLayoutStore.setMindmap(true); dshLog("mindmap", "浮动入口：打开分支导图"); });
-	const toggleDirector = () => {
-		const on = directorLayoutStore.getState().dialogOpen;
-		directorLayoutStore.setDialogOpen(!on);
-	};
+	const openDesign = props.onOpenDesign || (() => { directorLayoutStore.toggleOverlay("design"); dshLog("design", "浮动入口：toggle 设计图工作室"); });
+	const openMindmap = props.onOpenMindmap || (() => { directorLayoutStore.toggleOverlay("mindmap"); dshLog("mindmap", "浮动入口：toggle 分支导图"); });
+	const toggleDirector = () => { directorLayoutStore.toggleOverlay("director"); };
 
 	return h("div", {
 		id: FLOATDOCK_ID, "data-testid": "d-floatdock",
@@ -257,20 +288,23 @@ export function FloatDock(props = {}) {
 		}
 	}, [
 		h("button", {
-			key: "design", id: DESIGN_BTN_ID, type: "button", style: { ...BTN, ...V.design },
-			"data-testid": "d-open-design", title: "打开设计图工作室（铺满全屏 · 可拖拽编辑 · 元素带交互逻辑）",
+			key: "design", id: DESIGN_BTN_ID, type: "button",
+			style: { ...BTN, ...V.design, ...(st.designStudioOpen ? { boxShadow: "0 0 0 2px rgba(57,197,207,.6), 0 0 0 5px rgba(57,197,207,.15)" } : {}) },
+			"data-testid": "d-open-design", "data-active": st.designStudioOpen ? "1" : "0", title: "打开设计图工作室（铺满全屏 · 可拖拽编辑 · 元素带交互逻辑）",
 			onClick: openDesign
-		}, [h("span", { key: "i" }, "🖌"), h("span", { key: "t" }, "设计图")]),
+		}, [h("span", { key: "i" }, "🖌"), h("span", { key: "t" }, "设计图"), dot("design")]),
 		h("button", {
-			key: "mindmap", id: MINDMAP_BTN_ID, type: "button", style: { ...BTN, ...V.mindmap },
-			"data-testid": "d-open-mindmap", title: "打开分支导图（血缘树 · 底栏可交总监路由）",
+			key: "mindmap", id: MINDMAP_BTN_ID, type: "button",
+			style: { ...BTN, ...V.mindmap, ...(st.mindmapOpen ? { boxShadow: "0 0 0 2px rgba(47,111,235,.6), 0 0 0 5px rgba(47,111,235,.15)" } : {}) },
+			"data-testid": "d-open-mindmap", "data-active": st.mindmapOpen ? "1" : "0", title: "打开分支导图（血缘树 · 底栏可交总监路由）",
 			onClick: openMindmap
-		}, [h("span", { key: "i" }, "🧠"), h("span", { key: "t" }, "思维导图")]),
+		}, [h("span", { key: "i" }, "🧠"), h("span", { key: "t" }, "思维导图"), dot("mindmap")]),
 		h("button", {
-			key: "director", id: LAUNCHER_ID, type: "button", style: { ...BTN, ...V.director },
-			"aria-label": "打开总监", "data-testid": "d-open-director", title: "打开总监（弹窗三态）",
+			key: "director", id: LAUNCHER_ID, type: "button",
+			style: { ...BTN, ...V.director, ...(st.dialogOpen ? { boxShadow: "0 0 0 2px rgba(137,87,229,.6), 0 0 0 5px rgba(137,87,229,.15)" } : {}) },
+			"aria-label": "打开总监", "data-testid": "d-open-director", "data-active": st.dialogOpen ? "1" : "0", title: "打开总监（弹窗三态）",
 			onClick: toggleDirector
-		}, [h("span", { key: "i" }, "◆"), h("span", { key: "t" }, "总监")])
+		}, [h("span", { key: "i" }, "◆"), h("span", { key: "t" }, "总监"), dot("director")])
 	]);
 }
 

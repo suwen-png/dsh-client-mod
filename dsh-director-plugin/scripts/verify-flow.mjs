@@ -87,6 +87,13 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 	});
 	ws.send(JSON.stringify({ id, method, params }));
 });
+/* fire-and-forget（不等 CDP 响应）。
+ * 🔴 实测本 Electron 环境 Input.dispatchMouseEvent/KeyEvent 的**响应**稳定延迟约 5s，而事件本身
+ * 立即送达页面（对照 Runtime.evaluate 仅 2ms）。若每次指针事件都 await 响应：一次 click 串行
+ * moved/pressed/released 要 15s，F10/F11 这类时序敏感断言必被拖垮，渲染繁忙时还会堆出 CDP_TIMEOUT
+ * 假 INVALID。故所有 Input 派发只发不等（WebSocket 保序），事件是否生效一律由后续 ev() 回读验证；
+ * 渲染进程是否真卡死也由 ev()（Runtime.evaluate 8s 超时）来探测，不依赖 Input 响应。 */
+const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify({ id, method, params })); };
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
 await send("Log.enable");
@@ -144,11 +151,9 @@ async function hitAt(sel, x, y) {
 const cdpTimeouts = [];
 
 async function mouse(type, x, y, buttons) {
-	try {
-		await send("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: buttons || 0, clickCount: type === "mouseMoved" ? 0 : 1 });
-	} catch (e) {
-		cdpTimeouts.push(type + "@" + x + "," + y + "：" + String((e && e.message) || e));
-	}
+	// fire-and-forget：Input 事件立即送达、响应却延迟约 5s（理由见 emit 定义），绝不 await 响应。
+	// 渲染进程是否卡死由后续 ev()（Runtime.evaluate）探测，不再靠 Input 响应记账。
+	emit("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: buttons || 0, clickCount: type === "mouseMoved" ? 0 : 1 });
 }
 /** 真实点击（含命中测试；坐标现取现用） */
 async function click(sel) {
@@ -173,16 +178,22 @@ async function click(sel) {
 		}
 	}
 	await mouse("mouseMoved", r.cx, r.cy, 0);
+	await WAIT(15);
 	await mouse("mousePressed", r.cx, r.cy, 1);
+	await WAIT(30);
 	await mouse("mouseReleased", r.cx, r.cy, 0);
+	await WAIT(15);
 	return { ok: true, x: r.cx, y: r.cy, occluded: !hit.ok, top: hit.top, scrolled: scrolled };
 }
 async function clickText(sel, text) {
 	const r = await rectOfText(sel, text);
 	if (!r || r.zero) return { ok: false, why: "未找到文案为 " + text + " 的 " + sel };
 	await mouse("mouseMoved", r.cx, r.cy, 0);
+	await WAIT(15);
 	await mouse("mousePressed", r.cx, r.cy, 1);
+	await WAIT(30);
 	await mouse("mouseReleased", r.cx, r.cy, 0);
+	await WAIT(15);
 	return { ok: true, x: r.cx, y: r.cy };
 }
 /** 真实拖动：按下 → 多步移动 → 抬起（单步跳跃不会触发 pointermove 阈值判定）
@@ -193,26 +204,31 @@ async function drag(sel, dx, dy) {
 	if (!r || r.zero) return { ok: false, why: "未找到或零尺寸 " + sel };
 	const hit = await hitAt(sel, r.cx, r.cy);
 	await mouse("mouseMoved", r.cx, r.cy, 0);
+	await WAIT(15);
 	await mouse("mousePressed", r.cx, r.cy, 1);
+	await WAIT(15);
 	for (let i = 1; i <= 6; i++) {
 		await mouse("mouseMoved", Math.round(r.cx + (dx * i) / 6), Math.round(r.cy + (dy * i) / 6), 1);
 		await WAIT(18);
 	}
 	await mouse("mouseReleased", Math.round(r.cx + dx), Math.round(r.cy + dy), 0);
+	await WAIT(15);
 	return { ok: true, from: r, occluded: !hit.ok, timeouts: cdpTimeouts.length };
 }
 async function pressEsc() {
-	try {
-		await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
-		await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
-	} catch (e) { cdpTimeouts.push("Escape：" + String((e && e.message) || e)); }
+	// fire-and-forget（理由同 emit 定义）；keydown/keyUp 间留极短间隔
+	emit("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+	await WAIT(20);
+	emit("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+	await WAIT(40);
 }
 /** 原生输入：先聚焦再 insertText（走 Input 通道，与真人敲键一致；不用 el.value= 直写） */
 async function typeInto(sel, text) {
 	const r = await rectOf(sel);
 	if (!r || r.zero) return false;
 	await click(sel);
-	try { await send("Input.insertText", { text }); } catch (e) { cdpTimeouts.push("insertText：" + String((e && e.message) || e)); return false; }
+	emit("Input.insertText", { text });
+	await WAIT(60);
 	return true;
 }
 /** 第 i 个匹配元素的坐标（用于"同选择器多条、只点其中一条"的场景，例如侧栏会话项） */
@@ -266,6 +282,10 @@ async function ensureComposer() {
 	if (await composerVisible()) return { ok: true, how: "直接可见" };
 	const busy = await generating();
 	if (busy) {
+		/* ①' 测试不需要宿主把 AI 回答写完：先主动「停止生成」，最快拿回 composer
+		 *     （比换会话/干等几十秒更确定；与收尾复原成对，治"上一轮残留生成中"） */
+		await ev("(()=>{const b=document.querySelector('button[aria-label=\"停止生成\"]');if(b)b.click();return 1;})()");
+		if (await waitComposer(8000)) return { ok: true, how: "停止生成后可见" };
 		/* ② 换会话：挑一个"不是当前选中"的会话行真实点击 */
 		const other = await ev("(()=>{const L=[...document.querySelectorAll('[role=treeitem]')];"
 			+ "const i=L.findIndex(e=>e.getAttribute('aria-selected')==='true');"
@@ -1613,6 +1633,29 @@ const realErrors = pageErrors.filter((s) => !/favicon|net::ERR|Failed to load re
 check("E1", "全程无 console.error / Log.error", realErrors.length === 0, realErrors.length ? realErrors.slice(0, 3).join(" ‖ ") : "零错误");
 check("E2", "全程无 CDP 派发超时（渲染进程没被顶死；顶死会记成一条失败，不再无声吞掉整轮）",
 	cdpTimeouts.length === 0, cdpTimeouts.length ? cdpTimeouts.slice(0, 2).join(" ‖ ") : "零超时");
+
+/* ── 收尾环境复原（谁污染谁治理，2026-09-13）────────────────────────────────
+ * 🔴 本脚本 G 段 host-send 会触发**宿主真实 AI 生成**；脚本只等插件侧 busy=0（≤20s），
+ *   不等宿主智能体把流式回答吐完。若离场时它还在生成，宿主会隐藏原生 composer，
+ *   下一次运行 preComposer 就落在"生成中"，F/G 段被染成假红（composer-not-found）。
+ *   测试只需 G6 证明"投递被受理"，不需要 AI 把回答写完 ⇒ 离场前主动「停止生成」，
+ *   并回读确认 composer 真的回来（写操作回读校验，不靠点了就算）。 */
+const leavingBusy = await generating();
+if (leavingBusy) {
+	console.log("  · 收尾复原：宿主仍在生成，主动点「停止生成」…");
+	await ev("(()=>{const b=document.querySelector('button[aria-label=\"停止生成\"]');if(b)b.click();return 1;})()");
+	for (let i = 0; i < 24; i++) {
+		await WAIT(500);
+		if (!(await generating())) break;
+	}
+}
+let leavingComposer = false;
+for (let i = 0; i < 12; i++) {
+	if (await composerVisible()) { leavingComposer = true; break; }
+	await WAIT(500);
+}
+console.log("  · 收尾复原：离场前生成中=" + leavingBusy + " → 复原后 composer 可见=" + leavingComposer
+	+ (leavingBusy && !leavingComposer ? "（⚠ 未能复原，下一轮可能需等生成）" : ""));
 
 console.log("\n───────────────────────────────────────────────");
 console.log(" 通过 " + pass + " / 失败 " + fail + " / 跳过 " + skip);

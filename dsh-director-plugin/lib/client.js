@@ -460,7 +460,10 @@ window.__ModuleLoader__.load({
 				 * 🔴 只存**用户拖过的**节点（未拖过的走自动布局）⇒ 数据量最小、自动布局改动仍能生效。
 				 *    形如 { "<sessionId>": { x, y } }
 				 */
-				mmPos: {}
+				mmPos: {},
+				/* ── V17 P2：总监页 R2/R4/R6 区域折叠偏好（跨会话持久化，首次默认全展开）──
+				 *   只新增字段，不动既有键（R5）。形如 { r2:false, r4:false, r6:false }。 */
+				sectionCollapsed: { r2: false, r4: false, r6: false }
 			});
 			
 			function createDirectorLayoutStore() {
@@ -477,6 +480,8 @@ window.__ModuleLoader__.load({
 						}
 					}
 				} catch (e) { /* 解析失败 → 用默认值 */ }
+				// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
+				state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
 				const listeners = new Set();
 				function notify() {
 					try { if (typeof localStorage !== "undefined") localStorage.setItem(DIRECTOR_LAYOUT_KEY, JSON.stringify(state)); } catch (e) { /* 隐私模式 */ }
@@ -549,6 +554,22 @@ window.__ModuleLoader__.load({
 					/* ── 本轮新增：分支导图覆盖层 ─────────────────────────── */
 					setMindmap: (v) => { state = { ...state, mindmapOpen: Boolean(v) }; notify(); },
 					toggleMindmap: () => { state = { ...state, mindmapOpen: !state.mindmapOpen }; notify(); },
+					/**
+					 * V17 P1：统一浮层切换入口（FloatDock 三按钮共用）。
+					 * 打开目标浮层时关闭其他两个，避免多层浮层叠加；目标已打开则关闭（toggle）。
+					 * @param {"design"|"mindmap"|"director"} type
+					 */
+					toggleOverlay: (type) => {
+						const t = String(type || "");
+						const next = { ...state, designStudioOpen: false, mindmapOpen: false, dialogOpen: false, dialogCollapsed: false };
+						if (t === "design") next.designStudioOpen = !state.designStudioOpen;
+						else if (t === "mindmap") next.mindmapOpen = !state.mindmapOpen;
+						else if (t === "director") next.dialogOpen = !state.dialogOpen;
+						else return false;
+						state = next;
+						notify();
+						return true;
+					},
 					/** 记录用户把某个框拖到哪（**只改画面位置，不改血缘**） */
 					setNodePos: (sessionId, pos) => {
 						if (!sessionId || !pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false;
@@ -568,6 +589,14 @@ window.__ModuleLoader__.load({
 					/** 全部归位（"自动布局"按钮） */
 					resetNodePos: () => {
 						state = { ...state, mmPos: {} };
+						notify();
+						return true;
+					},
+					/** V17 P2：切换/设置总监页区域折叠态（r2/r4/r6），并持久化 */
+					setSectionCollapsed: (key, v) => {
+						if (["r2", "r4", "r6"].indexOf(String(key)) < 0) return false;
+						const prev = state.sectionCollapsed || {};
+						state = { ...state, sectionCollapsed: { ...prev, [String(key)]: Boolean(v) } };
 						notify();
 						return true;
 					}
@@ -3225,18 +3254,25 @@ window.__ModuleLoader__.load({
 						let docsSummary = "";
 						try {
 							if (typeof window !== "undefined" && window.__dshDocsIndex && window.__dshDocsIndex.docs) {
-								var docs = window.__dshDocsIndex.docs;
-								docsSummary = "项目文档库: 共" + docs.length + "篇文档";
+								// T-PLUG-030 修复：__dshDocsIndex.docs 是 **map 对象**（key=相对路径，value={content,dir,name,size}），
+								// 不是数组 —— 原代码直接 docs.length / docs.filter 导致「共undefined篇文档」+ TypeError 被空 catch 吞掉。
+								var docsMap = window.__dshDocsIndex.docs;
+								var docsArr = Object.keys(docsMap).map(function (p) {
+									var v = docsMap[p] || {};
+									return { path: p, name: v.name || p, dir: v.dir || "", content: v.content || "", size: v.size || 0 };
+								});
+								var docTotal = window.__dshDocsIndex.docCount || docsArr.length;
+								docsSummary = "项目文档库: 共" + docTotal + "篇文档";
 								// 简单关键词匹配，取最相关的3篇文档标题
 								var keywords = userText.toLowerCase().split(/\s+/).filter(function(w) { return w.length > 1; });
-								var relevant = docs.filter(function(d) {
-									return keywords.some(function(k) { return (d.title || "").toLowerCase().indexOf(k) !== -1 || (d.content || "").toLowerCase().indexOf(k) !== -1; });
+								var relevant = docsArr.filter(function(d) {
+									return keywords.some(function(k) { return (d.name || "").toLowerCase().indexOf(k) !== -1 || (d.content || "").toLowerCase().indexOf(k) !== -1; });
 								}).slice(0, 3);
 								if (relevant.length > 0) {
-									docsSummary += "\n相关文档:\n" + relevant.map(function(d) { return "- " + d.title + (d.docType ? " (" + d.docType + ")" : ""); }).join("\n");
+									docsSummary += "\n相关文档:\n" + relevant.map(function(d) { return "- " + d.name + (d.dir ? " (" + d.dir + ")" : ""); }).join("\n");
 								}
 							}
-						} catch (e) {}
+						} catch (e) { if (typeof window !== "undefined" && window.__dshDebug) window.__dshDebug.warn("process", "docs summary failed: " + (e && e.message)); }
 						var memorySection = projectMemory ? "\n\n## 项目记忆\n" + projectMemory : "";
 						var docsSection = docsSummary ? "\n\n## " + docsSummary : "";
 						const localPrompt = `你是一个AI助手总监，负责管理和指导项目开发。请基于项目记忆和文档上下文，分析以下用户输入，整理语言并给出执行建议。${memorySection}${docsSection}\n\n## 历史对话\n${history}\n\n## 用户输入\n${userText}\n\n请输出：\n1. 整理后的指令（简洁明确）\n2. 任务类型判断（代码开发/系统设计/资料调研/文本整理/日常对话）\n3. 模型建议（deepseek-chat/deepseek-coder等）\n4. 简要推理过程（结合项目记忆和文档上下文）`;
@@ -7425,6 +7461,471 @@ window.__ModuleLoader__.load({
 			exports.DirectorHierarchy = DirectorHierarchy;
 		};
 
+		// ── logic/flow.js ──
+		__defs["logic/flow.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/flow.js — 四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份文件在整体里的位置（改代码前先看这里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  需求原文（用户）：「最后打通总监和正常对话还有思维导图还有设计图之间的关联，
+			 *   保证同一个消息能在上面几个维度进行流转。我点击左侧，点入不同的对话切进去
+			 *   就是和当前对话有关的流转信息」
+			 *
+			 *  ⇒ 落地口径：
+			 *     一条**流转条目**（flow）= 一条消息 + 它走过哪些维度的足迹（`trail`）。
+			 *     四个界面**读写同一份数据**，于是"同一消息在四个维度流转"是可查证的，
+			 *     而不是四份互相不知道的影子状态。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么必须有这一层（而不是各界面各存一份）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  已有三份状态，但它们**互不相通**：
+			 *    · `store/plugin-db.js`  总监消息（按 nodeId 存，只有总监维度的）
+			 *    · 宿主原生会话          真实对话（在宿主里，插件只能读不能写历史）
+			 *    · 设计图底部对话（D6）  只处理设计图
+			 *  ⇒ 用户"发一句话"这件事在三个地方各记各的，看不出"这句话后来去哪了"。
+			 *  本层把「谁发的 / 发到哪 / 走到第几维 / 现在是什么状态」收敛成一份可追踪的轨迹。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  🔴 两条纪律
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ① **不静默分发**：`push()` 只登记"这句话产生了"，`move()` 才记"被送往某维"，
+			 *     且 UI 必须在该维度**给出可见反馈**（与 logic/routing.js 的确认闸门同一条纪律）。
+			 *  ② **不编内容**：`currentTaskOf()` 的每个分支都在 `source` 字段里写明
+			 *     "这个结论来自哪里"（host.running / host.pendingInteraction / flow.trail /
+			 *     plugin-db / none）。读不到就说读不到，不拿标题或深度顶替。
+			 *
+			 * ⚠️ 本文件**不 import react**（纯函数 + 持久化 store）⇒ 离线单测可直接 import。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、四个维度（顺序即界面顺序：总监 | 对话 | 思维导图 | 设计图）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const DIM = Object.freeze({
+				DIRECTOR: "director",
+				CHAT: "chat",
+				MINDMAP: "mindmap",
+				DESIGN: "design"
+			});
+			
+			/** 维度顺序（与用户口中的顺序一致："总监和正常对话还有思维导图还有设计图"） */
+			const DIM_ORDER = Object.freeze([DIM.DIRECTOR, DIM.CHAT, DIM.MINDMAP, DIM.DESIGN]);
+			
+			const DIM_LABEL = Object.freeze({
+				[DIM.DIRECTOR]: "总监",
+				[DIM.CHAT]: "对话",
+				[DIM.MINDMAP]: "思维导图",
+				[DIM.DESIGN]: "设计图"
+			});
+			
+			const DIM_ICON = Object.freeze({
+				[DIM.DIRECTOR]: "◆",
+				[DIM.CHAT]: "💬",
+				[DIM.MINDMAP]: "🧠",
+				[DIM.DESIGN]: "🖌"
+			});
+			
+			/** 落点（这条消息最终被送去哪；与 logic/routing.js 的 DESTINATION 语义对齐但独立计数） */
+			const FLOW_STATUS = Object.freeze({
+				OPEN: "open",        // 已登记，尚未确认去向
+				ROUTED: "routed",    // 已确认去向，已送达
+				BLOCKED: "blocked",  // 有阻塞（宿主接口不可用 / 目标不存在）
+				DONE: "done"         // 已收口（对应任务已完成）
+			});
+			
+			const FLOW_STATUS_LABEL = Object.freeze({
+				[FLOW_STATUS.OPEN]: "待确认去向",
+				[FLOW_STATUS.ROUTED]: "已送达",
+				[FLOW_STATUS.BLOCKED]: "有阻塞",
+				[FLOW_STATUS.DONE]: "已收口"
+			});
+			
+			/** 宿主的三种 pendingInteraction（与 store/mindmap-schema.js 的取值域一致） */
+			const PENDING_LABEL = Object.freeze({
+				approval: "等待批准",
+				question: "等待回答",
+				"plan-review": "等待方案评审"
+			});
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、纯函数（可离线断言）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 稳定短 id（不依赖 Math.random —— 项目纪律：禁用非确定性随机） */
+			function flowId(seed) {
+				const s = String(seed == null ? "" : seed);
+				let h1 = 2166136261, h2 = 2246822519;
+				for (let i = 0; i < s.length; i++) {
+					const c = s.charCodeAt(i);
+					h1 = (h1 ^ c) >>> 0; h1 = Math.imul(h1, 16777619) >>> 0;
+					h2 = (h2 + c * (i + 3)) >>> 0; h2 = Math.imul(h2, 3266489917) >>> 0;
+				}
+				return "fl" + h1.toString(36) + h2.toString(36).slice(0, 4);
+			}
+			
+			/** 文案截断（列表里显示用；不改变原文本） */
+			function clip(text, n) {
+				const s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+				const max = n || 60;
+				return s.length > max ? s.slice(0, max - 1) + "…" : s;
+			}
+			
+			/**
+			 * 登记一条新流转。
+			 * @param {{text:string, origin?:string, sessionId?:string, at?:number, target?:string, note?:string}} input
+			 * @returns {object} flow
+			 */
+			function makeFlow(input = {}) {
+				const text = String(input.text == null ? "" : input.text).trim();
+				const origin = DIM_ORDER.indexOf(input.origin) >= 0 ? input.origin : DIM.DIRECTOR;
+				const sessionId = input.sessionId === undefined || input.sessionId === null ? null : String(input.sessionId);
+				const at = typeof input.at === "number" ? input.at : Date.now();
+				return {
+					flowId: flowId(origin + "|" + text + "|" + at),
+					text,
+					origin,
+					sessionId,
+					at,
+					status: FLOW_STATUS.OPEN,
+					target: input.target || null,
+					trail: [{ dim: origin, at, note: input.note || "登记" }]
+				};
+			}
+			
+			/**
+			 * 让一条流转"走到"某一维（追加足迹；**不改** origin，保证"从哪来"可追溯）。
+			 * @param {object} flow
+			 * @param {string} dim
+			 * @param {string} [note]
+			 * @param {object} [extra] 可带 { status, target }
+			 * @returns {object} 新 flow（不原地改，便于对比）
+			 */
+			function hopFlow(flow, dim, note, extra) {
+				if (!flow) return null;
+				if (DIM_ORDER.indexOf(dim) < 0) return flow;
+				const at = (extra && typeof extra.at === "number") ? extra.at : Date.now();
+				const next = {
+					...flow,
+					status: (extra && extra.status) || flow.status,
+					target: (extra && extra.target) !== undefined ? extra.target : flow.target,
+					trail: (flow.trail || []).concat([{ dim, at, note: String(note || "") }])
+				};
+				return next;
+			}
+			
+			/** 这条流转走过哪些维度（去重、按界面顺序返回） */
+			function flowDims(flow) {
+				const seen = new Set((flow && flow.trail ? flow.trail : []).map((t) => t.dim));
+				return DIM_ORDER.filter((d) => seen.has(d));
+			}
+			
+			/** 人类可读的流转线：「总监 → 对话 → 思维导图」 */
+			function flowLine(flow, sep) {
+				const dims = flowDims(flow);
+				if (!dims.length) return "—";
+				return dims.map((d) => DIM_LABEL[d]).join(sep || " → ");
+			}
+			
+			/** 一条流转的发起维度（trail 第一跳）；V17 P3 跨界面同步反馈用 */
+			function flowOrigin(flow) {
+				const t = flow && Array.isArray(flow.trail) ? flow.trail : [];
+				return t.length ? t[0].dim : null;
+			}
+			
+			/** 最新一条足迹到达 dim 的流转 id（无则 null）；V17 P3 未读/同步提示用 */
+			function lastFlowIdFor(flows, dim) {
+				const list = Array.isArray(flows) ? flows : [];
+				for (let i = list.length - 1; i >= 0; i--) { if (flowDims(list[i]).indexOf(dim) >= 0) return list[i].flowId; }
+				return null;
+			}
+			
+			/** 是否存在比 seenId 更新、且足迹到达 dim 的流转；V17 P3 未读判定 */
+			function hasNewFlowFor(flows, dim, seenId) {
+				const list = Array.isArray(flows) ? flows : [];
+				for (let i = list.length - 1; i >= 0; i--) { if (flowDims(list[i]).indexOf(dim) >= 0) return list[i].flowId !== seenId; }
+				return false;
+			}
+			
+			/** 最后一次足迹（UI 上"现在在哪一维"） */
+			function lastHop(flow) {
+				const t = flow && flow.trail ? flow.trail : [];
+				return t.length ? t[t.length - 1] : null;
+			}
+			
+			/**
+			 * 最后活动时刻 —— 登记时刻与**全部足迹时刻**取最大。
+			 *
+			 * 🔴 为什么需要它（本闸门 B28 暴露的真实语义缺口）：
+			 *   `flow.at` 只是**登记时刻**（makeFlow 时写下，hopFlow 不再改它，因为它是"从哪来"的一部分）。
+			 *   于是一条昨天登记、今天才被推进到设计图的流转，
+			 *   `at` 仍是昨天 ⇒ 它会被排到"更晚登记但早已僵住"的条目**之后**，
+			 *   而用户看到的是「点左侧切进来、面板最上面写着要干的事」——
+			 *   他最关心的是**最近有动静的那条**，不是最近新建的那条。
+			 *   ⇒ 排序与「现在在做的事」的时间戳都改用本函数；`at` 保留原义（登记时刻）不动。
+			 */
+			function lastTouchOf(flow) {
+				if (!flow) return 0;
+				const t = flow.trail || [];
+				let m = typeof flow.at === "number" ? flow.at : 0;
+				for (const h of t) if (typeof h.at === "number" && h.at > m) m = h.at;
+				return m;
+			}
+			
+			/** 某会话的全部流转（按**最后活动**升序；sessionId 为 null 的条目属"全域"） */
+			function flowsOf(flows, sessionId) {
+				const sid = sessionId === undefined || sessionId === null ? null : String(sessionId);
+				return (Array.isArray(flows) ? flows : [])
+					.filter((f) => (f.sessionId === null ? sid === null : f.sessionId === sid))
+					.slice()
+					.sort((a, b) => lastTouchOf(a) - lastTouchOf(b));
+			}
+			
+			/** 某会话最新一条流转（无则 null） */
+			function latestFlow(flows, sessionId) {
+				const list = flowsOf(flows, sessionId);
+				return list.length ? list[list.length - 1] : null;
+			}
+			
+			/**
+			 * 「现在在做的事」—— 用户原文：「点击框在右侧展开对话，对话的最上面是
+			 * 现在正在做的事情，也就是我发给或者总监发给对话的信息，对话整理出目前
+			 * 自己在做的什么事情，我要在思维导图界面能看到」。
+			 *
+			 * 🔴 优先级固定（先"宿主真值"，后"我们自己记的"）：
+			 *     ① 宿主 `pendingInteraction` → 真的在等人（最强信号）
+			 *     ② 宿主 `running === true`  → 真的在跑
+			 *     ③ 最新流转               → 我们确实登记过的那句话
+			 *     ④ 总监消息（plugin-db）   → 总监维度的最后一句
+			 *     ⑤ 无                     → 如实报"待命 · 尚无流转"
+			 *   每个分支都带 `source`，UI 直接显示出来 ⇒ 读不到时用户知道是"没数据"，
+			 *   而不是以为界面坏了（这是本项目反复吃过亏的地方）。
+			 *
+			 * @param {{node?:object, flow?:object, flowList?:Array, msgs?:Array}} input
+			 * @returns {{title:string, detail:string, dim:string|null, at:number|null, tone:string, source:string, hops:number}}
+			 */
+			function currentTaskOf(input = {}) {
+				const node = input.node || null;
+				const flow = input.flow || null;
+				const flowList = Array.isArray(input.flowList) ? input.flowList : [];
+				const msgs = Array.isArray(input.msgs) ? input.msgs : [];
+				const hops = flowList.length;
+				const last = flow ? lastHop(flow) : null;
+				const trailNote = flow ? ("流转 " + hops + " 条 · " + flowLine(flow)) : "";
+			
+				if (node && node.pending) {
+					return {
+						title: "待你确认 —— " + (PENDING_LABEL[node.pending] || node.pending),
+						detail: flow ? clip(flow.text, 100) : "宿主报告该会话有待处理交互（pendingInteraction）",
+						dim: last ? last.dim : DIM.CHAT, at: last ? last.at : null, tone: "warn",
+						source: "host.pendingInteraction", hops
+					};
+				}
+				if (node && node.running === true) {
+					return {
+						title: "正在执行",
+						detail: flow ? clip(flow.text, 100) : "宿主报告该会话 running（插件侧尚无流转记录）",
+						dim: last ? last.dim : DIM.CHAT, at: last ? last.at : null, tone: "run",
+						source: "host.running", hops
+					};
+				}
+				if (node && node.completed === true && !flow) {
+					return {
+						title: "该对话已收口",
+						detail: "宿主报告 completed，且插件侧无未闭合流转",
+						dim: null, at: null, tone: "done", source: "host.completed", hops
+					};
+				}
+				if (flow) {
+					return {
+						title: clip(flow.text, 90) || "（空文本流转）",
+						detail: trailNote + (flow.status === FLOW_STATUS.ROUTED ? " · 已送达" : " · " + (FLOW_STATUS_LABEL[flow.status] || flow.status)),
+						/* 时间戳用**最后一次足迹**的时刻（不是登记时刻）——
+						 * 面板最上面那句「现在在做的事」旁边显示的时间，若写着几小时前，
+						 * 用户会以为界面卡住了。见 lastTouchOf 头注。 */
+						dim: last ? last.dim : flow.origin, at: last ? last.at : flow.at, tone: "info",
+						source: "flow.trail", hops
+					};
+				}
+				if (msgs.length) {
+					const m = msgs[msgs.length - 1];
+					return {
+						title: clip(m.text, 90) || "（空消息）",
+						detail: "最近一条总监消息 · " + (m.kind || "note") + " · " + new Date(m.at || 0).toLocaleTimeString(),
+						dim: DIM.DIRECTOR, at: m.at || null, tone: "info", source: "plugin-db", hops
+					};
+				}
+				return {
+					title: "待命 · 尚无流转",
+					detail: node
+						? "宿主未报 running / pending，插件侧也没有该会话的流转记录"
+						: "没有选中会话：点左侧会话或导图里的任一个框",
+					dim: null, at: null, tone: "idle", source: node ? "host.idle" : "none", hops
+				};
+			}
+			
+			/** 汇总（给总监页 R2.5 / 顶栏徽章用） */
+			function flowStats(flows) {
+				const list = Array.isArray(flows) ? flows : [];
+				const byDim = {};
+				for (const d of DIM_ORDER) byDim[d] = 0;
+				let multiDim = 0;
+				for (const f of list) {
+					const dims = flowDims(f);
+					for (const d of dims) byDim[d] += 1;
+					if (dims.length > 1) multiDim += 1;
+				}
+				return {
+					total: list.length,
+					byDim,
+					multiDim,
+					open: list.filter((f) => f.status === FLOW_STATUS.OPEN).length,
+					routed: list.filter((f) => f.status === FLOW_STATUS.ROUTED).length
+				};
+			}
+			
+			/** 按会话聚合（给"点左侧切会话 → 只显示该会话的流转"用） */
+			function flowsBySession(flows) {
+				const map = new Map();
+				for (const f of Array.isArray(flows) ? flows : []) {
+					const k = f.sessionId === null ? "__global__" : f.sessionId;
+					if (!map.has(k)) map.set(k, []);
+					map.get(k).push(f);
+				}
+				return map;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、持久化 store（唯一写入口；订阅式，与 branch-tree 同一套写法）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			const FLOW_KEY = "dsh.director.flow";
+			/** 上限：超出丢弃最旧的（防止 localStorage 无限膨胀） */
+			const FLOW_MAX = 200;
+			
+			function loadFlows() {
+				try {
+					const raw = typeof localStorage !== "undefined" ? localStorage.getItem(FLOW_KEY) : null;
+					if (!raw) return { flows: [], activeSessionId: null };
+					const p = JSON.parse(raw);
+					const flows = Array.isArray(p && p.flows) ? p.flows.filter((f) => f && f.flowId && Array.isArray(f.trail)) : [];
+					return { flows, activeSessionId: (p && p.activeSessionId) || null };
+				} catch (e) { return { flows: [], activeSessionId: null }; }
+			}
+			
+			let flowState = loadFlows();
+			const flowListeners = new Set();
+			
+			function persist() {
+				try {
+					if (typeof localStorage !== "undefined") localStorage.setItem(FLOW_KEY, JSON.stringify(flowState));
+				} catch (e) { /* 隐私模式 / 超配额：流转丢失不阻断功能 */ }
+			}
+			function notifyFlow() { for (const fn of flowListeners) { try { fn(flowState); } catch (e) { /* 忽略单个订阅者异常 */ } } }
+			
+			const flowStore = {
+				getState: () => flowState,
+				subscribe: (fn) => { flowListeners.add(fn); return () => flowListeners.delete(fn); },
+			
+				/** 登记一条流转（默认落在总监维度：用户先在总监说话） */
+				push: (text, opts = {}) => {
+					const f = makeFlow({ ...opts, text });
+					if (!f.text) return null;
+					const next = flowState.flows.concat([f]);
+					flowState = { ...flowState, flows: next.length > FLOW_MAX ? next.slice(next.length - FLOW_MAX) : next };
+					persist(); notifyFlow();
+					return f;
+				},
+			
+				/** 让某条流转"走到"下一维（并记下谁触发的） */
+				move: (id, dim, note, extra) => {
+					let moved = null;
+					flowState = {
+						...flowState,
+						flows: flowState.flows.map((f) => {
+							if (f.flowId !== id) return f;
+							moved = hopFlow(f, dim, note, extra);
+							return moved;
+						})
+					};
+					if (moved) { persist(); notifyFlow(); }
+					return moved;
+				},
+			
+				/** 直接改状态（收口 / 阻塞） */
+				setStatus: (id, status, target) => flowStore.move(id, (lastHop((flowState.flows.find((f) => f.flowId === id)) || {}) || {}).dim || DIM.DIRECTOR, "状态 → " + status, { status, target }),
+			
+				/** UI 当前正在看哪个会话（"点左侧切进去"时由组件写入） */
+				setActiveSession: (sessionId) => {
+					const sid = sessionId === undefined || sessionId === null ? null : String(sessionId);
+					if (flowState.activeSessionId === sid) return sid;
+					flowState = { ...flowState, activeSessionId: sid };
+					persist(); notifyFlow();
+					return sid;
+				},
+			
+				/** 测试 / 复位用 */
+				reset: () => { flowState = { flows: [], activeSessionId: null }; persist(); notifyFlow(); return true; },
+			
+				/* ── 查询（包一层，省得组件各自 import 纯函数） ── */
+				ofSession: (sessionId) => flowsOf(flowState.flows, sessionId),
+				latestOf: (sessionId) => latestFlow(flowState.flows, sessionId),
+				stats: () => flowStats(flowState.flows),
+				taskOf: (input) => currentTaskOf(input)
+			};
+			
+			/** 全局契约（调试 / e2e 用） */
+			function installFlowApi() {
+				const api = {
+					DIM, DIM_ORDER, DIM_LABEL, DIM_ICON, FLOW_STATUS, FLOW_STATUS_LABEL, PENDING_LABEL,
+					FLOW_KEY, FLOW_MAX,
+					flowId, clip, makeFlow, hopFlow, flowDims, flowLine, flowOrigin, lastFlowIdFor, hasNewFlowFor, lastHop, lastTouchOf,
+					flowsOf, latestFlow, currentTaskOf, flowStats, flowsBySession,
+					store: flowStore
+				};
+				if (typeof window !== "undefined") window.__dshFlow = api;
+				return api;
+			}
+			
+			exports.DIM = DIM;
+			exports.DIM_ORDER = DIM_ORDER;
+			exports.DIM_LABEL = DIM_LABEL;
+			exports.DIM_ICON = DIM_ICON;
+			exports.FLOW_STATUS = FLOW_STATUS;
+			exports.FLOW_STATUS_LABEL = FLOW_STATUS_LABEL;
+			exports.PENDING_LABEL = PENDING_LABEL;
+			exports.flowId = flowId;
+			exports.clip = clip;
+			exports.makeFlow = makeFlow;
+			exports.hopFlow = hopFlow;
+			exports.flowDims = flowDims;
+			exports.flowLine = flowLine;
+			exports.flowOrigin = flowOrigin;
+			exports.lastFlowIdFor = lastFlowIdFor;
+			exports.hasNewFlowFor = hasNewFlowFor;
+			exports.lastHop = lastHop;
+			exports.lastTouchOf = lastTouchOf;
+			exports.flowsOf = flowsOf;
+			exports.latestFlow = latestFlow;
+			exports.currentTaskOf = currentTaskOf;
+			exports.flowStats = flowStats;
+			exports.flowsBySession = flowsBySession;
+			exports.FLOW_KEY = FLOW_KEY;
+			exports.FLOW_MAX = FLOW_MAX;
+			exports.flowStore = flowStore;
+			exports.installFlowApi = installFlowApi;
+		};
+
 		// ── store/personalize.js ──
 		__defs["store/personalize.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -7644,6 +8145,14 @@ window.__ModuleLoader__.load({
 				L.push("@keyframes dp-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--dp-ac-soft);}50%{opacity:.65;box-shadow:0 0 0 4px var(--dp-ac-soft);}}");
 				L.push(".dp-rise{animation:dp-rise .18s ease-out;}");
 				L.push("@keyframes dp-rise{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}");
+				// V17 P1：三浮层统一入场过渡（140ms 淡入 + 轻微放大；只做入场，出场随互斥切换直接卸载，避免延迟卸载状态机）
+				L.push(".dp-overlay-in{animation:dp-overlay-in .14s ease-out;}");
+				L.push("@keyframes dp-overlay-in{from{opacity:0;transform:scale(.985);}to{opacity:1;transform:scale(1);}}");
+				// ⑤ 四界面域标识（V17 P0：用户始终知道自己在哪个域）
+				L.push(".dp-domain{display:inline-flex;align-items:center;gap:4px;font-size:calc(10.5px * var(--dp-font));font-weight:600;padding:2px 7px;border-radius:var(--dp-radius-sm);letter-spacing:.3px;white-space:nowrap;line-height:1.4;}");
+				L.push(".dp-domain.dir{background:rgba(47,111,235,.14);border:1px solid rgba(47,111,235,.35);color:#8ab4f8;}");
+				L.push(".dp-domain.design{background:rgba(57,197,207,.12);border:1px solid rgba(57,197,207,.32);color:#7fe3e8;}");
+				L.push(".dp-domain.map{background:rgba(137,87,229,.14);border:1px solid rgba(137,87,229,.35);color:#c9a8ff;}");
 				//
 				// ② 总监页跟随宿主主题（背景 / 文字 / 边框 / 阴影）
 				//
@@ -8198,6 +8707,7 @@ window.__ModuleLoader__.load({
 			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
 			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
 			const { dshLog } = __m("util/debug.js");
+			const { flowStore, lastFlowIdFor, flowOrigin, DIM } = __m("logic/flow.js");
 			/* 右上角「⚙ 个性化」—— 与总监页 / 设计图 / 导图**共用同一个组件与同一份持久化**。
 			 * 需求原文：「…同时都在右上角加自定义个性化设定」。 */
 			const { PersonalizePanel } = __m("components/PersonalizePanel.js");
@@ -8293,7 +8803,7 @@ window.__ModuleLoader__.load({
 				}),
 				muted: { fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.6 },
 				msg: { display: "flex", gap: 6, marginBottom: 6 },
-				av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 9.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
+				av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
 				bub: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
 			};
 			
@@ -8339,8 +8849,8 @@ window.__ModuleLoader__.load({
 			function ReviewCard({ result, onRun, busy }) {
 				return h("div", { style: S.blk, "data-testid": "d-review" }, [
 					h("div", { key: "t", style: S.blkT }, [
-						"R6 六维审核（17号文 §1A.9，不得减项）",
-						h("button", { key: "r", style: { ...S.btnGhost, marginLeft: "auto" }, "data-testid": "d-review-run", disabled: busy, onClick: onRun }, "重跑审核")
+						h("span", { key: "tt", style: { flex: 1, minWidth: 0 } }, "R6 六维审核（17号文 §1A.9，不得减项）"),
+						h("button", { key: "r", style: { ...S.btnGhost, marginLeft: "auto", flexShrink: 0 }, "data-testid": "d-review-run", disabled: busy, onClick: onRun }, "重跑审核")
 					]),
 					result
 						? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-review-dim": d.key, "data-status": d.status }, [
@@ -8389,7 +8899,7 @@ window.__ModuleLoader__.load({
 								? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
 									h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 									h("div", { key: "b", style: S.bub }, [
-										m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
+										m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
 										h("span", { key: "t2" }, m.text)
 									])
 								]))
@@ -8469,6 +8979,34 @@ window.__ModuleLoader__.load({
 				const [draft, setDraft] = react.useState("");
 				const [busy, setBusy] = react.useState(false);
 				const [toast, setToast] = react.useState("");
+				// V17 审校补漏：toast 与导图/设计图一致，约 2.2s 自动消失（原先只靠下一条覆盖，会常驻不消失）
+				const toastTimerRef = react.useRef(null);
+				react.useEffect(() => {
+					if (!toast) return undefined;
+					if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+					toastTimerRef.current = setTimeout(() => setToast(""), 2200);
+					return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
+				}, [toast]);
+				/* V17 P3：跨界面流转同步反馈 —— 弹窗打开期间别的维度把消息送到总监时轻提示；
+				 * 关闭期间不提示（未读交给 FloatDock 小圆点），并把基线推进到最新避免一开就弹旧账。 */
+				const flowSnap = react.useSyncExternalStore(
+					(fn) => flowStore.subscribe(fn),
+					() => flowStore.getState(),
+					() => flowStore.getState()
+				);
+				const dlgSyncSeenRef = react.useRef(lastFlowIdFor((flowStore.getState() || {}).flows, DIM.DIRECTOR));
+				react.useEffect(() => {
+					const flows = flowSnap.flows;
+					const latest = lastFlowIdFor(flows, DIM.DIRECTOR);
+					if (!open) { dlgSyncSeenRef.current = latest; return; }
+					if (latest && latest !== dlgSyncSeenRef.current) {
+						dlgSyncSeenRef.current = latest;
+						const f = flows.find((x) => x.flowId === latest);
+						if (f && flowOrigin(f) && flowOrigin(f) !== DIM.DIRECTOR) setToast("已同步到总监");
+					} else if (!latest) {
+						dlgSyncSeenRef.current = null;
+					}
+				}, [flowSnap, open]);
 				const [dragW, setDragW] = react.useState(null);
 				const [unread, setUnread] = react.useState(0);
 				/* 右上角「⚙ 个性化」开合 —— 与其他三处同一个面板组件。
@@ -8624,6 +9162,8 @@ window.__ModuleLoader__.load({
 				}, [onDragMove, calcDragW]);
 			
 				const startDrag = (e) => {
+					// 🔴 同 MindMap/DesignStudio：阻止原生文本选择把主线程挂进桌面壳原生交互状态机
+					e.preventDefault();
 					dragRef.current = { x0: e.clientX, w0: panelWidth };
 					document.addEventListener("pointermove", onDragMove);
 					document.addEventListener("pointerup", onDragEnd);
@@ -8724,7 +9264,7 @@ window.__ModuleLoader__.load({
 					}, [
 						h("span", { key: "i" }, "◆"),
 						h("span", { key: "t" }, "总监 · " + ((node && node.name) || "全局总管")),
-						unread > 0 ? h("span", { key: "c", style: { background: "#f85149", color: "#fff", borderRadius: 9, padding: "1px 6px", fontSize: 10 } }, String(unread)) : null
+						unread > 0 ? h("span", { key: "c", style: { background: "#f85149", color: "#fff", borderRadius: 9, padding: "1px 6px", fontSize: 10.5 } }, String(unread)) : null
 					]));
 				}
 			
@@ -8772,11 +9312,11 @@ window.__ModuleLoader__.load({
 							//    使既有逐交互脚本「点第一行 → 选中态迁移」失效（2026-09-12 真机实测踩中）。
 							role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId,
 							/* 质感类（三档纹理由 store/personalize.js 注入的样式表按 html[data-dp-texture] 命中） */
-							className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
+							className: "dp-textured dp-overlay-in", "data-personalize-open": pOpen ? "1" : "0"
 						}, [
 							/* mhead：R1 顶部栏 + 层级切换器（I5）*/
 							h("div", { key: "h", style: S.head }, [
-								h("span", { key: "t", style: S.headTitle }, "◆ 总监"),
+								h("span", { key: "t", className: "dp-domain dir", "data-testid": "d-domain" }, "◆ 总监"),
 								h("select", {
 									key: "sel", "data-testid": "d-level", "aria-label": "切换层级",
 									value: nodeId,
@@ -8817,7 +9357,7 @@ window.__ModuleLoader__.load({
 								h("span", {
 									key: "fc", "data-testid": "d-focus", "data-target": st.focusTarget,
 									style: {
-										fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
+										fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
 										border: "1px solid " + (st.focusTarget === "director" ? "rgba(137,87,229,.45)" : "rgba(47,111,235,.5)"),
 										background: st.focusTarget === "director" ? "rgba(137,87,229,.16)" : "rgba(47,111,235,.16)",
 										color: st.focusTarget === "director" ? "#b794f6" : "#79a8ff", cursor: "pointer"
@@ -8862,7 +9402,7 @@ window.__ModuleLoader__.load({
 						}
 					}, h("div", {
 						style: {
-							position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10,
+							position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
 							color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
 						}
 					}, "● 与「对话 tab」同源（同一渲染节点）")) : null,
@@ -10440,6 +10980,7 @@ window.__ModuleLoader__.load({
 			const { ELEMENT_KINDS, LOGIC_FIELDS, CANVAS_W, CANVAS_H, kindsByGroup, docStats, VERSION_LIMIT } = __m("store/design-schema.js");
 			const { getActiveDoc, getState, subscribe, newDoc, saveDoc, deleteDoc, setActiveDoc, listDocs, addElement, moveElement, resizeElement, removeElement, duplicateElement, reorderElement, updateElement, updateLogic, visibleElements, loadStandardFrame, appendThread, parseDesignCommand, applyOps, DESIGN_ROLE, saveVersion, listVersions, restoreVersion, deleteVersion, renameDoc, duplicateDoc, getVersionState } = __m("store/design.js");
 			const { dshLog } = __m("util/debug.js");
+			const { flowStore, lastFlowIdFor, flowOrigin, DIM } = __m("logic/flow.js");
 			/* 窗口控件安全区 —— 根治「设计图的关闭按钮和标准软件的关闭按钮重叠了」。
 			 * 详见 util/safe-area.js 头注（含真机取证的 137px 数字）。 */
 			const { readInset, watchInset } = __m("util/safe-area.js");
@@ -10634,7 +11175,9 @@ window.__ModuleLoader__.load({
 				},
 				/** 重命名输入框：占位与它替换掉的 <select> 同宽，避免提交后布局跳动 */
 				nameInput: {
-					width: 200, height: 26, boxSizing: "border-box", padding: "0 8px", fontSize: 11.5, borderRadius: 5,
+					/* T-A4 修复 C16.4/C16.2：必须 flex:0 0 auto —— select 有此声明保持 200px，
+					 * input 缺了它会在顶栏空间紧张时被 flex 压缩到 154px ⇒ 改名切换整栏位移 46px */
+					width: 200, flex: "0 0 auto", height: 26, boxSizing: "border-box", padding: "0 8px", fontSize: 11.5, borderRadius: 5,
 					border: "1px solid #8957e5", background: "#212429", color: "#e8eaed"
 				},
 				/** 导出兜底浮层：位于右下、避开顶栏安全区与底栏对话区 */
@@ -10786,6 +11329,25 @@ window.__ModuleLoader__.load({
 				const [draft, setDraft] = react.useState("");
 				const [pending, setPending] = react.useState(null);
 				const [toast, setToast] = react.useState("");
+				/* V17 P3：跨界面流转同步反馈 —— 工作室打开期间，别的维度把消息送到设计图时轻提示 */
+				const flowSnap = react.useSyncExternalStore(
+					(fn) => flowStore.subscribe(fn),
+					() => flowStore.getState(),
+					() => flowStore.getState()
+				);
+				const dsSyncSeenRef = react.useRef(lastFlowIdFor(flowSnap.flows, DIM.DESIGN));
+				react.useEffect(() => {
+					const flows = flowSnap.flows;
+					const latest = lastFlowIdFor(flows, DIM.DESIGN);
+					if (!open) { dsSyncSeenRef.current = latest; return; } // 关闭期只追基线不提示，避免一打开弹旧账
+					if (latest && latest !== dsSyncSeenRef.current) {
+						dsSyncSeenRef.current = latest;
+						const f = flows.find((x) => x.flowId === latest);
+						if (f && flowOrigin(f) && flowOrigin(f) !== DIM.DESIGN) setToast("已同步到设计图");
+					} else if (!latest) {
+						dsSyncSeenRef.current = null;
+					}
+				}, [flowSnap, open]);
 				const [scale, setScale] = react.useState(1);
 				/* 版本面板开合 · 顶栏右侧安全区宽度 · 重命名输入态（null = 不在重命名） */
 				const [verOpen, setVerOpen] = react.useState(false);
@@ -10796,6 +11358,31 @@ window.__ModuleLoader__.load({
 				const [exportText, setExportText] = react.useState(null);
 				/* 右上角「⚙ 个性化」开合。🔴 与上面几条同样**必须排在 early return 之前**（React Hooks 规则）。 */
 				const [pOpen, setPOpen] = react.useState(false);
+				/* V17 P2-2：顶栏响应式 —— 窗口宽度 <1500 时次要按钮（复制/重载框架/导出）收入「更多」菜单。
+				 * 阈值取 1500：顶栏按钮多，实测 1441 宽度下全平铺会溢出安全区 43px（C15.3/C15.5），
+				 * 且溢出导致版本按钮被 flex 压缩、C16.10 负对照失效。这三个是低频动作，收入菜单合理。 */
+				const [narrow, setNarrow] = react.useState(() => typeof window !== "undefined" && window.innerWidth < 1500);
+				const [moreOpen, setMoreOpen] = react.useState(false);
+				/* V17 审校补漏：「更多」菜单除 mouseleave 外，再支持点击外部 / Esc 关闭（鼠标不经过菜单边界也能收起） */
+				react.useEffect(() => {
+					if (!moreOpen) return undefined;
+					const onDown = (e) => {
+						const t = e.target;
+						if (t && t.closest && t.closest('[data-testid="ds-more"],[data-testid="ds-more-menu"]')) return;
+						setMoreOpen(false);
+					};
+					const onKey = (e) => { if (e.key === "Escape") { // 菜单打开时 Esc 只关菜单：截获并阻止冒泡到工作室全局 Esc（否则会连带关闭整张工作室）
+						e.stopImmediatePropagation(); e.preventDefault(); setMoreOpen(false); } };
+					document.addEventListener("pointerdown", onDown, true);
+					document.addEventListener("keydown", onKey, true);
+					return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey, true); };
+				}, [moreOpen]);
+				react.useEffect(() => {
+					if (typeof window === "undefined") return;
+					const onResize = () => setNarrow(window.innerWidth < 1500);
+					window.addEventListener("resize", onResize);
+					return () => window.removeEventListener("resize", onResize);
+				}, []);
 				const dragRef = react.useRef(null);
 				const gridRef = react.useRef(null);
 				const wrapRef = react.useRef(null);
@@ -10867,6 +11454,8 @@ window.__ModuleLoader__.load({
 				 */
 				const onElPointerDown = (e, el, mode) => {
 					e.stopPropagation();
+					// 🔴 同 MindMap：阻止原生文本选择/原生拖拽把渲染主线程挂进桌面壳原生交互状态机
+					e.preventDefault();
 					setSelected(el.id);
 					dragRef.current = {
 						mode, id: el.id, x0: e.clientX, y0: e.clientY,
@@ -11137,7 +11726,7 @@ window.__ModuleLoader__.load({
 					id: STUDIO_ID, style: S.root, "data-testid": "ds-root", role: "dialog", "aria-label": "设计图工作室",
 					/* 质感类：个性化里的三档纹理由 store/personalize.js 注入的样式表按
 					 * `html[data-dp-texture=...] .dp-textured` 命中（伪元素 / background-image **无法**用 inline 写）。 */
-					className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
+					className: "dp-textured dp-overlay-in", "data-personalize-open": pOpen ? "1" : "0"
 				}, [
 					/* ══ 顶栏（D1 · 四区 + 安全区）══════════════════════════════════════════
 					 * 🔴 安全区 —— 修用户报的「设计图的关闭按钮和标准软件的关闭按钮重叠了」：
@@ -11157,6 +11746,8 @@ window.__ModuleLoader__.load({
 					h("div", {
 						key: "top", style: { ...S.top, paddingRight: Math.max(10, inset + 10) }, "data-testid": "ds-top"
 					}, [
+						/* ── 域标识（V17 P0：用户始终知道自己在哪个域） ── */
+						h("span", { key: "dom", style: { fontSize: "calc(10.5px * var(--dp-font))", fontWeight: 600, color: "#7fe3e8", marginRight: 4, letterSpacing: ".3px", whiteSpace: "nowrap" }, "data-testid": "ds-domain" }, "◈ 设计图"),
 						/* ── ① 保存：**按钮即状态** ────────────────────────────────────────
 						 * 脏（有未保存改动）= 主色实心「● 保存」（最需要被看见）
 						 * 净（已保存）    = 绿色描边「✓ 已保存 vN」
@@ -11203,12 +11794,23 @@ window.__ModuleLoader__.load({
 							onClick: nameDraft == null ? onRenameStart : onRenameCancel
 						}, "✎ 改名"),
 						h("button", { key: "n", style: S.btn, "data-testid": "ds-new", "aria-label": "新建设计图", title: "新建一张设计图（自带标准框架 20 元素）", onClick: onNewDoc }, "＋ 新建图"),
-						h("button", { key: "cp", style: S.btn, "data-testid": "ds-dup-doc", "aria-label": "复制设计图", title: "复制这张设计图（内容带走，版本历史不带）", onClick: onDuplicateDoc }, "⧉ 复制"),
-						/* 🔴 标签必须**区别于图名**：本按钮原写作「↺ 标准框架」，而左上选择器显示的图名正是
-						 *    「标准框架 · 三页签（20）」⇒ 同屏出现两个「标准框架」，一个是要打开的图、
-						 *    一个是会覆盖内容的动作，用户无法区分。改为「重载框架」= 动作导向 + 与图名脱钩。 */
-						h("button", { key: "f", style: S.btn, "data-testid": "ds-frame", "aria-label": "重载标准框架", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: onLoadFrame }, "↺ 重载框架"),
-						h("button", { key: "ex", style: S.btn, "data-testid": "ds-export", "aria-label": "导出设计图 JSON", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: onExportJson }, "导出"),
+						/* V17 P2-2：窄窗口时复制/重载框架/导出收入「更多」菜单 */
+						narrow ? h("div", { key: "more", style: { position: "relative", display: "inline-block" } }, [
+							h("button", { key: "mb", style: S.btn, "data-testid": "ds-more", "aria-label": "更多操作", "aria-expanded": moreOpen, onClick: (e) => { e.stopPropagation(); setMoreOpen((v) => !v); } }, "更多 ▾"),
+							moreOpen ? h("div", {
+								key: "menu", style: { position: "absolute", top: "100%", left: 0, zIndex: 50, background: "#212429", border: "1px solid #3d4148", borderRadius: 6, padding: "4px 0", minWidth: 130, boxShadow: "0 6px 20px rgba(0,0,0,.4)" },
+								"data-testid": "ds-more-menu",
+								onMouseLeave: () => setMoreOpen(false)
+							}, [
+								h("button", { key: "cp", style: { ...S.btn, display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 0 }, "data-testid": "ds-dup-doc", title: "复制这张设计图（内容带走，版本历史不带）", onClick: (e) => { e.stopPropagation(); setMoreOpen(false); onDuplicateDoc(); } }, "⧉ 复制"),
+								h("button", { key: "f", style: { ...S.btn, display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 0 }, "data-testid": "ds-frame", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: (e) => { e.stopPropagation(); setMoreOpen(false); onLoadFrame(); } }, "↺ 重载框架"),
+								h("button", { key: "ex", style: { ...S.btn, display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 0 }, "data-testid": "ds-export", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: (e) => { e.stopPropagation(); setMoreOpen(false); onExportJson(); } }, "导出 JSON")
+							]) : null
+						]) : [
+							h("button", { key: "cp", style: S.btn, "data-testid": "ds-dup-doc", "aria-label": "复制设计图", title: "复制这张设计图（内容带走，版本历史不带）", onClick: onDuplicateDoc }, "⧉ 复制"),
+							h("button", { key: "f", style: S.btn, "data-testid": "ds-frame", "aria-label": "重载标准框架", title: "把标准框架重新铺一遍（会覆盖当前图内容）", onClick: onLoadFrame }, "↺ 重载框架"),
+							h("button", { key: "ex", style: S.btn, "data-testid": "ds-export", "aria-label": "导出设计图 JSON", title: "把这张图（含每个元素的逻辑）复制成 JSON", onClick: onExportJson }, "导出")
+						],
 						/* 危险动作只保留一个（删图）。原文案「🗑」是**彩色 emoji**，与同排的单色字形
 						 * （✎ / ⧉ / ↺）割裂；且 emoji 不继承 currentColor ⇒ btnDanger 的红色对它无效。
 						 * 改文字后颜色与描边真正生效，红=危险 的语义才传得到。
@@ -13113,448 +13715,6 @@ window.__ModuleLoader__.load({
 			exports.HOVER_BTN_STYLE = HOVER_BTN_STYLE;
 		};
 
-		// ── logic/flow.js ──
-		__defs["logic/flow.js"] = function (exports) {
-			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
-			 * 职责：四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
-			 * 引用：—
-			 * 上游：client-entry.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js
-			 * 下游：（无）
-			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
-			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
-			 * @map:end */
-			/**
-			 * logic/flow.js — 四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  这份文件在整体里的位置（改代码前先看这里）
-			 * ══════════════════════════════════════════════════════════════════
-			 *  需求原文（用户）：「最后打通总监和正常对话还有思维导图还有设计图之间的关联，
-			 *   保证同一个消息能在上面几个维度进行流转。我点击左侧，点入不同的对话切进去
-			 *   就是和当前对话有关的流转信息」
-			 *
-			 *  ⇒ 落地口径：
-			 *     一条**流转条目**（flow）= 一条消息 + 它走过哪些维度的足迹（`trail`）。
-			 *     四个界面**读写同一份数据**，于是"同一消息在四个维度流转"是可查证的，
-			 *     而不是四份互相不知道的影子状态。
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  为什么必须有这一层（而不是各界面各存一份）
-			 * ══════════════════════════════════════════════════════════════════
-			 *  已有三份状态，但它们**互不相通**：
-			 *    · `store/plugin-db.js`  总监消息（按 nodeId 存，只有总监维度的）
-			 *    · 宿主原生会话          真实对话（在宿主里，插件只能读不能写历史）
-			 *    · 设计图底部对话（D6）  只处理设计图
-			 *  ⇒ 用户"发一句话"这件事在三个地方各记各的，看不出"这句话后来去哪了"。
-			 *  本层把「谁发的 / 发到哪 / 走到第几维 / 现在是什么状态」收敛成一份可追踪的轨迹。
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  🔴 两条纪律
-			 * ══════════════════════════════════════════════════════════════════
-			 *  ① **不静默分发**：`push()` 只登记"这句话产生了"，`move()` 才记"被送往某维"，
-			 *     且 UI 必须在该维度**给出可见反馈**（与 logic/routing.js 的确认闸门同一条纪律）。
-			 *  ② **不编内容**：`currentTaskOf()` 的每个分支都在 `source` 字段里写明
-			 *     "这个结论来自哪里"（host.running / host.pendingInteraction / flow.trail /
-			 *     plugin-db / none）。读不到就说读不到，不拿标题或深度顶替。
-			 *
-			 * ⚠️ 本文件**不 import react**（纯函数 + 持久化 store）⇒ 离线单测可直接 import。
-			 */
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 一、四个维度（顺序即界面顺序：总监 | 对话 | 思维导图 | 设计图）
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			const DIM = Object.freeze({
-				DIRECTOR: "director",
-				CHAT: "chat",
-				MINDMAP: "mindmap",
-				DESIGN: "design"
-			});
-			
-			/** 维度顺序（与用户口中的顺序一致："总监和正常对话还有思维导图还有设计图"） */
-			const DIM_ORDER = Object.freeze([DIM.DIRECTOR, DIM.CHAT, DIM.MINDMAP, DIM.DESIGN]);
-			
-			const DIM_LABEL = Object.freeze({
-				[DIM.DIRECTOR]: "总监",
-				[DIM.CHAT]: "对话",
-				[DIM.MINDMAP]: "思维导图",
-				[DIM.DESIGN]: "设计图"
-			});
-			
-			const DIM_ICON = Object.freeze({
-				[DIM.DIRECTOR]: "◆",
-				[DIM.CHAT]: "💬",
-				[DIM.MINDMAP]: "🧠",
-				[DIM.DESIGN]: "🖌"
-			});
-			
-			/** 落点（这条消息最终被送去哪；与 logic/routing.js 的 DESTINATION 语义对齐但独立计数） */
-			const FLOW_STATUS = Object.freeze({
-				OPEN: "open",        // 已登记，尚未确认去向
-				ROUTED: "routed",    // 已确认去向，已送达
-				BLOCKED: "blocked",  // 有阻塞（宿主接口不可用 / 目标不存在）
-				DONE: "done"         // 已收口（对应任务已完成）
-			});
-			
-			const FLOW_STATUS_LABEL = Object.freeze({
-				[FLOW_STATUS.OPEN]: "待确认去向",
-				[FLOW_STATUS.ROUTED]: "已送达",
-				[FLOW_STATUS.BLOCKED]: "有阻塞",
-				[FLOW_STATUS.DONE]: "已收口"
-			});
-			
-			/** 宿主的三种 pendingInteraction（与 store/mindmap-schema.js 的取值域一致） */
-			const PENDING_LABEL = Object.freeze({
-				approval: "等待批准",
-				question: "等待回答",
-				"plan-review": "等待方案评审"
-			});
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 二、纯函数（可离线断言）
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/** 稳定短 id（不依赖 Math.random —— 项目纪律：禁用非确定性随机） */
-			function flowId(seed) {
-				const s = String(seed == null ? "" : seed);
-				let h1 = 2166136261, h2 = 2246822519;
-				for (let i = 0; i < s.length; i++) {
-					const c = s.charCodeAt(i);
-					h1 = (h1 ^ c) >>> 0; h1 = Math.imul(h1, 16777619) >>> 0;
-					h2 = (h2 + c * (i + 3)) >>> 0; h2 = Math.imul(h2, 3266489917) >>> 0;
-				}
-				return "fl" + h1.toString(36) + h2.toString(36).slice(0, 4);
-			}
-			
-			/** 文案截断（列表里显示用；不改变原文本） */
-			function clip(text, n) {
-				const s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
-				const max = n || 60;
-				return s.length > max ? s.slice(0, max - 1) + "…" : s;
-			}
-			
-			/**
-			 * 登记一条新流转。
-			 * @param {{text:string, origin?:string, sessionId?:string, at?:number, target?:string, note?:string}} input
-			 * @returns {object} flow
-			 */
-			function makeFlow(input = {}) {
-				const text = String(input.text == null ? "" : input.text).trim();
-				const origin = DIM_ORDER.indexOf(input.origin) >= 0 ? input.origin : DIM.DIRECTOR;
-				const sessionId = input.sessionId === undefined || input.sessionId === null ? null : String(input.sessionId);
-				const at = typeof input.at === "number" ? input.at : Date.now();
-				return {
-					flowId: flowId(origin + "|" + text + "|" + at),
-					text,
-					origin,
-					sessionId,
-					at,
-					status: FLOW_STATUS.OPEN,
-					target: input.target || null,
-					trail: [{ dim: origin, at, note: input.note || "登记" }]
-				};
-			}
-			
-			/**
-			 * 让一条流转"走到"某一维（追加足迹；**不改** origin，保证"从哪来"可追溯）。
-			 * @param {object} flow
-			 * @param {string} dim
-			 * @param {string} [note]
-			 * @param {object} [extra] 可带 { status, target }
-			 * @returns {object} 新 flow（不原地改，便于对比）
-			 */
-			function hopFlow(flow, dim, note, extra) {
-				if (!flow) return null;
-				if (DIM_ORDER.indexOf(dim) < 0) return flow;
-				const at = (extra && typeof extra.at === "number") ? extra.at : Date.now();
-				const next = {
-					...flow,
-					status: (extra && extra.status) || flow.status,
-					target: (extra && extra.target) !== undefined ? extra.target : flow.target,
-					trail: (flow.trail || []).concat([{ dim, at, note: String(note || "") }])
-				};
-				return next;
-			}
-			
-			/** 这条流转走过哪些维度（去重、按界面顺序返回） */
-			function flowDims(flow) {
-				const seen = new Set((flow && flow.trail ? flow.trail : []).map((t) => t.dim));
-				return DIM_ORDER.filter((d) => seen.has(d));
-			}
-			
-			/** 人类可读的流转线：「总监 → 对话 → 思维导图」 */
-			function flowLine(flow, sep) {
-				const dims = flowDims(flow);
-				if (!dims.length) return "—";
-				return dims.map((d) => DIM_LABEL[d]).join(sep || " → ");
-			}
-			
-			/** 最后一次足迹（UI 上"现在在哪一维"） */
-			function lastHop(flow) {
-				const t = flow && flow.trail ? flow.trail : [];
-				return t.length ? t[t.length - 1] : null;
-			}
-			
-			/**
-			 * 最后活动时刻 —— 登记时刻与**全部足迹时刻**取最大。
-			 *
-			 * 🔴 为什么需要它（本闸门 B28 暴露的真实语义缺口）：
-			 *   `flow.at` 只是**登记时刻**（makeFlow 时写下，hopFlow 不再改它，因为它是"从哪来"的一部分）。
-			 *   于是一条昨天登记、今天才被推进到设计图的流转，
-			 *   `at` 仍是昨天 ⇒ 它会被排到"更晚登记但早已僵住"的条目**之后**，
-			 *   而用户看到的是「点左侧切进来、面板最上面写着要干的事」——
-			 *   他最关心的是**最近有动静的那条**，不是最近新建的那条。
-			 *   ⇒ 排序与「现在在做的事」的时间戳都改用本函数；`at` 保留原义（登记时刻）不动。
-			 */
-			function lastTouchOf(flow) {
-				if (!flow) return 0;
-				const t = flow.trail || [];
-				let m = typeof flow.at === "number" ? flow.at : 0;
-				for (const h of t) if (typeof h.at === "number" && h.at > m) m = h.at;
-				return m;
-			}
-			
-			/** 某会话的全部流转（按**最后活动**升序；sessionId 为 null 的条目属"全域"） */
-			function flowsOf(flows, sessionId) {
-				const sid = sessionId === undefined || sessionId === null ? null : String(sessionId);
-				return (Array.isArray(flows) ? flows : [])
-					.filter((f) => (f.sessionId === null ? sid === null : f.sessionId === sid))
-					.slice()
-					.sort((a, b) => lastTouchOf(a) - lastTouchOf(b));
-			}
-			
-			/** 某会话最新一条流转（无则 null） */
-			function latestFlow(flows, sessionId) {
-				const list = flowsOf(flows, sessionId);
-				return list.length ? list[list.length - 1] : null;
-			}
-			
-			/**
-			 * 「现在在做的事」—— 用户原文：「点击框在右侧展开对话，对话的最上面是
-			 * 现在正在做的事情，也就是我发给或者总监发给对话的信息，对话整理出目前
-			 * 自己在做的什么事情，我要在思维导图界面能看到」。
-			 *
-			 * 🔴 优先级固定（先"宿主真值"，后"我们自己记的"）：
-			 *     ① 宿主 `pendingInteraction` → 真的在等人（最强信号）
-			 *     ② 宿主 `running === true`  → 真的在跑
-			 *     ③ 最新流转               → 我们确实登记过的那句话
-			 *     ④ 总监消息（plugin-db）   → 总监维度的最后一句
-			 *     ⑤ 无                     → 如实报"待命 · 尚无流转"
-			 *   每个分支都带 `source`，UI 直接显示出来 ⇒ 读不到时用户知道是"没数据"，
-			 *   而不是以为界面坏了（这是本项目反复吃过亏的地方）。
-			 *
-			 * @param {{node?:object, flow?:object, flowList?:Array, msgs?:Array}} input
-			 * @returns {{title:string, detail:string, dim:string|null, at:number|null, tone:string, source:string, hops:number}}
-			 */
-			function currentTaskOf(input = {}) {
-				const node = input.node || null;
-				const flow = input.flow || null;
-				const flowList = Array.isArray(input.flowList) ? input.flowList : [];
-				const msgs = Array.isArray(input.msgs) ? input.msgs : [];
-				const hops = flowList.length;
-				const last = flow ? lastHop(flow) : null;
-				const trailNote = flow ? ("流转 " + hops + " 条 · " + flowLine(flow)) : "";
-			
-				if (node && node.pending) {
-					return {
-						title: "待你确认 —— " + (PENDING_LABEL[node.pending] || node.pending),
-						detail: flow ? clip(flow.text, 100) : "宿主报告该会话有待处理交互（pendingInteraction）",
-						dim: last ? last.dim : DIM.CHAT, at: last ? last.at : null, tone: "warn",
-						source: "host.pendingInteraction", hops
-					};
-				}
-				if (node && node.running === true) {
-					return {
-						title: "正在执行",
-						detail: flow ? clip(flow.text, 100) : "宿主报告该会话 running（插件侧尚无流转记录）",
-						dim: last ? last.dim : DIM.CHAT, at: last ? last.at : null, tone: "run",
-						source: "host.running", hops
-					};
-				}
-				if (node && node.completed === true && !flow) {
-					return {
-						title: "该对话已收口",
-						detail: "宿主报告 completed，且插件侧无未闭合流转",
-						dim: null, at: null, tone: "done", source: "host.completed", hops
-					};
-				}
-				if (flow) {
-					return {
-						title: clip(flow.text, 90) || "（空文本流转）",
-						detail: trailNote + (flow.status === FLOW_STATUS.ROUTED ? " · 已送达" : " · " + (FLOW_STATUS_LABEL[flow.status] || flow.status)),
-						/* 时间戳用**最后一次足迹**的时刻（不是登记时刻）——
-						 * 面板最上面那句「现在在做的事」旁边显示的时间，若写着几小时前，
-						 * 用户会以为界面卡住了。见 lastTouchOf 头注。 */
-						dim: last ? last.dim : flow.origin, at: last ? last.at : flow.at, tone: "info",
-						source: "flow.trail", hops
-					};
-				}
-				if (msgs.length) {
-					const m = msgs[msgs.length - 1];
-					return {
-						title: clip(m.text, 90) || "（空消息）",
-						detail: "最近一条总监消息 · " + (m.kind || "note") + " · " + new Date(m.at || 0).toLocaleTimeString(),
-						dim: DIM.DIRECTOR, at: m.at || null, tone: "info", source: "plugin-db", hops
-					};
-				}
-				return {
-					title: "待命 · 尚无流转",
-					detail: node
-						? "宿主未报 running / pending，插件侧也没有该会话的流转记录"
-						: "没有选中会话：点左侧会话或导图里的任一个框",
-					dim: null, at: null, tone: "idle", source: node ? "host.idle" : "none", hops
-				};
-			}
-			
-			/** 汇总（给总监页 R2.5 / 顶栏徽章用） */
-			function flowStats(flows) {
-				const list = Array.isArray(flows) ? flows : [];
-				const byDim = {};
-				for (const d of DIM_ORDER) byDim[d] = 0;
-				let multiDim = 0;
-				for (const f of list) {
-					const dims = flowDims(f);
-					for (const d of dims) byDim[d] += 1;
-					if (dims.length > 1) multiDim += 1;
-				}
-				return {
-					total: list.length,
-					byDim,
-					multiDim,
-					open: list.filter((f) => f.status === FLOW_STATUS.OPEN).length,
-					routed: list.filter((f) => f.status === FLOW_STATUS.ROUTED).length
-				};
-			}
-			
-			/** 按会话聚合（给"点左侧切会话 → 只显示该会话的流转"用） */
-			function flowsBySession(flows) {
-				const map = new Map();
-				for (const f of Array.isArray(flows) ? flows : []) {
-					const k = f.sessionId === null ? "__global__" : f.sessionId;
-					if (!map.has(k)) map.set(k, []);
-					map.get(k).push(f);
-				}
-				return map;
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 三、持久化 store（唯一写入口；订阅式，与 branch-tree 同一套写法）
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			const FLOW_KEY = "dsh.director.flow";
-			/** 上限：超出丢弃最旧的（防止 localStorage 无限膨胀） */
-			const FLOW_MAX = 200;
-			
-			function loadFlows() {
-				try {
-					const raw = typeof localStorage !== "undefined" ? localStorage.getItem(FLOW_KEY) : null;
-					if (!raw) return { flows: [], activeSessionId: null };
-					const p = JSON.parse(raw);
-					const flows = Array.isArray(p && p.flows) ? p.flows.filter((f) => f && f.flowId && Array.isArray(f.trail)) : [];
-					return { flows, activeSessionId: (p && p.activeSessionId) || null };
-				} catch (e) { return { flows: [], activeSessionId: null }; }
-			}
-			
-			let flowState = loadFlows();
-			const flowListeners = new Set();
-			
-			function persist() {
-				try {
-					if (typeof localStorage !== "undefined") localStorage.setItem(FLOW_KEY, JSON.stringify(flowState));
-				} catch (e) { /* 隐私模式 / 超配额：流转丢失不阻断功能 */ }
-			}
-			function notifyFlow() { for (const fn of flowListeners) { try { fn(flowState); } catch (e) { /* 忽略单个订阅者异常 */ } } }
-			
-			const flowStore = {
-				getState: () => flowState,
-				subscribe: (fn) => { flowListeners.add(fn); return () => flowListeners.delete(fn); },
-			
-				/** 登记一条流转（默认落在总监维度：用户先在总监说话） */
-				push: (text, opts = {}) => {
-					const f = makeFlow({ ...opts, text });
-					if (!f.text) return null;
-					const next = flowState.flows.concat([f]);
-					flowState = { ...flowState, flows: next.length > FLOW_MAX ? next.slice(next.length - FLOW_MAX) : next };
-					persist(); notifyFlow();
-					return f;
-				},
-			
-				/** 让某条流转"走到"下一维（并记下谁触发的） */
-				move: (id, dim, note, extra) => {
-					let moved = null;
-					flowState = {
-						...flowState,
-						flows: flowState.flows.map((f) => {
-							if (f.flowId !== id) return f;
-							moved = hopFlow(f, dim, note, extra);
-							return moved;
-						})
-					};
-					if (moved) { persist(); notifyFlow(); }
-					return moved;
-				},
-			
-				/** 直接改状态（收口 / 阻塞） */
-				setStatus: (id, status, target) => flowStore.move(id, (lastHop((flowState.flows.find((f) => f.flowId === id)) || {}) || {}).dim || DIM.DIRECTOR, "状态 → " + status, { status, target }),
-			
-				/** UI 当前正在看哪个会话（"点左侧切进去"时由组件写入） */
-				setActiveSession: (sessionId) => {
-					const sid = sessionId === undefined || sessionId === null ? null : String(sessionId);
-					if (flowState.activeSessionId === sid) return sid;
-					flowState = { ...flowState, activeSessionId: sid };
-					persist(); notifyFlow();
-					return sid;
-				},
-			
-				/** 测试 / 复位用 */
-				reset: () => { flowState = { flows: [], activeSessionId: null }; persist(); notifyFlow(); return true; },
-			
-				/* ── 查询（包一层，省得组件各自 import 纯函数） ── */
-				ofSession: (sessionId) => flowsOf(flowState.flows, sessionId),
-				latestOf: (sessionId) => latestFlow(flowState.flows, sessionId),
-				stats: () => flowStats(flowState.flows),
-				taskOf: (input) => currentTaskOf(input)
-			};
-			
-			/** 全局契约（调试 / e2e 用） */
-			function installFlowApi() {
-				const api = {
-					DIM, DIM_ORDER, DIM_LABEL, DIM_ICON, FLOW_STATUS, FLOW_STATUS_LABEL, PENDING_LABEL,
-					FLOW_KEY, FLOW_MAX,
-					flowId, clip, makeFlow, hopFlow, flowDims, flowLine, lastHop, lastTouchOf,
-					flowsOf, latestFlow, currentTaskOf, flowStats, flowsBySession,
-					store: flowStore
-				};
-				if (typeof window !== "undefined") window.__dshFlow = api;
-				return api;
-			}
-			
-			exports.DIM = DIM;
-			exports.DIM_ORDER = DIM_ORDER;
-			exports.DIM_LABEL = DIM_LABEL;
-			exports.DIM_ICON = DIM_ICON;
-			exports.FLOW_STATUS = FLOW_STATUS;
-			exports.FLOW_STATUS_LABEL = FLOW_STATUS_LABEL;
-			exports.PENDING_LABEL = PENDING_LABEL;
-			exports.flowId = flowId;
-			exports.clip = clip;
-			exports.makeFlow = makeFlow;
-			exports.hopFlow = hopFlow;
-			exports.flowDims = flowDims;
-			exports.flowLine = flowLine;
-			exports.lastHop = lastHop;
-			exports.lastTouchOf = lastTouchOf;
-			exports.flowsOf = flowsOf;
-			exports.latestFlow = latestFlow;
-			exports.currentTaskOf = currentTaskOf;
-			exports.flowStats = flowStats;
-			exports.flowsBySession = flowsBySession;
-			exports.FLOW_KEY = FLOW_KEY;
-			exports.FLOW_MAX = FLOW_MAX;
-			exports.flowStore = flowStore;
-			exports.installFlowApi = installFlowApi;
-		};
-
 		// ── components/NodeDetailPanel.js ──
 		__defs["components/NodeDetailPanel.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -13630,7 +13790,7 @@ window.__ModuleLoader__.load({
 				nowT: { fontSize: "calc(12px * var(--dp-font,1))", fontWeight: 650, marginBottom: 3, wordBreak: "break-word", lineHeight: 1.5 },
 				nowD: { fontSize: "calc(11px * var(--dp-font,1))", color: "var(--dp-t2, #c3c8ce)", lineHeight: 1.55, wordBreak: "break-word" },
 				badge: {
-					fontSize: "calc(9.5px * var(--dp-font,1))", padding: "0 5px", borderRadius: "var(--dp-radius-sm, 5px)",
+					fontSize: "calc(10.5px * var(--dp-font,1))", padding: "0 5px", borderRadius: "var(--dp-radius-sm, 5px)",
 					border: "1px solid var(--dp-line, #31343a)", background: "var(--dp-bg-2, #1c1e23)", color: "var(--dp-t3, #8b9199)"
 				},
 				secT: {
@@ -13642,7 +13802,7 @@ window.__ModuleLoader__.load({
 					borderRadius: "var(--dp-radius, 8px)", padding: "6px 8px", marginBottom: 5
 				},
 				itemT: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word", color: "var(--dp-t1, #e8eaed)" },
-				itemM: { fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
+				itemM: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
 				ft: {
 					flex: "0 0 auto", borderTop: "1px solid var(--dp-line, #31343a)", padding: 9,
 					display: "flex", flexDirection: "column", gap: 6, background: "var(--dp-bg-0, #0b0c0e)"
@@ -13659,7 +13819,7 @@ window.__ModuleLoader__.load({
 					background: "var(--dp-bg-2, #1c1e23)", color: "var(--dp-t2, #c3c8ce)", whiteSpace: "nowrap"
 				},
 				btnPri: { background: "var(--dp-ac, #2f6feb)", borderColor: "var(--dp-ac, #2f6feb)", color: "#fff" },
-				note: { fontSize: "calc(10px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 }
+				note: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 }
 			};
 			
 			/** 维度足迹小标签（四个维度都在，走过的点亮 —— "同一消息在几个维度流转"一眼可见） */
@@ -13670,7 +13830,7 @@ window.__ModuleLoader__.load({
 						key: d, "data-flow-dim": d, "data-on": seen.has(d) ? "1" : "0",
 						title: DIM_LABEL[d] + (seen.has(d) ? "：走过" : "：未走"),
 						style: {
-							fontSize: 9.5, padding: "0 4px", borderRadius: 3,
+							fontSize: 10.5, padding: "0 4px", borderRadius: 3,
 							border: "1px solid " + (seen.has(d) ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
 							background: seen.has(d) ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
 							color: seen.has(d) ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)",
@@ -13831,7 +13991,7 @@ window.__ModuleLoader__.load({
 										key: "tr", style: { ...S.itemM, marginTop: 2 },
 										title: (f.trail || []).map((t) => DIM_LABEL[t.dim] + "：" + (t.note || "-")).join("\n")
 									}, (f.trail || []).map((t, i) => h("span", {
-										key: i, style: { fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)" }
+										key: i, style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)" }
 									}, (i ? " → " : "") + DIM_ICON[t.dim] + (t.note ? clip(t.note, 22) : DIM_LABEL[t.dim])))) : null
 								]))
 								: h("div", { key: "e", style: S.note, "data-testid": "nd-flow-empty" },
@@ -13965,7 +14125,7 @@ window.__ModuleLoader__.load({
 			const { readInset, watchInset } = __m("util/safe-area.js");
 			const { readConversation } = __m("bridge/chat-bridge.js");
 			const { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } = __m("store/mindmap-schema.js");
-			const { flowStore } = __m("logic/flow.js");
+			const { flowStore, lastFlowIdFor, flowOrigin, DIM } = __m("logic/flow.js");
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { personalizeStore } = __m("store/personalize.js");
 			const { NodeDetailPanel } = __m("components/NodeDetailPanel.js");
@@ -13979,6 +14139,9 @@ window.__ModuleLoader__.load({
 			/** 画布缩放范围 */
 			const ZOOM_MIN = 0.1;
 			const ZOOM_MAX = 3;
+			/** 「适应屏幕」的可读性下限：超长链不再为塞进全部节点而无限缩小（33 节点链会缩到 22%，节点成蚂蚁、💬 按钮点不中）；
+			 *  低于此值就停在 30%，放不下的方向交给滚动 —— 与主流画布工具一致，保证节点可读、控件可点。 */
+			const FIT_MIN = 0.3;
 			/** 判定"这是在拖，不是在点"的位移阈值（px）—— 低于它仍算点击（打开右侧对话） */
 			const DRAG_SLOP = 4;
 			
@@ -14004,8 +14167,11 @@ window.__ModuleLoader__.load({
 				main: { flex: 1, minHeight: 0, display: "flex", overflow: "hidden" },
 				canvasWrap: { flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", overflow: "hidden" },
 				body: { flex: 1, minHeight: 0, position: "relative", overflow: "auto", background: "var(--dp-bg-0, #0b0c0e)" },
-				stageWrap: { position: "relative" },
-				stage: { position: "relative", transformOrigin: "top left" },
+				// 居中不用 flex（flex 的 center/safe-center 在内容窄于视口时会凭空造出横向可滚动区，小地图点击会跳进空白）；
+				// 改为 block + 渲染时按视口与内容包围盒动态算 margin（见 stageWrap），内容大于视口时 margin 归零、正常双向滚动。
+				// overflow:hidden 裁掉内部 stage 按 minW/minH 预留、却落在可见包围盒之外的绘制空白，使其不贡献假滚动。
+				stageWrap: { position: "relative", overflow: "hidden" },
+				stage: { position: "relative", transformOrigin: "top left", userSelect: "none", WebkitUserSelect: "none" },
 				/* ── 节点 ──
 				 * 四型配色来自 NODE_KINDS[kind].accent；选中/悬停只改"描边与光晕"，不改底色。 */
 				node: (sel, hov, kind, dragging) => {
@@ -14018,6 +14184,7 @@ window.__ModuleLoader__.load({
 						borderRadius: "var(--dp-radius, 8px)", padding: "5px 8px 5px 9px",
 						cursor: dragging ? "grabbing" : "grab", color: "var(--dp-t1, #e6e8ec)",
 						boxShadow: dragging ? "var(--dp-shadow, 0 10px 30px rgba(0,0,0,.45))" : sel ? "0 0 0 3px var(--dp-ac-soft, rgba(47,111,235,.16))" : hov ? "0 0 0 3px rgba(75,142,247,.16)" : "none",
+						userSelect: "none", WebkitUserSelect: "none",
 						display: "flex", flexDirection: "column", gap: 3, overflow: "visible",
 						zIndex: dragging ? 9 : sel ? 5 : 1
 					};
@@ -14144,6 +14311,45 @@ window.__ModuleLoader__.load({
 					return () => clearTimeout(t);
 				}, [open]);
 			
+				/* 视口尺寸变化时刷新 view（驱动 stageWrap 的居中 margin 跟随重算），不依赖用户滚动/再点适应 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const el = bodyRef.current;
+					if (!el || typeof ResizeObserver === "undefined") return undefined;
+					const ro = new ResizeObserver(() => { syncView(); });
+					ro.observe(el);
+					return () => ro.disconnect();
+				}, [open]);
+			
+				/* V17 P3：跨界面流转同步反馈 —— 导图覆盖层打开期间，别的维度把一条消息送到思维导图时
+				 * 轻提示「已同步到思维导图」（自己发起的不提示；首次挂载把历史当已读，不翻旧账）。 */
+				const syncSeenRef = react.useRef(lastFlowIdFor(flowSnap.flows, DIM.MINDMAP));
+				react.useEffect(() => {
+					const flows = flowSnap.flows;
+					const latest = lastFlowIdFor(flows, DIM.MINDMAP);
+					if (!open) { syncSeenRef.current = latest; return; } // 关闭期（组件隐藏不卸载）只追基线、不提示，避免一打开就弹旧账
+					if (latest && latest !== syncSeenRef.current) {
+						syncSeenRef.current = latest;
+						const f = flows.find((x) => x.flowId === latest);
+						if (f && flowOrigin(f) && flowOrigin(f) !== DIM.MINDMAP) say("已同步到思维导图");
+					} else if (!latest) {
+						syncSeenRef.current = null;
+					}
+				}, [flowSnap, open]);
+			
+				/* V17 P2 发现性：首次打开导图给一次操作引导（只点真实存在的操作：悬浮工具条 / 右键菜单），localStorage 只提示一次 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					let shown = false;
+					try { shown = localStorage.getItem("dsh.director.mm.hint.shown") === "1"; } catch (e) { /* 隐私模式每次提示可接受 */ }
+					if (shown) return undefined;
+					const t = setTimeout(() => {
+						try { localStorage.setItem("dsh.director.mm.hint.shown", "1"); } catch (e) { /* 忽略 */ }
+						say("悬浮节点出快捷工具条 · 右键节点看全部操作");
+					}, 650);
+					return () => clearTimeout(t);
+				}, [open]);
+			
 				react.useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 			
 				/* 键盘：Esc 逐层退（个性化 → 菜单 → 右侧面板 → 导图）· Ctrl+0/=/- 缩放 · Ctrl+F 搜索 */
@@ -14260,8 +14466,22 @@ window.__ModuleLoader__.load({
 				const collapsedLive = winRows.filter((r) => collapsed.has(r.sessionId)).length;
 				const collapsibleLive = winRows.filter((r) => r.depth > 0 && r.childrenCount > 0).length;
 				const bounds = treeBounds(winRows);
-				const stageW = Math.max(LAYOUT.minW, bounds.x + bounds.w);
-				const stageH = Math.max(LAYOUT.minH, bounds.y + bounds.h);
+				// treeBounds 的 w/h 用 min(minW/minH, …) 做了**封顶**（其注释本意是"节点超出要撑大"，实现却夹了上限），
+				// 33 节点链式树逻辑高约 2708 > minH 1600 时 bounds 会偏小。这里按 winRows 重算**未封顶**的真实内容尺寸，
+				// 保证长树底部节点装得进 stage/wrap（否则 overflow:hidden 会裁掉、滚不到）。bounds 仍保留给 doFit 缩放比例。
+				let realMaxX = 0, realMaxY = 0;
+				for (const rr of winRows) {
+					realMaxX = Math.max(realMaxX, rr.x + LAYOUT.nodeW);
+					realMaxY = Math.max(realMaxY, rr.y + LAYOUT.nodeH);
+				}
+				const contentW = Math.max(bounds.x + bounds.w, realMaxX + LAYOUT.pad);
+				const contentH = Math.max(bounds.y + bounds.h, realMaxY + LAYOUT.pad);
+				const stageW = Math.max(LAYOUT.minW, contentW);
+				const stageH = Math.max(LAYOUT.minH, contentH);
+				// 滚动/居中容器贴合**真实可见包围盒**（不顶 minW、也不被 minH 封顶）：窄长树 fit 后由动态 margin 居中，
+				// 长树放大后底部节点仍可滚入视口。绘制舞台 stageW/H 保留 minW 兜底（SVG 连线/小地图整棵树缩略用）。
+				const wrapW = Math.max(contentW, 320);
+				const wrapH = Math.max(contentH, 240);
 				const matches = matchRows(rows, q);
 				const chain = ancestorChain(rows, sel);
 				const caps = hostCapabilities();
@@ -14281,6 +14501,8 @@ window.__ModuleLoader__.load({
 					if (toastTimer.current) clearTimeout(toastTimer.current);
 					toastTimer.current = setTimeout(() => setToast(""), TOAST_MS);
 				}
+			
+			
 			
 				/* ── 视野同步（小地图用；滚动/缩放后量一次） ── */
 				function syncView() {
@@ -14312,13 +14534,16 @@ window.__ModuleLoader__.load({
 					if (!el || !winRows.length) { if (!silent) say("没有可适应的节点"); return; }
 					const cw = el.clientWidth, ch = el.clientHeight;
 					if (!cw || !ch) { if (!silent) say("画布尚未布局完成，请稍后再试"); return; }
-					const next = Math.max(ZOOM_MIN, Math.min(1.4, Math.min(cw / bounds.w, ch / bounds.h) * 0.96));
+					// 用**未封顶**的真实内容尺寸 contentW/H 算缩放（bounds.h 被 minH 封顶会让长树 fit 后仍溢出）；
+					// 但不低于 FIT_MIN：超长链保留可读性，放不下的方向滚动而非无限缩小。
+					const next = Math.max(FIT_MIN, Math.min(1.4, Math.min(cw / contentW, ch / contentH) * 0.96));
 					setK(next);
 					requestAnimationFrame(() => {
 						const e2 = bodyRef.current;
 						if (!e2) return;
-						e2.scrollLeft = Math.max(0, bounds.x * next - 8);
-						e2.scrollTop = Math.max(0, bounds.y * next - 8);
+						// 内容缩放后放得下 ⇒ 滚动归零，交给动态 margin 居中；被 FIT_MIN 夹住仍放不下才滚到包围盒左上
+						e2.scrollLeft = contentW * next <= cw ? 0 : Math.max(0, bounds.x * next - 8);
+						e2.scrollTop = contentH * next <= ch ? 0 : Math.max(0, bounds.y * next - 8);
 						syncView();
 						if (!silent) say("已适应：可见 " + winRows.length + " 个节点 · " + Math.round(next * 100) + "%");
 					});
@@ -14462,12 +14687,13 @@ window.__ModuleLoader__.load({
 					id: MINDMAP_ID, style: S.root, "data-testid": "mm-root", role: "dialog", "aria-label": "分支导图",
 					"data-inset": inset, "data-lineage": snap.lineage ? "1" : "0", "data-source": snap.source || "none",
 					"data-detail": detailId ? "1" : "0", "data-moved": String(movesCount), "data-edge": pz.edge,
-					className: "dp-textured",
+					className: "dp-textured dp-overlay-in",
 					onClick: () => { if (menu) setMenu(null); }
 				}, [
 					/* ── 顶栏（⚙ 个性化 + ✕ 都落在窗口控件安全区左侧） ── */
 					h("div", { key: "t", style: { ...S.top, paddingRight: padRight }, "data-testid": "mm-top" }, [
 						h("span", { key: "a", style: { fontWeight: 650 } }, "🧠 分支导图"),
+						h("span", { key: "dom", className: "dp-domain map", "data-testid": "mm-domain" }, "❖ 导图"),
 						h("span", {
 							key: "s", style: S.chip, "data-testid": "mm-source",
 							title: snap.lineage
@@ -14597,7 +14823,11 @@ window.__ModuleLoader__.load({
 								key: "b", style: S.body, ref: bodyRef, "data-testid": "mm-body", className: "dp-scroll",
 								onScroll: syncView, onPointerDown: () => { if (menu) setMenu(null); }
 							},
-							h("div", { key: "w", style: { ...S.stageWrap, width: stageW * k, height: stageH * k } }, [
+							h("div", { key: "w", style: {
+								...S.stageWrap, width: wrapW * k, height: wrapH * k,
+								marginLeft: Math.max(0, (view.cw - wrapW * k) / 2),
+								marginTop: Math.max(0, (view.ch - wrapH * k) / 2)
+							} }, [
 								h("div", {
 									key: "s", style: { ...S.stage, width: stageW, height: stageH, transform: "scale(" + k + ")" },
 									"data-testid": "mm-stage", "data-zoom": k
@@ -14646,6 +14876,8 @@ window.__ModuleLoader__.load({
 											/* 拖动：在框体上按下即进入拖动（控件自己 stopPropagation，不会误触） */
 											onPointerDown: (e) => {
 												if (e.button !== 0) return;
+												// 🔴 阻止原生文本选择/原生拖拽把主线程挂进桌面壳原生交互状态机（见 S.node userSelect 注释）
+												e.preventDefault();
 												dragRef.current = { id: r.sessionId, sx: e.clientX, sy: e.clientY, ox: r.x, oy: r.y, moved: false, title: r.title };
 												setSel(r.sessionId);
 											},
@@ -14680,7 +14912,7 @@ window.__ModuleLoader__.load({
 											]),
 											/* 第 2 行：有据徽标（取不到就不写"未知"，退回深度） */
 											h("div", {
-												key: "r2", style: { fontSize: "calc(10px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+												key: "r2", style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 												"data-testid": "mm-node-meta"
 											}, metaLineOf(r) + (r.moved ? " · 已移动" : "")),
 											/* 第 3 行：**单框控件**（用户：「单个框没有展开和折叠的选项」）
@@ -14733,6 +14965,8 @@ window.__ModuleLoader__.load({
 													onPointerDown: (e) => {
 														e.stopPropagation();
 														if (e.button !== 0) return;
+														// 🔴 同节点框：阻止原生文本选择/原生拖拽挂起主线程
+														e.preventDefault();
 														dragRef.current = { id: r.sessionId, sx: e.clientX, sy: e.clientY, ox: r.x, oy: r.y, moved: false, title: r.title };
 														setSel(r.sessionId);
 													}
@@ -14740,7 +14974,7 @@ window.__ModuleLoader__.load({
 												/* 当前会话标记 */
 												r.isCurrent ? h("span", {
 													key: "cu", "data-testid": "mm-current", style: {
-														fontSize: 9, padding: "0 4px", borderRadius: 3,
+														fontSize: 10.5, padding: "0 4px", borderRadius: 3,
 														background: "var(--dp-ac-soft, rgba(47,111,235,.2))", border: "1px solid var(--dp-ac-line, rgba(47,111,235,.5))",
 														color: "var(--dp-ac, #9fc2ff)"
 													}
@@ -14749,7 +14983,7 @@ window.__ModuleLoader__.load({
 											/* 折叠时显示隐藏的子树规模（不是"什么都没有"） */
 											collapsed.has(r.sessionId) ? h("span", {
 												key: "gh", "data-testid": "mm-ghost", style: {
-													position: "absolute", right: -22, top: LAYOUT.nodeH / 2 - 9, fontSize: 9.5,
+													position: "absolute", right: -22, top: LAYOUT.nodeH / 2 - 9, fontSize: 10.5,
 													padding: "1px 5px", borderRadius: 4, background: "var(--dp-bg-2, #20212a)",
 													border: "1px dashed var(--dp-line, #4c525c)", color: "var(--dp-t3, #8b9199)"
 												}
@@ -14807,7 +15041,7 @@ window.__ModuleLoader__.load({
 								}, [
 									h("span", { key: "i" }, it.icon),
 									h("span", { key: "l" }, it.label),
-									!it.enabled ? h("span", { key: "n", style: { marginLeft: "auto", fontSize: 9.5, color: "var(--dp-t3, #4c525c)" } }, "未接通") : null
+									!it.enabled ? h("span", { key: "n", style: { marginLeft: "auto", fontSize: 10.5, color: "var(--dp-t3, #4c525c)" } }, "未接通") : null
 								])))) : null
 							])
 						),
@@ -14825,8 +15059,8 @@ window.__ModuleLoader__.load({
 								const box = e.currentTarget.getBoundingClientRect();
 								const rx = (e.clientX - box.left) / box.width;
 								const ry = (e.clientY - box.top) / box.height;
-								el.scrollLeft = Math.max(0, rx * stageW * k - el.clientWidth / 2);
-								el.scrollTop = Math.max(0, ry * stageH * k - el.clientHeight / 2);
+								el.scrollLeft = Math.max(0, rx * wrapW * k - el.clientWidth / 2);
+								el.scrollTop = Math.max(0, ry * wrapH * k - el.clientHeight / 2);
 								syncView();
 							}
 						}, [
@@ -14846,10 +15080,10 @@ window.__ModuleLoader__.load({
 								key: "vp", "data-testid": "mm-minimap-vp",
 								style: {
 									position: "absolute",
-									left: (view.sl / (stageW * k)) * 100 + "%",
-									top: (view.st / (stageH * k)) * 100 + "%",
-									width: ((view.cw || 0) / (stageW * k)) * 100 + "%",
-									height: ((view.ch || 0) / (stageH * k)) * 100 + "%",
+									left: (view.sl / (wrapW * k)) * 100 + "%",
+									top: (view.st / (wrapH * k)) * 100 + "%",
+									width: ((view.cw || 0) / (wrapW * k)) * 100 + "%",
+									height: ((view.ch || 0) / (wrapH * k)) * 100 + "%",
 									border: "1px solid var(--dp-ac, #9fc2ff)", background: "var(--dp-ac-soft, rgba(47,111,235,.12))"
 								}
 							})
@@ -15003,6 +15237,7 @@ window.__ModuleLoader__.load({
 			
 			const react = require("react");
 			const { directorLayoutStore } = __m("store/layout.js");
+			const { flowStore, lastFlowIdFor: lastFlowId, hasNewFlowFor: hasNewForDim } = __m("logic/flow.js");
 			const { dshLog } = __m("util/debug.js");
 			
 			const h = react.createElement;
@@ -15034,6 +15269,7 @@ window.__ModuleLoader__.load({
 			 *     所以读不到 `dp-root` 上桥接出来的 `--dp-*`（会静默落 fallback）。
 			 *     宿主令牌定义在 `body` 上，可被本图层继承 ⇒ 直接用它才是同源。 */
 			const BTN = {
+				position: "relative",
 				display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5,
 				borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap", backdropFilter: "blur(4px)",
 				boxShadow: "var(--dsw-shadow-lv1, 0 4px 14px rgba(0,0,0,.32))", fontFamily: "inherit",
@@ -15046,6 +15282,8 @@ window.__ModuleLoader__.load({
 				mindmap: { border: "1px solid rgba(47,111,235,.5)", background: "rgba(47,111,235,.16)" },
 				director: { border: "1px solid rgba(137,87,229,.5)", background: "rgba(137,87,229,.18)" }
 			};
+			/* V17 P3 跨界面流转未读点：lastFlowId / hasNewForDim 复用 logic/flow.js 单一真相源，
+			 * 首次挂载把历史流转全视为已读，浮层打开即已读，关闭期间到达的新流转点亮小红点。 */
 			
 			/**
 			 * 浮动按钮组。
@@ -15059,6 +15297,36 @@ window.__ModuleLoader__.load({
 					() => directorLayoutStore.getState(),
 					() => directorLayoutStore.getState()
 				);
+				/* V17 P3：订阅四维流转，计算每个浮层按钮的未读小红点 */
+				const flows = react.useSyncExternalStore(
+					(fn) => flowStore.subscribe(fn),
+					() => flowStore.getState().flows,
+					() => flowStore.getState().flows
+				);
+				const seenRef = react.useRef(null);
+				if (seenRef.current === null) {
+					// 首次挂载：历史流转全部视为已读（不为旧数据亮点）
+					seenRef.current = { design: lastFlowId(flows, "design"), mindmap: lastFlowId(flows, "mindmap"), director: lastFlowId(flows, "director") };
+				}
+				const [, bump] = react.useReducer((x) => x + 1, 0);
+				// 浮层处于打开态 ⇒ 到达它的流转立即已读（打开期间也持续清）
+				react.useEffect(() => {
+					const s = seenRef.current; let changed = false;
+					if (st.designStudioOpen && s.design !== lastFlowId(flows, "design")) { s.design = lastFlowId(flows, "design"); changed = true; }
+					if (st.mindmapOpen && s.mindmap !== lastFlowId(flows, "mindmap")) { s.mindmap = lastFlowId(flows, "mindmap"); changed = true; }
+					if (st.dialogOpen && s.director !== lastFlowId(flows, "director")) { s.director = lastFlowId(flows, "director"); changed = true; }
+					if (changed) bump();
+				}, [st.designStudioOpen, st.mindmapOpen, st.dialogOpen, flows]);
+				const unread = {
+					design: !st.designStudioOpen && hasNewForDim(flows, "design", seenRef.current.design),
+					mindmap: !st.mindmapOpen && hasNewForDim(flows, "mindmap", seenRef.current.mindmap),
+					director: !st.dialogOpen && hasNewForDim(flows, "director", seenRef.current.director)
+				};
+				/** 未读小红点（inline-flex 药丸右上角；testid 供真机断言） */
+				const dot = (dim) => unread[dim] ? h("span", {
+					key: "unread", "data-testid": "d-unread-" + dim,
+					style: { position: "absolute", top: -3, right: -3, width: 8, height: 8, borderRadius: "50%", background: "#f85149", border: "1.5px solid var(--dsw-bg-2,#1c1f24)", boxSizing: "border-box" }
+				}) : null;
 				/* ── 自适应避让原生输入区（2026-09-12 审美调优）──────────────────
 				 * 现象：固定 `bottom:18 / right:18` 时，浮动组与宿主 composer 的「发送」按钮、
 				 *       「1 轮 · 1 步」统计文字**重叠**（真机截图可见），既遮挡又难读。
@@ -15197,12 +15465,9 @@ window.__ModuleLoader__.load({
 				}, []);
 				if (st.floatDockOpen === false) return null;
 			
-				const openDesign = props.onOpenDesign || (() => { directorLayoutStore.setDesignStudio(true); dshLog("design", "浮动入口：打开设计图工作室"); });
-				const openMindmap = props.onOpenMindmap || (() => { directorLayoutStore.setMindmap(true); dshLog("mindmap", "浮动入口：打开分支导图"); });
-				const toggleDirector = () => {
-					const on = directorLayoutStore.getState().dialogOpen;
-					directorLayoutStore.setDialogOpen(!on);
-				};
+				const openDesign = props.onOpenDesign || (() => { directorLayoutStore.toggleOverlay("design"); dshLog("design", "浮动入口：toggle 设计图工作室"); });
+				const openMindmap = props.onOpenMindmap || (() => { directorLayoutStore.toggleOverlay("mindmap"); dshLog("mindmap", "浮动入口：toggle 分支导图"); });
+				const toggleDirector = () => { directorLayoutStore.toggleOverlay("director"); };
 			
 				return h("div", {
 					id: FLOATDOCK_ID, "data-testid": "d-floatdock",
@@ -15225,20 +15490,23 @@ window.__ModuleLoader__.load({
 					}
 				}, [
 					h("button", {
-						key: "design", id: DESIGN_BTN_ID, type: "button", style: { ...BTN, ...V.design },
-						"data-testid": "d-open-design", title: "打开设计图工作室（铺满全屏 · 可拖拽编辑 · 元素带交互逻辑）",
+						key: "design", id: DESIGN_BTN_ID, type: "button",
+						style: { ...BTN, ...V.design, ...(st.designStudioOpen ? { boxShadow: "0 0 0 2px rgba(57,197,207,.6), 0 0 0 5px rgba(57,197,207,.15)" } : {}) },
+						"data-testid": "d-open-design", "data-active": st.designStudioOpen ? "1" : "0", title: "打开设计图工作室（铺满全屏 · 可拖拽编辑 · 元素带交互逻辑）",
 						onClick: openDesign
-					}, [h("span", { key: "i" }, "🖌"), h("span", { key: "t" }, "设计图")]),
+					}, [h("span", { key: "i" }, "🖌"), h("span", { key: "t" }, "设计图"), dot("design")]),
 					h("button", {
-						key: "mindmap", id: MINDMAP_BTN_ID, type: "button", style: { ...BTN, ...V.mindmap },
-						"data-testid": "d-open-mindmap", title: "打开分支导图（血缘树 · 底栏可交总监路由）",
+						key: "mindmap", id: MINDMAP_BTN_ID, type: "button",
+						style: { ...BTN, ...V.mindmap, ...(st.mindmapOpen ? { boxShadow: "0 0 0 2px rgba(47,111,235,.6), 0 0 0 5px rgba(47,111,235,.15)" } : {}) },
+						"data-testid": "d-open-mindmap", "data-active": st.mindmapOpen ? "1" : "0", title: "打开分支导图（血缘树 · 底栏可交总监路由）",
 						onClick: openMindmap
-					}, [h("span", { key: "i" }, "🧠"), h("span", { key: "t" }, "思维导图")]),
+					}, [h("span", { key: "i" }, "🧠"), h("span", { key: "t" }, "思维导图"), dot("mindmap")]),
 					h("button", {
-						key: "director", id: LAUNCHER_ID, type: "button", style: { ...BTN, ...V.director },
-						"aria-label": "打开总监", "data-testid": "d-open-director", title: "打开总监（弹窗三态）",
+						key: "director", id: LAUNCHER_ID, type: "button",
+						style: { ...BTN, ...V.director, ...(st.dialogOpen ? { boxShadow: "0 0 0 2px rgba(137,87,229,.6), 0 0 0 5px rgba(137,87,229,.15)" } : {}) },
+						"aria-label": "打开总监", "data-testid": "d-open-director", "data-active": st.dialogOpen ? "1" : "0", title: "打开总监（弹窗三态）",
 						onClick: toggleDirector
-					}, [h("span", { key: "i" }, "◆"), h("span", { key: "t" }, "总监")])
+					}, [h("span", { key: "i" }, "◆"), h("span", { key: "t" }, "总监"), dot("director")])
 				]);
 			}
 			
@@ -15473,17 +15741,20 @@ window.__ModuleLoader__.load({
 			class SafeLayer extends react.Component {
 				constructor(props) {
 					super(props);
-					this.state = { err: null };
+					this.state = { err: null, showDetail: false, retries: 0 };
 					this.reset = this.reset.bind(this);
 				}
-				static getDerivedStateFromError(err) { return { err }; }
+				static getDerivedStateFromError(err) { return { err, showDetail: false }; } // 不清 retries：保留累计重试次数，否则"崩溃→重试→再崩"会反复归零、永远到不了 giveUp 阈值
 				componentDidCatch(err) {
 					try { dshLog("shell", "层「" + this.props.name + "」渲染异常已隔离（其余层不受影响）: " + ((err && err.message) || err)); } catch (_) {}
 				}
-				reset() { this.setState({ err: null }); }
+				reset() { this.setState((s) => ({ err: null, showDetail: false, retries: (s.retries || 0) + 1 })); }
+				toggleDetail() { this.setState((s) => ({ showDetail: !s.showDetail })); }
 				render() {
 					if (!this.state.err) return this.props.children;
 					const msg = String((this.state.err && this.state.err.message) || this.state.err);
+					const retries = this.state.retries || 0;
+					const giveUp = retries >= 3; // V17 3.7：连续重试 3 次仍失败 ⇒ 明确指引重启
 					return h("div", {
 						style: {
 							position: "fixed", left: 14, bottom: 14, zIndex: 2147483000, maxWidth: 460,
@@ -15493,8 +15764,15 @@ window.__ModuleLoader__.load({
 						},
 						"data-testid": "d-layer-error"
 					}, [
-						h("div", { key: "t", style: { fontWeight: 700, marginBottom: 3 } }, "⚠ 插件层「" + this.props.name + "」异常（已隔离）"),
-						h("div", { key: "m", style: { color: "#f5b7b1", wordBreak: "break-word" } }, msg),
+						h("div", { key: "t", style: { fontWeight: 700, marginBottom: 3 } }, "⚠ 插件层「" + this.props.name + "」出了点小问题（已隔离，其余层不受影响）"),
+						h("div", { key: "d" }, h("button", {
+							key: "dt", type: "button", "data-testid": "d-layer-detail-toggle",
+							style: { background: "none", border: "none", padding: 0, color: "#d4a0a0", cursor: "pointer", fontSize: 10.5, textDecoration: "underline" },
+							onClick: this.toggleDetail
+						}, this.state.showDetail ? "收起技术详情 ▴" : "查看技术详情 ▾")),
+						this.state.showDetail ? h("div", { key: "m", "data-testid": "d-layer-detail", style: { color: "#f5b7b1", wordBreak: "break-word", marginTop: 3 } }, msg) : null,
+						h("div", { key: "h", style: { marginTop: 4, fontSize: 10.5, color: giveUp ? "#ff9a92" : "#d4a0a0", fontWeight: giveUp ? 700 : 400 } },
+							giveUp ? ("已重试 " + retries + " 次仍未恢复，请重启 Harness（重启后其余数据不丢失）") : "其余层不受影响 · 若重试无效请重启 Harness"),
 						h("button", {
 							key: "r", type: "button",
 							style: { marginTop: 6, padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, border: "1px solid rgba(248,81,73,.5)", background: "rgba(248,81,73,.18)", color: "#ffd9d5" },
@@ -16161,7 +16439,7 @@ window.__ModuleLoader__.load({
 				msg: { display: "flex", gap: 6, marginBottom: 6, fontSize: "calc(11.5px * var(--dp-font,1))" },
 				av: (k) => ({
 					width: 18, height: 18, flex: "0 0 18px", borderRadius: "var(--dp-radius-sm, 5px)",
-					display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, fontWeight: 700,
+					display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700,
 					background: k === "user" ? "var(--dp-ac-soft, rgba(47,111,235,.18))" : "var(--dp-ac2-soft, rgba(137,87,229,.22))",
 					color: k === "user" ? "var(--dp-ac, #79a8ff)" : "var(--dp-ac2, #b794f6)"
 				}),
@@ -16172,7 +16450,7 @@ window.__ModuleLoader__.load({
 				},
 				muted: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", lineHeight: 1.55 },
 				src: {
-					fontSize: "calc(9.5px * var(--dp-font,1))", color: "var(--dp-t3, #6f757d)",
+					fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #6f757d)",
 					borderTop: "1px dashed var(--dp-line, #31343a)", marginTop: 6, paddingTop: 4, lineHeight: 1.5
 				}
 			};
@@ -16213,6 +16491,10 @@ window.__ModuleLoader__.load({
 				const [pOpen, setPOpen] = react.useState(false);
 				const [curId, setCurId] = react.useState(null);
 				const [composerOk, setComposerOk] = react.useState(false);
+				/* V17 P2-1：R2/R4/R6 区域可折叠（CSS display 控制，不改 DOM 结构） */
+				// V17 P2：折叠态持久化到 layout store（跨会话保留，首次默认全展开），不再用易失的本地 state
+				const collapsed = st.sectionCollapsed || { r2: false, r4: false, r6: false };
+				const toggleCollapse = (key) => directorLayoutStore.setSectionCollapsed(key, !collapsed[key]);
 				/* 执行态（本轮新增 · 真流转）。deliverMode 是**投递结果**，进 data-* 供断言读 ——
 				 * 界面上只显示一个短词，归因细节走属性，不占版面（用户要求「不用多余的解释」）。 */
 				const [busy, setBusy] = react.useState(false);
@@ -16552,12 +16834,12 @@ window.__ModuleLoader__.load({
 					/* ── R2.5 对话控制台（六动作 + 计数） ── */
 					h("div", { key: "r2", style: { padding: "7px 9px 0", display: "flex", flexDirection: "column", gap: 7 } }, [
 						h("div", { key: "b", style: S.sec, "data-testid": "dp-r25" }, [
-							h("div", { key: "t", style: S.blkT }, [
-								"R2.5 对话控制台",
+							h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r2"), "data-testid": "dp-r2-toggle" }, [
+								(collapsed.r2 ? "▶ " : "▼ ") + "R2.5 对话控制台",
 								h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } },
 									"血缘：" + (branch.lineage ? "已连接" : "降级") + " ｜ 顺序即闭环")
 							]),
-							h("div", { key: "c", style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
+							h("div", { key: "c", style: { display: collapsed.r2 ? "none" : "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
 								...CONSOLE_ACTIONS.map((a) => h("button", {
 									key: a.key, style: {
 										...S.btn,
@@ -16570,14 +16852,14 @@ window.__ModuleLoader__.load({
 								h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-console-counts" },
 									"待办 " + todos.length + " · 活跃分支 " + activeBranches + " · 流转 " + fStats.total +
 									(fStats.multiDim ? "（跨维 " + fStats.multiDim + "）" : "")),
-								h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.setMindmap(true) }, "🧠 打开分支导图"),
-								h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.setDesignStudio(true) }, "🖌 打开设计图"),
+								h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.toggleOverlay("mindmap") }, "🧠 打开分支导图"),
+								h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.toggleOverlay("design") }, "🖌 打开设计图"),
 								h("button", { key: "s", style: S.btn, "data-testid": "dp-sync", onClick: () => { refresh(); refreshBranchTree(); say("已刷新数据"); } }, "↻ 同步")
 							])
 						]),
 			
 						/* ── R2 项目总览（定位 / 目标 / 当前阶段 + 四指标卡） ── */
-						h("div", { key: "a", style: S.sec, "data-testid": "dp-r2" }, [
+						h("div", { key: "a", style: { ...S.sec, display: collapsed.r2 ? "none" : undefined }, "data-testid": "dp-r2" }, [
 							h("div", { key: "t", style: S.blkT }, ["R2 项目总览", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "概述 · 总揽 · 每个数字都标数据源")]),
 							h("div", { key: "c", style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 7 } }, [
 								h("span", { key: "p", style: S.chip }, "定位 · " + clampText((node && node.meta && node.meta.positioning) || "未填写（层级节点 meta.positioning）", 40)),
@@ -16612,14 +16894,15 @@ window.__ModuleLoader__.load({
 						/* R4 项目导航 */
 						h("div", { key: "r4", style: S.col, "data-testid": "dp-r4" },
 							h("div", { key: "s", style: S.sec }, [
-								h("div", { key: "t", style: S.blkT }, "R4 项目导航"),
-								h("div", { key: "seg", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
+								h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r4"), "data-testid": "dp-r4-toggle" },
+									(collapsed.r4 ? "▶ " : "▼ ") + "R4 项目导航"),
+								h("div", { key: "seg", style: { display: collapsed.r4 ? "none" : "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
 									R4_TABS.map((tb) => h("button", {
 										key: tb.key, style: S.seg(r4tab === tb.key), "data-testid": "dp-r4-" + tb.key,
 										"aria-selected": r4tab === tb.key, role: "tab",
 										onClick: () => setR4tab(tb.key)
 									}, tb.label))),
-								h("div", { key: "b", style: S.muted, "data-testid": "dp-r4-body" }, R4_BODY[r4tab])
+								h("div", { key: "b", style: { ...S.muted, display: collapsed.r4 ? "none" : undefined }, "data-testid": "dp-r4-body" }, R4_BODY[r4tab])
 							])),
 			
 						/* R5 当前会话的流转 + 总监消息 */
@@ -16674,7 +16957,7 @@ window.__ModuleLoader__.load({
 														key: d, "data-flow-dim": d, "data-on": ((f.trail || []).some((t) => t.dim === d)) ? "1" : "0",
 														title: DIM_LABEL[d] + (((f.trail || []).some((t) => t.dim === d)) ? "：走过" : "：未走"),
 														style: {
-															fontSize: 9.5, padding: "0 4px", borderRadius: 3,
+															fontSize: 10.5, padding: "0 4px", borderRadius: 3,
 															border: "1px solid " + (((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
 															background: ((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "transparent",
 															color: ((f.trail || []).some((t) => t.dim === d)) ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)", opacity: ((f.trail || []).some((t) => t.dim === d)) ? 1 : 0.6
@@ -16727,8 +17010,16 @@ window.__ModuleLoader__.load({
 					 * 右端按浮动按钮组宽度留白（见 dockReserve 注释）—— 否则「最近：…」会被压在药丸下面 */
 					h("div", { key: "r6", style: { padding: "0 " + (9 + dockReserve) + "px 7px 9px" } },
 						h("div", { style: S.sec, "data-testid": "dp-r6" }, [
-							h("div", { key: "t", style: S.blkT }, ["R6 记忆面板 · 独立数据元", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "库 " + ((stats && stats.name) || "—"))]),
-							h("div", { key: "k", style: { ...S.muted, display: "flex", gap: 12, flexWrap: "wrap" } }, [
+							h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r6"), "data-testid": "dp-r6-toggle" },
+								[(collapsed.r6 ? "▶ " : "▼ ") + "R6 记忆面板 · 独立数据元",
+								// V17 P2：折叠时标题直接给摘要（不必展开就能看到关键计数）
+								collapsed.r6 ? h("span", {
+									key: "sum", "data-testid": "dp-r6-summary",
+									style: { marginLeft: 8, color: "var(--dp-t2, #c3c8ce)", fontWeight: 400, fontSize: "calc(10.5px * var(--dp-font,1))" }
+								}, "节点 " + ((stats && stats.nodes) || 0) + " · 消息 " + ((stats && stats.conversations) || 0)
+									+ " · 决策 " + ((stats && stats.decisions) || 0) + " · 风险 " + ((node && node.risks) ? node.risks.length : 0)) : null,
+								h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } }, "库 " + ((stats && stats.name) || "—"))]),
+							h("div", { key: "k", style: { ...S.muted, display: collapsed.r6 ? "none" : "flex", gap: 12, flexWrap: "wrap" } }, [
 								h("span", { key: "n", "data-testid": "dp-db-nodes" }, "节点 " + ((stats && stats.nodes) || 0)),
 								h("span", { key: "c", "data-testid": "dp-db-msgs" }, "消息 " + ((stats && stats.conversations) || 0)),
 								h("span", { key: "r" }, "审核 " + ((stats && stats.reviews) || 0)),

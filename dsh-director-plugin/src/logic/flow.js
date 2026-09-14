@@ -172,6 +172,26 @@ export function flowLine(flow, sep) {
 	return dims.map((d) => DIM_LABEL[d]).join(sep || " → ");
 }
 
+/** 一条流转的发起维度（trail 第一跳）；V17 P3 跨界面同步反馈用 */
+export function flowOrigin(flow) {
+	const t = flow && Array.isArray(flow.trail) ? flow.trail : [];
+	return t.length ? t[0].dim : null;
+}
+
+/** 最新一条足迹到达 dim 的流转 id（无则 null）；V17 P3 未读/同步提示用 */
+export function lastFlowIdFor(flows, dim) {
+	const list = Array.isArray(flows) ? flows : [];
+	for (let i = list.length - 1; i >= 0; i--) { if (flowDims(list[i]).indexOf(dim) >= 0) return list[i].flowId; }
+	return null;
+}
+
+/** 是否存在比 seenId 更新、且足迹到达 dim 的流转；V17 P3 未读判定 */
+export function hasNewFlowFor(flows, dim, seenId) {
+	const list = Array.isArray(flows) ? flows : [];
+	for (let i = list.length - 1; i >= 0; i--) { if (flowDims(list[i]).indexOf(dim) >= 0) return list[i].flowId !== seenId; }
+	return false;
+}
+
 /** 最后一次足迹（UI 上"现在在哪一维"） */
 export function lastHop(flow) {
 	const t = flow && flow.trail ? flow.trail : [];
@@ -404,7 +424,7 @@ export function installFlowApi() {
 	const api = {
 		DIM, DIM_ORDER, DIM_LABEL, DIM_ICON, FLOW_STATUS, FLOW_STATUS_LABEL, PENDING_LABEL,
 		FLOW_KEY, FLOW_MAX,
-		flowId, clip, makeFlow, hopFlow, flowDims, flowLine, lastHop, lastTouchOf,
+		flowId, clip, makeFlow, hopFlow, flowDims, flowLine, flowOrigin, lastFlowIdFor, hasNewFlowFor, lastHop, lastTouchOf,
 		flowsOf, latestFlow, currentTaskOf, flowStats, flowsBySession,
 		store: flowStore
 	};

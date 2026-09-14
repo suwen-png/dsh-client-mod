@@ -43,6 +43,11 @@ ws.addEventListener("message", (ev) => {
 	if (m.id !== undefined && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result); }
 });
 const send = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); });
+/* fire-and-forget：不等 CDP 响应（响应回来时 pending 无记录会被自动忽略）。
+ * 🔴 实测本 Electron 环境 Input.dispatchMouseEvent 的**响应**稳定延迟约 5s，而事件本身立即送达
+ * （对照：Runtime.evaluate 往返仅 2ms）。坐标点击绝不能 await Input 响应，否则一次点击串行
+ * 3 个事件要 15s，「2.5s 内二次确认删除」这类时序窗口必然被打穿（假失败，非产品缺陷）。 */
+const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify({ id, method, params })); };
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
 
@@ -69,26 +74,29 @@ const clickLog = [];
 
 async function clickAt(x, y) {
 	const X = Math.round(x), Y = Math.round(y);
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: X, y: Y });
-	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 });
+	// Input 事件 fire-and-forget（理由见 emit 定义）；WebSocket 保序，短 sleep 等页面处理即可
+	emit("Input.dispatchMouseEvent", { type: "mouseMoved", x: X, y: Y });
+	emit("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 });
 	await sleep(35);
-	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
+	emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
+	await sleep(20);
 }
 async function drag(x1, y1, x2, y2, steps = 8) {
-	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x1), y: Math.round(y1) });
-	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(x1), y: Math.round(y1), button: "left", clickCount: 1, buttons: 1 });
+	emit("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x1), y: Math.round(y1) });
+	emit("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(x1), y: Math.round(y1), button: "left", clickCount: 1, buttons: 1 });
 	for (let i = 1; i <= steps; i++) {
 		const x = x1 + ((x2 - x1) * i) / steps, y = y1 + ((y2 - y1) * i) / steps;
-		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x), y: Math.round(y), buttons: 1 });
+		emit("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x), y: Math.round(y), buttons: 1 });
 		await sleep(18);
 	}
-	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(x2), y: Math.round(y2), button: "left", clickCount: 1, buttons: 0 });
+	emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(x2), y: Math.round(y2), button: "left", clickCount: 1, buttons: 0 });
+	await sleep(20);
 }
 async function key(k, code, extra = {}) {
 	const base = { key: k, code, windowsVirtualKeyCode: extra.vk || 0, nativeVirtualKeyCode: extra.vk || 0, modifiers: extra.mod || 0 };
-	await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+	emit("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
 	await sleep(25);
-	await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+	emit("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 	await sleep(60);
 }
 async function rectOf(sel) {
@@ -114,6 +122,26 @@ async function clickTestId(tid) {
 	if (!hit?.okSelf) clickMisses.push({ target: tid, landedOn: hit?.top, chain: hit?.chain, at: [Math.round(r.cx), Math.round(r.cy)] });
 	await clickAt(r.cx, r.cy);
 	return { ok: true, rect: r, hit };
+}
+/**
+ * 点击顶栏动作按钮（V17 P2-2 响应式适配）。
+ * 窄窗口（<1500）下「复制 / 重载框架 / 导出」收入「更多 ▾」下拉菜单，
+ * 菜单关闭时这些按钮不在可见布局中（坐标点击会落空）⇒ 先探测，
+ * 若目标不可见则先点 ds-more 展开菜单，再点目标。这与真人路径一致。
+ */
+async function clickTopAction(tid) {
+	const visible = await js(`(function(){
+		var e = document.querySelector('[data-testid=${JSON.stringify(tid)}]');
+		if (!e) return false;
+		var r = e.getBoundingClientRect();
+		return r.width >= 1 && r.height >= 1;
+	})()`);
+	if (!visible) {
+		const more = await clickTestId("ds-more");
+		if (!more.ok) return more;
+		await sleep(220);
+	}
+	return await clickTestId(tid);
 }
 /** 当前选中元素 id（从逻辑面板的 data-el-id 读，这是唯一可靠来源） */
 async function selectedId() {
@@ -469,7 +497,7 @@ assert("C8.5", "修订留痕进对话流", threadMsg, "thread 含「你：」= "
 
 /* ══ C10 标准框架映射 ══ */
 console.log("\n【C10】标准设计图框架映射");
-await clickTestId("ds-frame");
+await clickTopAction("ds-frame");
 await sleep(1000);
 const fr = await js(`(function(){
 	var n=document.querySelectorAll('[data-testid=ds-el]').length;
@@ -761,33 +789,45 @@ assert("C14.6", "重命名生效（文档选择器出现新名）",
 	typedName === "ok" && top4.options.some((o) => /C14 改名验证/.test(o)), { typedName, options: top4.options });
 
 // 复制图
-await clickTestId("ds-dup-doc");
+await clickTopAction("ds-dup-doc");
 await sleep(800);
 const top5 = await readTop();
 assert("C14.7", "复制图 ⇒ 文档数 +1 且新图名带「副本」",
 	top5.docs === top4.docs + 1 && top5.options.some((o) => /副本/.test(o)), { before: top4.docs, after: top5.docs, options: top5.options });
 
 // 删除图：**二次点击确认**（不可逆操作不上膛即删）
+// 🔴 两次点击必须落在产品的 2.5s 防误删上膛窗口内：原写法两击之间插 sleep500 + readTop，
+// 叠加 clickTestId 自身的 CDP 往返，实测两击间隔可达 5.6s > 2.5s ⇒ 第二击时已自动泄压、
+// 重新走了上膛分支（假失败，非产品缺陷）。故两击之间只做最轻量读取、sleep 压到 150ms。
 await clickTestId("ds-del-doc");
-await sleep(500);
-const afterArm = await readTop();
+await sleep(150);
+const afterArmDocs = await js(`document.querySelectorAll('[data-testid=ds-doclist] option').length`);
+const afterArmFlag = await js(`document.querySelector('[data-testid=ds-del-doc]').getAttribute('data-armed')`);
 await clickTestId("ds-del-doc");
 await sleep(800);
 const afterDel = await readTop();
-assert("C14.8", "🔴 删图需二次点击：首次只上膛，图仍在", afterArm.docs === top5.docs, { armed: afterArm.docs, was: top5.docs });
+assert("C14.8", "🔴 删图需二次点击：首次只上膛（data-armed=1），图仍在",
+	afterArmFlag === "1" && afterArmDocs === top5.docs, { armed: afterArmFlag, docs: afterArmDocs, was: top5.docs });
 assert("C14.8b", "第二次点击才真删 ⇒ 文档数 -1", afterDel.docs === top5.docs - 1, { before: top5.docs, after: afterDel.docs });
 
 // 导出（剪贴板在无头环境可能不可用 —— 只断言"有入口且给出反馈，不静默"）
+// V17 P2-2：窄窗口下 ds-export 收入「更多」菜单（菜单关闭时不在 DOM）⇒ 先展开菜单
 const expClicked = await js(`(function(){
-	var b = document.querySelector('[data-testid=ds-export]');
-	if (!b) return "no-btn";
-	b.click();
-	return "clicked";
-})()`);
+		var b = document.querySelector('[data-testid=ds-export]');
+		if (!b) { var m = document.querySelector('[data-testid=ds-more]'); if (m) m.click(); }
+		return "need-recheck";
+	})()`);
+if (expClicked === "need-recheck") await sleep(220);
+const expClicked2 = await js(`(function(){
+		var b = document.querySelector('[data-testid=ds-export]');
+		if (!b) return "no-btn";
+		b.click();
+		return "clicked";
+	})()`);
 await sleep(700);
 const expToast = await js(`(function(){var t=document.querySelector('[data-testid=ds-toast]');return t?t.textContent:null;})()`);
 assert("C14.9", "导出有入口且点击后给出反馈（成功/失败都不静默）",
-	expClicked === "clicked" && !!expToast, { expClicked, expToast });
+	expClicked2 === "clicked" && !!expToast, { expClicked: expClicked2, expToast });
 
 /* ══ C15 窗口控件安全区（用户报「关闭按钮和标准软件的关闭按钮重叠了」）══ */
 console.log("\n【C15】窗口控件安全区（✕ 与原生窗口按钮重叠的根治）");
@@ -940,7 +980,7 @@ assert("C16.4", "改名时 <select> 与替换它的 <input> 同宽（select 曾�
 	selW2 != null && inpW != null && selW2 === inpW, { select: selW2, input: inpW });
 
 /* C16.5 导出必须真的能把数据交到手上（曾固定在"复制失败：剪贴板不可用"⇒ 功能等于没有） */
-await clickTestId("ds-export"); await sleep(500);
+await clickTopAction("ds-export"); await sleep(500);
 const exp = await js(`(function(){
 	var t = document.querySelector('[data-testid=ds-toast]');
 	return { toast: t ? t.textContent.trim() : null, panel: !!document.querySelector('[data-testid=ds-export-panel]') };

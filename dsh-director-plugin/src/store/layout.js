@@ -107,7 +107,10 @@ const DEFAULTS = Object.freeze({
 	 * 🔴 只存**用户拖过的**节点（未拖过的走自动布局）⇒ 数据量最小、自动布局改动仍能生效。
 	 *    形如 { "<sessionId>": { x, y } }
 	 */
-	mmPos: {}
+	mmPos: {},
+	/* ── V17 P2：总监页 R2/R4/R6 区域折叠偏好（跨会话持久化，首次默认全展开）──
+	 *   只新增字段，不动既有键（R5）。形如 { r2:false, r4:false, r6:false }。 */
+	sectionCollapsed: { r2: false, r4: false, r6: false }
 });
 
 export function createDirectorLayoutStore() {
@@ -124,6 +127,8 @@ export function createDirectorLayoutStore() {
 			}
 		}
 	} catch (e) { /* 解析失败 → 用默认值 */ }
+	// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
+	state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
 	const listeners = new Set();
 	function notify() {
 		try { if (typeof localStorage !== "undefined") localStorage.setItem(DIRECTOR_LAYOUT_KEY, JSON.stringify(state)); } catch (e) { /* 隐私模式 */ }
@@ -196,6 +201,22 @@ export function createDirectorLayoutStore() {
 		/* ── 本轮新增：分支导图覆盖层 ─────────────────────────── */
 		setMindmap: (v) => { state = { ...state, mindmapOpen: Boolean(v) }; notify(); },
 		toggleMindmap: () => { state = { ...state, mindmapOpen: !state.mindmapOpen }; notify(); },
+		/**
+		 * V17 P1：统一浮层切换入口（FloatDock 三按钮共用）。
+		 * 打开目标浮层时关闭其他两个，避免多层浮层叠加；目标已打开则关闭（toggle）。
+		 * @param {"design"|"mindmap"|"director"} type
+		 */
+		toggleOverlay: (type) => {
+			const t = String(type || "");
+			const next = { ...state, designStudioOpen: false, mindmapOpen: false, dialogOpen: false, dialogCollapsed: false };
+			if (t === "design") next.designStudioOpen = !state.designStudioOpen;
+			else if (t === "mindmap") next.mindmapOpen = !state.mindmapOpen;
+			else if (t === "director") next.dialogOpen = !state.dialogOpen;
+			else return false;
+			state = next;
+			notify();
+			return true;
+		},
 		/** 记录用户把某个框拖到哪（**只改画面位置，不改血缘**） */
 		setNodePos: (sessionId, pos) => {
 			if (!sessionId || !pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false;
@@ -215,6 +236,14 @@ export function createDirectorLayoutStore() {
 		/** 全部归位（"自动布局"按钮） */
 		resetNodePos: () => {
 			state = { ...state, mmPos: {} };
+			notify();
+			return true;
+		},
+		/** V17 P2：切换/设置总监页区域折叠态（r2/r4/r6），并持久化 */
+		setSectionCollapsed: (key, v) => {
+			if (["r2", "r4", "r6"].indexOf(String(key)) < 0) return false;
+			const prev = state.sectionCollapsed || {};
+			state = { ...state, sectionCollapsed: { ...prev, [String(key)]: Boolean(v) } };
 			notify();
 			return true;
 		}

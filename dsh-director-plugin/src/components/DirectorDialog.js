@@ -48,6 +48,7 @@ import { appendDirectorMessage, listDirectorMessages, pluginDbStats, PLUGIN_DB_N
 import { DirectorWorkbench } from "./DirectorWorkbench.js";
 import { DirectorHierarchy } from "./DirectorHierarchy.js";
 import { dshLog } from "../util/debug.js";
+import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
 /* 右上角「⚙ 个性化」—— 与总监页 / 设计图 / 导图**共用同一个组件与同一份持久化**。
  * 需求原文：「…同时都在右上角加自定义个性化设定」。 */
 import { PersonalizePanel } from "./PersonalizePanel.js";
@@ -143,7 +144,7 @@ const S = {
 	}),
 	muted: { fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.6 },
 	msg: { display: "flex", gap: 6, marginBottom: 6 },
-	av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 9.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
+	av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
 	bub: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
 };
 
@@ -189,8 +190,8 @@ function RouteCard({ result, onConfirm, onCancel, busy }) {
 function ReviewCard({ result, onRun, busy }) {
 	return h("div", { style: S.blk, "data-testid": "d-review" }, [
 		h("div", { key: "t", style: S.blkT }, [
-			"R6 六维审核（17号文 §1A.9，不得减项）",
-			h("button", { key: "r", style: { ...S.btnGhost, marginLeft: "auto" }, "data-testid": "d-review-run", disabled: busy, onClick: onRun }, "重跑审核")
+			h("span", { key: "tt", style: { flex: 1, minWidth: 0 } }, "R6 六维审核（17号文 §1A.9，不得减项）"),
+			h("button", { key: "r", style: { ...S.btnGhost, marginLeft: "auto", flexShrink: 0 }, "data-testid": "d-review-run", disabled: busy, onClick: onRun }, "重跑审核")
 		]),
 		result
 			? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-review-dim": d.key, "data-status": d.status }, [
@@ -239,7 +240,7 @@ function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns
 					? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
 						h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 						h("div", { key: "b", style: S.bub }, [
-							m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
+							m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
 							h("span", { key: "t2" }, m.text)
 						])
 					]))
@@ -319,6 +320,34 @@ export function DirectorDialog(props = {}) {
 	const [draft, setDraft] = react.useState("");
 	const [busy, setBusy] = react.useState(false);
 	const [toast, setToast] = react.useState("");
+	// V17 审校补漏：toast 与导图/设计图一致，约 2.2s 自动消失（原先只靠下一条覆盖，会常驻不消失）
+	const toastTimerRef = react.useRef(null);
+	react.useEffect(() => {
+		if (!toast) return undefined;
+		if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+		toastTimerRef.current = setTimeout(() => setToast(""), 2200);
+		return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
+	}, [toast]);
+	/* V17 P3：跨界面流转同步反馈 —— 弹窗打开期间别的维度把消息送到总监时轻提示；
+	 * 关闭期间不提示（未读交给 FloatDock 小圆点），并把基线推进到最新避免一开就弹旧账。 */
+	const flowSnap = react.useSyncExternalStore(
+		(fn) => flowStore.subscribe(fn),
+		() => flowStore.getState(),
+		() => flowStore.getState()
+	);
+	const dlgSyncSeenRef = react.useRef(lastFlowIdFor((flowStore.getState() || {}).flows, DIM.DIRECTOR));
+	react.useEffect(() => {
+		const flows = flowSnap.flows;
+		const latest = lastFlowIdFor(flows, DIM.DIRECTOR);
+		if (!open) { dlgSyncSeenRef.current = latest; return; }
+		if (latest && latest !== dlgSyncSeenRef.current) {
+			dlgSyncSeenRef.current = latest;
+			const f = flows.find((x) => x.flowId === latest);
+			if (f && flowOrigin(f) && flowOrigin(f) !== DIM.DIRECTOR) setToast("已同步到总监");
+		} else if (!latest) {
+			dlgSyncSeenRef.current = null;
+		}
+	}, [flowSnap, open]);
 	const [dragW, setDragW] = react.useState(null);
 	const [unread, setUnread] = react.useState(0);
 	/* 右上角「⚙ 个性化」开合 —— 与其他三处同一个面板组件。
@@ -474,6 +503,8 @@ export function DirectorDialog(props = {}) {
 	}, [onDragMove, calcDragW]);
 
 	const startDrag = (e) => {
+		// 🔴 同 MindMap/DesignStudio：阻止原生文本选择把主线程挂进桌面壳原生交互状态机
+		e.preventDefault();
 		dragRef.current = { x0: e.clientX, w0: panelWidth };
 		document.addEventListener("pointermove", onDragMove);
 		document.addEventListener("pointerup", onDragEnd);
@@ -574,7 +605,7 @@ export function DirectorDialog(props = {}) {
 		}, [
 			h("span", { key: "i" }, "◆"),
 			h("span", { key: "t" }, "总监 · " + ((node && node.name) || "全局总管")),
-			unread > 0 ? h("span", { key: "c", style: { background: "#f85149", color: "#fff", borderRadius: 9, padding: "1px 6px", fontSize: 10 } }, String(unread)) : null
+			unread > 0 ? h("span", { key: "c", style: { background: "#f85149", color: "#fff", borderRadius: 9, padding: "1px 6px", fontSize: 10.5 } }, String(unread)) : null
 		]));
 	}
 
@@ -622,11 +653,11 @@ export function DirectorDialog(props = {}) {
 				//    使既有逐交互脚本「点第一行 → 选中态迁移」失效（2026-09-12 真机实测踩中）。
 				role: "dialog", "aria-label": "总监面板", "data-testid": "d-panel", "data-active-node-id": nodeId,
 				/* 质感类（三档纹理由 store/personalize.js 注入的样式表按 html[data-dp-texture] 命中） */
-				className: "dp-textured", "data-personalize-open": pOpen ? "1" : "0"
+				className: "dp-textured dp-overlay-in", "data-personalize-open": pOpen ? "1" : "0"
 			}, [
 				/* mhead：R1 顶部栏 + 层级切换器（I5）*/
 				h("div", { key: "h", style: S.head }, [
-					h("span", { key: "t", style: S.headTitle }, "◆ 总监"),
+					h("span", { key: "t", className: "dp-domain dir", "data-testid": "d-domain" }, "◆ 总监"),
 					h("select", {
 						key: "sel", "data-testid": "d-level", "aria-label": "切换层级",
 						value: nodeId,
@@ -667,7 +698,7 @@ export function DirectorDialog(props = {}) {
 					h("span", {
 						key: "fc", "data-testid": "d-focus", "data-target": st.focusTarget,
 						style: {
-							fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
+							fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
 							border: "1px solid " + (st.focusTarget === "director" ? "rgba(137,87,229,.45)" : "rgba(47,111,235,.5)"),
 							background: st.focusTarget === "director" ? "rgba(137,87,229,.16)" : "rgba(47,111,235,.16)",
 							color: st.focusTarget === "director" ? "#b794f6" : "#79a8ff", cursor: "pointer"
@@ -712,7 +743,7 @@ export function DirectorDialog(props = {}) {
 			}
 		}, h("div", {
 			style: {
-				position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10,
+				position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
 				color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
 			}
 		}, "● 与「对话 tab」同源（同一渲染节点）")) : null,
