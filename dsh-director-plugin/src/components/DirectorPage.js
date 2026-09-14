@@ -2,7 +2,7 @@
  * 职责：总监页（宿主原生 tab 环里的第一个视图）
  * 引用：—
  * 上游：client-entry.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, util/debug.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, util/safe-area.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, util/safe-area.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -57,7 +57,7 @@
 
 import * as react from "react";
 import { directorLayoutStore } from "../store/layout.js";
-import { loadTree, getBreadcrumb, LEVEL_LABEL, LEVEL, GLOBAL_NODE_ID, countByLevel } from "../store/hierarchy.js";
+import { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel, SCOPE_KIND, scopeKindOf, scopeKeyOf, scopeHasConversation, findNodeBySessionId } from "../store/hierarchy.js";
 import { onHierarchyChange } from "../util/bus.js";
 import { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos, listReviews } from "../store/plugin-db.js";
 import { route, DESTINATION, DESTINATION_LABEL, review6 } from "../logic/routing.js";
@@ -112,13 +112,17 @@ const RES_SKILLS = [
 	{ key: "refactor", label: "⚙️ 重构" }
 ];
 
-/** R1 层级 chips（设计稿 A1：全局级 / 项目级 ▸ 当前 / 文件夹级 / 对话级） */
-const LEVEL_CHIPS = Object.freeze([
-	{ level: LEVEL.GLOBAL, label: "全局级" },
-	{ level: LEVEL.PROJECT, label: "项目级" },
-	{ level: "folder", label: "文件夹级" },
-	{ level: LEVEL.SESSION, label: "对话级" }
-]);
+/* ── R1 层级 chips：**已删除**（2026-09-14 第 4 批 · 用户原话）───────────────
+ *   「这个就是这一列 只保留一个文档的切换，和设置放在 2.5 上，其他的都不要」
+ *   原先这里有 4 枚 chip（全局级 / 项目级 / 文件夹级 / 对话级），但它们
+ *   **从来没有点击行为**（`cursor: "default"`，只做静态展示），且其中
+ *   `{ level: "folder" }` 在 `LEVEL` 里**根本不存在**（`LEVEL` 只有
+ *   global/project/session，见 store/hierarchy.js）⇒ 那枚"文件夹级"永远不会点亮，
+ *   属"看着有用、其实只有一个真相源在动"的装饰。删掉它不损失任何能力：
+ *   当前层级由下拉项文案（`层级标签 · 节点名`）唯一表达。
+ *   ⚠️ 对应锚点 `dp-lv-*` 随之消失；`verify-walk.mjs` 的可点元素正则里那一项
+ *      同步清掉（否则是一处会误导后续维护者的死模式）。
+ */
 
 /** R2.5 六动作（设计稿 A1：顺序即闭环）
  *  🔴 第七轮新增「统筹」——「我提供一个想法……后续的开发文档编写、审核、蓝图设计、测试
@@ -151,10 +155,8 @@ const S = {
 		border: "1px solid var(--dp-line, #31343a)", borderRadius: "var(--dp-radius, 8px)",
 		background: "var(--dp-bg-1, #1c1e22)", padding: "calc(7px * var(--dp-density,1)) calc(9px * var(--dp-density,1))"
 	},
-	r1: {
-		display: "flex", alignItems: "center", gap: 7, padding: "6px 9px",
-		borderBottom: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto", background: "var(--dp-bg-1, transparent)"
-	},
+	/* ⚠️ 原 `r1` 样式（顶部栏）已于 2026-09-14 第 4 批删除 —— R1 整行取消，
+	 *    两个控件并入 R2.5 标题行。留一个没人用的样式对象只会让下一个人以为还有 R1。 */
 	r3: {
 		display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "5px 9px",
 		borderBottom: "1px solid var(--dp-line, #31343a)", flex: "0 0 auto"
@@ -293,8 +295,28 @@ export function DirectorPage() {
 	react.useEffect(() => { refresh(); }, [refresh]);
 	react.useEffect(() => onHierarchyChange(() => refresh()), [refresh]);
 	react.useEffect(() => { refreshBranchTree().catch(() => { }); return subscribeBranch(setBranch); }, []);
-	/* 跟随宿主当前会话（左栏点会话插件收不到事件 ⇒ 轮询单字段） */
-	react.useEffect(() => watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); }), []);
+	/* 跟随宿主当前会话（左栏点会话插件收不到事件 ⇒ 轮询单字段）。
+	 * ⚠️ 2026-09-14 第 4 批：这里**不再直接写 flowStore.setActiveSession** ——
+	 *    作用域已由下拉唯一决定（见文件下方 scope 注释块），流转归属统一由 scopeKey 派生。 */
+	react.useEffect(() => watchCurrentSession((id) => setCurId(id)), []);
+	/* 宿主切了会话 ⇒ 把**下拉**也切到对应节点（用户：「就相当于切对话了」）。
+	 *
+	 * 🔴 三条边界，缺一条就会变成"抢用户的鼠标"：
+	 *   ① **同一个会话只跟随一次**（`lastFollowRef`）—— 否则用户在总监页手动选到
+	 *      「全局总管」后，任何一次重渲染都会把他弹回会话节点（下拉按不动）。
+	 *   ② **树未加载 / 反查不到节点 ⇒ 不动**，不猜一个节点顶替（宁可保持原选择）。
+	 *   ③ 只在真的不同值时写 `activeNodeId`（同值写入会白触发一轮全页刷新）。
+	 * ⚠️ 本 hook 只依赖在它**之前**就已定义的 tree / curId / st，不得引用下方
+	 *    才声明的 `scopeKey`（否则是 TDZ 报错，不是"没生效"）。 */
+	const lastFollowRef = react.useRef(null);
+	react.useEffect(() => {
+		if (!tree || !curId) return;
+		if (lastFollowRef.current === curId) return;
+		const n = findNodeBySessionId(tree, curId);
+		if (!n) return;
+		lastFollowRef.current = curId;
+		if (st.activeNodeId !== n.id) directorLayoutStore.setActiveNode(n.id);
+	}, [tree, curId, st.activeNodeId]);
 	/* 原生 composer 是否可用 —— ⚠️ 只用来**显示状态**，不用来**禁用按钮**。
 	 *
 	 * 🔴 2026-09-12 真机补漏：原先「登记流转」写成 `disabled: !composerOk`，
@@ -325,12 +347,36 @@ export function DirectorPage() {
 	const rows = (branch.tree && branch.tree.rows) || [];
 	const activeBranches = rows.filter((r) => r.childrenCount > 0).length;
 	const fStats = flowStats(fs.flows);
-	/** 本页显示"哪个会话的流转"：优先宿主当前会话，否则用当前层级节点 */
-	const flowSession = curId || (nodeId && String(nodeId).indexOf("s_") === 0 ? nodeId : null);
+	/* ── 作用域（scope）唯一真相源 ────────────────────────────────────────
+	 * 🔴 2026-09-14 第 4 批 · 需求 ②③（用户原话见 store/hierarchy.js 的 scope 注释块）：
+	 *    「我在下列表切换的时候，我下面的总监和对话数据也要一起变，就是相当于切对话了；
+	 *      切换文件夹的时候不需要对话，因为没有」
+	 *    ⇒ 本页**只认下拉选中的节点**（`st.activeNodeId`）。原先这里写的是
+	 *      `curId || (nodeId 以 s_ 开头 ? nodeId : null)` —— 即**宿主当前会话压倒一切**：
+	 *      用户把下拉切到别的节点，`curId` 没变，R5 仍按宿主会话过滤 ⇒
+	 *      "切了下拉数据不动"，正是他报的现象。
+	 *    ⇒ 现在：scope 由节点决定；宿主切会话时**反向写回 activeNodeId**（见下面的跟随 effect），
+	 *      于是"点左侧切对话、插件跟着切"的能力仍在，而真相源只剩一处。
+	 * 三态：会话节点 → 真实会话 id；文件夹/全局节点 → 节点 id（各自一份总监数据，且**没有对话**）。 */
+	const scopeKind = scopeKindOf(node);
+	const scopeKey = scopeKeyOf(nodeId, node);
+	const scopeHasChat = scopeHasConversation(node);
+	/** 本页显示"哪个作用域的流转"（= scopeKey，见上） */
+	const flowSession = scopeKey;
 	const sessionFlows = flowStore.ofSession(flowSession);
 	const latest = sessionFlows.length ? sessionFlows[sessionFlows.length - 1] : null;
-	const nowRow = rows.find((r) => r.sessionId === flowSession) || (flowSession ? { sessionId: flowSession, title: "该对话", state: "idle" } : null);
+	/* ⚠️ 只在该作用域**真有对话**时才有"会话行"可比对；文件夹/全局作用域下
+	 *    伪造一行 `{title:"该对话"}` 会让「现在在做的事」说出不存在的话
+	 *    （项目纪律：读不到就说读不到，不编）。故非会话作用域传 null。 */
+	const nowRow = scopeHasChat
+		? (rows.find((r) => r.sessionId === scopeKey) || { sessionId: scopeKey, title: "该对话", state: "idle" })
+		: null;
 	const now = currentTaskOf({ node: nowRow, flow: latest, flowList: sessionFlows, msgs });
+	/** 作用域的中文种类名（空态文案与 title 用；不编层级名） */
+	const scopeKindLabel = scopeKind === SCOPE_KIND.SESSION ? "对话级"
+		: scopeKind === SCOPE_KIND.FOLDER ? "文件夹级" : "全局级";
+	/* 作用域变更 → 流转层的"当前会话"（flow.js 的 activeSessionId，供跨界面未读提示用） */
+	react.useEffect(() => { flowStore.setActiveSession(scopeKey); }, [scopeKey]);
 	const todoDone = todos.filter((t) => t.done === true || t.status === "done").length;
 	const todoRate = todos.length ? Math.round((todoDone / todos.length) * 100) : 0;
 	/* 问题记录（R5）：未通过的审核 + 节点风险 —— 两个源都是真实库，不编数 */
@@ -552,52 +598,68 @@ export function DirectorPage() {
 
 	return h("div", {
 		id: DIRECTOR_PAGE_ID, style: S.root, "data-testid": "dp-root", className: "dp-textured",
-		"data-focus-target": st.focusTarget, "data-flow-session": flowSession || "", "data-composer": composerOk ? "1" : "0",
+		"data-focus-target": st.focusTarget, "data-composer": composerOk ? "1" : "0",
+		/* `data-flow-session`：**宿主当前会话**（既有语义，verify-flow 的会话复原判据用它，勿改）。
+		 * 作用域另开两个属性——两者在"作用域=该会话"时相等，在"作用域=文件夹/全局"时**必须不同**，
+		 * 若混用一个属性，闸门就分不清"看的是文件夹"还是"会话漂了"（2026-09-14 第 4 批）。 */
+		"data-flow-session": (curId || flowSession) || "",
+		"data-scope": scopeKey, "data-scope-kind": scopeKind,
 		"data-texture": pz.texture,
 		/* 执行链路的**可断言面**（界面只显示短词，归因走属性 —— 用户要求「不用多余的解释」） */
 		"data-deliver-mode": deliverMode, "data-deliver-via": deliverVia,
 		"data-busy": busy ? "1" : "0", "data-run-grade": runGrade || ""
 	}, [
-		/* ── R1 顶部栏（设计稿 A1：📁 名称 ▾ + 层级 chips + 右上 ⚙） ── */
-		h("div", { key: "r1", style: { ...S.r1, paddingRight: Math.max(9, inset + 9) }, "data-testid": "dp-r1" }, [
-			h("span", { key: "t", style: { fontWeight: 650, whiteSpace: "nowrap" } }, "📁"),
-			h("select", {
-				key: "sel", "data-testid": "dp-level", "aria-label": "切换层级节点", value: nodeId,
-				onChange: (e) => { directorLayoutStore.setActiveNode(e.target.value); },
-				title: "选择当前治理的层级节点（全局 / 项目 / 会话）",
-				style: {
-					maxWidth: 190, height: 22, fontSize: "calc(11px * var(--dp-font,1))",
-					borderRadius: "var(--dp-radius-sm, 5px)", border: "1px solid var(--dp-line, #3d4148)",
-					background: "var(--dp-bg-2, #212429)", color: "var(--dp-t1, #e8eaed)"
-				}
-			}, buildOptions(tree)),
-			...LEVEL_CHIPS.map((c) => h("span", {
-				key: c.label, "data-testid": "dp-lv-" + c.level, "data-on": String(node && node.level === c.level) === "true" ? "1" : "0",
-				style: {
-					...S.chip, cursor: "default", opacity: node && node.level === c.level ? 1 : 0.55,
-					borderColor: node && node.level === c.level ? "var(--dp-ac-line, rgba(137,87,229,.4))" : "var(--dp-line, #31343a)",
-					background: node && node.level === c.level ? "var(--dp-ac-soft, rgba(137,87,229,.16))" : "transparent",
-					color: node && node.level === c.level ? "var(--dp-ac, #b794f6)" : "var(--dp-t3, #8b9199)"
-				},
-				title: "层级：" + c.label + (node && node.level === c.level ? "（当前）" : "（点上面的下拉可切到该层级）")
-			}, c.label + (node && node.level === c.level ? " ▸ 当前" : ""))),
-			h("span", { key: "b", style: { ...S.muted, marginLeft: "auto", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, "data-testid": "dp-crumb", title: crumbs.map((c) => c.name).join(" / ") },
-				crumbs.length ? crumbs.map((c) => c.name).join(" / ") : "全局总管"),
-			h("button", {
-				key: "p", style: S.btn, "data-testid": "dp-personalize",
-				title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角（与导图 / 弹窗 / 设计图共用同一份）",
-				onClick: () => setPOpen((v) => !v)
-			}, "⚙ 设置"),
-			h("span", { key: "c", style: S.chip, "data-testid": "dp-level-chip" }, node ? (LEVEL_LABEL[node.level] || node.level) : "—")
-		]),
+		/* ── R1 独立顶栏：**整行已取消**（2026-09-14 第 4 批 · 用户原话）──────────
+		 *   「取消 R1 独立顶栏，两控件并入 R2.5，R2.5 目前高度不需要调整，多余的给到会话」
+		 *   「这个就是这一列 只保留一个文档的切换，和设置放在 2.5 上，其他的都不要」
+		 * ⇒ 只留两个控件：作用域下拉（`dp-level`）+ 设置（`dp-personalize`），并入 R2.5 **标题行**；
+		 *   R1 省下的整行高度归内容区。
+		 * ⇒ 去掉的：📁 图标 · 4 枚层级 chip · 面包屑 `dp-crumb` · 层级徽标 `dp-level-chip`。
+		 *   其中面包屑的**信息没丢** —— 完整路径挪进了下拉的 `title`（悬停可见）。
+		 * 🔴 `dp-r1` 随之消失 ⇒ `verify-flow.mjs` 的"页面已挂载"哨兵改用 `dp-root`
+		 *    （页根才是"页面在不在"的判据；`dp-r1` 只是它的一个子块，本来就不该当哨兵）。
+		 * 🔴 **高度不增**：标题行原本是 `10.5px 文字 + 6px 下边距`（≈21px）。新控件取 18px 高、
+		 *    下边距收到 3px ⇒ 合计仍是 ≈21px，R2.5 的对外高度与改前一致。 */
 
-		/* ── R2.5 对话控制台（六动作 + 计数） ── */
-		h("div", { key: "r2", style: { padding: "7px 9px 0", display: "flex", flexDirection: "column", gap: 7 } }, [
+		/* ── R2.5 对话控制台（标题行承载"作用域 + 设置"；动作行结构不变） ──
+		 * ⚠️ 右内边距接替原 R1 的 `readInset()` 避让：R1 取消后**本行成了页面最上面一行**，
+		 *    右端的「⚙ 设置」正落在窗口控件（最小化/最大化/关闭）下面。
+		 *    环境量必须由环境读、不能写死（纪律 29）—— inset 由 `safe-area.js` 现取。 */
+		h("div", { key: "r2", style: { padding: "7px " + Math.max(9, inset + 9) + "px 0 9px", display: "flex", flexDirection: "column", gap: 7 } }, [
 			h("div", { key: "b", style: S.sec, "data-testid": "dp-r25" }, [
-				h("div", { key: "t", style: { ...S.blkT, cursor: "pointer" }, onClick: () => toggleCollapse("r2"), "data-testid": "dp-r2-toggle" }, [
-					(collapsed.r2 ? "▶ " : "▼ ") + "R2.5 对话控制台",
-					h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)" } },
-						"血缘：" + (branch.lineage ? "已连接" : "降级") + " ｜ 顺序即闭环")
+				h("div", { key: "t", style: { ...S.blkT, marginBottom: 3 } }, [
+					/* ① 作用域下拉 —— 全页**唯一**的"现在在看谁"（原 R1 最左位置，用户不用改肌肉记忆） */
+					h("select", {
+						key: "sel", "data-testid": "dp-level", "aria-label": "切换作用域（全局 / 文件夹 / 对话）",
+						value: nodeId,
+						onChange: (e) => { directorLayoutStore.setActiveNode(e.target.value); },
+						/* 面包屑信息挪进 title：去掉 `dp-crumb` 后"完整路径"仍可悬停查到 */
+						title: "切换作用域：全局总管 / 文件夹 / 对话"
+							+ (crumbs.length ? "。当前路径：" + crumbs.map((c) => c.name).join(" / ") : ""),
+						style: {
+							maxWidth: 190, height: 18, fontSize: "calc(10.5px * var(--dp-font,1))",
+							borderRadius: "var(--dp-radius-sm, 5px)", border: "1px solid var(--dp-line, #3d4148)",
+							background: "var(--dp-bg-2, #212429)", color: "var(--dp-t1, #e8eaed)"
+						}
+					}, buildOptions(tree)),
+					/* ② 折叠开关 —— **只有这一小块可点**。
+					 * 🔴 下拉与设置**绝不能**放进它里面：点下拉切换选项会顺带把整个控制台折叠掉
+					 *    （事件冒泡），这是"点一下坏两件事"的典型。 */
+					h("span", {
+						key: "tg", style: { cursor: "pointer", whiteSpace: "nowrap" },
+						onClick: () => toggleCollapse("r2"), "data-testid": "dp-r2-toggle"
+					}, (collapsed.r2 ? "▶ " : "▼ ") + "R2.5 对话控制台"),
+					/* ③ 右端状态：作用域种类（+ 无对话标记）+ 血缘 */
+					h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap" } },
+						scopeKindLabel + (scopeHasChat ? "" : " · 无对话")
+						+ " ｜ 血缘：" + (branch.lineage ? "已连接" : "降级")),
+					/* ④ 设置（原 R1 最右位置；`data-testid` 原样 —— 既有闸门锚点，纪律 7 不可改名） */
+					h("button", {
+						key: "p", "data-testid": "dp-personalize",
+						style: { ...S.btn, height: 18, padding: "0 7px", fontSize: "calc(10.5px * var(--dp-font,1))" },
+						title: "个性化设定：主色 / 质感 / 密度 / 字号 / 圆角（与导图 / 弹窗 / 设计图共用同一份）",
+						onClick: () => setPOpen((v) => !v)
+					}, "⚙ 设置")
 				]),
 				h("div", { key: "c", style: { display: collapsed.r2 ? "none" : "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
 					...CONSOLE_ACTIONS.map((a) => h("button", {
@@ -689,9 +751,13 @@ export function DirectorPage() {
 						]),
 						h("div", { key: "t", style: { fontSize: "calc(12px * var(--dp-font,1))", fontWeight: 600, lineHeight: 1.5, wordBreak: "break-word" }, "data-testid": "dp-now-title" }, now.title),
 						now.detail ? h("div", { key: "d", style: { ...S.muted, marginTop: 3 } }, now.detail) : null,
+						/* 作用域脚注：会话作用域说"哪个会话"；文件夹/全局作用域**明说没有对话** ——
+						 * 项目纪律：读不到/不存在就如实写出来，不编一个会话名顶替（需求 ②）。 */
 						h("div", { key: "f", style: { ...S.muted, marginTop: 4 } },
-							"会话 " + (flowSession ? ("…" + String(flowSession).slice(-8)) : "（未定位到当前会话）") +
-							" · 流转 " + sessionFlows.length + " 条" + (latest ? (" · " + flowLine(latest)) : ""))
+							scopeHasChat
+								? ("会话 …" + String(scopeKey).slice(-8) + " · 流转 " + sessionFlows.length + " 条"
+									+ (latest ? (" · " + flowLine(latest)) : ""))
+								: ("该作用域没有对话（" + scopeKindLabel + "：" + (node ? node.name : "—") + "）· 流转 " + sessionFlows.length + " 条"))
 					]),
 
 					/* ② 分段：流转 / 总监消息 */
@@ -728,7 +794,7 @@ export function DirectorPage() {
 									])
 								]))
 								: h("div", { key: "e", style: S.muted, "data-testid": "dp-flow-empty" },
-									"该会话还没有流转。本轮起，输入走**原生对话框**：写完后点 R8 的「登记为流转」，就会出现在这里，" +
+									"该作用域还没有流转。本轮起，输入走**原生对话框**：写完后点 R8 的「登记为流转」，就会出现在这里，" +
 									"并同步出现在导图右侧面板与设计图底部。"))
 							: (msgs.length
 								? msgs.slice(-14).map((m) => h("div", { key: m.messageId || m.at, style: S.msg, "data-testid": "dp-dir-msg" }, [

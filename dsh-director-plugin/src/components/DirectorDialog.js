@@ -2,7 +2,7 @@
  * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
  * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
  * 上游：client-entry.js, mount.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, components/PersonalizePanel.js, util/safe-area.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */

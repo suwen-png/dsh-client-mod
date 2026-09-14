@@ -1,9 +1,9 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
- * 职责：总览弹窗（R10：左已完成 / 右待完成 · 按文件夹+对话分组 · 可点击 · 可发消息修正）
- * 引用：用户原话（2026-09-12 第七轮）
+ * 职责：总览弹窗（R10）
+ * 引用：—
  * 上游：components/MindMap.js
- * 下游：logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/personalize.js
- * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 J）
+ * 下游：logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/plugin-db.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
 /**

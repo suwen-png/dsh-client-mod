@@ -28,7 +28,7 @@ import { resolveDuties, setOwnDuties, clearOwnDuties, submitUp, ORIGIN } from ".
 import { runDirector } from "../logic/director-run.js";
 import { directorStoreFactory } from "../store/create-store.js";
 import { useDirectorStore } from "../store/use-store.js";
-import { GLOBAL_NODE_ID, LEVEL_LABEL } from "../store/hierarchy.js";
+import { GLOBAL_NODE_ID, LEVEL_LABEL, scopeKeyOf } from "../store/hierarchy.js";
 import { loadDirectorConfig } from "../config/model.js";
 import { dshLog } from "../util/debug.js";
 
@@ -71,10 +71,12 @@ export function DirectorWorkbench({ node }) {
 	const [lastSteps, setLastSteps] = react.useState(null);
 	const [forwardLog, setForwardLog] = react.useState([]);
 
-	// 总监 store：会话级用真实 sessionId，其余用节点 id（同 sessionId 共享，切换不丢）
-	const sessionId = react.useMemo(() => (
-		node?.conversations?.[0]?.conversationId || nodeId
-	), [node, nodeId]);
+	// 总监 store 的桶 = **作用域键**，与总监页共用同一份口径（store/hierarchy.js 的 scope 注释块）
+	/* 🔴 2026-09-14 第 4 批：原先此处就地写 `conversations[0].conversationId || nodeId` ——
+	 *    与总监页的作用域算法**各算各的**。两处只要漂移一处，就会出现
+	 *    "总监页已经切走了、工作台还留在旧桶"这种极难定位的串桶（需求 ③ 报的正是这个）。
+	 *    现统一收敛到 `scopeKeyOf()`，全仓只有一处算法。 */
+	const sessionId = react.useMemo(() => scopeKeyOf(nodeId, node), [node, nodeId]);
 	const store = react.useMemo(() => directorStoreFactory(sessionId), [sessionId]);
 	const state = useDirectorStore(store);
 

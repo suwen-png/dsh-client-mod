@@ -375,6 +375,97 @@ export function isHigher(a, b) {
 	return (LEVEL_ORDER[a] ?? 99) < (LEVEL_ORDER[b] ?? 99);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 作用域（scope）—— **单一真相源**（2026-09-14 第 4 批 · 用户原话）
+ * ══════════════════════════════════════════════════════════════════
+ *  需求原文：
+ *   ② 「我在下列表切换的时候，我下面的总监和对话数据也要一起变，就是相当于切对话了；
+ *        切换文件夹的时候不需要对话，因为没有」
+ *   ③ 「总监没有持久对话信息，比如总监信息和消息流转。总监是[和]文件夹对话绑定的，
+ *        每一个文件夹和对话的总监数据理论上都不一样」
+ *
+ *  ⇒ 落地口径：**scope = 下拉选中的那个层级节点**（`directorLayoutStore.activeNodeId`）。
+ *     全页只有这一处决定"现在在看谁"，其它地方一律调 `scopeKeyOf()` 取，不得各算各的。
+ *
+ *  scopeKey 的三态（**决定数据落到哪个桶**）：
+ *     · 会话节点   → 该节点的 `conversations[0].conversationId`（真实会话 id）
+ *     · 文件夹节点 → 节点 id 本身（`project` 级 = 文件夹级，**没有对话**）
+ *     · 全局节点   → `__global__`（**没有对话**）
+ *
+ *  ⚠️ 为什么复用 nodeId 而不是每次都 `conversationId || nodeId` 就地算：
+ *     就地算会散落到 5 处（DirectorPage / DirectorWorkbench / DirectorDialog /
+ *     flow 写入 / 断言读属性），任何一处写漏都表现为"数据串桶"——
+ *     正是用户这次报的"总监数据不跟着切"。收敛成一处才有唯一真相。
+ */
+
+/** 作用域种类（UI 上决定"要不要显示对话"，断言上读 `data-scope-kind`） */
+export const SCOPE_KIND = Object.freeze({
+	SESSION: "session",
+	FOLDER: "folder",
+	GLOBAL: "global"
+});
+
+/** 该节点挂载的真实会话 id（没有则 null）—— 文件夹/全局节点天然为 null */
+export function nodeConversationId(node) {
+	const c = node && Array.isArray(node.conversations) ? node.conversations[0] : null;
+	return (c && c.conversationId) ? String(c.conversationId) : null;
+}
+
+/** 作用域种类：会话 / 文件夹(项目) / 全局 */
+export function scopeKindOf(node) {
+	if (!node) return SCOPE_KIND.GLOBAL;
+	if (node.level === LEVEL.SESSION) return SCOPE_KIND.SESSION;
+	if (node.level === LEVEL.PROJECT) return SCOPE_KIND.FOLDER;
+	return SCOPE_KIND.GLOBAL;
+}
+
+/**
+ * 作用域键 —— **数据分桶用的那一个字符串**。
+ * 会话节点落到真实会话 id（与宿主 `sessionId` 同名同值 ⇒ 既有"点左侧切对话、
+ * 插件跟随"的能力不变）；文件夹/全局落到节点 id（各自一份总监数据）。
+ * @param {string} nodeId
+ * @param {object|null} node
+ * @returns {string}
+ */
+export function scopeKeyOf(nodeId, node) {
+	return nodeConversationId(node) || String(nodeId || GLOBAL_NODE_ID);
+}
+
+/** 该作用域下"有没有对话"（文件夹/全局没有 ⇒ UI 不显示对话区，不编空对话） */
+export function scopeHasConversation(node) {
+	return scopeKindOf(node) === SCOPE_KIND.SESSION && Boolean(nodeConversationId(node));
+}
+
+/** 树里按 id 找节点（深度优先；找不到返回 null） */
+export function findNodeById(root, id) {
+	if (!root || !id) return null;
+	let found = null;
+	const walk = (n) => {
+		if (found) return;
+		if (n.id === id) { found = n; return; }
+		(n.childNodes || []).forEach(walk);
+	};
+	walk(root);
+	return found;
+}
+
+/**
+ * 树里按**真实会话 id** 反查节点 —— 宿主侧切了会话时用它把下拉切过去
+ * （这样"点左侧切对话 ⇒ 插件跟着切"仍在，且 scope 仍是唯一真相源）。
+ * @returns {object|null}
+ */
+export function findNodeBySessionId(root, sessionId) {
+	if (!root || !sessionId) return null;
+	let found = null;
+	const walk = (n) => {
+		if (found) return;
+		if (nodeConversationId(n) === String(sessionId)) { found = n; return; }
+		(n.childNodes || []).forEach(walk);
+	};
+	walk(root);
+	return found;
+}
+
 /** 安装全局契约 */
 export function installHierarchyApi() {
 	if (typeof window === "undefined") return null;
@@ -383,6 +474,9 @@ export function installHierarchyApi() {
 		makeNode, makeNodeId, getNode, saveNode, removeNode,
 		listAllNodes, loadTree, ensureGlobal, createChild, attachSession,
 		resolveConfig, getBreadcrumb, countByLevel, isHigher,
+		// 作用域单一真相源（2026-09-14 第 4 批）
+		SCOPE_KIND, nodeConversationId, scopeKindOf, scopeKeyOf, scopeHasConversation,
+		findNodeById, findNodeBySessionId,
 		// 数据元归属（要求 1 的可核验锚点）
 		PLUGIN_DB_NAME, MIRROR_LEGACY_MEMORY_CORE
 	};

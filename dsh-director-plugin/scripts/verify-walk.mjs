@@ -88,7 +88,10 @@ const ENUM = (rootSel) => `(function(){var root=document.querySelector(${JSON.st
    if(s.display==='none'||s.visibility==='hidden'||r.width<3||r.height<3)return;
    var tid=e.getAttribute('data-testid')||('TAG:'+e.tagName);
    var interactive=e.tagName==='BUTTON'||e.tagName==='SELECT'||e.getAttribute('role')==='button';
-   var clickableDiv=/toggle|chip|^dp-k-|agent-|^dp-lv-|^dp-model|^dp-now-title|^d-seg/.test(tid);
+   /* ⚠️ 2026-09-14 第 4 批：原模式里的 `^dp-lv-`（层级 chips）与含 `chip` 的兜底，
+    *    对应的 `dp-lv-*` / `dp-level-chip` 已随 R1 整行取消而消失 ⇒ 清掉死模式。
+    *    留着它的危害不是报错，而是让下一个人以为"还有一批 chip 要巡"。 */
+   var clickableDiv=/toggle|^dp-k-|agent-|^dp-model|^dp-now-title|^d-seg/.test(tid);
    if(!interactive&&!clickableDiv)return;
    if(seen[tid])return;seen[tid]=1;
    out.push({tid:tid,tag:e.tagName,x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),

@@ -86,7 +86,7 @@
 <body>
 <div class="wrap">
 
-<h1>V18 · 界面调整设计稿 <small>第 3 批调整 · 14 条需求 · 先行评审</small></h1>
+<h1>V18 · 界面调整设计稿 <small>第 3 批 14 条 + 第 4 批修正 5 条（已定稿落地）</small></h1>
 <div class="sub">
   范围：<b>对话列瘦身</b> · <b>智能体/技能流转浮窗</b> · <b>顶栏收敛为两项</b> · <b>R3 标签栏去除</b> · <b>模型可切换</b> · <b>R4/R7 左右缩回</b> · <b>R5 语义统一</b> · <b>R7 执行功能设置</b> · <b>对话框左右清单</b>
   ｜ 原则：只调整形态与信息层级；<b>不改数据口径、不动冻结契约</b>（localStorage key / DOM 锚点 / view order）
@@ -660,6 +660,101 @@
   <div class="bd">
     <div class="note warn"><b>不改</b>：localStorage key（<span class="kbd">dsh.director.layout</span> 等）· DB 名与 store 名 · DOM 锚点（<span class="kbd">dp-*</span> / <span class="kbd">d-*</span>）· 宿主三页签的 view order · 四维流转的数据口径（仍是一条消息一份 trail）。</div>
     <div class="note"><b>要新增</b>：入口来源记录 · 模型选择器 · 左右缩回的固定态字段 · A2 浮窗 · G1 设置区 · H 两侧清单。以上均为<b>只增不改</b>，存量数据由默认值兜底。</div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 L ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">L</span><h2>第 4 批：5 条修正定稿 + 实现记录</h2><span class="r">2026-09-14 当日</span></div>
+
+  <div class="sec">
+    <header><span class="no">L1</span><h3>顶栏定稿：R1 整行取消，两个控件并入 R2.5</h3><span class="tag">需求 ④ · 已实现</span></header>
+    <div class="bd">
+      <p class="lbl">用户原话：「取消 R1 独立顶栏，两控件并入 R2.5，R2.5 目前高度不需要调整，多余的给到会话」</p>
+      <table>
+        <tr><th style="width:26%">项</th><th>定稿</th></tr>
+        <tr><td>R1 顶栏</td><td class="err-t">整行删除（含 图标 / 4 枚层级 chip / 面包屑 / 层级徽标）</td></tr>
+        <tr><td>保留的两个控件</td><td class="ok-t">作用域下拉（dp-level）+ 设置（dp-personalize）</td></tr>
+        <tr><td>落位</td><td>R2.5 <b>标题行</b>：下拉在最左、设置在最优右 —— 与它们在 R1 时的左右位置一致，肌肉记忆不变</td></tr>
+        <tr><td>高度</td><td class="ok-t">不变：标题行原为 文字 + 6px 下边距（约 21px）；新控件取 18px 高、下边距收到 3px，合计仍是约 21px</td></tr>
+        <tr><td>省下的高度</td><td>归内容区（R2.5 之后的 R2 / R3 / 三栏 / R6 / R8 整体上移一行）</td></tr>
+        <tr><td>右内边距</td><td>R2.5 接替原 R1 的窗口控件避让（读 readInset()，不写死）</td></tr>
+      </table>
+      <div class="note warn"><b>一个坑（代码里已避开）</b>：R2.5 标题行原本整行可点（点哪都折叠）。下拉与设置<b>不能</b>放进那个可点区域里 —— 否则点下拉切换选项会顺带把控制台折叠，属「点一下坏两件事」。现在只有「▼ R2.5 对话控制台」那一小块可点。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">L2</span><h3>去掉的两个「全局总管」</h3><span class="tag">需求 ① · 已实现</span></header>
+    <div class="bd">
+      <p class="lbl">用户截图标红的那一处，右侧三个元素里两个是同名文字，都去掉。</p>
+      <table>
+        <tr><th style="width:30%">元素</th><th>处理</th></tr>
+        <tr><td>面包屑 dp-crumb（左「全局总管」）</td><td class="err-t">去掉显示；<b>信息没丢</b> —— 完整路径挪进下拉的 title，悬停可见</td></tr>
+        <tr><td>层级徽标 dp-level-chip（右「全局总管」）</td><td class="err-t">去掉</td></tr>
+        <tr><td>设置按钮</td><td class="ok-t">保留（并入 R2.5）</td></tr>
+      </table>
+      <div class="note"><b>顺带清掉的死装饰</b>：4 枚层级 chip 里的「文件夹级」在代码里<b>根本不存在这个层级</b>（合法层级只有 全局 / 项目 / 会话），那枚 chip 永远不会点亮；它们也从来没有点击行为。删掉不损失任何能力。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">L3</span><h3>下拉 = 作用域开关：切谁，下面的总监数据与对话数据一起切</h3><span class="tag">需求 ② · 已实现</span></header>
+    <div class="bd">
+      <p class="lbl">用户原话：「我在下列表切换的时候，我下面的总监和对话数据也要一起变，就是相当于切对话了；切换文件夹的时候不需要对话，因为没有」</p>
+      <table>
+        <tr><th style="width:22%">选中</th><th>下面的数据</th></tr>
+        <tr><td>对话节点</td><td class="ok-t">该对话的总监消息 + 该对话的流转 + 「现在在做的事」左上的会话标记（相当于切对话了）</td></tr>
+        <tr><td>文件夹节点</td><td>该文件夹<b>自己的</b>总监数据；<b>对话区不出现</b>，如实写「该作用域没有对话（文件夹级：名称）」</td></tr>
+        <tr><td>全局节点</td><td>同上（全局级）</td></tr>
+      </table>
+      <div class="note"><b>改前的病根</b>：页面把「宿主当前会话」当成作用域，压在用户的选择之上 —— 下拉切到别处、宿主会话没变，列表就<b>不动</b>。现在作用域只有一个真相源（下拉选中的节点），宿主切会话时<b>反向写回下拉</b>，所以「点左侧切对话、插件跟着切」的能力仍在。</div>
+      <div class="note warn"><b>防抢鼠标</b>：宿主跟随<b>同一个会话只跟随一次</b>；树没加载或反查不到节点时<b>不动</b>（不猜一个节点顶替）。否则用户手动选到「全局总管」后，会被每次重渲染弹回去。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">L4</span><h3>总监数据按作用域分桶（每个文件夹 / 对话各一份）</h3><span class="tag">需求 ③ · 已实现</span></header>
+    <div class="bd">
+      <p class="lbl">用户原话：「总监没有持久对话信息，比如总监信息和消息流转。总监是[和]文件夹对话绑定的，每一个文件夹和对话的总监数据理论上都不一样」</p>
+      <table>
+        <tr><th style="width:26%">数据</th><th>落桶键</th><th>持久层</th></tr>
+        <tr><td>总监消息</td><td>节点 id</td><td>插件自有库 directorConversations（按 nodeId 索引）</td></tr>
+        <tr><td>消息流转</td><td class="ok-t">作用域键</td><td>dsh.director.flow（每条带 sessionId）</td></tr>
+        <tr><td>总监 store（工作台）</td><td class="ok-t">作用域键</td><td>dsh.director.store.*（按作用域分桶）</td></tr>
+      </table>
+      <div class="note"><b>作用域键怎么算</b>（全仓<b>只有一处</b>实现，见 store/hierarchy.js）：对话节点取该节点的真实会话 id；文件夹 / 全局节点取节点 id。改前工作台与总监页<b>各算各的</b>，只要漂移一处就会「总监页切走了、工作台还在旧桶」—— 现在两处调同一个函数。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">L5</span><h3>宿主残留两行：只在页面上不显示</h3><span class="tag">需求 ⑤ · 已实现</span></header>
+    <div class="bd">
+      <p class="lbl">用户原话：「去掉，那目前只在页面上不显示就行，如果有后端逻辑就保留，没有不用管」</p>
+      <table>
+        <tr><th style="width:24%">问题</th><th>结论</th></tr>
+        <tr><td>后端逻辑有没有</td><td class="ok-t"><b>没有</b>。那 5 颗智能体按钮点的是 handleAgentClick，而该函数在当前构建里<b>已无定义</b>（随 DirectorView 退坡一起被删，全文件只剩一个悬空引用）⇒ 点它必抛错。无逻辑可保留</td></tr>
+        <tr><td>怎么去掉</td><td>显示层裁剪（按文本定位 + 上溯一层拿块容器，贴 display:none），<b>不改宿主源码</b></td></tr>
+        <tr><td>为什么不改源码</td><td>宿主目录被 .gitignore 排除 ⇒ 改了 git 无法回滚（本项目已列为高风险操作）</td></tr>
+        <tr><td>护栏</td><td>必须落在宿主总监面板内（面板是唯一带 min-width:180px 的列）；只对叶子元素生效；文本<b>全等</b>匹配（不是包含，避免吃掉「总监记忆」等相邻块）</td></tr>
+        <tr><td>可逆</td><td class="ok-t">提供还原函数：把 display 写回<b>裁剪前读到的原值</b>，可做「裁剪 → 还原 → 再裁剪」正负对照</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">L6</span><h3>本轮跑过的闸门（离线）</h3><span class="tag">证据</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:34%">闸门</th><th>结果</th></tr>
+        <tr><td>gen-source-map</td><td class="ok-t">61 文件（新增注入 1 / 刷新 18）IS_PASS TRUE</td></tr>
+        <tr><td>lint-undefined-symbols</td><td class="ok-t">阻塞级 0（扫描 61 文件 / 545 导出）</td></tr>
+        <tr><td>离线单测 5 套</td><td class="ok-t">flow 23 · design 49 · version 63 · mindmap 91 · personalize 87 全绿</td></tr>
+        <tr><td>build</td><td class="ok-t">语法自检通过 + import 对账 498 = 498</td></tr>
+        <tr><td>verify-bundle</td><td class="ok-t">97 / 97 通过</td></tr>
+        <tr><td>真机 7 套</td><td class="warn-t">按用户要求本轮<b>暂缓</b>（Harness 未启动）；其中 verify-data-safe 在无 CDP 时崩栈而非 exit 2，已记入待办</td></tr>
+      </table>
+    </div>
   </div>
 </div>
 

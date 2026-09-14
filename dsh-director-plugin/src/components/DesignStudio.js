@@ -2,7 +2,7 @@
  * 职责：设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）
  * 引用：V16 诉求 2 · 3 · 5（全屏工作室 / 审美 / 设计图插件）+ 2026-09-12 诉求 8（顶栏功能未实现）· 11（审美完善）
  * 上游：client-entry.js, mount.js
- * 下游：store/design-schema.js, store/design.js, util/debug.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js
+ * 下游：store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D1–D6（设计图工作室五区）· E1–E2（顶栏四区 / 保存两态）· E5（顶栏避让）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */

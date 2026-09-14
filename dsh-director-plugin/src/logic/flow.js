@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）
  * 引用：—
- * 上游：client-entry.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js
+ * 上游：client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, components/NodeDetailPanel.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md

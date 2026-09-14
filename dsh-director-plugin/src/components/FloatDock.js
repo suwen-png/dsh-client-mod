@@ -2,7 +2,7 @@
  * 职责：右下角浮动按钮组（全屏能力的统一入口）
  * 引用：V16 诉求 3（按钮位置审美）· 5（设计图入口按钮）
  * 上游：client-entry.js, components/DirectorPage.js, mount.js
- * 下游：store/layout.js, util/debug.js
+ * 下游：store/layout.js, logic/flow.js, util/debug.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A · D0（右下角浮动按钮组 = 三浮层统一入口）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */

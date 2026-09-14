@@ -2,7 +2,7 @@
  * 职责：插件浏览器侧入口（批次 1 已落地）
  * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
  * 上游：（无：插件入口层）
- * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, components/DirectorDialog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, components/NodeDetailPanel.js
+ * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, components/DirectorDialog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -124,6 +124,8 @@ import { installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATI
 import { installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive } from "./bridge/split.js";
 import { installChatBridgeApi, sendToChat, readConversation } from "./bridge/chat-bridge.js";
 import { installNavHook, installNavHookApi } from "./bridge/nav-hook.js";
+// 宿主残留区块的显示层裁剪（2026-09-14 第 4 批 · 需求 ⑤「只在页面上不显示就行」）
+import { installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, trimState } from "./bridge/host-panel-trim.js";
 import { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } from "./components/DirectorDialog.js";
 // ── 批次 10 设计图工作室 + 总监 tab（T-PLUG-018）──
 //    设计图：store/design-schema.js（元素原子）+ store/design.js（CRUD）+ components/DesignStudio.js
@@ -159,6 +161,17 @@ export function installBatch1(options = {}) {
 	//     消息根本进不了渲染进程（连 mousemove 都没有）。表现为顶栏所有按钮点不动。
 	//     🔴 该故障对静态检查 / 离线单测 / CDP 合成事件全部不可见，详见 util/no-drag.js 头部。
 	installNoDrag();
+
+	// 1.6 宿主残留区块的**显示层裁剪**（2026-09-14 第 4 批 · 需求 ⑤）
+	//     用户原话：「去掉，那目前只在页面上不显示就行，如果有后端逻辑就保留，没有不用管」。
+	//     目标 = 对话页左栏那两行宿主残留（「总监对话」标题行 / 「智能体 · 点击创建分支」按钮行）。
+	//     🔴 为什么改显示层而不改宿主源码：`workspace/**` 被 `.gitignore` 排除 ⇒ 改它 git 无法回滚。
+	//     取证：那 5 颗按钮的 onClick 指向 `handleAgentClick`，该函数在当前构建里**已无定义**
+	//           （DirectorView 随 MOD-B 退坡时删除）⇒ 无后端逻辑可保留，隐掉不损失任何能力。
+	//     细节（护栏 / 可逆 / 代价控制）见 bridge/host-panel-trim.js 头注。
+	//     ⚠️ 返回值不在这里接：真状态在 `trimState`（见下方 installed.hostPanelTrim），
+	//        因为"调用过"与"真的贴上去了"是两件事。
+	installHostPanelTrim();
 
 	// 2. 状态层（构造时即自挂 window，见各模块）
 	//    directorLayoutStore → window.__directorLayoutStore
@@ -468,6 +481,20 @@ export function installBatch1(options = {}) {
 		rounds: ["spec", "independent", "counter"],
 		rubricSelfAudit: true
 	};
+	/* 2026-09-14 第 4 批：宿主残留区块的**显示层裁剪**（用户：「只在页面上不显示就行」）。
+	 * `installed` = 是否真的贴上去了（不是"调用过"）—— 断言读它，别读调用与否。
+	 * `degraded` / `reason` 必须一起报出来：**降级可以，无声不行**（纪律 19）。
+	 * （离线桩 `verify-bundle` 里没有 DOM ⇒ 这里会如实显示"无 MutationObserver"。） */
+	installed.hostPanelTrim = {
+		installed: trimState.applied.length > 0,
+		degraded: trimState.degraded,
+		reason: trimState.reason,
+		applied: trimState.applied.slice(),
+		targets: TRIM_TARGETS.map((t) => t.key),
+		mark: "data-dsh-trimmed",
+		reversible: true,
+		guard: "作用域护栏：必须落在宿主总监面板 [style*=\"min-width: 180px\"] 内"
+	};
 
 	if (typeof window !== "undefined") {
 		window.__dshDirectorBatch1 = installed;
@@ -611,5 +638,7 @@ export {
 	installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID,
 	installFlowApi, flowStore, DIM, DIM_LABEL,
 	NodeDetailPanel, NODE_DETAIL_ID,
-	installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER // 宿主 tab 注册
+	installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册
+	// ── 批次 12 · 第 4 批界面调整（2026-09-14）──
+	installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS // 宿主残留区块显示层裁剪
 };

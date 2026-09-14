@@ -46,15 +46,28 @@
  *  ⑤ **拖动步间留间隔**：8 个指针事件零间隔连发比真人"拖"硬得多。
  *
  * 用法：node scripts/verify-flow.mjs        # 需要 Harness 已启动且开着 --remote-debugging-port=9222
- * 退出码：0 全绿 / 1 有失败
+ * 退出码：0 全绿 / 1 有失败 / 2 INVALID（含 CDP 连不上 —— 判目标错，不判产品错）
  */
 const PORT = 9222;
 const WAIT = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* ══ CDP 连接 ══ */
-const pages = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json();
+/* ══ CDP 连接 ══
+ * 🔴 2026-09-14 补（纪律 17：用错目标必须自诊断，不许崩成"产品坏了"）：
+ *    原先 Harness 未启动时这里直接抛 `TypeError: fetch failed` + ECONNREFUSED 崩栈，
+ *    读起来像脚本/产品坏了，实际只是**目标没开**。⇒ 判 INVALID(2)，不判 FAIL(1)。 */
+let pages;
+try {
+	pages = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json();
+} catch (e) {
+	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
+	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
+	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
+	console.error("    powershell -File scripts/restart-harness.ps1");
+	console.error("    node scripts/verify-flow.mjs");
+	process.exit(2);
+}
 const page = pages.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
-if (!page) { console.error("未找到页面目标（Harness 是否开着 9222？）"); process.exit(1); }
+if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let seq = 0; const pending = new Map(); const pageErrors = [];
@@ -461,8 +474,8 @@ check("A1", "宿主 tab 环里真实点击「总监」tab", tabClick.ok, tabClic
 await WAIT(900);
 
 section("【A】总监页 · 用原生对话框（用户：「不要这个对话框，用原本的对话框」）");
-const hasPage = await exists('[data-testid="dp-r1"]');
-check("A2", "总监页已挂载（dp-r1 出现）", hasPage, hasPage ? "已挂载" : "未找到 dp-r1");
+const hasPage = await exists('[data-testid="dp-root"]');
+check("A2", "总监页已挂载（dp-root 出现）", hasPage, hasPage ? "已挂载" : "未找到 dp-root");
 /* 🔴 记下**起点会话的 sessionId**（总监页挂载后才有 `data-flow-session` 可读）。
  *   `openedSessionIndex/Label` 只够"点回去"，判"是不是同一个会话"必须靠 id ——
  *   见 restoreStartSession 的注释（r11/r12/r13 跨轮漂移的真因）。 */
@@ -570,7 +583,7 @@ check("B9", "「恢复默认」⇒ 主色与质感都回到默认", acReset === 
 /* Esc 逐层退：先关面板，总监页不能被一起关掉 */
 await pressEsc(); await WAIT(300);
 const panelGone = !(await exists("#" + panelId));
-const pageAlive = await exists('[data-testid="dp-r1"]');
+const pageAlive = await exists('[data-testid="dp-root"]');
 check("B10", "🔴 Esc 只关最上层：面板消失而总监页仍在（防「按 Esc 把整页关掉」）", panelGone && pageAlive, "面板 " + (panelGone ? "已关" : "仍在") + " / 总监页 " + (pageAlive ? "在" : "没了"));
 
 /* ══════════════════════════════════════════════════════════════════

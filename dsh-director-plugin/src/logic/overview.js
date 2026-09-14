@@ -1,9 +1,9 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
- * 职责：总览弹窗的数据整形（R10：左已完成 / 右待完成，按文件夹+对话分类）
- * 引用：用户原话（2026-09-12 第七轮）
- * 上游：components/OverviewDialog.js
+ * 职责：总览弹窗的数据整形（纯函数）
+ * 引用：—
+ * 上游：client-entry.js, components/OverviewDialog.js
  * 下游：（无）
- * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 J）
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
 /**
