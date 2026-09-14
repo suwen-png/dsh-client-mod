@@ -72,33 +72,59 @@ export function scanTables(src) {
   return { tables, bad };
 }
 
+/**
+ * 「表头声明的条数」与「表格实际数据行数」对账。
+ *
+ * 动因（2026-09-14 实测）：`03` 表头长期写「4 组 / 10 条」，而表格实际有 **11** 行 ——
+ * **差 1 且无人发现**。用户正是从这份清单读「还有多少待办」，所以声明的数字必须与事实同源。
+ * 无声明时不判分（不得凭空报红）。
+ *
+ * @returns {{present:boolean, rows:number, groups?:number, claim?:number, ok?:boolean}}
+ */
+export function checkCountClaim(src) {
+	const m = src.match(/当前\s*\*\*\s*(\d+)\s*组\s*\/\s*(\d+)\s*条\s*\*\*/);
+	const rows = src.split("\n").filter((l) => /^\|\s*T-[A-Z0-9-]+/.test(l)).length;
+	if (!m) return { present: false, rows };
+	const claim = Number(m[2]);
+	return { present: true, groups: Number(m[1]), claim, rows, ok: claim === rows };
+}
+
 /** 防线自检：坏样本必须被拦、好样本不得误报（防空转） */
 function selfTest() {
-  const BT = String.fromCharCode(96); // 反引号，避免被当作模板分隔符
-  const head = "| a | b | c |\n|:--|:--|:--|\n";
+	const BT = String.fromCharCode(96); // 反引号，避免被当作模板分隔符
+	const head = "| a | b | c |\n|:--|:--|:--|\n";
 
-  // 坏样本：行只有 2 格（3 个管道），表头 3 格（4 个管道）
-  const badSrc = head + "| 1 | 2 |\n";
-  // 好样本：含转义竖线，格数仍为 3
-  const goodSrc = head + "| x \\| y | z | w |\n";
-  // 好样本 2：行内含行内代码里的未转义竖线也应被拦（这是真缺陷形态）
-  const badSrc2 = head + "| " + BT + "a|b" + BT + " | c | d |\n";
+	// 坏样本：行只有 2 格（3 个管道），表头 3 格（4 个管道）
+	const badSrc = head + "| 1 | 2 |\n";
+	// 好样本：含转义竖线，格数仍为 3
+	const goodSrc = head + "| x \\| y | z | w |\n";
+	// 好样本 2：行内含行内代码里的未转义竖线也应被拦（这是真缺陷形态）
+	const badSrc2 = head + "| " + BT + "a|b" + BT + " | c | d |\n";
 
-  const r1 = scanTables(badSrc);
-  const r2 = scanTables(goodSrc);
-  const r3 = scanTables(badSrc2);
+	const r1 = scanTables(badSrc);
+	const r2 = scanTables(goodSrc);
+	const r3 = scanTables(badSrc2);
 
-  const checks = [
-    ["坏样本(少一格)必须报红", r1.bad.length === 1],
-    ["好样本(转义竖线)不得误报", r2.bad.length === 0],
-    ["坏样本(行内代码含裸竖线)必须报红", r3.bad.length === 1],
-  ];
-  let ok = true;
-  for (const [name, pass] of checks) {
-    console.log("  [自检] " + (pass ? "✅" : "❌") + " " + name);
-    if (!pass) ok = false;
-  }
-  return ok;
+	// 条数声明对账样本
+	const tHead = "| 编号 | 任务 |\n|:--|:--|\n";
+	const cGood = checkCountClaim("当前 **4 组 / 2 条**\n\n" + tHead + "| T-A-1 | x |\n| T-A-2 | y |\n");
+	const cBad = checkCountClaim("当前 **4 组 / 9 条**\n\n" + tHead + "| T-A-1 | x |\n");
+	const cNone = checkCountClaim(tHead + "| T-A-1 | x |\n");
+
+	const checks = [
+		["坏样本(少一格)必须报红", r1.bad.length === 1],
+		["好样本(转义竖线)不得误报", r2.bad.length === 0],
+		["坏样本(行内代码含裸竖线)必须报红", r3.bad.length === 1],
+		["条数声明与行数**一致**时必须通过", cGood.present === true && cGood.ok === true],
+		["条数声明与行数**不符**必须报红（曾差 1 无人发现）", cBad.present === true && cBad.ok === false],
+		["无条数声明时不判分（不得凭空报红）", cNone.present === false],
+	];
+	let ok = true;
+	for (const [name, pass] of checks) {
+		console.log("  [自检] " + (pass ? "✅" : "❌") + " " + name);
+		if (!pass) ok = false;
+	}
+	return ok;
 }
 
 function main() {
@@ -114,33 +140,45 @@ function main() {
   const argv = process.argv.slice(2).filter((a) => !a.startsWith("-"));
   const files = (argv.length ? argv : DEFAULTS).map((f) => resolve(ROOT, f));
 
-  let totalBad = 0;
-  let totalTables = 0;
-  let checked = 0;
+	let totalBad = 0;
+	let totalTables = 0;
+	let checked = 0;
+	let claimBad = 0;
 
-  for (const f of files) {
-    const rel = f.slice(ROOT.length + 1).split("\\").join("/");
-    if (!existsSync(f)) {
-      console.log("  ⏭  未找到（跳过）：" + rel);
-      continue;
-    }
-    const { tables, bad } = scanTables(readFileSync(f, "utf8"));
-    checked += 1;
-    totalTables += tables;
-    totalBad += bad.length;
-    if (bad.length === 0) {
-      console.log("  ✅ " + rel + "  （表 " + tables + " 张，列数全一致）");
-    } else {
-      console.log("  ❌ " + rel + "  （表 " + tables + " 张，异常 " + bad.length + " 行）");
-      for (const b of bad) {
-        console.log("       L" + b.line + "  管道 " + b.got + " ≠ 期望 " + b.want + "   :: " + b.head);
-      }
-    }
-  }
+	for (const f of files) {
+		const rel = f.slice(ROOT.length + 1).split("\\").join("/");
+		if (!existsSync(f)) {
+			console.log("  ⏭  未找到（跳过）：" + rel);
+			continue;
+		}
+		const src = readFileSync(f, "utf8");
+		const { tables, bad } = scanTables(src);
+		const claim = checkCountClaim(src);
+		checked += 1;
+		totalTables += tables;
+		totalBad += bad.length;
+		if (bad.length === 0) {
+			console.log("  ✅ " + rel + "  （表 " + tables + " 张，列数全一致）");
+		} else {
+			console.log("  ❌ " + rel + "  （表 " + tables + " 张，异常 " + bad.length + " 行）");
+			for (const b of bad) {
+				console.log("       L" + b.line + "  管道 " + b.got + " ≠ 期望 " + b.want + "   :: " + b.head);
+			}
+		}
+		if (claim.present) {
+			if (claim.ok) {
+				console.log("     📊 条数声明 " + claim.groups + " 组 / " + claim.claim + " 条  =  表格实际 " + claim.rows + " 行  ✅");
+			} else {
+				claimBad += 1;
+				console.log("     📊 ❌ 条数声明 " + claim.groups + " 组 / " + claim.claim + " 条  ≠  表格实际 " + claim.rows + " 行" +
+					"（差 " + Math.abs(claim.claim - claim.rows) + "）");
+			}
+		}
+	}
 
-  console.log("");
-  console.log("扫描文件 " + checked + " · 表 " + totalTables + " 张 · 破表行 " + totalBad);
-  const pass = totalBad === 0;
+	console.log("");
+	console.log("扫描文件 " + checked + " · 表 " + totalTables + " 张 · 破表行 " + totalBad + " · 条数声明不符 " + claimBad);
+	const pass = totalBad === 0 && claimBad === 0;
   console.log("IS_PASS: " + (pass ? "TRUE" : "FALSE"));
   process.exit(pass ? 0 : 1);
 }
