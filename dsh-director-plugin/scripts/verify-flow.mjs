@@ -1678,6 +1678,82 @@ check("G5", "分支聚焦真机可用：点分支含祖先链 · 开「含上一
 	!!g5 && g5.applied === true && g5.a.indexOf("1") >= 0 && g5.b.indexOf("2") >= 0, g5 ? J(g5) : "取不到 __dshBranchFocus");
 
 /* ══════════════════════════════════════════════════════════════════
+ * 【H】宿主残留两行的**显示层裁剪**（2026-09-14 第 4 批交付，
+ *      本轮才发现**一个闸门都没覆盖它** —— 离线与真机都没有）
+ * ══════════════════════════════════════════════════════════════════
+ *  目标：宿主 `workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js:7337-7357`
+ *        的「总监对话」标题行 + 「智能体 · 点击创建分支」按钮行。
+ *  🔴 为什么必须真机验：产品侧只能**读 DOM**（那是宿主写的），断言对象与结论同源的要求
+ *     在这里意味着"必须量**计算样式**与**是否在被隐的块上**"，不能只断言"函数被调过"。
+ *  🔴 为什么要有正负对照：`display:none` 可能是**别人**写的（宿主自己/别的样式）。
+ *     故用模块自己的 `restoreHostPanelTrim()` 还原 ⇒ 必须变可见；再 `applyHostPanelTrim()`
+ *     ⇒ 必须又变不可见。只看"现在是 hidden"是空真（可能一直就是 hidden）。
+ * ⚠️ 用 `window.__dshHostPanelTrim`（该模块自带的调试面）而不是自己写选择器 ——
+ *    **单一真相源**：判据与产品实现必须指向同一份目标清单。 */
+section("【H】宿主残留两行显示层裁剪（第 4 批交付 · 本轮补闸门）");
+/* 起点显式建立：宿主残留只在**对话页**的总监面板里，先确保在该页（已在则点击是无害的幂等动作） */
+const hTabClicked = await clickText('[role="tab"]', "对话");
+await WAIT(1200);
+console.log("  · H 段起点：切到「对话」页 " + (hTabClicked && hTabClicked.ok ? "（已点击 @ " + hTabClicked.x + "," + hTabClicked.y + "）" : "（未找到对话页签：" + (hTabClicked && hTabClicked.why) + "）"));
+const hProbe = await ev(`(async () => {
+	const T = ['智能体 · 点击创建分支', '总监对话'];
+	const api = window.__dshHostPanelTrim || null;
+	/* 目标：**叶子**元素文本全等，且其块容器（上溯 1 层）在宿主总监面板内 */
+	const blocks = () => {
+		const out = {};
+		const all = [].slice.call(document.querySelectorAll('div,span'));
+		for (const t of T) {
+			const leaf = all.find((e) => e.children.length === 0 && String(e.textContent || '').trim() === t);
+			const b = leaf ? leaf.parentElement : null;
+			out[t] = b ? {
+				display: getComputedStyle(b).display,
+				mark: b.getAttribute('data-dsh-trimmed'),
+				inPanel: !!(b.closest && b.closest('[style*="min-width: 180px"]'))
+			} : null;
+		}
+		return out;
+	};
+	if (!api) return { api: false };
+	const before = blocks();
+	const restoredN = api.restoreHostPanelTrim();
+	await new Promise((r) => setTimeout(r, 350));
+	const during = blocks();
+	/* 还原成产品常态（裁剪生效）—— 谁污染谁治理 */
+	const applied = api.applyHostPanelTrim();
+	await new Promise((r) => setTimeout(r, 350));
+	const after = blocks();
+	return {
+		api: true, scanCount: api.trimState.scans, degraded: api.trimState.degraded, reason: api.trimState.reason,
+		observer: api.trimState.observer, restoredN: restoredN, appliedAfter: applied,
+		before: before, during: during, after: after
+	};
+})()`);
+const hTargets = ["智能体 · 点击创建分支", "总监对话"];
+const hHidden = (m) => hTargets.every((t) => m && m[t] && m[t].display === "none" && m[t].inPanel && m[t].mark);
+if (!hProbe || !hProbe.api) {
+	check("H0", "前置：插件已挂载（含宿主裁剪模块）", false,
+		hProbe ? "window.__dshHostPanelTrim 不存在（插件未装载或该能力缺失）" : "探针取不到");
+} else {
+	/* 前提：目标真的在 DOM 里且落在宿主面板内 —— 否则下面全是空真 */
+	const hPresent = hTargets.every((t) => hProbe.before[t] && hProbe.before[t].inPanel);
+	check("H0", "前置：两行目标都在 DOM 的宿主总监面板内（否则 H1~H3 是空真）",
+		hPresent, { degraded: hProbe.degraded, reason: hProbe.reason, scanCount: hProbe.scanCount, before: hProbe.before });
+	if (hPresent) {
+		check("H1", "🔴 两行的**块容器**计算样式为 display:none，且带 data-dsh-trimmed 标记（用户看不到）",
+			hHidden(hProbe.before), hProbe.before);
+		check("H2", "🔴 正负对照①：调模块自己的 restoreHostPanelTrim() ⇒ 两行**必须变回可见**（证明 none 是它写的，不是别人）",
+			hProbe.restoredN > 0 && hTargets.every((t) => hProbe.during[t] && hProbe.during[t].display !== "none"),
+			{ restoredN: hProbe.restoredN, during: hProbe.during });
+		check("H3", "🔴 正负对照②：再 applyHostPanelTrim() ⇒ 两行**必须又变不可见**（可逆 + 幂等），并复原成产品常态",
+			hTargets.every((t) => hProbe.after[t] && hProbe.after[t].display === "none" && hProbe.after[t].mark),
+			{ appliedAfter: hProbe.appliedAfter, after: hProbe.after });
+	}
+	check("H4", "裁剪未被降级（读不到就必须说清原因，不许无声）",
+		hProbe.degraded === false && hProbe.reason === null && hProbe.observer === true,
+		{ degraded: hProbe.degraded, reason: hProbe.reason, observer: hProbe.observer });
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 收尾：页面级错误
  * ══════════════════════════════════════════════════════════════════ */
 section("【E】页面级错误（真机 console.error）+ CDP 健康度");
