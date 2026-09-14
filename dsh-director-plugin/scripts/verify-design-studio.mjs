@@ -228,10 +228,22 @@ async function ensureSelected() {
 	return await selectedId();
 }
 
-let pass = 0, fail = 0; const rows = [];
+let pass = 0, fail = 0, skipped = 0; const rows = [];
 function assert(id, name, ok, detail) {
 	rows.push({ id, name, ok, detail }); ok ? pass++ : fail++;
 	console.log(`  ${ok ? "✅" : "❌"} ${id} ${name}`);
+	if (detail !== undefined) console.log(`      ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+}
+/* 🔴 2026-09-14 补（纪律 18）：**"跳过"比"红"更危险** —— 所以跳过必须
+ *   ① 有**可分辨、可证伪**的原因（不是"本机数据如此"这种没法反驳的收尾）；
+ *   ② 单独计数并进汇总，绝不算进 pass（否则跳过会伪装成通过）。
+ *   用途：某些断言需要**环境测试面**（如 Windows 原生窗口控件覆盖层存在），
+ *   而测试面不成立时断言恒真/恒假 —— 此时报 SKIP + 原因，并另加一条**契约断言**
+ *   覆盖"测试面不存在时产品应当怎么做"，保证这一组不是白跑的。 */
+function skip(id, name, reason, detail) {
+	rows.push({ id, name, ok: null, reason, detail }); skipped++;
+	console.log(`  ⏭️ ${id} ${name}`);
+	console.log(`      跳过原因：${reason}`);
 	if (detail !== undefined) console.log(`      ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
 }
 
@@ -847,42 +859,133 @@ console.log("\n【C15】窗口控件安全区（✕ 与原生窗口按钮重叠�
 
 const safe = await js(`(function(){
 	var w = window.innerWidth;
-	var ins = 0, src = "none";
+	var wco = navigator.windowControlsOverlay;
+	var overlayVisible = wco ? wco.visible : null;
+	var ins = 0, src = "none", rectW = null;
 	try {
-		var wco = navigator.windowControlsOverlay;
-		if (wco && wco.getTitlebarAreaRect) { var r = wco.getTitlebarAreaRect(); ins = Math.max(0, Math.round(w - r.width)); src = "wco"; }
+		if (wco && typeof wco.getTitlebarAreaRect === "function") {
+			var r = wco.getTitlebarAreaRect();
+			rectW = r ? Math.round(r.width) : null;
+			if (wco.visible === true && r && r.width > 0 && w > 0) { ins = Math.max(0, Math.round(w - r.width)); src = "wco"; }
+			else { src = "wco-not-visible"; }
+		}
 	} catch (e) { src = "err"; }
 	var top = document.querySelector('[data-testid=ds-top]');
 	var padRight = top ? Math.round(parseFloat(getComputedStyle(top).paddingRight) || 0) : -1;
-	return { w: w, inset: ins, src: src, boundary: w - ins, padRight: padRight, topFound: !!top };
+	return { w: w, inset: ins, src: src, overlayVisible: overlayVisible, rectW: rectW,
+	         boundary: w - ins, padRight: padRight, topFound: !!top };
 })()`);
-assert("C15.1", "顶栏按安全区留出右内边距（= inset + 10）", safe.topFound && safe.padRight === safe.inset + 10, safe);
-/* 🔴 防"平凡真"：若 inset 为 0，下面的越界断言对任何元素都成立、等于没测。
- *    故先要求"本次环境确实存在原生窗口控件覆盖层"。 */
-assert("C15.2", "🔴 安全区非平凡（inset > 0，本环境确有原生窗口控件）—— 否则下一条是平凡真",
-	safe.inset > 0 && safe.boundary < safe.w, safe);
+/* 🔴 2026-09-14 修（**本条曾是假红**，务必别改回去）：
+ *   原实现 `ins = Math.max(0, Math.round(w - r.width))` **不判 `wco.visible`**。
+ *   覆盖层不可见时 `getTitlebarAreaRect()` 返回 `{x:0,y:0,width:0,height:44}`
+ *   ⇒ `ins = w - 0 = ` **整个窗宽**（实测 1440）⇒ `boundary = 0`
+ *   ⇒「✕ 在安全区内」这类断言对任何元素都**必然失败**（4 条假红同时出现）。
+ *   而产品侧 `src/util/safe-area.js` 第 73 行明确写着 `if (wco.visible === false) return 0;`
+ *   —— 产品是对的（此时**没有**原生窗口控件要避让，留白反而是新 bug），
+ *      错的是闸门把"读不到"当成了"读到一个巨大的值"。
+ *   ⇒ 现在：inset 只在 `visible === true` 时才由矩形反推；否则恒为 0。
+ *      再据此分成「契约断言（任何环境都必须过）」+「测试面断言（不成立则 SKIP）」。 */
+assert("C15.1", "顶栏右内边距 = 安全区 inset + 10（inset 仅在覆盖层可见时由矩形反推，否则必须是 0）",
+	safe.topFound && safe.padRight === safe.inset + 10, safe);
 
-const closeR = await rectOf('[data-testid="ds-close"]');
-const statsR = await rectOf('[data-testid="ds-stats"]');
-assert("C15.3", "🔴 关闭按钮 ✕ 完全在安全区内（原位置被原生窗口按钮压住）",
-	!!closeR && Math.round(closeR.x + closeR.w) <= safe.boundary,
-	{ closeRight: closeR && Math.round(closeR.x + closeR.w), boundary: safe.boundary });
-assert("C15.4", "状态文字也未被压（ds-stats 右边界 ≤ 安全区左边界）",
-	!!statsR && Math.round(statsR.x + statsR.w) <= safe.boundary,
-	{ statsRight: statsR && Math.round(statsR.x + statsR.w), boundary: safe.boundary });
+/* 🔴 防"平凡真/平凡假"（纪律 23）：若覆盖层不可见，`boundary = w`，
+ *    下面的越界断言对任何元素都恒真 —— 等于没测。
+ *    故先要求"本次环境确实存在原生窗口控件覆盖层"，且 inset 落在开区间 (0, w) 内。 */
+const overlayTestable = safe.overlayVisible === true && safe.inset > 0 && safe.boundary < safe.w;
+if (overlayTestable) {
+	assert("C15.2", "🔴 测试面：覆盖层可见且 inset ∈ (0, w) 内 —— C15.3~5 的越界断言才有判别力",
+		true, safe);
+} else {
+	/* 测试面不成立时**不能什么都不测**：改测产品在"无覆盖层"下的正确契约 ——
+	 * 「不许凭空留白」= paddingRight 必须恰好是 10（inset 0 + 10），而不是 147 之类。 */
+	skip("C15.2", "🔴 测试面：覆盖层可见且 inset ∈ (0, w) 内（C15.3~5 的前提）",
+		"本环境 windowControlsOverlay.visible = " + String(safe.overlayVisible)
+		+ "、矩形宽 = " + String(safe.rectW)
+		+ " ⇒ 当前窗口**没有**原生窗口控件覆盖层，'右侧 137px 被系统按钮独占'这一物理事实不存在，"
+		+ "越界断言对任何元素都恒真。测试面由宿主的窗口状态决定，闸门无法伪造；"
+		+ "复现路径：让 Harness 窗口上屏并置前后重跑本脚本。", safe);
+	assert("C15.2b", "🔴 测试面不存在时的契约：顶栏**不许凭空留白** —— paddingRight 必须 = 0 + 10",
+		safe.topFound && safe.inset === 0 && safe.padRight === 10, safe);
+}
+
+const runOverlapChecks = overlayTestable;
+if (runOverlapChecks) {
+	const closeR = await rectOf('[data-testid="ds-close"]');
+	const statsR = await rectOf('[data-testid="ds-stats"]');
+	assert("C15.3", "🔴 关闭按钮 ✕ 完全在安全区内（原位置被原生窗口按钮压住）",
+		!!closeR && Math.round(closeR.x + closeR.w) <= safe.boundary,
+		{ closeRight: closeR && Math.round(closeR.x + closeR.w), boundary: safe.boundary });
+	assert("C15.4", "状态文字也未被压（ds-stats 右边界 ≤ 安全区左边界）",
+		!!statsR && Math.round(statsR.x + statsR.w) <= safe.boundary,
+		{ statsRight: statsR && Math.round(statsR.x + statsR.w), boundary: safe.boundary });
+} else {
+	skip("C15.3", "🔴 关闭按钮 ✕ 完全在安全区内（原位置被原生窗口按钮压住）",
+		"覆盖层不可见 ⇒ boundary = 窗宽，「✕ 越界」不可能为真（恒真断言）", safe);
+	skip("C15.4", "状态文字也未被压（ds-stats 右边界 ≤ 安全区左边界）",
+		"覆盖层不可见 ⇒ boundary = 窗宽，同上恒真", safe);
+}
 
 const over = await js(`(function(){
 	var w = window.innerWidth, ins = 0;
-	try { ins = Math.max(0, Math.round(w - navigator.windowControlsOverlay.getTitlebarAreaRect().width)); } catch(e) {}
+	try {
+		var wco = navigator.windowControlsOverlay;
+		if (wco && wco.visible === true && typeof wco.getTitlebarAreaRect === 'function') {
+			var r = wco.getTitlebarAreaRect();
+			if (r && r.width > 0 && w > 0) ins = Math.max(0, Math.round(w - r.width));
+		}
+	} catch(e) {}
 	var b = w - ins, bad = [];
 	document.querySelectorAll('[data-testid=ds-top] button, [data-testid=ds-top] select, [data-testid=ds-top] input').forEach(function(e){
 		var r = e.getBoundingClientRect(); if (r.width < 1) return;
 		if (Math.round(r.right) > b) bad.push((e.getAttribute('data-testid')||e.tagName)+"@"+Math.round(r.right));
 	});
-	return bad;
+	return { ins: ins, bad: bad };
 })()`);
-assert("C15.5", "顶栏**所有**可点元素均不越界（不是只把 ✕ 挪了一下）",
-	Array.isArray(over) && over.length === 0, over);
+if (runOverlapChecks) {
+	assert("C15.5", "顶栏**所有**可点元素均不越界（不是只把 ✕ 挪了一下）",
+		Array.isArray(over && over.bad) && over.bad.length === 0, over);
+} else {
+	skip("C15.5", "顶栏**所有**可点元素均不越界（不是只把 ✕ 挪了一下）",
+		"覆盖层不可见 ⇒ 边界即窗宽，'越界'恒为假", over);
+}
+
+/* C15.6 🔴 正负对照（纪律 6：新判据必须能分辨，否则是平凡真）——
+ *   把顶栏 paddingRight 人为改成**错误值**（= 正确值 + 37），同一个判据必须**转假**；
+ *   还原后必须**回真**。这条证明 C15.1 / C15.2b 真的在测东西。
+ * 🔴 反例取值必须**相对**正确值构造，不能写死 —— 第一版写死 147，结果在
+ *    "覆盖层可见（inset=137 ⇒ 正确值就是 147）"的环境里，反例恰好等于正确值，
+ *    判据当然不转假 ⇒ **自检自己假红**。与"断言对象必须与结论同源"是同一条纪律。 */
+const ctrl = await js(`(function(){
+	var top = document.querySelector('[data-testid=ds-top]');
+	if (!top) return null;
+	var computeIns = function(){
+		var w = window.innerWidth, ins = 0;
+		try {
+			var wco = navigator.windowControlsOverlay;
+			if (wco && wco.visible === true && typeof wco.getTitlebarAreaRect === 'function') {
+				var r = wco.getTitlebarAreaRect();
+				if (r && r.width > 0 && w > 0) ins = Math.max(0, Math.round(w - r.width));
+			}
+		} catch(e) {}
+		return ins;
+	};
+	var judge = function(){
+		var pad = Math.round(parseFloat(getComputedStyle(top).paddingRight) || 0);
+		return pad === computeIns() + 10;
+	};
+	var before = judge();
+	var correct = computeIns() + 10;
+	var wrongPad = correct + 37;
+	var prev = top.style.paddingRight;
+	top.style.paddingRight = wrongPad + "px";
+	var during = judge();
+	top.style.paddingRight = prev;
+	var after = judge();
+	return { before: before, during: during, after: after, prev: prev, correctPad: correct, wrongPad: wrongPad };
+})()`);
+assert("C15.6", "🔴 正负对照：人为把 paddingRight 改成（正确值 + 37）⇒ 判据必须转假；还原 ⇒ 必须回真",
+	!!ctrl && ctrl.before === true && ctrl.during === false && ctrl.after === true,
+	ctrl);
 
 /* ══════════════════════════════════════════════════════════════════
  * C16 顶栏「连续点击可用性」
@@ -1008,11 +1111,27 @@ const armed = await js(`(function(){ var e = document.querySelector('[data-testi
 assert("C16.6", "点「删除」后按钮自身可见变化（data-armed=1 · 文字变「确认」）",
 	!!armed && armed.armed === "1" && armed.text === "确认", armed);
 const delW = await js(`(function(){ var e = document.querySelector('[data-testid=ds-del-doc]'); return e ? Math.round(e.getBoundingClientRect().width) : null; })()`);
-await sleep(2700);                                          // 等自动泄压
-const disarmed = await js(`(function(){ var e = document.querySelector('[data-testid=ds-del-doc]'); return e ? { armed: e.getAttribute('data-armed'), text: e.textContent.trim(), w: Math.round(e.getBoundingClientRect().width) } : null; })()`);
-assert("C16.7", "上膛 2.5s 后自动泄压回「删除」，且两态同宽（「确认」曾因 padding 差 1px×2 推动 8 个按钮）",
-	!!disarmed && disarmed.armed === "0" && disarmed.text === "删除" && delW === disarmed.w,
-	{ armed: disarmed, widthArmed: delW, widthIdle: disarmed && disarmed.w });
+/* 🔴 2026-09-14 修（**本条曾是假红**）：原来是 `await sleep(2700)` 死等 —— 而产品定时器是 **2500ms**，
+ *    余量只有 200ms，**没有任何容忍度**。实测（真机时间线探针 .probe-disarm.mjs）：
+ *    点击 → +47ms 上膛 → **+3329ms 才泄压**。多出的 ~830ms 不是产品慢，而是
+ *    **隐藏窗口（document.visibilityState === "hidden"）下 Chromium 会把 setTimeout
+ *    对齐到 1s 桶**（2500ms ⇒ 落在 2500~3500ms 之间）—— 环境特性，不是缺陷。
+ *    ⇒ 正确判据是「**有截止期的轮询**」：在 6s 内等到泄压即为真，并报出**实际耗时**。
+ *    这样仍然会抓到真缺陷（永不泄压 / 泄压超过 6s），但不把 1s 对齐误判成失败。 */
+const ARM_DEADLINE_MS = 6000;
+const disarmT0 = Date.now();
+let disarmed = null;
+while (Date.now() - disarmT0 < ARM_DEADLINE_MS) {
+	await sleep(150);
+	disarmed = await js(`(function(){ var e = document.querySelector('[data-testid=ds-del-doc]'); return e ? { armed: e.getAttribute('data-armed'), text: e.textContent.trim(), w: Math.round(e.getBoundingClientRect().width) } : null; })()`);
+	if (disarmed && disarmed.armed === "0") break;
+}
+const disarmMs = Date.now() - disarmT0;
+assert("C16.7", "上膛后自动泄压回「删除」（带截止期轮询；两态同宽 —— 「确认」曾因 padding 差 1px×2 推动 8 个按钮）",
+	/* 🔴 负向对照就藏在条件里：必须**先证明起点是上膛的**（C16.6 的回读），
+	 *    否则"读到一个 0"可能只是"本来就没上膛" —— 那 C16.7 就是空真。 */
+	!!disarmed && !!armed && armed.armed === "1" && disarmed.armed === "0" && disarmed.text === "删除" && delW === disarmed.w,
+	{ armed: disarmed, 起点armed: armed && armed.armed, widthArmed: delW, widthIdle: disarmed && disarmed.w, 泄压耗时ms: disarmMs, 截止期ms: ARM_DEADLINE_MS });
 
 /* C16.8 🔴 正负对照（台账规则 F：新闸门必须校准，否则 C16.2 的"零位移"可能是平凡真）——
  * 人为把保存按钮加宽 44px，位移检测器**必须**报出来。 */
@@ -1143,10 +1262,16 @@ assert("C17.2", "环境复原：跑完把工作室 / 个性化面板 / 版本面
 
 /* ══ 汇总 ══ */
 console.log("\n════════════════════════════════════════════════════════════");
-console.log(` 结果：${pass} 通过 / ${fail} 失败 / 共 ${pass + fail} 项`);
-const failed = rows.filter((r) => !r.ok);
+console.log(` 结果：${pass} 通过 / ${fail} 失败 / ${skipped} 跳过 / 共 ${pass + fail + skipped} 项`);
+const failed = rows.filter((r) => !r.ok && r.ok !== null);
 if (failed.length) { console.log(" 未通过项："); failed.forEach((f) => console.log(`   ${f.id} ${f.name}`)); }
+const skippedRows = rows.filter((r) => r.ok === null);
+/* 🔴 跳过必须**逐条列出原因**（纪律 18）：只报个数等于把"没测"藏进汇总里 */
+if (skippedRows.length) {
+	console.log(" 跳过项（含可证伪原因 —— 测试面不成立，非产品问题）：");
+	skippedRows.forEach((s) => console.log(`   ⏭️ ${s.id} ${s.name}\n       原因：${s.reason}`));
+}
 console.log("════════════════════════════════════════════════════════════");
-console.log(`\nIS_PASS: ${fail === 0 ? "TRUE" : "FALSE"}（fail=${fail}）`);
+console.log(`\nIS_PASS: ${fail === 0 ? "TRUE" : "FALSE"}（fail=${fail}${skipped ? " / 跳过=" + skipped : ""}）`);
 ws.close();
 process.exit(fail === 0 ? 0 : 1);

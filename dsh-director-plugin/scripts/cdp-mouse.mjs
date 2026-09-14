@@ -186,8 +186,47 @@ if (mode === "hit") {
 }
 
 /* ── sweep：遍历容器内所有 button ───────────────────────────────────────── */
+/* 🔴 2026-09-14 补：sweep 原先**没有起点建立、也没有收尾复原**，于是它
+ *   ① 点到容器里的 `ds-close`（工作室的关闭按钮，属**破坏夹具型**控件）⇒ 工作室被关掉；
+ *   ② 点开 `ds-ver-toggle` / `ds-personalize` 这类**开合型**控件后原地不管 ⇒ 浮层跨运行留着。
+ *   后果实测：连跑第二次直接 `容器找不到: ds-top`，而退出码是 1 —— 读起来像"产品坏了"，
+ *   其实是"脚本自己把夹具拆了"。本项目要求真机套件**各连跑 3 次**，这条因此必须修。
+ *   纪律依据：① 起点必须**显式建立并断言**；② 开合/破坏型控件点完**当场还原**；
+ *            ③ 用错目标判 INVALID(2)，不判 FAIL(1)。 */
+const clickSel = async (sel) => {
+	const r = (await evalJs(hitExpr([sel])))[0];
+	if (!r || !r.found) return false;
+	const { x, y } = r.center;
+	await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+	await new Promise((res) => setTimeout(res, 40));
+	await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+	await new Promise((res) => setTimeout(res, 60));
+	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+	await new Promise((res) => setTimeout(res, 400));
+	return true;
+};
+
+const sweepContainerExists = async () => !!(await evalJs(`!!document.querySelector(${containerJson})`));
+let sweepStudioWasOpen = false;
+
+/** sweep 收尾复原：关掉本次可能打开的浮层，并把工作室开合态还原到进入时的样子 */
+const sweepRestore = async () => {
+	const pairs = [["[data-testid=ds-ver-panel]", "ds-ver-toggle"], ["[data-testid=pp-panel]", "pp-close"], ["[data-testid=ds-export-panel]", "ds-export-close"]];
+	for (const [open, closer] of pairs) {
+		for (let i = 0; i < 4; i++) {
+			if (!(await evalJs(`!!document.querySelector(${JSON.stringify(open)})`))) break;
+			if (!(await clickSel(toSel(closer)))) break;
+		}
+	}
+	const nowOpen = !!(await evalJs(`!!document.querySelector('[data-testid=ds-top]')`));
+	if (sweepStudioWasOpen && !nowOpen) { await clickSel("#dsh-design-studio-launcher"); await new Promise((r) => setTimeout(r, 600)); }
+	if (!sweepStudioWasOpen && nowOpen) { await clickSel(toSel("ds-close")); await new Promise((r) => setTimeout(r, 500)); }
+	const after = !!(await evalJs(`!!document.querySelector('[data-testid=ds-top]')`));
+	console.log(`\n♻️ 收尾复原：工作室开合 ${sweepStudioWasOpen ? "开" : "关"} → ${after ? "开" : "关"}` + (sweepStudioWasOpen === after ? "（起点等价 ✅）" : "（⚠️ 未还原）"));
+};
+
 if (mode === "sweep") {
-	const list = await evalJs(`(() => {
+	const buildList = () => evalJs(`(() => {
 		const c = document.querySelector(${containerJson});
 		if (!c) return null;
 		return [].map.call(c.querySelectorAll("button, select, input"), (e, i) => {
@@ -197,12 +236,33 @@ if (mode === "sweep") {
 			return "?i=" + i;
 		});
 	})()`);
-	if (!list) { console.error("容器找不到:", rest[0]); process.exit(1); }
+	sweepStudioWasOpen = !!(await evalJs(`!!document.querySelector('[data-testid=ds-top]')`));
+	let list = await buildList();
+	if (!list) {
+		/* 容器不在就**自己把起点建立起来**（走用户真实入口），而不是让调用者先手动开 */
+		console.log("容器不在，尝试经用户入口打开：" + rest[0]);
+		await clickSel("#dsh-design-studio-launcher");
+		await new Promise((r) => setTimeout(r, 700));
+		list = await buildList();
+	}
+	if (!list) {
+		console.error("容器找不到:", rest[0]);
+		console.error("  这是**前置条件缺失（INVALID）**，不是被测目标不合格：该容器当前不在文档里。");
+		console.error("  可复制命令（先起 Harness 并让它上屏）：");
+		console.error("    powershell -ExecutionPolicy Bypass -File scripts/restart-harness.ps1");
+		console.error("    node scripts/cdp-eval.mjs \"document.getElementById('dsh-design-studio-launcher').click()\"");
+		console.error("    node scripts/cdp-mouse.mjs sweep " + rest[0]);
+		process.exit(2);
+	}
 	targets = list;
 	console.log(`扫到 ${list.length} 个可交互元素\n`);
 }
 
 /* ── click：每个目标现取坐标 → 点击 → 复测 ──────────────────────────────── */
+/* 🔴 位移统计必须**记账**：`beforePos`/`afterPos` 任一为 null 时原代码是**静默跳过** ——
+ *    于是"顶栏没动"与"根本没量"在输出里长得一模一样（空真）。故作两个计数器，
+ *    收尾打一行 `量了 N 次 / 位移 M 个`，M>0 或 N=0 都肉眼可见。 */
+let posProbes = 0, movedTotal = 0;
 const printClick = (r, before, after, beforePos, afterPos) => {
 	console.log(`  ${r.reachable ? "🖱" : "🔴"} ${r.sel}  「${r.text}」 @ ${r.center.x},${r.center.y}`);
 	if (!r.reachable) console.log(`       栈顶是 ${r.blocker} —— 这一下点给了别人`);
@@ -215,10 +275,12 @@ const printClick = (r, before, after, beforePos, afterPos) => {
 	}
 	/* 位移检测 */
 	if (beforePos && afterPos) {
+		posProbes++;
 		const moved = Object.keys(beforePos).filter((k) => afterPos[k] !== undefined && afterPos[k] !== beforePos[k]);
 		const gone = Object.keys(beforePos).filter((k) => afterPos[k] === undefined);
 		const born = Object.keys(afterPos).filter((k) => beforePos[k] === undefined);
 		if (moved.length) {
+			movedTotal += moved.length;
 			console.log(`       ⚠️ 顶栏位移 ${moved.length} 个（按钮跑了 ⇒ 用户下一次会点空）：`);
 			for (const k of moved.slice(0, 6)) console.log(`          ${k}: ${beforePos[k]} → ${afterPos[k]}  (Δ${afterPos[k] - beforePos[k] >= 0 ? "+" : ""}${afterPos[k] - beforePos[k]})`);
 			if (moved.length > 6) console.log(`          …另有 ${moved.length - 6} 个`);
@@ -247,6 +309,13 @@ for (const sel of targets.map(toSel)) {
 	const after = await evalJs(SNAP_EXPR);
 	const afterPos = await evalJs(shiftExpr(TOP_SEL));
 	printClick(r, before, after, beforePos, afterPos);
+}
+
+/* 🔴 sweep 收尾复原必须**接在循环之后**（原先根本没有这一步）：
+ *    不接的话，上面那些开合型/破坏型控件的副作用会留给下一次运行。 */
+if (mode === "sweep") {
+	console.log(`\n📏 顶栏位移：量了 ${posProbes} 次 / 检出 ${movedTotal} 个` + (posProbes === 0 ? "（⚠️ 一次都没量到 ⇒ 本判据空转，不是「没动」）" : movedTotal === 0 ? "（✅ 零位移）" : "（⚠️ 有位移，按钮会跑）"));
+	try { await sweepRestore(); } catch (e) { console.error("♻️ 收尾复原异常：" + String((e && e.message) || e)); }
 }
 
 ws.close();

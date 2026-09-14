@@ -88,9 +88,12 @@ const ENUM = (rootSel) => `(function(){var root=document.querySelector(${JSON.st
    if(s.display==='none'||s.visibility==='hidden'||r.width<3||r.height<3)return;
    var tid=e.getAttribute('data-testid')||('TAG:'+e.tagName);
    var interactive=e.tagName==='BUTTON'||e.tagName==='SELECT'||e.getAttribute('role')==='button';
-   /* ⚠️ 2026-09-14 第 4 批：原模式里的 `^dp-lv-`（层级 chips）与含 `chip` 的兜底，
-    *    对应的 `dp-lv-*` / `dp-level-chip` 已随 R1 整行取消而消失 ⇒ 清掉死模式。
-    *    留着它的危害不是报错，而是让下一个人以为"还有一批 chip 要巡"。 */
+   /* ⚠️ 2026-09-14 第 4 批：原模式里的层级 chips 选择器（^dp-lv- 与含 chip 的兜底），
+    *    对应的 dp-lv-* / dp-level-chip 已随 R1 整行取消而消失 ⇒ 清掉死模式。
+    *    留着它的危害不是报错，而是让下一个人以为"还有一批 chip 要巡"。
+    * 🔴 本段位于**模板字符串内部**，注释里**绝对不能出现反引号** ——
+    *    反引号会提前闭合外层模板串，报成 SyntaxError: Unexpected identifier
+    *    （2026-09-14 实际踩到：verify-walk.mjs 自第 4 批起一直无法解析）。 */
    var clickableDiv=/toggle|^dp-k-|agent-|^dp-model|^dp-now-title|^d-seg/.test(tid);
    if(!interactive&&!clickableDiv)return;
    if(seen[tid])return;seen[tid]=1;

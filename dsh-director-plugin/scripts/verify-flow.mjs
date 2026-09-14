@@ -439,7 +439,25 @@ let openedSessionIndex = null;
  *    ⇒ 复原必须比"能看见输入框"更强：**是同一个会话**。 */
 let startSessionId = null;
 if (tabRing.length === 0) {
-	const items = (await ev("Array.from(document.querySelectorAll('[role=\"treeitem\"]')).map((e,i)=>({i,t:String(e.textContent||'').trim().slice(0,26)}))")) || [];
+	const readItems = async () => (await ev("Array.from(document.querySelectorAll('[role=\"treeitem\"]')).map((e,i)=>({i,t:String(e.textContent||'').trim().slice(0,26)}))")) || [];
+	let items = await readItems();
+	/* 🔴 2026-09-14 补（**实测踩到，代价已付**）：侧栏可能处在**折叠**状态 —— 那时
+	 *    `[role=treeitem]` 里只有工作区根节点（实测唯一一项文案 = "workspace"、
+	 *    `aria-expanded="false"`），**会话根本不在 DOM 里**。
+	 *    原实现直接按 `/分钟|小时|天|刚刚/` 过滤 ⇒ 0 个候选 ⇒ 打不开任何会话
+	 *    ⇒ 后面整轮级联失败（F1「总监页已挂载」false、F2/F3 取不到、F4 汇总崩栈），
+	 *    读起来像"功能坏了"，其实是**起点没建立**（本项目的经典误判形态）。
+	 *    ⇒ 先展开工作区根节点再找会话。 */
+	if (!items.some((x) => /分钟|小时|天|刚刚/.test(x.t))) {
+		const marked = await ev("(()=>{const w=document.querySelector('[role=treeitem][aria-expanded=\"false\"]');if(!w)return false;w.setAttribute('data-probe','ws-root');return true;})()");
+		if (marked) {
+			await click('[data-probe="ws-root"]');
+			await WAIT(1300);
+			await ev("document.querySelectorAll('[data-probe=\"ws-root\"]').forEach(function(e){e.removeAttribute('data-probe');})");
+			items = await readItems();
+			console.log("  · 侧栏原为折叠态 ⇒ 已展开工作区根节点，项数 " + items.length);
+		}
+	}
 	const sessions = items.filter((x) => /分钟|小时|天|刚刚/.test(x.t));
 	console.log("  侧栏项 " + items.length + " 个，其中像会话的 " + sessions.length + " 个：" + JSON.stringify(sessions.map((s) => s.t)));
 	for (const s of sessions.slice(0, 4)) {
@@ -1071,7 +1089,21 @@ await closeOverlays("D 段收尾");
 /* 🔴 真机演练「点左侧切会话」：R5 必须跟着换 —— 判据是**切过去之后 MARK 不再出现在 R5 里**
  * （不用「条目数 == 0」：那个会话可能本来就有别的流转，用计数会把"正常"误判成"失败"） */
 const items2 = (await ev("Array.from(document.querySelectorAll('[role=\"treeitem\"]')).map((e,i)=>({i,t:String(e.textContent||'').trim().slice(0,26)}))")) || [];
-const others = items2.filter((x) => /分钟|小时|天|刚刚/.test(x.t) && x.t !== openedSessionLabel);
+const pickOthers = (arr) => arr.filter((x) => /分钟|小时|天|刚刚/.test(x.t) && x.t !== openedSessionLabel);
+let others = pickOthers(items2);
+/* 🔴 起点显式建立（2026-09-14 补）：D8 需要"**另一个**会话"来做对照，但那是**数据状态**、
+ *    不是产品能力 —— 没有就该**自己造一个**，而不是报 SKIP。
+ *    原实现只读现成列表，于是结果依赖"上一次运行恰好留下过会话"：
+ *    实测连跑载荷不一致（run1 = 68/0/0，run2 = 67/0/1），属于"偶发跳过"——
+ *    比偶发红更隐蔽，因为它看起来永远是绿的。走宿主真实入口「新建会话」补齐起点。 */
+if (!others.length) {
+	const made = await clickText('button,[role="button"]', "新会话");
+	console.log("  · D8 起点补齐：侧栏无第二个会话，走宿主入口「新建会话」" + (made && made.ok ? "（已点击 @ " + made.x + "," + made.y + "）" : "（❌ 点击失败：" + (made && made.why) + "）"));
+	await WAIT(2200);
+	const items3 = (await ev("Array.from(document.querySelectorAll('[role=\"treeitem\"]')).map((e,i)=>({i,t:String(e.textContent||'').trim().slice(0,26)}))")) || [];
+	others = pickOthers(items3);
+	console.log("  · 补齐后候选会话 " + others.length + " 个 ⇒ " + JSON.stringify(others.map((o) => o.t)));
+}
 let sw = null;
 for (const s of others.slice(0, 3)) {
 	await clickIndex('[role="treeitem"]', s.i);
@@ -1087,7 +1119,8 @@ for (const s of others.slice(0, 3)) {
 	break;
 }
 if (!sw) check("D8", "🔴 真实点左侧**另一个**会话 ⇒ 总监页 R5 不再显示上一条会话的流转", "SKIP",
-	"侧栏没有可切换的第二个会话（" + others.length + " 个候选），无法做对照");
+	"侧栏仍无可切换的第二个会话（" + others.length + " 个候选；已尝试走宿主入口「新建会话」补齐起点，"
+	+ "补齐后仍为 " + others.length + "）⇒ 无对照物，无法做对照。");
 else check("D8", "🔴 真实点左侧**另一个**会话 ⇒ 总监页 R5 不再显示上一条会话的流转（跟的是宿主当前会话）",
 	sw.n >= 0, "切到「" + sw.label + "」⇒ dp-flow-item = " + sw.n + "，MARK 已不可见");
 
@@ -1193,7 +1226,13 @@ const fTok = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-ro
 const fTokBad = fTok ? Object.keys(fTok).filter((k) => !fTok[k].mine || fTok[k].mine !== fTok[k].host) : ["探针失败"];
 check("F4", "🔴 六个表面/文字令牌逐个等于宿主令牌（背景 / 卡片 / 卡片2 / 边框 / 主文字 / 次文字）",
 	fTokBad.length === 0,
-	fTokBad.length ? fTokBad.map((k) => k + " mine=" + (fTok[k] && fTok[k].mine) + " host=" + (fTok[k] && fTok[k].host)).join(" ｜ ") : "六项全等");
+	/* 🔴 详情串必须对 `fTok === null` 设防：原写法 `fTok[k] && fTok[k].mine` 会**先求值
+	 *    `fTok[k]`** ⇒ 探针失败时（fTok 为 null、k 为 "探针失败"）抛
+	 *    `TypeError: Cannot read properties of null` ⇒ **整轮汇总崩栈**，
+	 *    上面所有已收集的断言结果全丢，读起来像"脚本坏了"。判据错要判红，不许把取证也弄没。 */
+	fTokBad.length
+		? fTokBad.map((k) => (fTok && fTok[k] ? k + " mine=" + fTok[k].mine + " host=" + fTok[k].host : k)).join(" ｜ ")
+		: "六项全等");
 
 /* 🔴 正负对照（同「断连→红→恢复→绿」）：把宿主的令牌改掉 ⇒ 总监页必须立刻跟着变。
  *    只验「当前相等」是不够的 —— 抄一份同色值也能相等。改宿主后总监页同步变，才证明
