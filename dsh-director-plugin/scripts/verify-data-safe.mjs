@@ -5,7 +5,7 @@
  *       （必须清除 ELECTRON_RUN_AS_NODE，否则 Electron 退化为 Node 并拒绝该开关）
  *
  * 用法：node scripts/verify-data-safe.mjs [port]
- * 退出码：0 = 全通过；1 = 存在失败项
+ * 退出码：0 = 全通过；1 = 存在失败项；2 = INVALID（含 CDP 连不上）
  *
  * 零依赖：Node 22 原生 fetch + 全局 WebSocket。
  *
@@ -92,9 +92,21 @@ console.log(` 端口: ${PORT}`);
 console.log("========================================\n");
 
 // ── 0. 连接 ──
-const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+// 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed` + ECONNREFUSED，
+//    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。
+let targets;
+try {
+	targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+} catch (e) {
+	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
+	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
+	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
+	console.error("    powershell -File scripts/restart-harness.ps1");
+	console.error("    node scripts/verify-data-safe.mjs");
+	process.exit(2);
+}
 const page = targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url || ""));
-if (!page) { console.error("未找到 Harness 页面目标（Harness 是否以 CDP 启动？）"); process.exit(1); }
+if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 const cdp = await connect(page.webSocketDebuggerUrl);
 await cdp.send("Runtime.enable");
 

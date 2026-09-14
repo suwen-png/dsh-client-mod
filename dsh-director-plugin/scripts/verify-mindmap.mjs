@@ -22,13 +22,25 @@
  *   数据真实  → C-M2（血缘必须走 ctx.sessions 且 stateSource=host，不许静默降级）
  *
  * 用法：node scripts/verify-mindmap.mjs
- * 退出码：0 全绿 / 1 有失败
+ * 退出码：0 全绿 / 1 有失败 / 2 INVALID（含 CDP 连不上）
  */
 const PORT = 9222;
 
-const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+/* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
+ *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */
+let targets;
+try {
+	targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+} catch (e) {
+	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
+	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
+	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
+	console.error("    powershell -File scripts/restart-harness.ps1");
+	console.error("    node scripts/verify-mindmap.mjs");
+	process.exit(2);
+}
 const page = targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
-if (!page) { console.error("未找到页面目标（Harness 未启动或未开 9222？）"); process.exit(1); }
+if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let seq = 0; const pending = new Map();

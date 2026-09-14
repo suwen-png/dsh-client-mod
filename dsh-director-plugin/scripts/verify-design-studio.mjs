@@ -24,6 +24,7 @@
  *   D9  键盘 Delete / 方向键 / Ctrl+D / Esc 逐层退      → C12 + C13
  *
  * 用法：node scripts/verify-design-studio.mjs
+ * 退出码：0 全绿 / 1 有失败 / 2 INVALID（含 CDP 连不上）
  */
 // 单一真相源：标准框架的元素数/逻辑齐备性**从 schema 直接算**，不硬编码。
 // （早先硬编码 19，而 FRAME_SEEDS 实为 20 ⇒ 把产品正确误判成 ❌。数字类断言必须可导出。）
@@ -32,9 +33,21 @@ const FRAME_ELEMENTS = buildStandardFrame("threeTab");
 
 const PORT = 9222;
 
-const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+/* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
+ *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */
+let targets;
+try {
+	targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+} catch (e) {
+	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
+	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
+	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
+	console.error("    powershell -File scripts/restart-harness.ps1");
+	console.error("    node scripts/verify-design-studio.mjs");
+	process.exit(2);
+}
 const page = targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
-if (!page) { console.error("未找到页面目标（Harness 未启动或未开 9222？）"); process.exit(1); }
+if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let seq = 0; const pending = new Map();
