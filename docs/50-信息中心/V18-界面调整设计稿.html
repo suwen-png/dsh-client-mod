@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V18 · 界面调整设计稿 — dsh-director（第 3 批 · 14 条需求 · 先行评审）</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --sbg:#101114; --sbg2:#15161a; --sbg3:#1a1b1f; --sbg4:#1c1d21;
+    --panel:#212227; --line:#26282e; --line2:#2e3138; --line3:#34373e; --line4:#3d4148;
+    --fg:#e8eaed; --fg2:#c9ced6; --fg3:#9aa0a6; --fg4:#6b7076;
+    --acc:#2f6feb; --acc2:#8ab4f8; --accbg:#1d2739; --accbd:#2b3f5e;
+    --pur:#8957e5; --pur2:#c9a8ff; --purbg:#1a1524; --purbd:#4c3a6b;
+    --teal:#39c5cf; --teal2:#7fe3e8; --tealbg:#15201f; --tealbd:#2b6b70;
+    --ok:#3fb950; --ok2:#8fd48f; --okbg:#152318; --okbd:#2b6b3a;
+    --warn:#d29922; --warn2:#e3c07a; --warnbg:#241d10; --warnbd:#6b5320;
+    --err:#f85149; --err2:#ff9a92; --errbg:#1e1416; --errbd:#6b2b28;
+    --doc:#0d0e11;
+  }
+  body{background:var(--doc);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;font-size:11.5px;padding:26px 18px 70px}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:9px}
+  .sub{font-size:12.5px;color:var(--fg3);margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #24262c}
+  .sub b{color:var(--acc2);font-weight:600}
+  .blk{margin-bottom:30px}
+  .bh{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:9px;border-bottom:1px solid #24262c}
+  .bh .k{font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 11px;border-radius:6px;background:var(--acc);color:#fff;white-space:nowrap}
+  .bh .k.p{background:var(--pur)}
+  .bh .k.t{background:var(--teal);color:#0d0e11}
+  .bh h2{font-size:17px;font-weight:650}
+  .bh .r{margin-left:auto;font-size:11.5px;color:var(--fg4);white-space:nowrap}
+  .sec{background:var(--sbg3);border:1px solid #26282e;border-radius:12px;margin-bottom:18px;overflow:hidden}
+  .sec > header{padding:11px 16px;background:var(--sbg2);border-bottom:1px solid #26282e;display:flex;align-items:center;gap:10px}
+  .sec > header .no{font-size:11px;font-weight:700;padding:2px 9px;border-radius:5px;background:#2b2e35;color:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+  .sec > header h3{font-size:14px;font-weight:600}
+  .sec > header .tag{margin-left:auto;font-size:11px;color:var(--fg4);white-space:nowrap}
+  .sec > .bd{padding:16px}
+  .note{font-size:11.5px;color:var(--fg3);background:var(--sbg2);border-left:3px solid var(--acc);padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--pur)}
+  .note.t{border-left-color:var(--teal)}
+  .note b{color:var(--fg)}
+  .note .src{color:var(--fg4)}
+  .cap{font-size:11px;color:var(--fg4);margin-top:8px;text-align:center}
+  .frame{background:var(--sbg4);border:1px solid #2b2e34;border-radius:10px;overflow:hidden}
+  .fbar{height:28px;background:var(--sbg2);border-bottom:1px solid #232529;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:11px;color:var(--fg4)}
+  .fbar .tl{width:9px;height:9px;border-radius:50%}
+  .fbar .tl.r{background:#ec6a5e}.fbar .tl.y{background:#f4bf4f}.fbar .tl.g{background:#61c554}
+  .fbd{padding:10px}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ttl{font-size:11px;font-weight:600;margin-bottom:6px}
+  .ttl.bad{color:var(--err2)}
+  .ttl.good{color:var(--ok2)}
+  .mark{border:1.5px dashed var(--err);border-radius:8px;padding:9px;position:relative}
+  .mark .lb{position:absolute;top:-9px;left:8px;background:var(--err);color:#fff;font-size:10.5px;padding:1px 7px;border-radius:4px;white-space:nowrap}
+  .mark.ok{border-color:var(--ok)}
+  .mark.ok .lb{background:var(--ok);color:#0d0e11}
+  .kbd{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--sbg2);border:1px solid var(--line3);border-radius:4px;padding:1px 5px;color:var(--fg2)}
+  .chip{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line3);background:var(--sbg3);color:var(--fg3);margin:2px 5px 2px 0}
+  .chip.on{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .chip.p{border-color:var(--purbd);background:var(--purbg);color:var(--pur2)}
+  .chip.t{border-color:var(--tealbd);background:var(--tealbg);color:var(--teal2)}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;padding:6px 10px;background:var(--sbg2);border-bottom:1px solid var(--line2);color:var(--fg3);font-weight:600}
+  td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(--fg2);vertical-align:top}
+  .ok-t{color:var(--ok2)}
+  .warn-t{color:var(--warn2)}
+  .err-t{color:var(--err2)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step{background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;padding:6px 10px;font-size:11px;color:var(--fg2)}
+  .step.hi{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .arrow{color:var(--fg4);font-size:12px}
+  .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .sp{margin-left:auto}
+  .box{border:1px solid var(--line2);border-radius:7px;padding:7px 9px;background:var(--panel);font-size:11px;color:var(--fg3)}
+  .lbl{font-size:10.5px;color:var(--fg4);letter-spacing:.4px}
+  .val{font-size:11.5px;color:var(--fg2)}
+  .bar{height:3px;border-radius:2px;background:var(--line3);margin-top:4px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--acc)}
+  .side{display:flex;gap:8px;align-items:stretch}
+  .rail{width:26px;background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--acc2);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V18 · 界面调整设计稿 <small>第 3 批调整 · 14 条需求 · 先行评审</small></h1>
+<div class="sub">
+  范围：<b>对话列瘦身</b> · <b>智能体/技能流转浮窗</b> · <b>顶栏收敛为两项</b> · <b>R3 标签栏去除</b> · <b>模型可切换</b> · <b>R4/R7 左右缩回</b> · <b>R5 语义统一</b> · <b>R7 执行功能设置</b> · <b>对话框左右清单</b>
+  ｜ 原则：只调整形态与信息层级；<b>不改数据口径、不动冻结契约</b>（localStorage key / DOM 锚点 / view order）
+</div>
+
+<!-- ═══════════ 板块 A ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">A</span><h2>对话 tap — 总监列瘦身 + 智能体/技能流转浮窗</h2><span class="r">需求 2</span></div>
+
+  <div class="sec">
+    <header><span class="no">A1</span><h3>对话页左侧「总监列」：去掉智能体两行</h3><span class="tag">现状 → 目标</span></header>
+    <div class="bd">
+      <div class="note warn">
+        <b>来源核实</b>：那两行（「智能体 · 点击创建分支」+ 代码/文档/调研/测试/审核）<b>不在插件代码里</b>，而是宿主
+        <span class="src">client.js:7342–7357</span> 的旧总监面板渲染的；插件侧只有对话流本体（<span class="src">components/DirectorFlow.js</span>）。
+        所以「去掉它」= <b>完成宿主退坡（T-PLUG-005-B6）</b>，由插件接管这一列 —— 而不是去改一行文案。
+      </div>
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状（宿主旧面板）</div>
+          <div class="frame">
+            <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span>对话页 · 左列</span></div>
+            <div class="fbd">
+              <div class="row" style="margin-bottom:7px">
+                <span class="val" style="font-weight:600">总监对话</span><span class="sp" style="color:var(--fg4)">—</span>
+              </div>
+              <div class="mark">
+                <span class="lb">这两行全去掉</span>
+                <div class="lbl" style="margin-bottom:4px">智能体 · 点击创建分支</div>
+                <div style="padding-top:11px">
+                  <span class="chip">● 代码</span><span class="chip">● 文档</span><span class="chip">● 调研</span><span class="chip">● 测试</span><span class="chip">● 审核</span>
+                </div>
+              </div>
+              <div class="box" style="margin-top:8px;text-align:center;color:var(--fg4)">总监对话流为空，输入消息开始</div>
+              <div class="box" style="margin-top:6px">
+                <div class="row"><span class="lbl">总监记忆</span><span class="sp" style="color:var(--fg4)">▲ 悬停展开</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标（插件接管）</div>
+          <div class="frame">
+            <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span>对话页 · 左列</span></div>
+            <div class="fbd">
+              <div class="row" style="margin-bottom:7px">
+                <span class="val" style="font-weight:600">总监</span>
+                <span class="sp"></span>
+                <span class="chip p">◇ 智能体 · 技能</span>
+                <span style="color:var(--fg4)">—</span>
+              </div>
+              <div class="mark ok">
+                <span class="lb">两行已消失 · 只留对话流</span>
+                <div class="box" style="text-align:center;color:var(--fg4);margin-top:6px">总监对话流为空，输入消息开始</div>
+              </div>
+              <div class="box" style="margin-top:8px">
+                <div class="row"><span class="lbl">总监记忆</span><span class="sp" style="color:var(--fg4)">▾ 折叠</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">A1 · 左＝现状（红框＝要去掉的两行）；右＝目标（智能体/技能改为右上角按需浮窗，见 A2）</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">A2</span><h3>对话框右上角：智能体 / 角色 / 技能「流转引用」小浮窗</h3><span class="tag">新增</span></header>
+    <div class="bd">
+      <div class="note">点击右上角 <span class="kbd">◇ 智能体 · 技能</span> 展开一个小窗，只显示<b>这一条对话正在用谁</b>：用了哪个智能体、扮演什么角色、调了哪些技能、以及这条消息的流转引用（从哪来 → 去哪）。<b>不放常驻标签栏</b>，用完即收。</div>
+      <div class="frame" style="max-width:520px">
+        <div class="fbar"><span>对话框右上角</span><span class="sp"></span><span style="color:var(--acc2)">◇ 智能体 · 技能</span></div>
+        <div class="fbd">
+          <div style="background:var(--sbg2);border:1px solid var(--line2);border-radius:8px;padding:9px">
+            <div class="lbl" style="margin-bottom:6px">本次对话使用</div>
+            <div class="row" style="margin-bottom:7px">
+              <span class="chip p">🧑💻 代码智能体</span><span class="chip">角色 · 实现者</span><span class="chip t">自动</span>
+            </div>
+            <div class="lbl" style="margin-bottom:5px">调用技能</div>
+            <div style="margin-bottom:8px">
+              <span class="chip t">execution-standards</span><span class="chip">codebase-inspection</span>
+            </div>
+            <div class="lbl" style="margin-bottom:5px">流转引用</div>
+            <div class="flow">
+              <span class="step hi">◆ 总监</span><span class="arrow">→</span>
+              <span class="step">💬 本对话</span><span class="arrow">→</span>
+              <span class="step">🧠 导图</span>
+              <span class="sp" style="color:var(--fg4);font-size:10.5px">登记于 08:52</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">A2 · 小浮窗（贴对话框右上角，与个性化面板同层避让原生窗口控件）</div>
+      <div class="note t" style="margin-top:10px">与「⚙ 个性化」同处右上角，两者<b>互斥展开</b>（开一个自动收另一个）；两者统一读 <span class="kbd">readInset()</span> 让开原生窗口控件（实测 138px，z-index 压不过）。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">A3</span><h3>折叠态：竖排文字 → 单个箭头按钮，上下占满</h3><span class="tag">需求 2 / 9</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状（留了大片空白）</div>
+          <div class="side" style="height:120px">
+            <div style="width:74px;background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--fg3);font-size:10.5px">总 监 面 板 · 点 击 展 开</div>
+            <div class="box" style="flex:1">（空白区）</div>
+          </div>
+          <div class="cap">竖排长文字 + 宽条，且未撑满高度</div>
+        </div>
+        <div>
+          <div class="ttl good">目标（只剩一个箭头）</div>
+          <div class="side" style="height:120px">
+            <div class="rail">&gt;</div>
+            <div class="box" style="flex:1">内容区（上下占满）</div>
+          </div>
+          <div class="cap">窄条 + 单箭头图标 + <span class="kbd">height:100%</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 B ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">B</span><h2>总监页顶栏收敛为「下拉选 + 设置」两项</h2><span class="r">需求 4 / 5 / 6</span></div>
+
+  <div class="sec">
+    <header><span class="no">B1</span><h3>现状 → 目标：6 个元素收敛为 2 个</h3><span class="tag">R1 / R2 / R2.5</span></header>
+    <div class="bd">
+      <div class="ttl bad">现状（R1 顶栏一行塞 6 个元素）</div>
+      <div class="frame" style="margin-bottom:12px">
+        <div class="fbd">
+          <div class="row">
+            <span class="val">📁</span>
+            <span class="chip on">全局总管 · 全局总管 ▾</span>
+            <span class="chip">全局级</span><span class="chip">项目级</span><span class="chip">文件夹级</span><span class="chip">对话级</span>
+            <span class="sp"></span>
+            <span style="color:var(--fg4)">全局总管 / 全局总管</span>
+            <span class="chip">⚙ 设置</span>
+            <span class="chip p">全局总管</span>
+          </div>
+        </div>
+      </div>
+      <div class="note warn">要去掉：4 个层级 chips（全局级/项目级/文件夹级/对话级）· 面包屑文字 · 右侧层级 chip。它们在下方 R2 里已有等价信息，<b>重复且无实际作用</b>。</div>
+      <div class="note p"><b>需求原文有歧义，请你定</b>：「后面全局项目对话文字没必要去掉，没有实际作用」。两种读法：(甲) <b>去掉</b>这些文字（因为没有实际作用）；(乙) <b>不必去掉</b>。本稿按 <b>甲</b> 画（去掉面包屑与右侧层级 chip）；若你要的是乙，只需保留 B1 现状里的「全局总管 / 全局总管」面包屑即可。</div>
+
+      <div class="ttl good">目标（顶部只保留两个控件，并各自就位）</div>
+      <div class="note t" style="margin-bottom:10px"><b>两种落位，取其一</b>：<b>方案甲（本稿所画）</b>＝取消 R1 独立顶栏，下拉选并入 R2 行、设置并入 R2.5 行；<b>方案乙</b>＝R1 保留一行但只放这两个控件（其余删空）。两者都满足「最上面只保留两个」，差别只是 R1 是否留一行。</div>
+      <div class="frame">
+        <div class="fbar"><span>总监页 · 顶部区域（方案甲）</span><span class="sp"></span><span style="color:var(--fg4)">R1 独立顶栏取消</span></div>
+        <div class="fbd">
+          <div class="box" style="margin-bottom:8px">
+            <div class="row">
+              <span class="lbl" style="color:var(--fg2)">R2 项目总览</span>
+              <span style="color:var(--fg4)">概述 · 总揽 · 每个数字都标数据源</span>
+              <span class="sp"></span>
+              <span class="chip on">📁 当前节点 ▾</span>
+            </div>
+            <div class="cap" style="margin-top:4px;text-align:left;color:var(--ok2)">↑ 下拉选放在「项目总览」后面（需求 6）</div>
+          </div>
+          <div class="box">
+            <div class="row">
+              <span class="lbl" style="color:var(--fg2)">R2.5 对话控制台</span>
+              <span style="color:var(--fg4)">血缘：已连接 ｜ 顺序即闭环</span>
+              <span class="sp"></span>
+              <span class="chip">⚙ 设置</span>
+            </div>
+            <div class="cap" style="margin-top:4px;text-align:left;color:var(--ok2)">↑ 设置放在「顺序即闭环」后面（需求 6）</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">B1 · 顶部区域此后只有两个交互控件：下拉选（R2 行）+ 设置（R2.5 行）</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">B2</span><h3>下拉选默认值 = 「当前点击进入的部分」</h3><span class="tag">需求 4</span></header>
+    <div class="bd">
+      <div class="note p">现在的下拉固定落在「全局总管」。目标：<b>默认跟随入口来源</b> —— 从对话点进来就显示当前对话；从文件树点进来就显示该文件/文件夹对应的节点。</div>
+      <table>
+        <tr><th style="width:34%">入口来源</th><th style="width:33%">下拉默认值</th><th>说明</th></tr>
+        <tr><td>从「对话」页当前会话进入</td><td class="ok-t">该会话节点（对话级）</td><td>与 R5「现在在做的事」的会话一致（<span class="kbd">watchCurrentSession</span>）</td></tr>
+        <tr><td>从文件树点某个文档/文件夹</td><td class="ok-t">该文件夹 / 文件节点</td><td>文件树 → 节点映射走 <span class="kbd">store/docs.js</span></td></tr>
+        <tr><td>直接打开总监页（无来源）</td><td>上一次选中的节点</td><td>回落 <span class="kbd">st.activeNodeId</span>，仍无则全局总管</td></tr>
+      </table>
+      <div class="cap">B2 · 需要新增一个「入口来源」记录（<span class="kbd">bridge/nav-hook.js</span> 已有 hook 能力，只增字段）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 C ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">C</span><h2>R3 智能体/技能标签栏去除 · 模型挪到会话前</h2><span class="r">需求 7</span></div>
+
+  <div class="sec">
+    <header><span class="no">C1</span><h3>现状 → 目标</h3><span class="tag">R3 整行 / R8</span></header>
+    <div class="bd">
+      <div class="ttl bad">现状（R3 一行常驻标签栏）</div>
+      <div class="frame" style="margin-bottom:12px">
+        <div class="fbd">
+          <div class="row">
+            <span class="lbl">智能体</span>
+            <span class="chip p">🧑💻 代码</span><span class="chip p">📄 文档</span><span class="chip p">🔍 调研</span><span class="chip p">🧪 测试</span><span class="chip p">🎯 审核</span>
+            <span style="color:var(--line4)">|</span>
+            <span class="lbl">技能</span>
+            <span class="chip t">🔎 搜索</span><span class="chip t">✍️ 写作</span><span class="chip t">⚙️ 重构</span>
+            <span class="sp"></span>
+            <span class="chip">模型 qwen2:7b ▾ ｜ 上下文 78%</span>
+          </div>
+        </div>
+      </div>
+      <div class="mark" style="margin-bottom:12px">
+        <span class="lb">整行删除</span>
+        <div style="padding-top:11px;color:var(--fg3)">R3 资源行（智能体 5 个 + 技能 3 个）不再常驻。<b>智能体与技能本身就各有独立文件夹</b>：技能＝<span class="kbd">~/.workbuddy/skills/&lt;技能名&gt;/SKILL.md</span>（每个技能一个目录，与 Hermes 是同一批真实文件）；智能体＝同族做法，每个智能体一个独立目录。既然目录里本就分类清楚，界面上再放一排常驻标签就是重复；需要时看 A2 浮窗即可。</div>
+      </div>
+
+      <div class="ttl good">目标（R8 底部焦点条，模型移到「会话」前面）</div>
+      <div class="frame">
+        <div class="fbd">
+          <div class="row">
+            <span class="lbl">目标</span>
+            <span class="chip on">总监 ●</span><span class="chip">对话</span>
+            <span class="chip">定位输入框</span><span class="chip">登记流转</span>
+            <span class="sp"></span>
+            <span class="chip on">模型 ▾</span>
+            <span style="color:var(--fg3)">上下文 78%</span>
+            <span style="color:var(--fg4)">会话 …6dcda14e</span>
+            <span class="chip on">执行</span>
+          </div>
+          <div class="cap" style="margin-top:5px;text-align:left;color:var(--ok2)">↑「模型 + 上下文」移到「会话 …xxxx」前面</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 D ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">D</span><h2>总监区域可切换模型（默认本地）</h2><span class="r">需求 8</span></div>
+
+  <div class="sec">
+    <header><span class="no">D1</span><h3>R8 模型选择器</h3><span class="tag">默认本地 · 可切其他</span></header>
+    <div class="bd">
+      <div class="note">现状 R8 只显示固定文本，<b>没有切换入口</b>。目标：点「模型 ▾」弹出候选列表，默认选中本地模型，可改选别的；选择写入总监配置（<span class="kbd">config/model.js</span>），并即时反映到 R8 标签。</div>
+      <div class="frame" style="max-width:430px">
+        <div class="fbd">
+          <div style="position:relative">
+            <div class="row">
+              <span class="chip on">模型 ▾</span><span style="color:var(--fg3)">上下文 78%</span>
+            </div>
+            <div style="margin-top:7px;background:var(--sbg2);border:1px solid var(--line3);border-radius:8px;padding:6px;max-width:280px">
+              <div class="row" style="padding:4px 6px"><span class="val">本地 · qwen2:7b</span><span class="sp" style="color:var(--ok2)">✓ 默认</span></div>
+              <div class="row" style="padding:4px 6px;color:var(--fg3)"><span>本地 · deepseek-r1:7b</span></div>
+              <div class="row" style="padding:4px 6px;color:var(--fg3)"><span>云端 · DeepSeek-V4-Flash</span></div>
+              <div class="row" style="padding:4px 6px;color:var(--fg4);border-top:1px solid var(--line2);margin-top:4px;padding-top:7px"><span>本地模型加载中… 不可用则置灰</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">D1 · 取不到的模型置灰并写明原因（不编可用项）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 E ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">E</span><h2>R4 / R7 左右缩回 · hover 5 秒弹出 · 可固定</h2><span class="r">需求 9 / 10</span></div>
+
+  <div class="sec">
+    <header><span class="no">E1</span><h3>现状 → 目标：从「上下折叠」改为「左右缩回」</h3><span class="tag">R4 / R7</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状</div>
+          <div class="frame" style="height:170px">
+            <div class="fbd" style="display:flex;gap:8px;height:100%">
+              <div class="box" style="flex:1">
+                <div class="lbl">▼ R4 项目导航</div>
+                <div style="color:var(--fg4);margin-top:6px">上下折叠：点标题行 → 整块内容收起来，但<b>栏位还在原位</b>，高度不对</div>
+              </div>
+              <div class="box" style="flex:1">
+                <div class="lbl">R5 总监对话区</div>
+                <div style="color:var(--fg4);margin-top:6px">R7 目前<b>没有折叠能力</b>，只能一直占 210px</div>
+              </div>
+              <div class="box" style="flex:1">
+                <div class="lbl">R7 详情 / 产出物</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标</div>
+          <div class="frame" style="height:170px">
+            <div class="fbd" style="display:flex;gap:8px;height:100%">
+              <div class="rail">&gt;</div>
+              <div class="box" style="flex:1">
+                <div class="lbl">R5 总监对话区</div>
+                <div style="color:var(--fg4);margin-top:6px">R4 / R7 向右/向左缩回，只留一个箭头；<b>展开时 height:100%</b> 上下占满</div>
+              </div>
+              <div class="rail">&lt;</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">E1 · 缩进后只剩一个箭头按钮；展开态与对话区等高（<span class="kbd">align-items:stretch</span>）</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">E2</span><h3>交互时序：hover 5 秒弹出 → 移出缩回 → 点击固定</h3><span class="tag">防误触</span></header>
+    <div class="bd">
+      <div class="flow" style="margin-bottom:10px">
+        <span class="step">鼠标移入缩进的栏位</span><span class="arrow">→</span>
+        <span class="step hi">计时约 5 秒</span><span class="arrow">→</span>
+        <span class="step">自动弹出展开</span><span class="arrow">→</span>
+        <span class="step">鼠标移出</span><span class="arrow">→</span>
+        <span class="step">自动缩回</span>
+      </div>
+      <div class="flow">
+        <span class="step">点击箭头 &gt;</span><span class="arrow">→</span>
+        <span class="step hi">固定（钉住）</span><span class="arrow">→</span>
+        <span class="step">再点一次取消固定</span>
+      </div>
+      <table style="margin-top:12px">
+        <tr><th style="width:30%">行为</th><th style="width:22%">触发条件</th><th>结果</th></tr>
+        <tr><td>自动弹出</td><td>鼠标悬停满 5 秒</td><td class="ok-t">展开（5 秒内移开则不弹出，避免太敏感）</td></tr>
+        <tr><td>自动缩回</td><td>鼠标移出且<b>未固定</b></td><td>约 0.6 秒后缩回</td></tr>
+        <tr><td>固定</td><td>点击箭头 / 展开态任意位置</td><td class="ok-t">钉住，鼠标移出也不缩回</td></tr>
+        <tr><td>取消固定</td><td>再次点击箭头以外的收起处</td><td>回到 hover 逻辑</td></tr>
+      </table>
+      <div class="note" style="margin-top:12px">三个时长都做成<b>可配常量</b>（弹出延时 5000ms / 缩回延时 600ms / 固定态无延时），集中放一处，避免散落在组件里。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">E3</span><h3>三处共用同一套逻辑</h3><span class="tag">需求 10</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:38%">位置</th><th style="width:20%">现状</th><th>目标</th></tr>
+        <tr><td>对话 tap 的总监列（弹窗左面板）</td><td>已有 <span class="kbd">⇤ / ⇥</span> 折叠</td><td class="ok-t">换为同一套：左右缩回 + 单箭头 + hover 5s + 可固定</td></tr>
+        <tr><td>总监页 R4（左栏）</td><td>上下折叠</td><td class="ok-t">同上（左右缩回）</td></tr>
+        <tr><td>总监页 R7（右栏）</td><td>无折叠</td><td class="ok-t">同上（左右缩回）</td></tr>
+      </table>
+      <div class="note t" style="margin-top:12px">实现上共用一个 store 字段（形如 <span class="kbd">railPinned</span> / <span class="kbd">railExpanded</span>，只增字段不动既有键）与一个 <span class="kbd">RailToggle</span> 行为，三处只是位置不同。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 F ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">F</span><h2>R5 语义统一 · 分支优先路由 · 点击跳转</h2><span class="r">需求 11 / 12</span></div>
+
+  <div class="sec">
+    <header><span class="no">F1</span><h3>先回答「R5 现在这两个分段是什么」</h3><span class="tag">需求 11</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:24%">分段</th><th style="width:34%">现在装什么</th><th>数据来源</th></tr>
+        <tr><td><b>流转 N</b></td><td>这条消息走过哪些维度（总监/对话/导图/设计图）的足迹</td><td><span class="kbd">logic/flow.js</span> 的 <span class="kbd">trail</span></td></tr>
+        <tr><td><b>总监消息 N</b></td><td>你发给总监、以及总监回给你的对话消息</td><td><span class="kbd">store/plugin-db.js</span> 的 <span class="kbd">listDirectorMessages</span></td></tr>
+      </table>
+      <div class="note warn" style="margin-top:12px">两个分段是<b>同一条消息的两个侧面</b>，分开看反而要来回切。<b>你要的语义是</b>：我发给总监的一句话 → 总监整理判断 → 转给哪个对话（可点进去）。</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">F2</span><h3>目标：一条时间轴，合并两分段</h3><span class="tag">需求 12</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状（两个 Tab）</div>
+          <div class="frame">
+            <div class="fbd">
+              <div class="row" style="margin-bottom:7px">
+                <span class="chip on" style="flex:1;text-align:center">流转 0</span>
+                <span class="chip" style="flex:1;text-align:center">总监消息 0</span>
+              </div>
+              <div class="box" style="text-align:center;color:var(--fg4)">（两块内容要分别切）</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标（一条轴）</div>
+          <div class="frame">
+            <div class="fbd">
+              <div class="box" style="margin-bottom:6px">
+                <div class="lbl" style="margin-bottom:3px">你 → 总监</div>
+                <div class="val">导图侧测试：这句话要能流转到别的维度</div>
+              </div>
+              <div class="box" style="margin-bottom:6px;border-color:var(--purbd)">
+                <div class="lbl" style="margin-bottom:3px;color:var(--pur2)">总监整理</div>
+                <div style="color:var(--fg3)">任务类型：调研 · 建议模型：deepseek-chat · 5 项职责生效</div>
+              </div>
+              <div class="box" style="border-color:var(--okbd)">
+                <div class="row">
+                  <span class="lbl" style="color:var(--ok2)">转给</span>
+                  <span class="chip on" style="margin:0">💬 分支 · 导图侧测试</span>
+                  <span class="sp" style="color:var(--acc2);font-size:10.5px">点击跳过去 →</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">F2 · 不再区分「总监处理 / 流转处理」；一条消息一行，直接标明去处且可点击</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">F3</span><h3>路由规则：分支优先于文件夹 · 依据=会话概要文件</h3><span class="tag">需求 12</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:22%">事项</th><th>规则</th></tr>
+        <tr><td>在哪找目标</td><td>在「文件夹 + 分支」两者的集合里找对应对话</td></tr>
+        <tr><td><b>优先级</b></td><td class="ok-t"><b>先找分支，再找文件夹</b>（有下级分支就用分支；上级若有文件夹则用文件夹对应对话）</td></tr>
+        <tr><td>判断依据</td><td>总监整理的<b>当前会话概要文件</b>（<span class="kbd">logic/summarize.js</span> 产出，与导图 <span class="kbd">branch-tree.normalizeSummary</span> 同源）</td></tr>
+        <tr><td>「分支」怎么算</td><td>该会话有上级血缘（<span class="kbd">meta.parentSession</span> 存在）＝<b>分支</b>；否则按层级树落到对应<b>文件夹节点</b>的对话</td></tr>
+        <tr><td>返回标记</td><td>回复里标清「→ 哪个对话」，<b>名称 + 会话 id 短号</b>都在</td></tr>
+        <tr><td>点击行为</td><td class="ok-t">点击该标记 → <span class="kbd">openSession(id)</span> 直接跳到那个对话</td></tr>
+      </table>
+      <div class="flow" style="margin-top:12px">
+        <span class="step">总监整理概要</span><span class="arrow">→</span>
+        <span class="step hi">先匹配分支</span><span class="arrow">→</span>
+        <span class="step">未命中再匹配文件夹</span><span class="arrow">→</span>
+        <span class="step">回写「→ 对话 · 名称（id）」</span><span class="arrow">→</span>
+        <span class="step">点击跳转</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 G ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">G</span><h2>R7 增加「总监执行功能」设置 + 处理流转可视化</h2><span class="r">需求 13</span></div>
+
+  <div class="sec">
+    <header><span class="no">G1</span><h3>R7 最右侧：总监执行功能设置</h3><span class="tag">新增区</span></header>
+    <div class="bd">
+      <div class="note p">现在总监页<b>没有调整总监自身能力的地方</b>。在 R7 增一块设置区，四类信息集中放：</div>
+      <div class="frame" style="max-width:520px">
+        <div class="fbd">
+          <div class="box" style="margin-bottom:7px">
+            <div class="lbl" style="margin-bottom:5px">总监负责的功能（5 项，可开关）</div>
+            <div><span class="chip on">✓ 整理语言</span><span class="chip on">✓ 意图识别</span><span class="chip on">✓ 调整模型</span><span class="chip on">✓ 拆分任务</span><span class="chip on">✓ 自动审核</span></div>
+          </div>
+          <div class="box" style="margin-bottom:7px">
+            <div class="lbl" style="margin-bottom:5px">必须有的文件</div>
+            <div><span class="kbd">docs/00-统筹入口/03-待完成任务清单.md</span> <span class="kbd">AGENTS.md</span></div>
+          </div>
+          <div class="box" style="margin-bottom:7px">
+            <div class="lbl" style="margin-bottom:5px">调用技能使用信息</div>
+            <div style="color:var(--fg3)">execution-standards ×12 · codebase-inspection ×3 · mermaid-diagram ×1</div>
+          </div>
+          <div class="box">
+            <div class="lbl" style="margin-bottom:5px">调用分支使用信息</div>
+            <div style="color:var(--fg3)">主分支 ×8 · 导图侧测试 ×2 · 设计图重构 ×1</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">G2</span><h3>总监部分：显示「总监如何处理信息」</h3><span class="tag">需求 13</span></header>
+    <div class="bd">
+      <div class="flow">
+        <span class="step">收到消息</span><span class="arrow">→</span>
+        <span class="step hi">1 整理语言</span><span class="arrow">→</span>
+        <span class="step">2 意图识别</span><span class="arrow">→</span>
+        <span class="step">3 调整模型</span><span class="arrow">→</span>
+        <span class="step">4 拆分任务</span><span class="arrow">→</span>
+        <span class="step">5 自动审核产出</span><span class="arrow">→</span>
+        <span class="step hi">路由到对话</span>
+      </div>
+      <div class="cap">G2 · 每步标出「生效 / 关闭」与来源层级（默认 / 全局 / 项目 / 会话）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 H ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">H</span><h2>对话框左右：待完成清单 / 已完成清单</h2><span class="r">需求 14</span></div>
+
+  <div class="sec">
+    <header><span class="no">H1</span><h3>用对话框左右两侧的空位</h3><span class="tag">左侧待完成 · 右侧已完成</span></header>
+    <div class="bd">
+      <div class="frame">
+        <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span>对话页</span><span class="sp"></span><span style="color:var(--fg4)">左右清单可各自缩回（同 E 的逻辑）</span></div>
+        <div class="fbd" style="display:flex;gap:8px;min-height:150px">
+          <div class="box" style="width:130px;flex:0 0 130px">
+            <div class="lbl" style="margin-bottom:6px;color:var(--warn2)">待完成 · 3</div>
+            <div style="color:var(--fg3)">□ 补齐分支路由</div>
+            <div style="color:var(--fg3)">□ R7 设置区</div>
+            <div style="color:var(--fg3)">□ 模型切换器</div>
+          </div>
+          <div class="box" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--fg4)">原生对话区</div>
+          <div class="box" style="width:130px;flex:0 0 130px">
+            <div class="lbl" style="margin-bottom:6px;color:var(--ok2)">已完成 · 7</div>
+            <div style="color:var(--fg4)">✓ 顶栏收敛</div>
+            <div style="color:var(--fg4)">✓ R3 去除</div>
+            <div style="color:var(--fg4)">✓ 左右缩回</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">H1 · 左＝待完成（取自待办清单），右＝已完成（取自已办结项）；点击条目同样能跳转</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 I ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">I</span><h2>版本号认知修正（文档层，不改代码）</h2><span class="r">需求 1</span></div>
+
+  <div class="sec">
+    <header><span class="no">I1</span><h3>允许新开版本 · 禁止的是架构重写</h3><span class="tag">文档表述</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:26%">项</th><th style="width:37%">原表述</th><th>修正为</th></tr>
+        <tr><td>新开版本号</td><td class="err-t">不新开版本号（V17 稿未开 V17）</td><td class="ok-t">允许新开版本号（V17 / V18 各成文档没问题）</td></tr>
+        <tr><td>真正禁止的</td><td>—</td><td class="ok-t">禁止<b>对架构重写</b>（把已有三版的设计推倒重来 = 白做）</td></tr>
+        <tr><td>版本演进方式</td><td>就地改 V16</td><td>可就地改，也可新开；<b>以「不推翻既有设计」为准绳</b></td></tr>
+      </table>
+      <div class="note ok" style="margin-top:12px">据此，本稿以 <b>V18</b> 独立成文；V16 主设计稿、V17 迭代稿保留为历史，<b>三份并存但不是三份互相矛盾的真相源</b>（V18 只做增量调整，不改 V16/V17 已确立的结构）。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 J ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">J</span><h2>改动影响面（落到哪个文件 / 字段）</h2><span class="r">评审用</span></div>
+
+  <div class="sec">
+    <header><span class="no">J1</span><h3>逐条映射</h3><span class="tag">只增不改优先</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:16%">需求</th><th style="width:44%">要动的文件 / 字段</th><th style="width:14%">类型</th><th>风险</th></tr>
+        <tr><td>A1 / A3 对话列瘦身</td><td>宿主 <span class="kbd">client.js:7328–7400</span>（旧总监面板区块）退坡；由插件接管该列</td><td>改宿主</td><td class="err-t">高 · git 未纳管</td></tr>
+        <tr><td>A2 流转浮窗</td><td>新增 <span class="kbd">components/AgentSkillPopover.js</span>；DirectorDialog / DirectorPage 挂载</td><td>新增</td><td class="ok-t">低</td></tr>
+        <tr><td>B 顶栏收敛</td><td><span class="kbd">components/DirectorPage.js</span>（R1/R2/R2.5）；<span class="kbd">store/layout.js</span> 增 entrySource（只增字段）</td><td>改</td><td class="ok-t">低</td></tr>
+        <tr><td>C R3 去除</td><td>DirectorPage.js 删 R3 区块；<span class="kbd">dp-model</span> 迁到 R8 会话前</td><td>改</td><td class="ok-t">低</td></tr>
+        <tr><td>D 模型切换</td><td><span class="kbd">config/model.js</span> + R8 下拉；DirectorPage.js</td><td>改</td><td class="warn-t">中（要读真实可用模型）</td></tr>
+        <tr><td>E 左右缩回</td><td><span class="kbd">store/layout.js</span> 增 railPinned / railExpanded；新增 <span class="kbd">RailToggle</span>；DirectorPage R4/R7 + DirectorDialog 左栏</td><td>改 + 新增</td><td class="warn-t">中（三处共用要同源）</td></tr>
+        <tr><td>F R5 统一</td><td>DirectorPage.js R5（去两分段）；<span class="kbd">logic/routing.js</span> 加分支优先；<span class="kbd">logic/summarize.js</span> 概要入口</td><td>改</td><td class="warn-t">中（路由口径）</td></tr>
+        <tr><td>G R7 设置区</td><td>DirectorPage.js R7 新增；读 <span class="kbd">store/duty-config.js</span> 与调用记录</td><td>改</td><td class="ok-t">低</td></tr>
+        <tr><td>H 左右清单</td><td>新增 <span class="kbd">components/TodoRails.js</span>，挂到对话页两侧</td><td>新增</td><td class="warn-t">中（要与原生布局共存）</td></tr>
+        <tr><td>I 表述修正</td><td><span class="kbd">docs/00-统筹入口/V17-需求统筹与设计迭代方案.md</span> 版本号段落</td><td>文档</td><td class="ok-t">无</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 K ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">K</span><h2>验收判据</h2><span class="r">做完怎么证明改对了</span></div>
+
+  <div class="sec">
+    <header><span class="no">K1</span><h3>四条判据</h3><span class="tag">形态 / 断言 / 回归 / 基线</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:20%">判据</th><th>内容</th></tr>
+        <tr><td>形态</td><td class="ok-t">四界面截图复验（每处改动至少一张），排在一起比对</td></tr>
+        <tr><td>断言</td><td>新增语义锚点供真机使用：<span class="kbd">dp-rail-r4</span> / <span class="kbd">dp-rail-r7</span> / <span class="kbd">dp-model-select</span> / <span class="kbd">dp-agent-popover</span> / <span class="kbd">dp-todo-rail</span> / <span class="kbd">dp-done-rail</span></td></tr>
+        <tr><td>回归</td><td class="ok-t">既有真机 7 套 + 离线 22 套<b>全绿且零跳过</b>；改动处正负对照</td></tr>
+        <tr><td>基线</td><td>改完先跑 <span class="kbd">baseline-check.mjs</span> 看漂移，确认后 <span class="kbd">--write</span> 重封</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <header><span class="no">备注</span><h3>本轮不改的东西（避免误解）</h3><span class="tag">边界</span></header>
+  <div class="bd">
+    <div class="note warn"><b>不改</b>：localStorage key（<span class="kbd">dsh.director.layout</span> 等）· DB 名与 store 名 · DOM 锚点（<span class="kbd">dp-*</span> / <span class="kbd">d-*</span>）· 宿主三页签的 view order · 四维流转的数据口径（仍是一条消息一份 trail）。</div>
+    <div class="note"><b>要新增</b>：入口来源记录 · 模型选择器 · 左右缩回的固定态字段 · A2 浮窗 · G1 设置区 · H 两侧清单。以上均为<b>只增不改</b>，存量数据由默认值兜底。</div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>
