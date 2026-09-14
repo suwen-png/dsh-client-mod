@@ -1,5 +1,6 @@
 /**
  * verify-data-safe.mjs — T-PLUG-009 数据兼容与边界安全验证（IDB 三 store 条数抽查 + 数据源零损伤）
+ *                        + T-PLUG-035 真机 Cookie 体积预算（第 [7] 节 · 「打不开软件」长效防线）
  *
  * 前置：Harness 以 `--remote-debugging-port=9222` 启动
  *       （必须清除 ELECTRON_RUN_AS_NODE，否则 Electron 退化为 Node 并拒绝该开关）
@@ -492,6 +493,110 @@ ok("🔴 localStorage 全量快照在全程后与基线逐键一致（宿主数�
 	JSON.stringify(Object.keys(LS_BEFORE).sort()) === JSON.stringify(Object.keys(F.ls).sort())
 	&& Object.keys(LS_BEFORE).every((k) => LS_BEFORE[k] === F.ls[k]),
 	`${Object.keys(F.ls).length} 个 key`);
+
+/* ══════════════════════════════════════════════════════════════════
+ * [7] Cookie 体积预算 —— 「打不开软件」的长效防线（T-PLUG-035）
+ * ══════════════════════════════════════════════════════════════════
+ * 2026-09-14 用户报「打不开软件」＝ 窗口全白。根因链（已定案）：
+ *   `dsh_director_*` 分块 cookie 累积到 **16,794 B** > 宿主 Node 默认请求头上限
+ *   `--max-http-header-size = 16384 B`（宿主启动脚本**没有**覆盖该值，已实测确认）
+ *   ⇒ 宿主内嵌 HTTP 服务回 **431 + 空体** ⇒ Chromium 把响应当 `text/plain`
+ *   ⇒ 渲染文档只剩 **39 B** ⇒ 全白，而**主进程日志一行错都没有**。
+ * 产品侧修复 = `src/store/cookie.js` 的总预算层（最旧优先淘汰 + 每次淘汰告警）。
+ * 本节负责把它变成**每一轮真机都跑的判据** —— 离线单测 `test-cookie-budget.mjs`
+ * 只能证明「淘汰算法对」，证不了「这台机器上的真实体积真的没越限」。
+ *
+ * 🔴 判据分三层，缺一层就退化成**平凡真**（真实值离预算很远时，写死 true 也能过）：
+ *   (a) 前提：真机上确实存在 `dsh_director_*` cookie —— 否则断言的是一个空集；
+ *   (b) 判据：实测总量 ≤ 预算 —— 预算与前缀**都从源码读**（写死就会与产品脱钩，纪律 14）；
+ *   (c) 正负对照：同一测量口径对**合成超预算串**与**历史事故等效串（16,794）**必须判「超」。
+ */
+console.log("\n[7] Cookie 体积预算（打不开软件的长效防线）");
+
+/* 被测源可用 `COOKIE_SRC` 覆盖（与 `test-cookie-budget.mjs` 同款口径）——
+ * 负向校准才能**不改产品源码**地植入「预算过小」这类缺陷（纪律 6）。
+ *
+ * 校准配方（2026-09-14 实测，三条各自命中不同的红）：
+ *   A 预算过小：`COOKIE_TOTAL_BUDGET = 12288` → `1000` ⇒ **判据**红（6007 B ≤ 1000 B 余量 -5007）
+ *   B 前缀改名：`COOKIE_PREFIX = "dsh_director_"` → `"dsh_directorRENAMED_"` ⇒ **前提**红（0 组 / 0 B），
+ *     而「判据」仍绿（0 ≤ 12288）—— **这正是空真**，也正因如此才必须有那条前提断言。
+ *   C 目标不存在：`COOKIE_SRC=<不存在>` ⇒ INVALID **exit 2** + 打印可复制命令（不崩栈）。
+ * 校准样本放在 `logs/`（已被 .gitignore），用完即删，不入库。 */
+const cookieSrcPath = process.env.COOKIE_SRC || join(PLUGIN_ROOT, "src", "store", "cookie.js");
+if (!existsSync(cookieSrcPath)) {
+	console.error("IS_PASS: FALSE（INVALID：Cookie 被测源不存在）");
+	console.error("  目标：" + cookieSrcPath);
+	console.error("  正确用法：不传 COOKIE_SRC 即测产品源码；校准时才显式指向样本：");
+	console.error("    COOKIE_SRC=<绝对路径>/cookie-defect.js node scripts/verify-data-safe.mjs");
+	process.exit(2);
+}
+const cookieSrc = readFileSync(cookieSrcPath, "utf8");
+const COOKIE_BUDGET = Number((cookieSrc.match(/COOKIE_TOTAL_BUDGET\s*=\s*(\d+)/) || [])[1]);
+const COOKIE_PFX = (cookieSrc.match(/COOKIE_PREFIX\s*=\s*"([^"]+)"/) || [])[1] || "";
+/** 宿主 Node 默认请求头上限（`--max-http-header-size`）；启动脚本未覆盖 ⇒ 取默认值。 */
+const HOST_HEADER_LIMIT = 16384;
+/** 历史事故实测值（`document.cookie.length`，2026-09-14 诊断记录）。 */
+const HISTORIC_BYTES = 16794;
+
+ok("🔴 预算常量与 cookie 前缀**可从源码读出**（不写死 ⇒ 闸门不会与产品脱钩）",
+	Number.isFinite(COOKIE_BUDGET) && COOKIE_BUDGET > 0 && COOKIE_PFX.length > 0,
+	`COOKIE_TOTAL_BUDGET=${COOKIE_BUDGET} COOKIE_PREFIX=${COOKIE_PFX}`);
+ok("🔴 预算必须**显著低于**宿主请求头上限（余量 < 3000 B 时下一个 431 只是时间问题）",
+	Number.isFinite(COOKIE_BUDGET) && COOKIE_BUDGET <= HOST_HEADER_LIMIT - 3000,
+	`预算 ${COOKIE_BUDGET} B / 上限 ${HOST_HEADER_LIMIT} B / 余量 ${HOST_HEADER_LIMIT - COOKIE_BUDGET} B`);
+ok("🔴 历史事故值确实越限（回归反证：那次白屏的算术前提在今天仍成立）",
+	HISTORIC_BYTES > HOST_HEADER_LIMIT, `${HISTORIC_BYTES} B > ${HOST_HEADER_LIMIT} B`);
+
+const cookieProbe = await evalExpr(`
+	const PFX = ${JSON.stringify(COOKIE_PFX)};
+	const BUDGET = ${Number.isFinite(COOKIE_BUDGET) ? COOKIE_BUDGET : 12288};
+	/* 与产品同源的口径：只统计前缀匹配的 cookie，按**整段字符数**累加。
+	   （cookie 值里的非 ASCII 已被浏览器百分号编码为 ASCII ⇒ 字符数 = 请求头字节数。）
+	   注意：这里做的是**测量**，不是把产品的 dshCookieUsage() 抄一遍 ——
+	   判据量的是「真实浏览器串里有多少前缀匹配字节」，与淘汰算法无关。 */
+	const measure = (s) => {
+		let total = 0;
+		const byKey = {};
+		for (const seg of String(s || '').split(';')) {
+			const t = seg.replace(/^[ ]+/, '');
+			const eq = t.indexOf('=');
+			const name = eq < 0 ? t : t.slice(0, eq);
+			if (name.indexOf(PFX) !== 0) continue;
+			total += t.length;
+			byKey[name] = t.length;
+		}
+		return { total, byKey, count: Object.keys(byKey).length };
+	};
+	const real = document.cookie || '';
+	const realM = measure(real);
+	/* 合成超预算串 —— **只做字符串，绝不写盘**：真写一个超大 cookie 就是复现事故。 */
+	const giantM = measure(real + '; ' + PFX + 'probe_giant=' + 'x'.repeat(BUDGET + 1));
+	/* 历史事故等效串：在真实串基础上补足到 HISTORIC_BYTES 长度。 */
+	const histPad = Math.max(1, ${HISTORIC_BYTES} - realM.total);
+	const histM = measure(real + '; ' + PFX + 'probe_hist=' + 'x'.repeat(histPad));
+	return JSON.stringify({
+		prefix: PFX, budget: BUDGET, rawLen: real.length,
+		realTotal: realM.total, realCount: realM.count, realByKey: realM.byKey,
+		giantTotal: giantM.total, histTotal: histM.total
+	});
+`);
+const CP = JSON.parse(cookieProbe);
+
+ok("🔴 前提：真机上确实存在 `dsh_director_*` cookie（否则下面的预算断言是**空真**）",
+	CP.realCount > 0 && CP.realTotal > 0, `${CP.realCount} 组 / ${CP.realTotal} B`);
+ok("🔴 判据：当前 `dsh_director_*` 总量 ≤ 预算（预算取自源码，非写死）",
+	CP.realTotal <= CP.budget,
+	`${CP.realTotal} B ≤ ${CP.budget} B（余量 ${CP.budget - CP.realTotal} B）`);
+ok("🔴 正负对照①：同一测量口径对**合成超预算串**必须判「超」（证明判据不是写死 true）",
+	CP.giantTotal > CP.budget, `合成 ${CP.giantTotal} B > ${CP.budget} B`);
+ok("🔴 正负对照②：**历史事故等效串 16,794 B** 同口径必须判「超」（回归反证）",
+	CP.histTotal > CP.budget, `等效 ${CP.histTotal} B > ${CP.budget} B`);
+ok("测量自洽：前缀匹配总量不超过整串长度，且每个命中组的字节数均为正",
+	CP.realTotal <= CP.rawLen && Object.values(CP.realByKey).every((n) => n > 0),
+	`整串 ${CP.rawLen} B / 前缀命中 ${CP.realTotal} B`);
+ok("离线预算闸门在位（`scripts/test-cookie-budget.mjs`）—— 本节补的是**真机**常态判据",
+	existsSync(join(PLUGIN_ROOT, "scripts", "test-cookie-budget.mjs")), "scripts/test-cookie-budget.mjs");
+console.log(`    观察: document.cookie=${CP.rawLen} B · ${CP.prefix}* = ${CP.realTotal} B / ${CP.realCount} 组 · 预算 ${CP.budget} B`);
 
 /* ══════════════════════════════════════════════════════════════════ */
 cdp.close();
