@@ -57,13 +57,19 @@ const running = new WeakSet();
  * @param {object} [p.config] 模型配置（localModel.endpoint/model/enabled）
  * @param {boolean} [p.autoForward=false] 是否自动转发到原对话（§2.3 ④）
  * @param {(instruction:string)=>void} [p.onForward] 转发回调
+ * @param {{taskId:string, note:string}|null} [p.taskNote]
+ *        当前任务的**补充说明**（V20 需求 3）。🔴 **最多一条**，由调用方从
+ *        `directorLayoutStore.getActiveTaskNote(scopeKey)` 取 —— 这里**不查表、不遍历**，
+ *        所以上下文增量与"用户总共写了多少条说明"**无关**（O(1)）。
+ *        为 `null` / `note` 为空时**什么都不加**，也不编占位文案（纪律 19）。
  * @returns {Promise<{steps: Array<{n:number,name:string,enabled:boolean,grade:string,text:string}>,
  *                    instruction: string, model: string, branch: string, taskType: string,
- *                    reasoning: string, forward: {done:boolean, at?:number}}>}
+ *                    reasoning: string, taskNote: object|null,
+ *                    forward: {done:boolean, at?:number}}>}
  */
 export async function runDirector({
 	sessionId, userText, store, duties, config,
-	autoForward = false, onForward
+	autoForward = false, onForward, taskNote = null
 }) {
 	const d = normalizeDuties(duties || cloneDefaultDuties());
 	const cfg = config || { localModel: { enabled: false } };
@@ -84,6 +90,21 @@ export async function runDirector({
 			.map((m) => `${m.role}: ${m.content}`).join("\n");
 		const taskType = classifyTask(userText);
 
+		/* ── V20 需求 3：当前任务的补充说明（**单条**注入）──────────────────
+		 *  用户原话：「在执行的时候读取尽量不影响上下文？不确定具体执行逻辑，
+		 *             怎么添加可以不影响上下文，如果可行的话」
+		 *  ⇒ 只注入**一条**、且由调用方定位好（`taskNote.taskId`）；
+		 *    这里不做表扫描 ⇒ 增量与"说明总条数"无关。
+		 *  ⚠️ 三处模型调用都拼上：职责开关是**用户可关的**，只拼在第一步
+		 *     ⇒ 一旦用户关掉「语言润色」，补充说明就**静默失效**
+		 *     （表现是"写了没用"，最难查的一类）。三处拼同一条，总量仍是常数。
+		 *  ⚠️ 缺省/空串 ⇒ **一个字都不加**，不写"（无补充说明）"这类占位 ——
+		 *     占位会挤占模型注意力，且让"有没有写"在回显里无法分辨。 */
+		const noteText = (taskNote && typeof taskNote.note === "string") ? taskNote.note.trim() : "";
+		const noteBlock = noteText
+			? ("\n\n## 当前任务的补充说明（" + String(taskNote.taskId || "") + "）\n" + noteText)
+			: "";
+
 		/* ── §2.3 消息流 ①：用户消息**立即上屏** ──
 		 * 必须在执行 5 步之前写入。原因：步骤 1/2/3 会调用本地模型（单次超时
 		 * `LOCAL_MODEL_TIMEOUT_MS = 60s`，串行最多 3 次）——若把用户消息放在末尾，
@@ -102,7 +123,7 @@ export async function runDirector({
 			polished = polishLanguage(userText);
 			if (cfg.localModel?.enabled) {
 				const out = await callLocalModel(
-					d.languagePolish.prompt + "\n\n## 用户输入\n" + userText
+					d.languagePolish.prompt + "\n\n## 用户输入\n" + userText + noteBlock
 					+ "\n\n请只输出整理后的指令本身，不要解释。",
 					cfg
 				);
@@ -121,7 +142,7 @@ export async function runDirector({
 			if (cfg.localModel?.enabled) {
 				const out = await callLocalModel(
 					d.branchSwitch.prompt + "\n\n## 上一条用户消息\n" + (prev ? prev.content : "(无)")
-					+ "\n\n## 当前用户消息\n" + userText
+					+ "\n\n## 当前用户消息\n" + userText + noteBlock
 					+ "\n\n只回答：连续 或 不连续，并给一句理由。",
 					cfg
 				);
@@ -140,7 +161,7 @@ export async function runDirector({
 			model = TASK_MODEL[taskType] || "deepseek-chat";
 			if (cfg.localModel?.enabled) {
 				const out = await callLocalModel(
-					d.modelRouting.prompt + "\n\n## 用户输入\n" + userText
+					d.modelRouting.prompt + "\n\n## 用户输入\n" + userText + noteBlock
 					+ "\n\n## 规则初判\n任务类型=" + (TASK_NAME[taskType] || taskType) + "，建议=" + model,
 					cfg
 				);
@@ -191,7 +212,10 @@ export async function runDirector({
 		const payload = {
 			instruction: polished,
 			model, branch, taskType, reasoning,
-			steps
+			steps,
+			/* 注入留痕：`null` = 本条没有可注入的补充说明（**不是**"没有这个功能"）。
+			 * 落进 payload 是为了让"到底注没注"在数据上可查，而不是只能看日志。 */
+			taskNote: noteText ? { taskId: taskNote.taskId || "", chars: noteText.length } : null
 		};
 
 		if (store) {
@@ -217,7 +241,8 @@ export async function runDirector({
 		dshLog("director", "runDirector done: session=" + sessionId + " taskType=" + taskType
 			+ " grade=" + [g1, g2, g3, g4, g5].join("/") + " forward=" + forward.done);
 
-		return { steps, instruction: polished, model, branch, taskType, reasoning, forward, payload };
+		return { steps, instruction: polished, model, branch, taskType, reasoning, forward, payload,
+			noteInjected: payload.taskNote ? payload.taskNote : null };
 	} catch (e) {
 		/* 🔴 失败不得静默：用户消息已经上屏，若不补一条回复，面板会永远停在
 		 * 「发出去了但没有任何反应」的状态（比直接报错更难排查）。

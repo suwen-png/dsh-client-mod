@@ -32,6 +32,9 @@ const DOCS = join(PKG, "docs");
 const CHECK = process.argv.includes("--check");
 
 const DESIGN = "docs/50-信息中心/V16-设计图·需求图·交互逻辑.html";
+/* 第二设计稿：多智能体编排架构补全。一个文件可同时属于两份稿（例如 DirectorPage 既是 V16 板块 A，也是 V21 板块 九），
+ * 故头部「设计稿」改为**可并列**输出，不再假设全局只有一份稿。 */
+const DESIGN21 = "docs/50-信息中心/V21-多智能体编排架构补全设计稿.html";
 const INDEX_REL = "dsh-director-plugin/docs/12-源码映射索引.md";
 
 /* 人工小表：只登记与 V16 设计稿**直接对应**的文件（板块 A 高保真 / C 交互逻辑 / D 设计图工作室 / E 保存·版本·安全区）。
@@ -55,6 +58,22 @@ const PLATE = {
 	"logic/routing.js": "C（输入路由决策树）",
 	"store/branch.js": "C（分支生命周期）",
 	"store/messages.js": "C（消息投递时序）"
+};
+
+/* 人工小表：与 V21 编排补全稿**直接对应**的文件。同样手动登记，不做正则猜测。
+ * 板块号取自 V21 正文的一~十。 */
+const PLATE21 = {
+	"logic/roles.js": "二（四层组织 · 12 角色 Agent Card · L1 预算）",
+	"logic/dag.js": "三（声明式执行图 · 6 类错误校验 · 波浪并行 · 条件与模板）",
+	"logic/verify.js": "四（两层验收 · 三态标签 · 成对交换去偏）",
+	"logic/delegate.js": "五（简报四段 · 交接五段 · 上下文裁剪）",
+	"logic/task-state.js": "六（A2A 九态机 · 两种暂停态 · 乐观并发）",
+	"logic/checkpoint.js": "七（不可变快照链 · 分叉保主干 · 断点重放）",
+	"logic/policy.js": "八（三模式四策略 · 削顶标注 · 无证据不升级）",
+	"logic/director-chain.js": "三（五步链的声明式依赖图：纯数据，视图与闸门共用同一份）",
+	"components/OrchestratorPanel.js": "九（四页签编排面板 · 数字全部实时算）",
+	"components/DirectorPage.js": "九（编排入口按钮 + 与个性化设定互斥）",
+	"client-entry.js": "十（7 个内核 API 逐模块 try/catch 挂载）"
 };
 
 /* 人工小表：诉求编号 → 文件。同样是**手动登记**，不做正则猜测。 */
@@ -83,20 +102,29 @@ const files = walk(SRC);
 const rel = (abs) => relative(SRC, abs).split("\\").join("/");
 
 /* ── 1. 抽取：职责 / 引用 / 下游（import 目标）── */
+/* ⚠ 抽取前必须剥掉自己的 @map 块（生成器自指）。
+ * 否则：块占 8 行 ≈ 500 字符，会把「xxx.js — 说明」这行挤出 head 窗口；
+ * 此时兜底规则 m2 会抓到本生成器写的标记行（它自身也匹配 ^\s*\*?\s*(.+)$），
+ * 「职责」于是静默变成 "/* @map:begin …" —— 不报错、只是说谎。
+ * 已实测咬到：client-entry.js / util/no-drag.js。 */
+const stripMapBlock = (s) => s.replace(/\/\* @map:begin[\s\S]*?@map:end \*\/\n?/, "");
 const info = {};
 for (const abs of files) {
 	const src = readFileSync(abs, "utf8");
-	const head = src.slice(0, 1600);
+	const head = stripMapBlock(src).slice(0, 1600);
 
-	// 职责 = 顶部 JSDoc 第一行里「文件名 — 说明」的说明部分；退化时取第一行注释文本
+	// 职责 = 顶部 JSDoc 第一行里「文件名 — 说明」的说明部分；退化时取第一行有实义的注释文本
 	let duty = "";
 	const m1 = head.match(/^\s*\/\*\*?\s*\n?\s*\*?\s*[\w./-]+\.js\s*[—\-–]\s*(.+)$/m);
 	if (m1) duty = m1[1].trim();
 	else {
-		const m2 = head.match(/^\s*\*?\s*(.+)$/m);
+		/* 兜底：首字符排除 * 与 /，否则会抓到 /** 这种純分隔符行（no-drag.js 就是这么被读成 "/**" 的） */
+		const m2 = head.match(/^\s*\*?\s*([^\s*/].*)$/m);
 		duty = m2 ? m2[1].trim() : "（无顶部说明）";
 	}
 	duty = duty.replace(/\*\/\s*$/, "").trim();
+	// 双保险：万一兜底仍抓到标记行，显式暴露，不静默当数据用
+	if (duty.includes("@map:")) duty = "（职责抽取异常：命中生成器标记行，请查顶部 JSDoc 格式）";
 
 	// 引用：只看头部注释区，避免把业务字符串里的数字当引用
 	const refs = [];
@@ -147,18 +175,29 @@ const BEGIN = "/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿�
 const END = " * @map:end */";
 const blockOf = (r) => {
 	const d = info[r];
-	const plate = PLATE[r] || "—";
 	const refs = d.refs.length ? d.refs.join(" · ") : "—";
+	/* 设计稿可并列：V16 主稿 与 V21 编排稿 各按人工小表命中，都不命中则显式标「板块 —」。 */
+	const dp = [];
+	if (PLATE[r]) dp.push(DESIGN + "【板块 " + PLATE[r] + "】");
+	if (PLATE21[r]) dp.push(DESIGN21 + "【板块 " + PLATE21[r] + "】");
+	if (!dp.length) dp.push(DESIGN + "（板块 —）");
 	return [
 		BEGIN,
 		" * 职责：" + d.duty,
 		" * 引用：" + refs,
 		" * 上游：" + (d.up.length ? d.up.join(", ") : "（无：插件入口层）"),
 		" * 下游：" + (d.downResolved.length ? d.downResolved.join(", ") : "（无）"),
-		" * 设计稿：" + (plate === "—" ? DESIGN + "（板块 —）" : DESIGN + "【板块 " + plate + "】"),
+		" * 设计稿：" + dp.join(" · "),
 		" * 索引：" + INDEX_REL,
 		END
 	].join("\n") + "\n";
+};
+
+/* 索引表格里的「设计稿板块」单元格：两份稿各自登记，合并成可读一格。 */
+const plateCell = (r) => {
+	const a = PLATE[r] ? "V16 · " + PLATE[r] : "";
+	const b = PLATE21[r] ? "V21 · " + PLATE21[r] : "";
+	return [a, b].filter(Boolean).join(" ／ ") || "—";
 };
 
 let injected = 0, refreshed = 0;
@@ -188,7 +227,7 @@ md.push("# 12 · 源码映射索引（自动生成 · 勿手改）");
 md.push("");
 md.push("> 生成器：`scripts/gen-source-map.mjs`（重跑即刷新）｜生成时间：" + new Date().toISOString());
 md.push("> **职责**取自每个文件顶部 JSDoc 首行（原作者写的，事实）｜**上游/下游**由真实 import 图推出（事实）｜**板块**只登记与设计稿直接对应的文件，其余标 —，不编。");
-md.push("> 设计稿：`" + DESIGN + "`");
+md.push("> 设计稿：`" + DESIGN + "` ｜ 编排补全稿：`" + DESIGN21 + "`");
 md.push("");
 md.push("## 一、总表（" + rows.length + " 个文件）");
 md.push("");
@@ -196,7 +235,7 @@ md.push("| 文件 | 职责 | 引用 | 设计稿板块 | 上游 | 下游 |");
 md.push("|:-----|:-----|:-----|:----------:|:----:|:----:|");
 for (const r of rows) {
 	const d = info[r];
-	md.push("| `src/" + r + "` | " + d.duty.replace(/\|/g, "\\|") + " | " + (d.refs.join(" · ") || "—") + " | " + (PLATE[r] || "—") + " | " + d.up.length + " | " + d.downResolved.length + " |");
+	md.push("| `src/" + r + "` | " + d.duty.replace(/\|/g, "\\|") + " | " + (d.refs.join(" · ") || "—") + " | " + plateCell(r) + " | " + d.up.length + " | " + d.downResolved.length + " |");
 }
 md.push("");
 md.push("## 二、按模块分组");
@@ -212,7 +251,10 @@ for (const dir of Object.keys(byDir).sort()) {
 md.push("## 三、反向索引：设计稿板块 → 文件");
 md.push("");
 const rev = {};
-for (const r of rows) { const p = PLATE[r]; if (!p) continue; (rev[p] = rev[p] || []).push(r); }
+for (const r of rows) {
+	const p = PLATE[r]; if (p) (rev["V16 · " + p] = rev["V16 · " + p] || []).push(r);
+	const q = PLATE21[r]; if (q) (rev["V21 · " + q] = rev["V21 · " + q] || []).push(r);
+}
 md.push("| 设计稿板块 | 文件 |");
 md.push("|:-----------|:-----|");
 for (const p of Object.keys(rev).sort()) md.push("| " + p + " | " + rev[p].map((x) => "`" + x + "`").join(" · ") + " |");

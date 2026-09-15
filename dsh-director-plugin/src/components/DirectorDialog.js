@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
  * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
- * 上游：client-entry.js, mount.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js
+ * 上游：client-entry.js, components/DirectorPage.js, mount.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -39,10 +39,14 @@ import * as react_jsx_runtime from "react/jsx-runtime";
 import {
 	directorLayoutStore, LEFT_TAB, PANEL_RAIL_WIDTH, PANEL_MIN_WIDTH
 } from "../store/layout.js";
-import { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel } from "../store/hierarchy.js";
+import {
+	loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel,
+	findNodeById, scopeKeyOf, scopeHasConversation
+} from "../store/hierarchy.js";
 import { onHierarchyChange } from "../util/bus.js";
 import { applySplit, clearSplit, getSplitRootRect } from "../bridge/split.js";
-import { sendToChat, observeConversation, readConversation, installChatBridgeApi } from "../bridge/chat-bridge.js";
+import { sendToChat, deliverToChat, observeConversation, readConversation, installChatBridgeApi } from "../bridge/chat-bridge.js";
+import { openSession } from "../logic/branch-tree.js";
 import { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL } from "../logic/routing.js";
 import { appendDirectorMessage, listDirectorMessages, pluginDbStats, PLUGIN_DB_NAME } from "../store/plugin-db.js";
 import { DirectorWorkbench } from "./DirectorWorkbench.js";
@@ -54,47 +58,80 @@ import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
 import { PersonalizePanel } from "./PersonalizePanel.js";
 /* 原生窗口控件安全区：本弹窗是全屏 fixed 层，右上角面板必须避让（实测 138px，z-index 无效）。 */
 import { readInset } from "../util/safe-area.js";
+/* 执行状态（智能体 / 技能调用记录）—— 第 6 批需求 6。
+ * 🔴 改前是本文件内的**模块级内存数组**（页内刷新即丢、真实执行链一条不写）。
+ *    现改为 `store/agent-runs.js`（可持久化 + 可订阅 + 真实链路上报），
+ *    本文件只做**再导出**，保持对外 API 名称逐字不变（关闭的是实现，不是契约）。 */
+import {
+	recordAgentRun, listAgentRuns, RUNS_SHOWN, RUNS_KEEP, subscribeRuns
+} from "../store/agent-runs.js";
+/* 技能指向表（第 6 批「完善技能和智能体的指向」）：key=真实技能 name，dir=真实磁盘目录。 */
+import { SKILL_CATALOG } from "../logic/catalog.js";
 
 export const DIALOG_ID = "dsh-director-dialog";
 export const CHIP_ID = "dsh-director-chip";
 
-/* ── 5 类标准智能体（17 号文 §1A.8，含执行标准 + 检查清单）── */
+/* ── 5 类标准智能体（17 号文 §1A.8，含执行标准 + 检查清单）──
+ * 🔴 第 6 批「完善技能和智能体的指向」新增三个字段（**只增不改**，`key`/`label`
+ *    /`mode`/`desc`/`checks` 全部保持原样 —— 它们是已冻结的对外契约）：
+ *      · `roleId`     —— 对应 `logic/roles.js` 的角色 id（无对应者写空串，**不硬凑**）
+ *      · `target`     —— 真实执行入口 `module#symbol`（已逐条 grep 核对存在）
+ *      · `targetNote` —— 指向为空的**原因**（本项目纪律 19：降级可以，无声不行）
+ *    ⚠️ `code` / `research` 两项在本仓**没有**执行角色，指向的是"能力出口"
+ *       而不是"实现"。这是**如实标注**而不是补一个假实现 —— 编一个 `logic/code.js`
+ *       出来才是更坏的做法（会让人以为代码任务真在本仓执行）。 */
 export const AGENTS = Object.freeze([
-	{ key: "code", label: "代码", mode: "auto", desc: "实现 / 重构 / 修复，产出可运行代码", checks: ["可编译", "有测试", "零硬编码密钥"] },
-	{ key: "doc", label: "文档", mode: "auto", desc: "需求 / 设计 / 交付文档编写", checks: ["结构完整", "含出处", "有反证"] },
-	{ key: "research", label: "调研", mode: "manual", desc: "外部资料检索与交叉比对", checks: ["来源可追溯", "交叉验证", "结论明确"] },
-	{ key: "test", label: "测试", mode: "auto", desc: "用例编写与执行", checks: ["可重复", "覆盖边界", "结果可核验"] },
-	{ key: "review", label: "审核", mode: "manual", desc: "六维审核与纠偏", checks: ["六维齐备", "含证据", "打回可追溯"] }
+	{
+		key: "code", label: "代码", mode: "auto",
+		desc: "实现 / 重构 / 修复，产出可运行代码", checks: ["可编译", "有测试", "零硬编码密钥"],
+		roleId: "", target: "logic/delegate.js#buildBriefing",
+		targetNote: "本仓无代码执行角色 ⇒ 指向委派简报（四段式），由外部 AI 团队实际执行"
+	},
+	{
+		key: "doc", label: "文档", mode: "auto",
+		desc: "需求 / 设计 / 交付文档编写", checks: ["结构完整", "含出处", "有反证"],
+		roleId: "doc-writer", target: "logic/ledger.js#buildLedgerView", targetNote: ""
+	},
+	{
+		key: "research", label: "调研", mode: "manual",
+		desc: "外部资料检索与交叉比对", checks: ["来源可追溯", "交叉验证", "结论明确"],
+		roleId: "", target: "logic/discover.js#discover",
+		targetNote: "本仓无外部检索能力 ⇒ 指向工作区勘察；外部检索须经宿主工具，不在插件侧"
+	},
+	{
+		key: "test", label: "测试", mode: "auto",
+		desc: "用例编写与执行", checks: ["可重复", "覆盖边界", "结果可核验"],
+		roleId: "test-planner", target: "logic/verify.js#selfCheck", targetNote: ""
+	},
+	{
+		key: "review", label: "审核", mode: "manual",
+		desc: "六维审核与纠偏", checks: ["六维齐备", "含证据", "打回可追溯"],
+		roleId: "output-reviewer", target: "logic/routing.js#review6", targetNote: ""
+	}
 ]);
 
-/** 可调用技能（R3 第二段；`mode` 表示默认调用方式） */
-export const SKILLS = Object.freeze([
-	{ key: "execution-standards", label: "执行标准规范", mode: "auto", desc: "L1–L4 链路 / 检查点 / 终止条件" },
-	{ key: "codebase-inspection", label: "代码库勘察", mode: "manual", desc: "行数 / 语言 / 结构盘点" },
-	{ key: "mermaid-diagram", label: "图表生成", mode: "manual", desc: "流程图 / 时序图 / 架构图" },
-	{ key: "browser-skill", label: "浏览器操作", mode: "manual", desc: "自动化导航与抓取" }
-]);
+/** 可调用技能（R3 第二段；`mode` 表示默认调用方式）
+ *
+ * 🔴 第 6 批改：**不再本文件硬编码**，直接由 `logic/catalog.js` 的 `SKILL_CATALOG` 派生。
+ *   改前的 4 条有两个真缺陷：
+ *     ① 与技能真实磁盘目录**不同源** —— 例如 `mermaid-diagram` 实际在
+ *        `mermaid-diagram__skillhub/`，按 key 拼路径会**找不到**（且失败无声）；
+ *     ② 没有「不适用」条件 ⇒ 会被挂到不该挂的步骤上。
+ *   `target` 现在给出真实目录（`dir`），`noUse` 给出反触发条件。
+ *   ⚠️ 保持 `{key, label, mode, desc}` 四个字段与原样同名 —— 渲染与既有闸门都吃这套。 */
+export const SKILLS = Object.freeze(SKILL_CATALOG.map((s) => ({
+	key: s.key, label: s.label, mode: s.mode, desc: s.desc,
+	dir: s.dir, target: s.dir, noUse: s.noUse
+})));
 
-/* ── 调用记录（R3「调用情况」的数据源；内存态，会话级）── */
-/** 面板「调用情况」一屏最多渲染条数（超出部分由 `data-run-total` 反映真实总数） */
-export const RUNS_SHOWN = 8;
-/** 内存中最多保留条数 */
-export const RUNS_KEEP = 30;
-const agentRuns = [];
-export function recordAgentRun(key, status, note) {
-	agentRuns.unshift({ key, status: status || "ok", note: note || "", at: Date.now() });
-	if (agentRuns.length > RUNS_KEEP) agentRuns.length = RUNS_KEEP;
-}
-/**
- * 列出调用记录（最新在前）。
- * 🔴 无参调用返回**全量**（供 `data-run-total` 反映真实条数）；
- *    渲染截断由面板自己做（`RUNS_SHOWN`）——「列表 API 静默截断」曾使
- *    「5 智能体 + 4 技能 = 9 条」时最旧一条被挤出，验证脚本据此误判为缺记录。
- * @param {number} [limit]
- */
-export function listAgentRuns(limit) {
-	return typeof limit === "number" && limit >= 0 ? agentRuns.slice(0, limit) : agentRuns.slice();
-}
+/* ── 调用记录（R3「调用情况」的数据源）──
+ * 🔴 第 6 批改：由本文件的**内存数组**迁到 `store/agent-runs.js`（持久化 + 可订阅）。
+ *    下面这几个名字**逐字保持不变**（对外契约）：`RUNS_SHOWN` / `RUNS_KEEP` /
+ *    `recordAgentRun` / `listAgentRuns` —— 只是**定义地**换了，语义一条没改。
+ *    ⚠️ 面板渲染仍在本文件（并且仍用 `agentRuns` 这个**入参名**）——
+ *       「渲染截断在面板层、总量由 data-run-total 反映」这条设计**没有变**，
+ *       变的只是记录从哪来。 */
+export { recordAgentRun, listAgentRuns, RUNS_SHOWN, RUNS_KEEP };
 
 const RAIL = PANEL_RAIL_WIDTH;
 
@@ -277,7 +314,14 @@ function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns
 				]),
 				h("div", { key: "c", style: S.chips }, (agentSeg === "agents" ? AGENTS : SKILLS).map((a) =>
 					h("button", {
-						key: a.key, style: S.chip(a.mode, Boolean(called[a.key])), title: a.desc + "｜检查项：" + ((a.checks || ["—"]).join(" / ")),
+						key: a.key, style: S.chip(a.mode, Boolean(called[a.key])),
+						/* 第 6 批「完善指向」：悬停即看到**真实执行入口**与**不适用条件** ——
+						 * 指向如果只存在代码里，界面上就仍然回答不了"点了它会发生什么"。 */
+						title: a.desc
+							+ "｜指向：" + (a.target || "（未接入 · " + (a.targetNote || "无实现") + "）")
+							+ (a.targetNote ? "（" + a.targetNote + "）" : "")
+							+ (a.checks ? "｜检查项：" + a.checks.join(" / ") : "")
+							+ (a.noUse ? "｜不适用：" + a.noUse : ""),
 						"data-testid": "d-agent-" + a.key, "data-mode": a.mode,
 						onClick: () => { setCalled((c) => ({ ...c, [a.key]: true })); onCallAgent(a); }
 					}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "#b794f6" : "#e0b341") }), h("span", { key: "l" }, a.label)])
@@ -316,7 +360,7 @@ export function DirectorDialog(props = {}) {
 	const [stats, setStats] = react.useState(null);
 	const [reviewResult, setReviewResult] = react.useState(null);
 	const [routeResult, setRouteResult] = react.useState(null);
-	const [runs, setRuns] = react.useState([]);
+	const [runs, setRuns] = react.useState(() => listAgentRuns());
 	const [draft, setDraft] = react.useState("");
 	const [busy, setBusy] = react.useState(false);
 	const [toast, setToast] = react.useState("");
@@ -328,6 +372,15 @@ export function DirectorDialog(props = {}) {
 		toastTimerRef.current = setTimeout(() => setToast(""), 2200);
 		return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
 	}, [toast]);
+	/* 调用记录订阅（第 6 批需求 6）——
+	 * 🔴 记录的数据源已迁到 `store/agent-runs.js`（持久化 + 可订阅），
+	 *    而**别再处**也会写它（总监页执行链、执行状态窗口）。
+	 *    本组件原先只在 5 个本地动作后 `setRuns(...)` ⇒ 别处写的记录在弹窗里看不见
+	 *    （表现就是"数据在库里、界面上没有"，本项目已栽过多次的一类）。
+	 *    订阅回调里重新取**全量**（`listAgentRuns()` 无参 = 全量），不自己拼增量。
+	 * ⚠️ hook 必须**无条件**执行（纪律 21：不得放在任何 early-return 之后）。 */
+	react.useEffect(() => subscribeRuns(() => setRuns(listAgentRuns())), []);
+
 	/* V17 P3：跨界面流转同步反馈 —— 弹窗打开期间别的维度把消息送到总监时轻提示；
 	 * 关闭期间不提示（未读交给 FloatDock 小圆点），并把基线推进到最新避免一开就弹旧账。 */
 	const flowSnap = react.useSyncExternalStore(
@@ -567,10 +620,25 @@ export function DirectorDialog(props = {}) {
 		try {
 			const r = await confirmRoute(nodeId, routeResult, dest);
 			const cand = (routeResult.candidates || [])[0];
+			const targetNode = cand && cand.nodeId ? findNodeById(tree, cand.nodeId) : null;
+			/* 目标会话：只有"真有对话"的节点才有 —— 判据走 store/hierarchy.js 的单一真相源
+			 * （`scopeHasConversation` / `scopeKeyOf`），不在这里各算各的。 */
+			const targetSession = (targetNode && scopeHasConversation(targetNode)) ? scopeKeyOf(targetNode.id, targetNode) : null;
 			const summary = DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : "");
 			if (dest === DESTINATION.DIRECT || dest === DESTINATION.TRANSFER) {
-				const sent = await sendToChat(routeResult.subtasks.map((s) => s.text).join("\n"), { autoSend: dest === DESTINATION.DIRECT });
-				await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + (sent.mode === "sent" ? "已发送" : "已填入输入框") + "）");
+				/* 🔴 第 5 批 bug ⑥ 根治：改前无论判到哪个节点一律 `sendToChat`（= 当前会话）
+				 * ⇒ 现象"有流转、但没按消息判定归属对话"。现在按**目标会话**投递；
+				 * 目标是文件夹/全局（无对话）时如实告知，**不静默改发当前会话**。 */
+				if (!targetSession) {
+					await pushMsg("方案 · 派活", "路由已记录：" + summary + "（该目标无对话 ⇒ 未投递、未改发当前会话）");
+				} else {
+					const sent = await deliverToChat(routeResult.subtasks.map((s) => s.text).join("\n"), {
+						sessionId: targetSession, opener: openSession, autoSend: dest === DESTINATION.DIRECT
+					});
+					const how = sent.mode === "sent" ? "已发送到该对话"
+						: sent.ok ? "已填入该对话输入框" : "投递失败：" + (sent.reason || "未知");
+					await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + how + "）");
+				}
 			} else {
 				await pushMsg("方案 · 派活", "路由已落实：" + summary + "（由总监新建对话并初始化其总监节点）");
 			}

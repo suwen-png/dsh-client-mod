@@ -74,3 +74,17 @@ coverage/
 dsh-director-plugin/scripts/_probe-*
 dsh-director-plugin/.tmpcheck/
 
+# === 12. OpenClaw 工作区文件（非项目产物，2026-09-15 登记） ===
+/SOUL.md
+/IDENTITY.md
+/USER.md
+/TOOLS.md
+/HEARTBEAT.md
+/.openclaw/
+
+# === 13. 运行期临时产物（批次 14+ 累积，2026-09-15 登记） ===
+dsh-director-plugin/.wb-*
+dsh-director-plugin/_vf-run*.log
+dsh-director-plugin/_vm-run*.log
+dsh-director-plugin/scripts/_tmp-*
+

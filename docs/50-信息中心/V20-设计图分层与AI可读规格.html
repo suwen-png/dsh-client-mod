@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V20 · 设计图分层与 AI 可读规格 — dsh-director（成因 · 分层模型 · 修改顺序 · 结构大纲 · 行式 DSL）</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --sbg:#101114; --sbg2:#15161a; --sbg3:#1a1b1f; --sbg4:#1c1d21;
+    --panel:#212227; --line:#26282e; --line2:#2e3138; --line3:#34373e; --line4:#3d4148;
+    --fg:#e8eaed; --fg2:#c9ced6; --fg3:#9aa0a6; --fg4:#6b7076;
+    --acc:#2f6feb; --acc2:#8ab4f8; --accbg:#1d2739; --accbd:#2b3f5e;
+    --pur:#8957e5; --pur2:#c9a8ff; --purbg:#1a1524; --purbd:#4c3a6b;
+    --teal:#39c5cf; --teal2:#7fe3e8; --tealbg:#15201f; --tealbd:#2b6b70;
+    --ok:#3fb950; --ok2:#8fd48f; --okbg:#152318; --okbd:#2b6b3a;
+    --warn:#d29922; --warn2:#e3c07a; --warnbg:#241d10; --warnbd:#6b5320;
+    --err:#f85149; --err2:#ff9a92; --errbg:#1e1416; --errbd:#6b2b28;
+    --doc:#0d0e11;
+  }
+  body{background:var(--doc);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;font-size:11.5px;padding:26px 18px 70px}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:9px}
+  .sub{font-size:12.5px;color:var(--fg3);margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #24262c}
+  .sub b{color:var(--acc2);font-weight:600}
+  .blk{margin-bottom:30px}
+  .bh{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:9px;border-bottom:1px solid #24262c}
+  .bh .k{font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 11px;border-radius:6px;background:var(--acc);color:#fff;white-space:nowrap}
+  .bh .k.p{background:var(--pur)}
+  .bh .k.t{background:var(--teal);color:#0d0e11}
+  .bh .k.e{background:var(--err);color:#fff}
+  .bh .k.g{background:var(--ok);color:#0d0e11}
+  .bh h2{font-size:17px;font-weight:650}
+  .bh .r{margin-left:auto;font-size:11.5px;color:var(--fg4);white-space:nowrap}
+  .sec{background:var(--sbg3);border:1px solid #26282e;border-radius:12px;margin-bottom:18px;overflow:hidden}
+  .sec > header{padding:11px 16px;background:var(--sbg2);border-bottom:1px solid #26282e;display:flex;align-items:center;gap:10px}
+  .sec > header .no{font-size:11px;font-weight:700;padding:2px 9px;border-radius:5px;background:#2b2e35;color:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+  .sec > header h3{font-size:14px;font-weight:600}
+  .sec > header .tag{margin-left:auto;font-size:11px;color:var(--fg4);white-space:nowrap}
+  .sec > .bd{padding:16px}
+  .note{font-size:11.5px;color:var(--fg3);background:var(--sbg2);border-left:3px solid var(--acc);padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--pur)}
+  .note.t{border-left-color:var(--teal)}
+  .note.e{border-left-color:var(--err)}
+  .note b{color:var(--fg)}
+  .note .src{color:var(--fg4)}
+  .cap{font-size:11px;color:var(--fg4);margin-top:8px;text-align:center}
+  .frame{background:var(--sbg4);border:1px solid #2b2e34;border-radius:10px;overflow:hidden}
+  .fbar{height:28px;background:var(--sbg2);border-bottom:1px solid #232529;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:11px;color:var(--fg4)}
+  .fbar .tl{width:9px;height:9px;border-radius:50%}
+  .fbar .tl.r{background:#ec6a5e}.fbar .tl.y{background:#f4bf4f}.fbar .tl.g{background:#61c554}
+  .fbd{padding:10px}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ttl{font-size:11px;font-weight:600;margin-bottom:6px}
+  .ttl.bad{color:var(--err2)}
+  .ttl.good{color:var(--ok2)}
+  .mark{border:1.5px dashed var(--err);border-radius:8px;padding:9px;position:relative}
+  .mark .lb{position:absolute;top:-9px;left:8px;background:var(--err);color:#fff;font-size:10.5px;padding:1px 7px;border-radius:4px;white-space:nowrap}
+  .mark.ok{border-color:var(--ok)}
+  .mark.ok .lb{background:var(--ok);color:#0d0e11}
+  .kbd{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--sbg2);border:1px solid var(--line3);border-radius:4px;padding:1px 5px;color:var(--fg2)}
+  .chip{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line3);background:var(--sbg3);color:var(--fg3);margin:2px 5px 2px 0}
+  .chip.on{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .chip.p{border-color:var(--purbd);background:var(--purbg);color:var(--pur2)}
+  .chip.t{border-color:var(--tealbd);background:var(--tealbg);color:var(--teal2)}
+  .chip.x{border-color:var(--errbd);background:var(--errbg);color:var(--err2)}
+  .chip.g{border-color:var(--okbd);background:var(--okbg);color:var(--ok2)}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;padding:6px 10px;background:var(--sbg2);border-bottom:1px solid var(--line2);color:var(--fg3);font-weight:600}
+  td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(--fg2);vertical-align:top}
+  .ok-t{color:var(--ok2)}
+  .warn-t{color:var(--warn2)}
+  .err-t{color:var(--err2)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step{background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;padding:6px 10px;font-size:11px;color:var(--fg2)}
+  .step.hi{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .step.x{border-color:var(--errbd);background:var(--errbg);color:var(--err2)}
+  .arrow{color:var(--fg4);font-size:12px}
+  .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .sp{margin-left:auto}
+  .box{border:1px solid var(--line2);border-radius:7px;padding:7px 9px;background:var(--panel);font-size:11px;color:var(--fg3)}
+  .lbl{font-size:10.5px;color:var(--fg4);letter-spacing:.4px}
+  .val{font-size:11.5px;color:var(--fg2)}
+  .bar{height:3px;border-radius:2px;background:var(--line3);margin-top:4px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--acc)}
+  .pre{font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.62;background:#0b0c0f;border:1px solid var(--line2);border-radius:8px;padding:11px 13px;overflow-x:auto;color:var(--fg2);white-space:pre}
+  .pre .c{color:var(--fg4)}
+  .pre .k1{color:var(--acc2)}
+  .pre .k2{color:var(--pur2)}
+  .pre .k3{color:var(--teal2)}
+  .pre .k4{color:var(--err2)}
+  .pre .k5{color:var(--ok2)}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .kpi{background:var(--sbg2);border:1px solid var(--line2);border-radius:9px;padding:10px 12px}
+  .kpi .n{font-size:22px;font-weight:700;letter-spacing:-.5px;line-height:1.15}
+  .kpi .n.x{color:var(--err2)}
+  .kpi .n.g{color:var(--ok2)}
+  .kpi .n.a{color:var(--acc2)}
+  .kpi .t{font-size:10.5px;color:var(--fg4);margin-top:3px}
+  .olist{display:flex;flex-direction:column;gap:5px}
+  .oitem{display:flex;align-items:center;gap:8px;background:var(--sbg2);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:11px}
+  .oitem .ix{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--fg4);min-width:20px}
+  .oitem .nm{color:var(--fg2);flex:1;min-width:0}
+  .oitem .geo{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--fg4)}
+  .oitem.hid{opacity:.45}
+  .oitem.lk{border-color:var(--warnbd);background:var(--warnbg)}
+  .lv{font-size:10.5px;padding:1px 6px;border-radius:4px;font-weight:600;white-space:nowrap}
+  .lv.base{background:var(--purbg);color:var(--pur2);border:1px solid var(--purbd)}
+  .lv.screen{background:var(--accbg);color:var(--acc2);border:1px solid var(--accbd)}
+  .lv.modal{background:var(--errbg);color:var(--err2);border:1px solid var(--errbd)}
+  .lv.tech{background:var(--tealbg);color:var(--teal2);border:1px solid var(--tealbd)}
+  .stack{position:relative;height:132px;background:#0b0c0e;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+  .sl{position:absolute;border-radius:5px;border:1px solid;font-size:10.5px;padding:2px 6px;box-sizing:border-box;overflow:hidden;white-space:nowrap}
+  .sl.b{background:rgba(137,87,229,.22);border-color:var(--purbd);color:var(--pur2)}
+  .sl.c{background:rgba(47,111,235,.22);border-color:var(--accbd);color:var(--acc2)}
+  .sl.m{background:rgba(248,81,73,.20);border-color:var(--errbd);color:var(--err2)}
+  .tiny{font-size:10.5px;color:var(--fg4)}
+  .mono{font-family:ui-monospace,Consolas,monospace}
+  hr.sep{border:0;border-top:1px solid #24262c;margin:14px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V20 · 设计图分层与 AI 可读规格<small>dsh-director 设计图工作室 · 先行设计稿</small></h1>
+<div class="sub">
+  回答四个问题：<b>① 「元素层层堆叠」的成因是什么</b> · <b>② 按什么顺序改才不迷路</b> ·
+  <b>③ 一张好用易改的设计图长什么样（参考哪些开源方案）</b> · <b>④ 怎么让设计图的描述语言被 AI 直接读写</b>。
+  全部结论以 <span class="mono">dsh-director-plugin/src/**</span> 的行号与
+  <span class="mono">scripts/_probe-overlap.mjs</span> 的实测输出为证，不采信自述。
+</div>
+
+<!-- ══════════════ 0 导航 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">0</span><h2>一页看清：问题、结论、落点</h2><span class="r">导航</span></div>
+  <div class="g4">
+    <div class="kpi"><div class="n x">9 / 20</div><div class="t">元素中心点<b>完全点不中</b><br>（被导图画布整块吃掉）</div></div>
+    <div class="kpi"><div class="n x">50 / 190</div><div class="t">存在交集的元素对<br>其中 36 对一方被遮 ≥50%</div></div>
+    <div class="kpi"><div class="n a">3 幅画面</div><div class="t">被摊平在同一张画布<br>区分它们的<b>只有 z 数字</b></div></div>
+    <div class="kpi"><div class="n g">0 行</div><div class="t">代码里声明「画面」的地方<br>（无字段、无校验、无 UI）</div></div>
+  </div>
+  <div class="note p" style="margin-top:12px">
+    <b>一句话结论：</b>「层层堆叠」不是视觉问题，是<b>数据模型缺一层</b> ——
+    三幅本来应该分开编辑的画面（总监页底图 / 右侧对话弹窗 / 导图态）被压进同一个
+    <span class="mono">elements[]</span> 平铺数组，它们的从属与先后关系<b>只编码在一个裸整数
+    <span class="mono">z</span> 里</b>；而上层一旦存在，下层在物理上就点不到，
+    于是「不知道该从哪些部分、按什么顺序改」是<b>必然结果</b>，不是操作不熟练。
+  </div>
+</div>
+
+<!-- ══════════════ A 成因 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k e">A</span><h2>成因：把主观感受变成可核验数字</h2><span class="r">取证 · 实测</span></div>
+
+  <div class="sec">
+    <header><span class="no">A1</span><h3>实测：标准框架 20 个元素的堆叠程度</h3><span class="tag">node scripts/_probe-overlap.mjs</span></header>
+    <div class="bd">
+      <div class="note">
+        探针直接对 <span class="mono">buildStandardFrame("threeTab")</span> 的返回值做几何运算 ——
+        量的是<b>产品真正会渲染的那 20 个元素</b>，不是设计稿里画的示意图。
+      </div>
+      <div class="g3">
+        <div class="kpi"><div class="n">20</div><div class="t">元素总数 · 画布 1180×644</div></div>
+        <div class="kpi"><div class="n x">50</div><div class="t">有交集的元素对（总对 190 · 26.3%）</div></div>
+        <div class="kpi"><div class="n x">36</div><div class="t">其中一方被遮挡 ≥50% 的对数</div></div>
+      </div>
+      <div class="cap">数据来源：2026-09-14 本机实测，探针输出见 §H 施工映射表</div>
+
+      <hr class="sep">
+      <div class="ttl bad">最致命的一条：9 个元素「点中心必失手」</div>
+      <table>
+        <tr><th style="width:130px">元素</th><th style="width:190px">标签</th><th style="width:120px">被遮面积</th><th>点它中心时实际命中的是谁</th></tr>
+        <tr><td class="mono">el-2-win</td><td>Harness 主窗口</td><td class="err-t">100%</td><td class="mono">el-32-can（导图态画布）</td></tr>
+        <tr><td class="mono">el-4-sid</td><td>侧栏 · 会话树</td><td class="err-t">52%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-10-car</td><td>R2 项目总览 · 四指标</td><td class="err-t">100%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-12-reg</td><td>R2.5 总监控制台</td><td class="err-t">100%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-14-reg</td><td>R3 智能体 / 技能 / 资源</td><td class="err-t">100%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-16-pan</td><td>R4 项目导航（三 Tab）</td><td class="err-t">100%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-18-pan</td><td>R5 总监对话区</td><td class="err-t">100%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-20-pan</td><td>R7 详情 / 产出物</td><td class="err-t">100%</td><td class="mono">el-32-can</td></tr>
+        <tr><td class="mono">el-28-pan</td><td>右侧「对话」弹窗</td><td class="err-t">64%</td><td class="mono">el-32-can</td></tr>
+      </table>
+      <div class="note e" style="margin-top:12px">
+        <b>9 / 20 = 45% 的元素无法被选中。</b>规矩是 —— 选不中就不能改。
+        用户「不知道该从哪些部分去修改」的现场，就是这 9 行的现场：
+        想改 R5 总监对话区，鼠标怎么点都只选中那张导图画布。
+      </div>
+      <div class="cap">
+        全部 9 例的命中者都是同一个元素 <span class="mono">el-32-can</span>（导图态画布，z=10，覆盖 60,80 起 1060×440）
+        —— <b>一个根因连爆 9 条</b>，不是 9 个独立毛病。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">A2</span><h3>堆叠是怎么长出来的：z 值只有 8 档，却装了 20 个元素</h3><span class="tag">FRAME_SEEDS 实测</span></header>
+    <div class="bd">
+      <div class="g2">
+        <div>
+          <div class="ttl">按 z 分档看元素数</div>
+          <table>
+            <tr><th>z</th><th>元素数</th><th>这一档实际是什么</th></tr>
+            <tr><td class="mono">0</td><td>1</td><td>主窗口（整块底板）</td></tr>
+            <tr><td class="mono">1</td><td>1</td><td>侧栏</td></tr>
+            <tr><td class="mono">2</td><td class="warn-t">9</td><td>R1 / R2 / R2.5 / R3 / R4 / R5 / R7 / R6（总监页正片）</td></tr>
+            <tr><td class="mono">3</td><td>3</td><td>页签环 / R8 输入条 / 目标徽章</td></tr>
+            <tr><td class="mono">6</td><td>1</td><td>右侧「对话」弹窗</td></tr>
+            <tr><td class="mono">8</td><td>1</td><td>浮动按钮组</td></tr>
+            <tr><td class="mono">10</td><td class="err-t">2</td><td>导图画布 + 血缘连线（<b>同 z 碰撞</b>）</td></tr>
+            <tr><td class="mono">11</td><td>3</td><td>三个分支节点</td></tr>
+          </table>
+          <div class="cap" style="text-align:left">20 个元素挤在 8 个整数档里；最大的那一档（z=2）装了 9 个。</div>
+        </div>
+        <div>
+          <div class="ttl">同 z 碰撞为什么危险</div>
+          <div class="note warn" style="margin-bottom:10px">
+            <span class="mono">el-32-can</span>（导图画布）与 <span class="mono">el-40-edg</span>（血缘连线）
+            <b>同为 z=10</b>，且连线 100% 落在画布内。
+          </div>
+          <div class="pre"><span class="c">// design-schema.js:320-329（命中测试）</span>
+<span class="k1">export function</span> hitTest(elements, x, y) {
+  <span class="k1">let</span> best = <span class="k2">null</span>;
+  <span class="k1">for</span> (<span class="k1">const</span> el <span class="k1">of</span> list) {
+    <span class="k1">if</span> (x &gt;= el.x &amp;&amp; x &lt;= el.x + el.w &amp;&amp; ...) {
+      <span class="k1">if</span> (!best || el.z &gt;= best.z) best = el;
+      <span class="c">//            ↑ 同 z 时「后遍历者胜」</span>
+    }
+  }
+  <span class="k1">return</span> best;
+}</div>
+          <div class="cap" style="text-align:left">
+            判据是 <span class="mono">&gt;=</span> 而不是 <span class="mono">&gt;</span> ⇒
+            同 z 谁在上<b>取决于数组顺序</b>，而不是任何显式约定。
+            今天能工作，只是因为 <span class="mono">FRAME_SEEDS</span> 的书写顺序恰好对。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">A3</span><h3>七条成因（逐条给证据）</h3><span class="tag">按危害排序</span></header>
+    <div class="bd">
+      <div class="note">
+        前三条是<b>同一个病的三个阶段</b>：没有画面概念 → 层级只能塞进 z → 上层存在即下层不可达。
+      </div>
+      <table>
+        <tr><th style="width:30px">#</th><th style="width:210px">成因</th><th>证据（可自行复跑核验）</th></tr>
+        <tr>
+          <td class="err-t">1</td>
+          <td><b>「画面」不是一个概念</b></td>
+          <td>20 条 seed 里 <b>13 条属总监页底图、2 条属对话弹窗、5 条属导图态</b>，
+          但数据模型里<b>没有任何字段</b>表达「这是哪幅画面」
+          （<span class="mono">design-schema.js:290-302</span> 的字段清单只有 id/kind/x/y/w/h/z/label/props/logic）。
+          区分它们的唯一凭据是 z 的<b>区间约定</b>：0-3 底图 / 6、8 浮层 / 10-11 模态。</td>
+        </tr>
+        <tr>
+          <td class="err-t">2</td>
+          <td><b>层级只编码在裸整数 z 里</b></td>
+          <td><span class="mono">z: Math.round(num(p.z, 1))</span>（<span class="mono">:294</span>）——
+          一个无分组、无命名、无校验的整数。代码里<b>没有一处</b>声明「z≥10 表示模态」，
+          这个约定只活在作者的脑子里和设计稿的正文里。</td>
+        </tr>
+        <tr>
+          <td class="err-t">3</td>
+          <td><b>没有第二条选择通道</b></td>
+          <td>左栏只有 <span class="mono">LogicPanel</span>（显示<b>选中后</b>的七元组，
+          <span class="mono">DesignStudio.js:1003-1016</span>），<b>没有元素列表</b>。
+          唯一的选中途径是点画布 ⇒ 点不中的元素 = <b>完全不可编辑</b>，不只是"难点"。</td>
+        </tr>
+        <tr>
+          <td class="warn-t">4</td>
+          <td><b>同 z 顺序不确定</b></td>
+          <td><span class="mono">el-32-can</span> 与 <span class="mono">el-40-edg</span> 同 z=10 且 100% 交叠
+          （见 A2）；<span class="mono">hitTest</span> 用 <span class="mono">&gt;=</span> ⇒
+          层内顺序由数组下标决定，重排数组就会静默改变观感。</td>
+        </tr>
+        <tr>
+          <td class="warn-t">5</td>
+          <td><b>调序能力只有一个「置顶」</b></td>
+          <td><span class="mono">reorderElement</span>（<span class="mono">design.js:507-512</span>）实现只有
+          <span class="mono">where === "bottom" ? 0 : top + 1</span>；
+          UI 只渲染「置顶」一枚按钮（<span class="mono">DesignStudio.js:330</span>）。
+          「把 R5 挪到弹窗上面」「R1 下移一层」<b>没有任何入口</b>。</td>
+        </tr>
+        <tr>
+          <td class="warn-t">6</td>
+          <td><b>导出物是几何清单，不含结构</b></td>
+          <td>「导出 JSON」原样吐出 <span class="mono">elements[]</span>：只有
+          x/y/w/h/z + label + 七元组。AI 拿到的是一张<b>20 行坐标表</b>，
+          必须自己推断"这图里有三幅画面、哪几个属同一幅"⇒
+          每次生成的图<b>结构都可能不一样</b>。这正是「三次改版改出来三版完全不一样的」的机制。</td>
+        </tr>
+        <tr>
+          <td class="warn-t">7</td>
+          <td><b>设计稿文档横向堆积</b></td>
+          <td><span class="mono">docs/50-信息中心/</span> 下已有 <b>13 份</b>设计稿
+          （V10 / V10.2 / V11 / V12 / V13 / V14 / V14.1 / V15 / V15.1 / V16 / V17 / V18 / V19），
+          彼此<b>无共享契约文件</b>，迭代靠整文件复制。同一份 CSS 变量在三份稿里各抄一遍。</td>
+        </tr>
+      </table>
+      <div class="note ok" style="margin-top:12px">
+        <b>为什么这七条能解释"不知道该按什么顺序改"：</b>
+        成因 1、2 让层级<b>不可见</b>（要读 z 数字才知道谁盖谁）；
+        成因 3 让下层<b>不可达</b>（43% 的元素点不到）；
+        成因 5 让顺序<b>不可调</b>（想换次序没入口）；
+        成因 6 让结构<b>不可传递</b>（AI 读不到，下次生成又变了）。
+        四条合起来 = 用户拿着鼠标，面对一堆互相覆盖的方块，任何动作都没有确定的下一步。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ B 分层模型 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k p">B</span><h2>解法一：把「画面」变成一等公民</h2><span class="r">数据模型</span></div>
+
+  <div class="sec">
+    <header><span class="no">B1</span><h3>三层语义：画面 → 层 → 元素</h3><span class="tag">规格</span></header>
+    <div class="bd">
+      <div class="note p">
+        <b>核心洞察：</b>堆叠的三种情形在语义上完全不同，不该用同一套 z 数字表达 ——
+        <b>属于不同画面</b>（导图盖住总监页）、<b>属于同画面的不同层</b>（弹窗盖住内容）、
+        <b>属于同层的相邻元素</b>（R4 和 R5 并排，本来就不该相交）。
+        分开表达之后，「重叠」就不再是一个需要靠经验判断的东西，而是可以<b>被校验</b>的。
+      </div>
+      <div class="g3">
+        <div class="box" style="border-color:var(--accbd);background:var(--accbg)">
+          <div class="row"><span class="lv screen">画面 screen</span></div>
+          <div style="margin-top:6px;color:var(--acc2)">
+            一幅可独立查看、独立编辑的完整屏。取值
+            <span class="mono">director</span> /
+            <span class="mono">chat</span> /
+            <span class="mono">mindmap</span>。
+          </div>
+          <div class="tiny" style="margin-top:6px">画面之间是<b>重叠顺序</b>关系（后一个盖前一个），不是平面摆位。</div>
+        </div>
+        <div class="box" style="border-color:var(--purbd);background:var(--purbg)">
+          <div class="row"><span class="lv base">层 layer</span></div>
+          <div style="margin-top:6px;color:var(--pur2)">
+            画面内的分层。取值 <span class="mono">base</span> /
+            <span class="mono">content</span> / <span class="mono">deco</span>。
+          </div>
+          <div class="tiny" style="margin-top:6px"><b>同画面同层内的元素不应相交</b> —— 这是一条可校验的不变量。</div>
+        </div>
+        <div class="box" style="border-color:var(--tealbd);background:var(--tealbg)">
+          <div class="row"><span class="lv tech">元素 element</span></div>
+          <div style="margin-top:6px;color:var(--teal2)">
+            既有概念，不动：几何 + 标签 + <b>七元组逻辑</b>。
+          </div>
+          <div class="tiny" style="margin-top:6px">18 类图元、20 个标准框架元素、版本快照机制<b>全部保持现状</b>。</div>
+        </div>
+      </div>
+
+      <hr class="sep">
+      <div class="ttl">新增字段（全部可缺省 ⇒ 旧数据零迁移）</div>
+      <table>
+        <tr><th style="width:90px">字段</th><th style="width:200px">取值</th><th style="width:110px">缺省</th><th>作用</th></tr>
+        <tr><td class="mono">screen</td><td class="mono">director | chat | mindmap</td><td>由 z 推断</td><td>归属哪幅画面。<b>camera/坐标都不动</b> —— 只标身份。</td></tr>
+        <tr><td class="mono">layer</td><td class="mono">base | content | deco</td><td class="mono">base</td><td>画面内的层，决定修改次序。</td></tr>
+        <tr><td class="mono">hidden</td><td class="mono">true | false</td><td class="mono">false</td><td>隐而不删：不渲染，但仍在结构大纲里（可一键回来）。</td></tr>
+        <tr><td class="mono">locked</td><td class="mono">true | false</td><td class="mono">false</td><td>锁而不动：不参与拖拽 / 缩放 / 删除，<b>防误拖</b>。</td></tr>
+        <tr><td class="mono">note</td><td>字符串</td><td class="mono">""</td><td>一句话说明「这块干什么用」 —— 专给 AI 读，人可省略。</td></tr>
+      </table>
+
+      <div class="note warn" style="margin-top:12px">
+        <b>与冻结契约的关系（必须守住）：</b>
+        <span class="mono">dsh.director.design</span> 是本插件<b>自有键</b>，不在 R5 冻结清单内 ⇒ 可以自由加字段。
+        但 <span class="mono">docId / title / elements / thread / revision</span> <b>五个既有字段一律不动名、不动义</b>；
+        元素数 <b>20</b>、图元数 <b>18</b>、<span class="mono">reorderElement</span> 的 top 语义
+        <b>一个都不许变</b>（否则基线闸门红）。新字段一律给缺省值 ⇒ 已落死基线读得懂新数据，反之亦然。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">B2</span><h3>分层后的不变量（可校验，不再是经验）</h3><span class="tag">闸门口径</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:40px">#</th><th style="width:280px">不变量</th><th>违反时意味着什么</th></tr>
+        <tr><td class="mono">N1</td><td>每个元素的 <span class="mono">screen</span> 必须是已知画面</td><td>数据损坏，或 AI 生成了未注册的画面名 ⇒ <b>拒收并报出是哪一条</b>。</td></tr>
+        <tr><td class="mono">N2</td><td>同画面 + 同层内，任意两元素<b>不相交</b></td><td>真的摆错了（本该并排却叠住）。<b>跨画面相交是允许的</b>，那是重叠语义。</td></tr>
+        <tr><td class="mono">N3</td><td><span class="mono">locked</span> 元素不参与拖拽 / 缩放 / 删除</td><td>误拖。锁不是权限，是<b>防手滑</b>。</td></tr>
+        <tr><td class="mono">N4</td><td><span class="mono">hidden</span> 元素不渲染，但保留在大纲与导出里</td><td>隐藏 ≠ 删除。删了就找不回来，藏起来随时能放。</td></tr>
+        <tr><td class="mono">N5</td><td><span class="mono">z</span> 只在<b>画面内</b>有意义，跨画面比较 z 无效</td><td>画面之间的先后由 <span class="mono">SCREEN_ORDER</span> 决定，不由 z 决定。</td></tr>
+        <tr><td class="mono">N6</td><td>聚焦某画面后，<b>跨画面遮挡数必须为 0</b></td><td>聚焦没生效 ⇒ 用户仍在「点不中」的状态里。</td></tr>
+      </table>
+      <div class="note t" style="margin-top:12px">
+        <b>N2 与 N6 是这套设计真正兑现货的地方。</b>
+        N6 直接消灭 A1 表里那 9 条不可选中；N2 把「摆歪了」从"看起来怪"变成"闸门报红"。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ C 修改顺序 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">C</span><h2>解法二：修改顺序 —— 四步法</h2><span class="r">可操作</span></div>
+
+  <div class="sec">
+    <header><span class="no">C1</span><h3>从「一堆互相盖住的方块」到「一条确定的路径」</h3><span class="tag">现场流程</span></header>
+    <div class="bd">
+      <div class="note">
+        原则只有一句：<b>先把一幅画面改对，再谈另一幅</b>。
+        不要在一屏里同时调底图和浮层 —— 那正是遮挡产生的时刻。
+      </div>
+      <div class="olist">
+        <div class="oitem"><span class="ix">1</span><span class="lv screen">定画面</span><span class="nm">先回答「我要改的是哪一屏」：总监页底图 / 对话弹窗 / 导图态。</span><span class="geo">三选一</span></div>
+        <div class="oitem"><span class="ix">2</span><span class="lv modal">开聚焦</span><span class="nm">打开「只看当前画面」—— 其余两幅整幅隐去。<b>跨画面遮挡立刻归零</b>，原来点不中的 9 个元素全部可选。</span><span class="geo">遮挡 0</span></div>
+        <div class="oitem"><span class="ix">3</span><span class="lv base">自下而上改</span><span class="nm">同一画面内按 <span class="mono">base → content → deco</span> 的顺序改。改上层前，先把下层「锁定」。</span><span class="geo">base→deco</span></div>
+        <div class="oitem"><span class="ix">4</span><span class="lv tech">回全景核对</span><span class="nm">关掉聚焦，回到三画面重叠视图，确认层叠关系仍然是你想要的。</span><span class="geo">全景</span></div>
+      </div>
+      <div class="cap">四步的产出物不是"改完了"，而是"<b>能指着元素 id 说出改了什么</b>"。</div>
+
+      <hr class="sep">
+      <div class="g2">
+        <div>
+          <div class="ttl bad">✗ 现在的改法（无层级信息）</div>
+          <div class="stack">
+            <div class="sl b" style="left:4%;top:12%;width:22%;height:76%">侧栏</div>
+            <div class="sl b" style="left:30%;top:14%;width:64%;height:28%">R2 / R2.5 / R3</div>
+            <div class="sl b" style="left:30%;top:46%;width:22%;height:40%">R4</div>
+            <div class="sl b" style="left:54%;top:46%;width:24%;height:40%">R5</div>
+            <div class="sl c" style="left:78%;top:14%;width:20%;height:76%">对话弹窗</div>
+            <div class="sl m" style="left:6%;top:20%;width:88%;height:66%">导图态画布（盖住上面全部）</div>
+          </div>
+          <div class="cap" style="text-align:left">六块互相覆盖，没有编号、没有分组、没有顺序提示。</div>
+        </div>
+        <div>
+          <div class="ttl good">✓ 分层后（一次只动一幅）</div>
+          <div class="stack">
+            <div class="sl b" style="left:4%;top:12%;width:22%;height:76%">① 侧栏</div>
+            <div class="sl b" style="left:30%;top:14%;width:64%;height:28%">① R2 / R2.5 / R3</div>
+            <div class="sl b" style="left:30%;top:46%;width:22%;height:40%">① R4</div>
+            <div class="sl b" style="left:54%;top:46%;width:24%;height:40%">① R5</div>
+            <div class="sl c" style="left:78%;top:14%;width:20%;height:76%;opacity:.35">② 对话弹窗（未聚焦）</div>
+            <div class="sl m" style="left:6%;top:20%;width:88%;height:66%;opacity:.18">③ 导图态（未聚焦）</div>
+          </div>
+          <div class="cap" style="text-align:left">聚焦「总监页」时，② ③ 整幅淡出且<b>不接收点击</b> ⇒ ① 的每一块都点得中。</div>
+        </div>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>聚焦是临时的视图状态，不是数据操作。</b>
+        切画面不改任何元素的坐标、不改 z、不写持久化 —— 因此它<b>不影响版本快照</b>，
+        也不会把 <span class="mono">revision</span> 推进（避免"只是看了看"却让人以为改了东西）。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ D 结构大纲 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">D</span><h2>解法三：结构大纲 —— 把「点得到」变成「列得清」</h2><span class="r">界面设计</span></div>
+
+  <div class="sec">
+    <header><span class="no">D1</span><h3>左栏改成两段式：大纲在上，逻辑在下</h3><span class="tag">DesignStudio.js</span></header>
+    <div class="bd">
+      <div class="note p">
+        <b>为什么不只是修拖拽、而是补一张清单：</b>
+        画布是<b>二维空间</b>的表达，天然会有遮挡；而"有哪些元素、谁在哪一层"是<b>树形</b>的表达，
+        两者不该挤在同一个入口。补上树以后，「点不中」就从一个功能缺陷降级成一种操作偏好。
+      </div>
+      <div class="frame">
+        <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span style="margin-left:8px">设计图工作室 · 左栏（268px）</span></div>
+        <div class="fbd">
+          <div class="row">
+            <span class="chip on">结构大纲</span>
+            <span class="chip">交互逻辑</span>
+            <span class="sp"></span>
+            <span class="chip">聚焦：全部 ▾</span>
+          </div>
+          <div class="olist" style="margin-top:8px">
+            <div class="oitem" style="background:var(--accbg);border-color:var(--accbd)">
+              <span class="lv screen">画面 director</span><span class="nm" style="color:var(--acc2)">总监页</span>
+              <span class="tiny">13 元素</span><span class="chip on" style="margin:0">聚焦</span>
+            </div>
+            <div class="oitem"><span class="ix">·</span><span class="lv base">base</span><span class="nm">Harness 主窗口</span><span class="geo">0,0 1180×644</span></div>
+            <div class="oitem"><span class="ix">·</span><span class="lv base">base</span><span class="nm">侧栏 · 会话树</span><span class="geo">0,0 230×644</span></div>
+            <div class="oitem lk"><span class="ix">🔒</span><span class="lv base">content</span><span class="nm">R1 顶部栏</span><span class="geo">240,40 930×34</span></div>
+            <div class="oitem lk"><span class="ix">🔒</span><span class="lv base">content</span><span class="nm">R2 项目总览 · 四指标</span><span class="geo">240,80 930×76</span></div>
+            <div class="oitem"><span class="ix">·</span><span class="lv base">content</span><span class="nm">R4 项目导航（三 Tab）</span><span class="geo">240,264 200×240</span></div>
+            <div class="oitem hid"><span class="ix">◌</span><span class="lv base">content</span><span class="nm">R5 总监对话区（已隐藏）</span><span class="geo">447,264 520×240</span></div>
+            <div class="oitem" style="background:var(--sbg3)">
+              <span class="lv screen">画面 chat</span><span class="nm">右侧对话弹窗</span>
+              <span class="tiny">2 元素</span><span class="chip" style="margin:0">聚焦</span>
+            </div>
+            <div class="oitem" style="background:var(--sbg3)">
+              <span class="lv modal">画面 mindmap</span><span class="nm">导图态</span>
+              <span class="tiny">5 元素</span><span class="chip" style="margin:0">聚焦</span>
+            </div>
+          </div>
+          <div class="row" style="margin-top:9px">
+            <span class="tiny">行内动作：</span>
+            <span class="chip t">聚焦</span>
+            <span class="chip">隐藏/显示</span>
+            <span class="chip">锁定/解锁</span>
+            <span class="chip">上移</span>
+            <span class="chip">下移</span>
+          </div>
+        </div>
+      </div>
+      <div class="cap">
+        点行 = 选中（与点画布等价，合成同一个 selected）；
+        行首图标直接显示 <span class="mono">hidden / locked</span> 状态。
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>关键取舍：大纲里的「上移 / 下移」只在本画面内换位置，不跨画面。</b>
+        跨画面搬移必须走「改归属」通道（显式选目标画面），因为它改变的是<b>语义</b>而不是次序 ——
+        这和 tldraw 的「重新指定 parentId」与「改 index」分成两个动作是同一个理由。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">D2</span><h3>状态栏：让「这图有多少东西」一眼可见</h3><span class="tag">防盲改</span></header>
+    <div class="bd">
+      <div class="row">
+        <span class="chip on">总监页 13 / 20</span>
+        <span class="chip">隐藏 1</span>
+        <span class="chip">锁定 2</span>
+        <span class="chip g">同层重叠 0</span>
+        <span class="chip">版本 3</span>
+        <span class="chip x">未保存改动</span>
+      </div>
+      <div class="note warn" style="margin-top:12px">
+        <b>「同层重叠 0」是要实时算的，不是装饰。</b>
+        它是 N2 不变量的现场读数 —— 一旦摆歪就变红并说出是哪两个元素。
+        这样"摆歪了"在动手的当下就能发现，不必等到某天截图时肉眼看出来。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ E AI 可读语言 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">E</span><h2>解法四：让 AI 直接读写的结构语言</h2><span class="r">行式 DSL</span></div>
+
+  <div class="sec">
+    <header><span class="no">E1</span><h3>为什么不用 JSON，改用「行式 DSL」</h3><span class="tag">设计动机</span></header>
+    <div class="bd">
+      <div class="note">
+        用户的工作流是「<b>我提想法 → AI 生成设计图 → 我改</b>」。
+        那么这份图必须有两种读法：<b>人读</b>（在画布上看）与 <b>AI 读</b>（在文本里看）。
+        现在 AI 只能拿到 <span class="mono">elements[]</span> 的 JSON —— 它是一堆<b>没有从属关系的坐标</b>，
+        AI 每次都要重新推断结构，于是每次生成的图都不一样。
+      </div>
+      <table>
+        <tr><th style="width:150px">维度</th><th style="width:290px">JSON（现状）</th><th>行式 DSL（本稿规格）</th></tr>
+        <tr><td><b>结构可见性</b></td><td class="err-t">要靠 x/y 反推谁盖谁</td><td class="ok-t">缩进即从属，行序即层次</td></tr>
+        <tr><td><b>嵌套深度</b></td><td class="err-t">任意深，方言多</td><td class="ok-t">固定两层（画面 → 元素），无嵌套括符</td></tr>
+        <tr><td><b>逐行 diff</b></td><td class="err-t">改一个字段 diff 出十几行</td><td class="ok-t">一行一条 ⇒ diff 精确到"改了哪行的哪列"</td></tr>
+        <tr><td><b>LLM 出错率</b></td><td class="warn-t">逗号 / 括号 / 引号易错</td><td class="ok-t">列式定长，缺列即报错、可精确指出行号</td></tr>
+        <tr><td><b>版本对照</b></td><td class="err-t">要写专门的比较器</td><td class="ok-t">两个版本逐行比即可，人能直接读</td></tr>
+      </table>
+      <div class="note t" style="margin-top:12px">
+        <b>这不是自创路子。</b>Thesys 的 OpenUI Lang 出于同样的动机做了同样的事：
+        官方给出的理由是「JSON 冗长、不可流式、模型约 3% 概率产出非法 JSON」，
+        改成形如 <span class="mono">标识符 = 表达式</span> 的<b>一行一条</b>语言后，
+        非法产出降到 0.3% 以下、token 省 45–67%（见 §F 对照表）。
+        差别只在于：OpenUI 用它描述 UI 组件树，我们用它描述设计图。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">E2</span><h3>语法规格（六条，够用且够严）</h3><span class="tag">DSL v1</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:44px">规则</th><th style="width:280px">内容</th><th>为什么这么定</th></tr>
+        <tr><td class="mono">R1</td><td><b>一行一条语句</b>，禁止 <span class="mono">{ } [ ]</span> 等嵌套结构</td><td>消除方言；解析器可逐行、可流式</td></tr>
+        <tr><td class="mono">R2</td><td>首个非空行必须是 <span class="mono">图 &lt;docId&gt; 「标题」</span></td><td>唯一入口。参照 OpenUI Lang「首行必须赋给 root」，省掉"从哪儿开始读"的歧义</td></tr>
+        <tr><td class="mono">R3</td><td>元素行 = <b>固定 5 列</b>：<span class="mono">层 类型 「标签」 x,y wxh</span>，列间单空格</td><td>定长列 ⇒ 可像 CSV 那样校验；缺列 / 多列都能精确报第几列</td></tr>
+        <tr><td class="mono">R4</td><td>缩进 = 归属。画面下缩 2 空格，元素再缩 2 空格</td><td>缩进即层级，人也能一眼看出从属</td></tr>
+        <tr><td class="mono">R5</td><td>可选标记写在<b>行尾</b>：<span class="mono">| hidden</span> / <span class="mono">| locked</span> / <span class="mono">| note=…</span></td><td>追加不改列序 ⇒ 旧解析器遇到新标记不会错位</td></tr>
+        <tr><td class="mono">R6</td><td><b>幂等</b>：导出 → 导入 → 再导出，三次结果逐字节一致</td><td>AI 改完再交回来不会产生"看着没改但 diff 满天飞"的噪声</td></tr>
+      </table>
+
+      <hr class="sep">
+      <div class="ttl good">完整示例（就是标准框架那张图）</div>
+      <div class="pre"><span class="c">图 dd_xxx_1 「三页签标准框架」</span>
+<span class="k1">画面 director 「总监页」</span> <span class="c">重叠序 1</span>
+  <span class="k2">base</span> window   「Harness 主窗口」           <span class="k3">0,0 1180x644</span>
+  <span class="k2">base</span> sidebar  「侧栏 · 会话树」            <span class="k3">0,0 230x644</span>
+  <span class="k2">content</span> tabring 「页签环 · 总监/对话/轨迹」  <span class="k3">240,6 440x28</span>
+  <span class="k2">content</span> region  「R1 顶部栏」               <span class="k3">240,40 930x34</span>  | locked
+  <span class="k2">content</span> card    「R2 项目总览 · 四指标」      <span class="k3">240,80 930x76</span>  | locked
+  <span class="k2">content</span> region  「R2.5 总监控制台」           <span class="k3">240,162 930x56</span>
+  <span class="k2">content</span> panel   「R4 项目导航（三 Tab）」      <span class="k3">240,264 200x240</span>
+  <span class="k2">content</span> panel   「R5 总监对话区」              <span class="k3">447,264 520x240</span>
+  <span class="k2">content</span> panel   「R7 详情 / 产出物」           <span class="k3">974,264 196x240</span>
+  <span class="k2">content</span> input   「R8 全局输入条」              <span class="k3">240,578 850x30</span>
+  <span class="k2">deco</span> badge   「目标徽章 · 总监/对话」       <span class="k3">240,612 96x20</span>
+<span class="k1">画面 chat 「右侧对话弹窗」</span> <span class="c">重叠序 2</span>
+  <span class="k2">content</span> panel    「右侧「对话」弹窗」          <span class="k3">858,40 312x604</span>
+  <span class="k2">deco</span> overline 「浮动组 · 思维导图 / 总监」    <span class="k3">900,590 170x34</span>
+<span class="k1">画面 mindmap 「导图态」</span> <span class="c">重叠序 3</span>
+  <span class="k2">base</span> canvas 「导图态 · 分支血缘画布」    <span class="k3">60,80 1060x440</span>
+  <span class="k2">content</span> node   「分支节点 · 根」            <span class="k3">180,180 130x44</span>
+  <span class="k2">content</span> node   「分支节点 · 子 A」          <span class="k3">400,140 130x44</span>
+  <span class="k2">content</span> node   「分支节点 · 子 B」          <span class="k3">400,240 130x44</span>
+  <span class="k2">content</span> edge   「血缘连线」                  <span class="k3">310,200 90x2</span>
+
+<span class="c">逻辑 sidebar:</span>
+  <span class="k5">触发</span>   点击会话行 / 文件夹行
+  <span class="k5">行为</span>   切换当前会话；点文件夹则进入该层级总监
+  <span class="k5">状态</span>   未选中 → 选中（高亮当前行）
+  <span class="k5">数据</span>   写 dsh.sessions.current；读 dsh.workspace.view.v5 展开态
+  <span class="k5">退化</span>   会话不存在 → 回落全局总管；侧栏收起时入口移入浮动按钮组
+  <span class="k5">快捷键</span> Ctrl+K 搜索会话
+  <span class="k5">代码</span>   src/bridge/nav-hook.js</div>
+      <div class="cap">
+        注意三处刻意的设计：① 画面行带「重叠序」，跨画面先后在<b>结构里</b>写明，不用 z 数字推；
+        ② 元素行只有 5 列，可选状态全部挂行尾；
+        ③ 逻辑块只在<b>被需要时</b>出现（默认不导出，避免 20 个元素 × 7 字段把文件撑到 3 倍）。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">E3</span><h3>闭环：AI 生成 → 人改 → AI 再读</h3><span class="tag">工作流</span></header>
+    <div class="bd">
+      <div class="flow">
+        <span class="step hi">你说想法</span>
+        <span class="arrow">→</span>
+        <span class="step">AI 产出 DSL 全文</span>
+        <span class="arrow">→</span>
+        <span class="step">解析 + 校验（N1–N5 六条不变量）</span>
+        <span class="arrow">→</span>
+        <span class="step">载入画布</span>
+        <span class="arrow">→</span>
+        <span class="step hi">你在结构大纲里逐层改</span>
+        <span class="arrow">→</span>
+        <span class="step">导出 DSL</span>
+        <span class="arrow">→</span>
+        <span class="step hi">AI 只读被改的那些行</span>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>为什么这个闭环能成立：</b>
+        因为 DSL 是<b>定长列 + 逐行独立</b>的 —— AI 收到回稿后不需要重读全图，
+        只要看 diff 的那几行就知道你在哪一幅画面的哪一层动了什么。
+        这正是现在最缺的能力：现状下 AI 拿到的是整份 JSON，必须每次重新理解全局。
+      </div>
+      <div class="note warn" style="margin-top:12px">
+        <b>边界（不许越）：</b>
+        DSL 是<b>交换格式</b>，不是<b>存储格式</b>。
+        落库仍然走 <span class="mono">dsh.director.design</span> 的既有 JSON 结构 ——
+        加一层交换格式是为了让 AI 好读，不是为了动持久化契约。
+        导入失败时<b>必须逐行报错并且一个字都不改图</b>（不做"部分应用"）。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ F 开源对照 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k g">F</span><h2>参考思路与开源方案对照</h2><span class="r">可溯源</span></div>
+
+  <div class="sec">
+    <header><span class="no">F1</span><h3>四份现成方案，各借一点</h3><span class="tag">2026-09-14 核实</span></header>
+    <div class="bd">
+      <div class="note">
+        下面每条的机制描述均来自官方规范页或官方文档（URL 见 F2），
+        不是转述二手的"据说"。<b>借的是机制，不是代码</b> ——
+        本项目不引入任何外部依赖，只沿用其数据建模思路。
+      </div>
+      <table>
+        <tr><th style="width:130px">方案</th><th style="width:270px">它解决的核心问题</th><th style="width:300px">可借的点</th><th>本项目落法</th></tr>
+        <tr>
+          <td><b>JSON Canvas</b><br><span class="tiny">Obsidian · MIT</span></td>
+          <td>无限画布的<b>开放交换格式</b>：顶层只有 <span class="mono">nodes</span> 与 <span class="mono">edges</span> 两个数组，
+          节点 4 类（text / file / link / <b>group</b>）；
+          <b>z 序 = 数组顺序</b>（第一个在最下、最后在最上）。</td>
+          <td>① <b>group 作为显式容器节点</b>（而不是靠坐标包含关系反推父子）；
+          ② 用「顺序即层次」取代"显式 z 数字"；
+          ③ 只有两个顶层数组这种<b>极简骨架</b>。</td>
+          <td>「画面」= 一种更粗的 group，但<b>不是可选的装饰节点</b>，而是必填归属字段
+          （因为我们不只画图，还要<b>编辑</b>，必须能寻址）。</td>
+        </tr>
+        <tr>
+          <td><b>Excalidraw</b><br><span class="tiny">开源白板 · 官方 scene schema</span></td>
+          <td>元素级 schema：<span class="mono">groupIds</span>（最深→最浅的组路径）、
+          <span class="mono">frameId</span>（frame 成员身份，<b>只标身份、不改子元素坐标</b>）、
+          <span class="mono">index</span>（<b>分数索引</b>排 z 序）、
+          <span class="mono">locked</span>、<span class="mono">isDeleted</span> 软删。</td>
+          <td>① <b>「成员身份」与「坐标」正交</b> —— 认领归属不该顺手挪位置；
+          ② <b>分数索引</b>替代裸整数：在两元素之间插入不用全表重排；
+          ③ <span class="mono">locked</span> / 软删的语义。</td>
+          <td><span class="mono">screen</span> 字段照 ① 设计 —— 只标身份，<b>x/y 一个不动</b>；
+          层内顺序改用时序数组下标（比分数索引更简单，且我们的元素数上限仅 20 量级）。</td>
+        </tr>
+        <tr>
+          <td><b>tldraw</b><br><span class="tiny">开源 SDK · 官方文档</span></td>
+          <td>每个 shape 有 <span class="mono">parentId</span>（指向 page 或父 shape）⇒ <b>显式父子树</b>；
+          <b>Pages</b>：一个文档内有多个独立子文档，每页各自持有相机与选中态，
+          切页保留离开时的状态；默认上限 40 页。</td>
+          <td>① <b>Pages 模型</b>：多幅画面 = 多页，而不是同一张画布上挪 z；
+          ② <span class="mono">getSortedChildIdsForParent</span> 这类"按父取子、已排序"的取数方式；
+          ③ <span class="mono">isLocked</span> / <span class="mono">isHidden</span> 成对出现。</td>
+          <td><b>这是与本稿最贴近的一份。</b>我们把 Pages 改名为「画面」，
+          但不引入相机分页（本项目画布只有一幅固定尺寸 1180×644，无缩放平移需求）。</td>
+        </tr>
+        <tr>
+          <td><b>OpenUI Lang</b><br><span class="tiny">Thesys · MIT</span></td>
+          <td>面向 LLM 输出的<b>行式 DSL</b>：一行一条
+          <span class="mono">标识符 = 表达式</span>，首行必须是 <span class="mono">root</span>，
+          参数按 schema 键序位置化；为流式渲染允许前向引用。
+          官方动机：JSON 冗长、不可流式、模型约 3% 概率产出非法 JSON；
+          改成类代码语法后非法率降至 0.3% 以下、token 省 45–67%。</td>
+          <td>① <b>面向模型输出设计的语法</b>（不是为人手写设计的）；
+          ② 固定入口标识符，消除"从哪儿开始读"的歧义；
+          ③ <b>由组件库自动生成系统提示</b> —— 组件定义即提示词来源。</td>
+          <td>DSL 规格（§E2）照 ① ② 设计；
+          第 ③ 条我们天然具备条件：<span class="mono">ELEMENT_KINDS</span> 已经是
+          <b>18 类带 logic 骨架的组件库</b>，可直接生成"允许用哪些类型"的说明，
+          从而约束 AI 不臆造不存在的图元。</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">F2</span><h3>出处（便于自行复核）</h3><span class="tag">禁止二手转述</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:150px">方案</th><th>参考位置</th><th style="width:110px">性质</th></tr>
+        <tr><td>JSON Canvas</td><td class="mono">jsoncanvas.org/spec/1.0.html · github.com/obsidianmd/jsoncanvas</td><td>开放规范 · MIT</td></tr>
+        <tr><td>Excalidraw</td><td class="mono">plus.excalidraw.com/docs/api/scene-content-schema</td><td>官方文档</td></tr>
+        <tr><td>tldraw</td><td class="mono">tldraw.dev/sdk-features/parenting · /sdk-features/pages</td><td>官方文档</td></tr>
+        <tr><td>OpenUI Lang</td><td class="mono">openui.com/docs/openui-lang/specification-v01 · github.com/thesysdev/openui</td><td>开放规范 · MIT</td></tr>
+      </table>
+      <div class="note warn" style="margin-top:12px">
+        核实时间 <b>2026-09-14</b>。以上机制描述取自上述页面的当期内容；
+        开源规范会演进，<b>引用前请重新核对该页</b>，不要拿本稿当准。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">F3</span><h3>不采用的方案，以及为什么</h3><span class="tag">反面对照</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:210px">候选思路</th><th>不采用的理由</th></tr>
+        <tr><td><b>只加"层级调序"按钮，不动模型</b></td>
+          <td>治标。加「上移一层 / 下移一层」后，用户<b>仍然看不到有几个画面</b> ——
+          层级不可见这个根因一个都没碰，只是让 z 数字操作更方便。而且 9 个不可选中依旧不可选中。</td></tr>
+        <tr><td><b>靠"点击时遍历穿透"选中下层</b>（连点几次循环到下面一层）</td>
+          <td>把不可见性换成不可预测性。<b>点下去命中谁取决于之前的点击历史</b>，
+          同一位置点两次结果不同 —— 比点不中更难排查，且无法写确定性断言。</td></tr>
+        <tr><td><b>把默认 z 间距拉开（0/10/20/…）</b></td>
+          <td>只解决"同 z 碰撞"，不解决"画面没有名字"。
+          而且间距一旦写死，下次加画面又要重排数字 —— 是把约定从脑子搬进常量，没有消除约定。</td></tr>
+        <tr><td><b>引入完整开源画布内核</b>（如直接嵌 tldraw / Excalidraw）</td>
+          <td>与本项目纪律冲突：插件产物是<b>单文件 bundle</b>、不装 node_modules、
+          <span class="mono">react</span> 是平台冻结模块（ADR-001）。
+          引入画布内核会改变构建形态与全部既有闸门基线。借机制、不借依赖。</td></tr>
+        <tr><td><b>把设计图整体换成纯文本编辑</b></td>
+          <td>丢掉了这个功能存在的理由 ——
+          <span class="mono">design-schema.js</span> 的原文注释写得很清楚：痛点是<b>沟通</b>，
+          要「指着同一个 id 说话」。纯文本没有空间感，改不了"这块往右挪一点"。</td></tr>
+      </table>
+      <div class="note p" style="margin-top:12px">
+        <b>共同原则：</b>凡是"让用户更容易容忍不可见"的方案都不采用，
+        只采用"<b>让结构本身可见</b>"的方案。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ G 施工映射 ══════════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">G</span><h2>施工映射表（设计稿 → 代码 → 验收）</h2><span class="r">施工单</span></div>
+
+  <div class="sec">
+    <header><span class="no">G1</span><h3>逐条落点</h3><span class="tag">8 条</span></header>
+    <div class="bd">
+      <table>
+        <tr><th style="width:44px">板块</th><th style="width:230px">落点文件</th><th style="width:330px">改什么</th><th>验收判据</th></tr>
+        <tr><td>A1</td><td class="mono">scripts/_probe-overlap.mjs</td><td>新建探针（本稿数据的出处）</td><td>输出 9/20 不可选中 · 可复跑</td></tr>
+        <tr><td>B1</td><td class="mono">src/store/design-schema.js</td>
+          <td>加 <span class="mono">SCREENS</span> / <span class="mono">LAYERS</span> /
+          <span class="mono">SCREEN_ORDER</span> / <span class="mono">screenOf()</span>；
+          <span class="mono">createElement</span> 写 5 个新字段；<span class="mono">FRAME_SEEDS</span> 显式标注归属</td>
+          <td>元素数仍 20 · 图元仍 18 · 旧数据可读（无字段时按 z 推断）</td></tr>
+        <tr><td>B2</td><td class="mono">src/store/design.js</td>
+          <td>加 <span class="mono">outlineOf()</span> / <span class="mono">screenStats()</span> /
+          <span class="mono">layerOverlaps()</span> / <span class="mono">setElementFlags()</span> /
+          <span class="mono">reorderInScreen()</span> / <span class="mono">moveToScreen()</span></td>
+          <td>纯函数、入参 doc 不变；<span class="mono">reorderElement</span> 语义不动</td></tr>
+        <tr><td>C1</td><td class="mono">src/components/DesignStudio.js</td>
+          <td>加「聚焦画面」开关（视图态，不落库、不进版本）</td>
+          <td>聚焦后跨画面遮挡 = 0；<span class="mono">revision</span> 不增</td></tr>
+        <tr><td>D1</td><td class="mono">src/components/DesignStudio.js</td>
+          <td>左栏两段式：上「结构大纲」树（画面 → 元素）+ 行内动作；下沿用既有 D3 逻辑面板</td>
+          <td>20/20 元素可从大纲选中 · 既有 <span class="mono">ds-*</span> 锚点一个不丢</td></tr>
+        <tr><td>D2</td><td class="mono">src/components/DesignStudio.js</td>
+          <td>状态栏加「本画面 n/m · 隐藏 · 锁定 · 同层重叠」</td>
+          <td>同层重叠计数与 <span class="mono">layerOverlaps()</span> 同源</td></tr>
+        <tr><td>E2</td><td class="mono">src/store/design.js</td>
+          <td>加 <span class="mono">toDesignDSL()</span> / <span class="mono">parseDesignDSL()</span>
+          （R1–R6 六条规则，导出幂等，导入失败零改动）</td>
+          <td>导出→导入→再导出 逐字节一致；坏样本按行报错且图不变</td></tr>
+        <tr><td>E3</td><td class="mono">scripts/test-design-layers.mjs</td>
+          <td>新建闸门（N1–N6 六条不变量 + DSL 幂等 + 大纲覆盖率）</td>
+          <td>植入缺陷→红，还原→绿（正负对照校准）</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">G2</span><h3>不许碰的（冻结契约）</h3><span class="tag">红线</span></header>
+    <div class="bd">
+      <div class="row">
+        <span class="chip x">dsh.director.design（键名不动）</span>
+        <span class="chip x">docId / title / elements / thread / revision（字段不动名不动义）</span>
+        <span class="chip x">元素数 20</span>
+        <span class="chip x">图元数 18</span>
+        <span class="chip x">reorderElement 的 top 语义</span>
+        <span class="chip x">全部 ds-* 测试锚点</span>
+        <span class="chip x">版本快照 VERSION_LIMIT = 30</span>
+      </div>
+      <div class="note e" style="margin-top:12px">
+        <b>新增字段可以，改既有字段不行。</b>
+        判据是双向的：<b>已落死基线读得懂本版写的数据，本版也读得懂基线写的数据</b> ——
+        任何一侧读不懂就是破坏契约，必须在 <span class="mono">normalizeDoc</span> /
+        <span class="mono">normalizeElement</span> 里补迁移，而不是要求用户重画。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">G3</span><h3>本稿自身遵循的规矩</h3><span class="tag">自指</span></header>
+    <div class="bd">
+      <div class="note ok">
+        本稿是"设计图规范"的设计稿，因此它自己也走一遍该走的路：
+        经 <span class="mono">scripts/verify-design-html.mjs</span> 五项卫生闸门
+        （LF / 零反引号 / 字号 ≥ 10.5px / 标签平衡 / class 全部有定义）；
+        结论全部带取证来源；不引入外部依赖；不改任何冻结契约。
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

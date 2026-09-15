@@ -21,7 +21,7 @@
  *      → C 段：真实点击 💬 ⇒ 面板出现；并用**文档序 + 真实几何**双判据断言
  *        `nd-now` 排在流转条目 / 输入条之前（不是"存在"就行，也不是比"第一个直接子节点"）。
  *  「保证同一个消息能在上面几个维度进行流转」/「点击左侧切进去就是和当前对话有关的流转信息」
- *      → D 段：**走真实界面路径**（往原生输入框写标记 → 真实点「📥 登记为流转」）⇒
+ *      → D 段：**走真实界面路径**（往原生输入框写标记 → 真实点注入条「登记流转」）⇒
  *        R5 里必须出现那段标记；再 `move` 到导图维 ⇒ R5 徽标两个都亮；
  *        导图右侧面板里也要读得到同一条；最后**真实点左侧另一个会话** ⇒ MARK 从 R5 消失。
  *  「总监tap页面的背景采用原软件的背景 保持风格统一」
@@ -162,6 +162,35 @@ async function hitAt(sel, x, y) {
  *    ⇒ 所有指针/键盘派发统一记账：超时记一条、继续跑；收尾用 E2 断言"零超时"，
  *      并在超时非零时把整轮判为 INVALID（渲染进程无响应 ⇒ 结果不可信，不是产品失败）。 */
 const cdpTimeouts = [];
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  闸门自身异常兜底（2026-09-14 补，与 `verify-mindmap` / `verify-v20` **同一套约定**）
+ *
+ *  为什么必须补（本轮实测踩到，且**是本项目登记过的同类事故的第 2 次**）：
+ *    渲染进程主线程被占住时，`ev()` 不再抛错，而是**返回 `{__err: "CDP_TIMEOUT …"}`**。
+ *    调用方若把它当数组用，就会在**深层**炸出 `TypeError: arr.filter is not a function`，
+ *    而顶层没有兜底 ⇒ 进程只留一个堆栈，**后面所有断言一条都没跑，也没人知道**。
+ *    现场：本轮 D5 之后直接崩在 L1143，其后 D6/D7 + 收尾段全部丢失。
+ *    台账（二）真因 #1 记的就是同类（`null` 解引用把 600 行处打哑，其后 100+ 条断言丢失）。
+ *
+ *  ⇒ 兜住任何未捕获异常 / 未处理拒绝：把**已经跑出来的**结果 + "其后未跑"明确打出来，
+ *     并以 **exit 2（INVALID）** 收尾。「脚本自己死了 ≠ 产品不合格」（纪律 17）。
+ *     `cdpTimeouts` 的非零检查保不住这种情况 —— 崩溃时根本走不到收尾段。 */
+let reachedFlowFinal = false;
+const dieReport = (why) => {
+	console.error("\n───────────────────────────────────────────────");
+	console.error(" ❌ INVALID：脚本异常终止 —— " + why);
+	console.error(` 已跑出：通过 ${pass} / 失败 ${fail} / 跳过 ${skip}（合计 ${pass + fail + skip}）`);
+	console.error(` 是否已到达收尾段：${reachedFlowFinal}`);
+	console.error(` CDP 派发超时累计：${cdpTimeouts.length} 次（非 0 高度提示"渲染进程被占住"是根因）`);
+	if (failures.length) console.error(" 期间失败项：\n   - " + failures.join("\n   - "));
+	console.error(" 其后段落**一条都没跑** ⇒ 不得据此判定产品好坏。");
+	console.error(" 处置：重启 Harness 重跑（本工具会话下须**同一条命令内**先启动再测）。");
+	console.error("───────────────────────────────────────────────");
+	process.exit(2);
+};
+process.on("uncaughtException", (e) => dieReport("uncaughtException：" + ((e && e.stack) || e)));
+process.on("unhandledRejection", (e) => dieReport("unhandledRejection：" + ((e && (e.stack || e.message)) || e)));
 
 async function mouse(type, x, y, buttons) {
 	// fire-and-forget：Input 事件立即送达、响应却延迟约 5s（理由见 emit 定义），绝不 await 响应。
@@ -505,14 +534,32 @@ if (hasPage) {
 if (!hasPage) {
 	console.log("\n⚠️ 总监页未挂载，后续 A/B/D 段跳过（这不是通过，是阻塞）。");
 }
-/* 🔴 负向断言必须限定子树：全页搜 input/textarea 会把**原生 composer 本身**当成"自建输入框" */
-const r8Inputs = await ev("(()=>{const r=document.querySelector('[data-testid=\"dp-r8\"]');if(!r)return -1;"
-	+ "return r.querySelectorAll('input,textarea,select').length;})()");
-check("A3", "🔴 总监页 R8 焦点条内**零** input/textarea（自建输入框已删）", r8Inputs === 0, "R8 内表单元素数 = " + r8Inputs);
-const r8Keys = ["dp-route-director", "dp-route-chat", "dp-focus-native", "dp-register-flow", "dp-send"];
+/* ══ 第 6 批 · 需求 9：用户明确要求删掉**整条 R8** ══════════════════════════════
+ * 原话：「[图8]… 都完成之后去掉这一行」，澄清为
+ *   「目标 总监 ● 对话 定位输入框 登记流转 模型 qwen2:7b ▾上下文 0% 会话 …6dcda14e 这一行」。
+ * ⇒ 原 A3（"R8 里零 input"）/ A4（"R8 五键齐备"）/ A6（"点 ⌨ 聚焦原生对话框"）
+ *   三条断言的**对象已不存在**。按纪律 18（跳过比红更危险、禁用不可证伪收尾）：
+ *   不是"删了断言就算"，而是**双向改造**：
+ *     ① 负向：R8 与它的六个旧锚点**确实全部消失**（防"只删了外壳、半截还在"）；
+ *     ② 正向：被删能力**确实搬到了宿主底部注入条**（防"顺手把能力一起砍了"）。
+ *   `⌨ 聚焦原生对话框` 这个键**没有搬迁**（用户要求连整行一起去掉）
+ *   ⇒ 原 A6 整条**删除并在此留痕**，不再以任何形式断言它；A5（原生 composer 仍在且可见）保留，
+ *     它才是「用原本的对话框」这一诉求的物理前提。 */
+const r8Gone = await count('[data-testid="dp-r8"]');
+check("A3", "🔴 需求 9：整条 R8 已从 DOM 移除", r8Gone === 0, "dp-r8 命中 = " + r8Gone);
+const r8Keys = ["dp-route-director", "dp-route-chat", "dp-focus-native", "dp-register-flow", "dp-send", "dp-model"];
 const keyCounts = {};
 for (const k of r8Keys) keyCounts[k] = await count('[data-testid="' + k + '"]');
-check("A4", "R8 焦点条五键齐备", r8Keys.every((k) => keyCounts[k] === 1), JSON.stringify(keyCounts));
+check("A4", "R8 内部六个旧锚点**全部**消失（不是只删了外壳）", r8Keys.every((k) => keyCounts[k] === 0), JSON.stringify(keyCounts));
+const barKeys = ["dp-host-scope-toggle", "dp-host-deliver", "dp-host-register"];
+const barCounts = {};
+for (const k of barKeys) barCounts[k] = await count('[data-testid="' + k + '"]');
+check("A4b", "🔴 被删 R8 的能力**确已搬到宿主底部注入条**（总监/对话切换 · 执行 · 登记流转）",
+	barKeys.every((k) => barCounts[k] === 1), JSON.stringify(barCounts));
+const barInputs = await ev("(()=>{const b=document.getElementById('dsh-host-scope-bar');if(!b)return -1;"
+	+ "return b.querySelectorAll('input,textarea,select').length;})()");
+check("A4c", "🔴 注入条里**零** input/textarea（我们不自建输入框，沿用宿主原生 composer）",
+	barInputs === 0, "注入条内表单元素数 = " + barInputs);
 
 /* 原生 composer：必须存在、可见、且不是零尺寸 */
 const composer = await ev("(()=>{const L=Array.from(document.querySelectorAll('textarea')).filter(e=>{const r=e.getBoundingClientRect();return r.width>60&&r.height>8;});"
@@ -521,15 +568,10 @@ const composer = await ev("(()=>{const L=Array.from(document.querySelectorAll('t
 check("A5", "🔴 总监 tab 下**原生对话框仍在且可见**（这是「用原本的对话框」的物理前提）",
 	Boolean(composer) && composer.w > 60, composer ? "placeholder=" + J(composer.ph) + " 矩形 " + composer.w + "×" + composer.h : "未找到可见 textarea");
 
-/* 真实点击「聚焦原生对话框」→ activeElement 必须真的落过去 */
-if (composer) {
-	await click('[data-testid="dp-focus-native"]'); await WAIT(450);
-	const focused = await ev("(()=>{const a=document.activeElement;if(!a)return null;return {tag:a.tagName,ph:a.getAttribute&&a.getAttribute('placeholder')};})()");
-	check("A6", "🔴 点「⌨ 聚焦原生对话框」⇒ 焦点真的落到原生 composer（点到哪里往哪里输入）",
-		Boolean(focused) && focused.tag === "TEXTAREA", focused ? focused.tag + " / " + J(focused.ph) : "activeElement 为空");
-} else {
-	check("A6", "🔴 点「⌨ 聚焦原生对话框」⇒ 焦点落到原生 composer", "SKIP", "原生 composer 未找到");
-}
+/* ⚠️ 原 A6「点 ⌨ 聚焦原生对话框 ⇒ 焦点落到原生 composer」**已随需求 9 删除该键而移除**。
+ *   留痕：该键属于被整行删掉的 R8，没有搬迁到任何位置 ⇒ 断言的**对象不存在**。
+ *   不改成"改点别处"（那会变成另一件事被记在这个标题下，属口径污染）。 */
+console.log("  ⓘ A6 已随需求 9 移除（『⌨ 聚焦原生对话框』键连同 R8 整行一起删除，无搬迁目标）");
 
 /* 空内容不登记（正负对照）
  * 🔴 上一版为什么红：这个"负向"对照**没有建立前提**。原生输入框里可能留着上一轮跑
@@ -548,27 +590,46 @@ const n0 = await flowLen();
  *   不然「点了没反应」也会让这条负向断言变绿 —— 死按钮与"正确地拒绝空输入"
  *   在结果上无法区分（A7 原本就是这个弱点：它删掉 disabled 前后都是绿的）。
  *   这里不重复产品判据，只记事实，供人分辨。 */
-const aClickable = await ev("(()=>{const b=document.querySelector('[data-testid=dp-register-flow]');"
+const aClickable = await ev("(()=>{const b=document.querySelector('[data-testid=dp-host-register]');"
 	+ "if(!b)return {there:false};const r=b.getBoundingClientRect();"
 	+ "return {there:true,disabled:Boolean(b.disabled),aria:b.getAttribute('aria-disabled'),"
 	+ " w:Math.round(r.width),h:Math.round(r.height)};})()");
-const aClick = await click('[data-testid="dp-register-flow"]'); await WAIT(350);
+const aClick = await click('[data-testid="dp-host-register"]'); await WAIT(350);
 const n1 = await flowLen();
-check("A7", "【负】原生框**确为空**时点「📥 登记为流转」⇒ 不产生空流转（含前提自证）",
+check("A7", "【负】原生框**确为空**时点注入条「登记流转」⇒ 不产生空流转（含前提自证）",
 	draftNow === "" && n1 === n0,
 	"前置清空后读到 " + J(draftNow) + "（原草稿 " + (userDraft ? userDraft.length + " 字" : "空") + "）"
 	+ " ｜ 按钮可点自证=" + J(aClickable) + " ｜ 命中=" + (aClick && aClick.ok ? (aClick.occluded ? "被遮" : "命中") : "失败")
 	+ " ｜ 前 " + n0 + " → 后 " + n1);
 if (userDraft) await ev("(()=>{try{window.__dshChatBridge.setComposerText(" + J(userDraft) + ");}catch(e){}return 1;})()");
 
+/* ══ 「⓪ 先摆平起点」—— 四处 ⚙ 共用一个**单例 + 开合型**面板 ═══════════════════════
+ * 🔴 真机实测（2026-09-14）：同一份代码跑两次，`verify-flow` 交替出 **74/74** 与 **73/74**；
+ *    红的那次**不是崩溃、也不是产品缺陷**，读数就一行：`scope=null`（同一条里的 bgImage 完全正常）。
+ *    根因：`#dsh-personalize-panel` 是**开合控件**（点一下 = 切换），四处 ⚙ 共用同一个 id。
+ *    真机 e2e **不重载页面** ⇒ 状态**跨运行保留**：上一轮（或本轮上一段）把面板留在**打开态**
+ *    ⇒ 本段这一下点击是「**关**」不是「开」⇒ `querySelector('#dsh-personalize-panel')` 为 null
+ *    ⇒ `data-scope` 读成 null。这是本仓第 N 次踩同一条：**偶发红先查"起点是否等价"，别先查产品**。
+ * ⇒ 对策（三段式，缺一不可）：
+ *    ① 点之前**归零**：已在场就先 `pp-close` 关掉；
+ *    ② **回读确认"确实没了"**（`=== false` 才算归零成功，不能只看"我点过了"）；
+ *    ③ 点之后再**证前提**（面板真的在场）—— 前提不成立时后续断言是**无从判定**，不是"产品坏了"。
+ *    （与 C 段「聚焦态先归零」、C12「💬 是开关、先归零」、G3b 后「页签切回」是同一条纪律。） */
+const panelId = "dsh-personalize-panel";
+const panelShut = async () => {
+	if (await exists("#" + panelId)) { await click('[data-testid="pp-close"]'); await WAIT(250); }
+	return !(await exists("#" + panelId));
+};
+
 section("【B】右上角个性化（用户：「都在右上角加自定义个性化设定」）");
 const pBtn = await rectOf('[data-testid="dp-personalize"]');
 check("B1", "总监页右上角有 ⚙ 设置按钮且**未被原生窗口控件遮挡**", Boolean(pBtn) && !pBtn.zero, pBtn && !pBtn.zero ? "矩形 " + pBtn.w + "×" + pBtn.h + " @ " + pBtn.x : JSON.stringify(pBtn));
+const bShut = await panelShut();
 const opened = pBtn && !pBtn.zero ? await click('[data-testid="dp-personalize"]') : { ok: false };
 await WAIT(350);
-const panelId = "dsh-personalize-panel";
 const panelOpen = await exists("#" + panelId);
-check("B2", "真实点击后个性化面板出现（#dsh-personalize-panel）", panelOpen, panelOpen ? "已出现" : "未出现");
+check("B2", "真实点击后个性化面板出现（#dsh-personalize-panel）—— 含「起点已归零」前置（开合控件：起点不复位则这一下是「关」）",
+	bShut && panelOpen, (bShut ? "" : "起点未归零（pp-close 关不掉）/ ") + (panelOpen ? "已出现" : "未出现"));
 check("B3", "面板 data-scope 标出这是哪一处", (await attr("#" + panelId, "data-scope")) === "总监页", await attr("#" + panelId, "data-scope"));
 const swat = await count('[data-testid^="pp-accent-"]');
 const tex = await count('[data-testid^="pp-texture-"]');
@@ -834,13 +895,15 @@ if (mmOpen) {
 	const mmAlive = await exists('[data-testid="mm-root"]');
 	check("C16", "🔴 Esc 只关右侧面板，导图仍在（逐层退）", ndGone && mmAlive, "面板 " + (ndGone ? "已关" : "仍在") + " / 导图 " + (mmAlive ? "在" : "没了"));
 
-	/* ⚙ 在导图右上角 */
+	/* ⚙ 在导图右上角 —— 起点先归零（见 §「⓪ 先摆平起点」：面板是开合控件，留着打开态会让这一下变成"关"） */
 	const mmP = await rectOf('[data-testid="mm-personalize"]');
+	const c17Shut = await panelShut();
 	const mmOpen2 = mmP && !mmP.zero ? await click('[data-testid="mm-personalize"]') : { ok: false };
 	await WAIT(350);
 	const mmScope = await attr("#" + panelId, "data-scope");
 	check("C17", "🔴 导图右上角也有 ⚙，点开是**同一个面板**，scope=分支导图（四处同一份设定）",
-		Boolean(mmP) && !mmP.zero && mmOpen2.ok && mmScope === "分支导图", "scope=" + mmScope);
+		c17Shut && Boolean(mmP) && !mmP.zero && mmOpen2.ok && mmScope === "分支导图",
+		"起点已归零=" + c17Shut + " / scope=" + mmScope);
 	await click('[data-testid="pp-close"]'); await WAIT(250);
 
 	await click('[data-testid="mm-close"]'); await WAIT(400);
@@ -860,47 +923,99 @@ check("D1", "真实点击「🖌 打开设计图」⇒ 工作室出现", dsOpen,
 if (dsOpen) {
 	const dsP = await rectOf('[data-testid="ds-personalize"]');
 	check("D2", "设计图右上角有 ⚙ 设置（同一组件、同一份设定）", Boolean(dsP) && !dsP.zero, dsP ? "矩形 " + dsP.w + "×" + dsP.h + " @ " + dsP.x : JSON.stringify(dsP));
-	const dsTex = await ev("Boolean(document.querySelector('#dsh-design-studio.dp-textured, #dsh-design-studio .dp-textured, #dsh-design-studio'))");
 	const dsCls = await ev("(()=>{const e=document.getElementById('dsh-design-studio');return e?(e.className||''):null;})()");
 	check("D3", "🔴 设计图根节点带 dp-textured 质感类（否则面板里改纹理它不会变）", /dp-textured/.test(String(dsCls)), "class=" + J(dsCls));
+
+	/* ⚙ 起点先归零（见 §「⓪ 先摆平起点」） */
+	const dShut = await panelShut();
 	await click('[data-testid="ds-personalize"]'); await WAIT(350);
-	const dsScope = await attr("#" + panelId, "data-scope");
-	const dsBi = await ev("(()=>{const e=document.getElementById('dsh-design-studio');if(!e)return null;return getComputedStyle(e).backgroundImage;})()");
-	check("D4", "🔴 设计图的面板 scope=设计图，且改纹理后根节点的 computed background-image 会变（质感四题之一落地）",
-		dsScope === "设计图" && Boolean(dsBi) && dsBi !== "none", "scope=" + dsScope + " / bgImage=" + String(dsBi).slice(0, 46));
+	const dPanelOn = await exists("#" + panelId);
+	check("D4p", "🔴 **前提**：⚙ 点开后个性化面板**真的在场**（起点已归零 ⇒ 这一下必是「开」；前提不成立时其后两条是**无从判定**，不是产品坏了）",
+		dShut && dPanelOn, "起点已归零=" + dShut + " / 点后面板=" + (dPanelOn ? "在场" : "缺席"));
+	const dsScope = dPanelOn ? await attr("#" + panelId, "data-scope") : null;
+	check("D4a", "🔴 设计图的 ⚙ 打开的是**同一个面板**（四处同一份设定），scope=设计图", dsScope === "设计图", "scope=" + dsScope);
+
+	/* 🔴 原 `D4` 是**假断言**（2026-09-14 拆开）：描述写「改纹理后 background-image **会变**」，
+	 *    代码却只查 `bgImage !== "none"` —— 既没改纹理、也没做前后对账，测的其实是**入场状态**：
+	 *    上轮留下什么就判什么 ⇒ 与「断言对象必须与结论同源」直接冲突，且必然随状态飘。
+	 *    「存在性断言」冒充「变化断言」是这个仓反复出现的形态 ⇒ 这里真做：
+	 *    读现值 → 切到**与现值不同**的档（不同才谈得上"变"）→ 前后对账 → **换回原档并断言逐字符复原**。
+	 *    （负向校准：把 `other` 写成与 `before` 相同 ⇒ `changed` 必为 false ⇒ 断言转红。） */
+	const dsTexChg = await ev("(function(){"
+		+ "const e=document.getElementById('dsh-design-studio');if(!e)return null;"
+		+ "const S=window.__dshPersonalize&&window.__dshPersonalize.store;if(!S)return {err:'no-store'};"
+		+ "const before=S.getState().texture;"
+		+ "const other=(before==='grid')?'dots':'grid';"
+		+ "const img0=getComputedStyle(e).backgroundImage;"
+		+ "S.set('texture',other);"
+		+ "const img1=getComputedStyle(e).backgroundImage;"
+		+ "S.set('texture',before);"
+		+ "const img2=getComputedStyle(e).backgroundImage;"
+		+ "return {before:before,after:other,img0:img0.slice(0,54),img1:img1.slice(0,54),"
+		+ "changed:img0!==img1,restored:img0===img2};})()");
+	check("D4b", "🔴 改纹理 ⇒ 设计图根节点 background-image **真的变了**（前后对账），且换回原档后**逐字符复原**（还原断言 `after===before`）",
+		Boolean(dsTexChg) && dsTexChg.err !== "no-store" && dsTexChg.changed === true && dsTexChg.restored === true,
+		dsTexChg ? J(dsTexChg) : "探针失败");
 	await click('[data-testid="pp-close"]'); await WAIT(250);
 	await click('[data-testid="ds-close"]'); await WAIT(400);
-	void dsTex;
 } else {
+	/* 🔴 「工作室没开」时**必须逐条 SKIP**，不许让 D3/D4* 静默消失 ——
+	 *    静默消失会让**断言总数**随状态变化（74 / 72 两种分母），"总数对账"就失去意义。 */
 	check("D2", "设计图右上角有 ⚙ 设置", "SKIP", "工作室未打开");
+	check("D3", "🔴 设计图根节点带 dp-textured 质感类", "SKIP", "工作室未打开");
+	check("D4p", "🔴 前提：⚙ 点开后个性化面板在场", "SKIP", "工作室未打开");
+	check("D4a", "🔴 设计图 ⚙ 打开的是同一面板，scope=设计图", "SKIP", "工作室未打开");
+	check("D4b", "🔴 改纹理 ⇒ background-image 真的变了且可还原", "SKIP", "工作室未打开");
 }
 
-/* ══ D5p 🔴 布局不漂：出一句提示前后，R8 各按钮的 y 一个都不许变 ═══════════════
+/* ══ D5p 🔴 布局不漂：出一句提示前后，**注入条各按钮**的 y 一个都不许变 ═════════
  * 这是用户原话「右下角，发送到该对话，交给总监，两个按钮点击不好用」的**物理根因**：
- *   提示行原先写成"有内容才渲染"，而它排在 R8 **之后**、本页是**底部锚定**列布局
- *   ⇒ 一句提示弹出来，整条 R8 被顶上去 **23px**（实测 btnY 628 → 605，消失又落回）。
- *   后果不是难看，是**点不中**：手指从「⌨ 定位输入框」移向「📥 登记流转」时，
- *   那颗按钮已经不在原来的位置了。r19 实测 D5 因此没登记上 —— 而命中自检**还是通过的**
- *   （读坐标时它确实在那儿，鼠标落下时它走了）⇒ 只测"点的时候在不在"是不够的，
- *   必须测"出提示的瞬间有没有被推开"。 */
-const r8Geo = () => ev("(()=>{const o={};document.querySelectorAll('[data-testid=dp-r8] button').forEach(function(b){"
-	+ "o[b.getAttribute('data-testid')]=Math.round(b.getBoundingClientRect().y);});"
+ *   提示行原先写成"有内容才渲染"，而它排在动作行**之后**、本页是**底部锚定**列布局
+ *   ⇒ 一句提示弹出来，整条动作行被顶上去 **23px**（实测 btnY 628 → 605，消失又落回）。
+ *   后果不是难看，是**点不中**：手指从一颗按钮移向另一颗时，那颗按钮已经不在原来的位置了。
+ *   r19 实测 D5 因此没登记上 —— 而命中自检**还是通过的**（读坐标时它确实在那儿，
+ *   鼠标落下时它走了）⇒ 只测"点的时候在不在"是不够的，必须测"出提示的瞬间有没有被推开"。
+ *
+ * 🔴 2026-09-14 判据对象迁移（**锚点删除后必须同步，否则就是下一条"D5p 式"的过期断言**）：
+ *   原实测量的是 `[data-testid=dp-r8] button` 的 y 与 `dp-r8` 自身的 y。
+ *   第 6 批需求 9 删掉了整条 R8（动作行搬进宿主底部注入条）⇒ `r8Y` 恒为 `null`、
+ *   `Object.keys({})` 为 0 ⇒ 断言以「无提示 r8Y=null ｜ 有提示 null r8Y=null ｜ 零位移（0 颗）」
+ *   的形态**必然红**，而读起来像"布局又漂了"（**假红**，且零信息量）。
+ *   ⇒ 现在量的是**注入条**上的三颗真实按钮（切换视图 / 执行 / 登记流转）与整条 bar 的 y。
+ *   触发提示的方式也不再是那颗被删的「⌨ 定位原生对话框」，而是**把原生框清空后点「执行」**——
+ *   `deliver()` 在 `t` 为空时 `say("请输入内容")` 后**立即返回**（早于 `setBusy`）
+ *   ⇒ 制造提示**且零副作用**（不会真跑五步、不会落流转）。
+ *   清空前先记原值，跑完**逐字写回**（纪律 26：动别人状态前先读原值）。 */
+const gBarGeo = () => ev("(()=>{const o={};"
+	+ "['dp-host-scope-toggle','dp-host-deliver','dp-host-register'].forEach(function(k){"
+	+ "const b=document.querySelector('[data-testid=\"'+k+'\"]');"
+	+ "if(b)o[k]=Math.round(b.getBoundingClientRect().y);});"
 	+ "const t=document.querySelector('[data-testid=dp-toast]');"
-	+ "const e=document.querySelector('[data-testid=dp-r8]');"
-	+ "return {y:o,toast:t?String(t.textContent).slice(0,14):null,r8Y:e?Math.round(e.getBoundingClientRect().y):null};})()");
-await ev("(()=>{const t=document.querySelector('[data-testid=dp-toast]');if(t)t.click();return 1;})()");
-await WAIT(320);
-const g0 = await r8Geo();
-await click('[data-testid="dp-focus-native"]');            // 它一定会 say 一句（= 制造提示）
+	+ "const bar=document.querySelector('[data-testid=dp-host-scope-bar]');"
+	+ "return {y:o,toast:t?String(t.textContent).slice(0,14):null,"
+	+ "barY:bar?Math.round(bar.getBoundingClientRect().y):null};})()");
+const composerBefore = await ev("(()=>{try{return String(window.__dshChatBridge.readComposerText()||'');}catch(e){return null;}})()");
+await ev("(()=>{try{window.__dshChatBridge.setComposerText('');}catch(e){}return 1;})()");
+await WAIT(260);
+const g0 = await gBarGeo();
+const gToastTrigger = await click('[data-testid="dp-host-deliver"]');   // 空输入 ⇒ 必 say「请输入内容」
 let g1 = null;
-for (let i = 0; i < 20; i++) { g1 = await r8Geo(); if (g1 && g1.toast) break; await WAIT(100); }
-const r8Drift = (g0 && g0.y && g1 && g1.y)
+for (let i = 0; i < 20; i++) { g1 = await gBarGeo(); if (g1 && g1.toast) break; await WAIT(100); }
+const barDrift = (g0 && g0.y && g1 && g1.y)
 	? Object.keys(g0.y).filter((k) => g1.y[k] !== g0.y[k]).map((k) => k + " " + g0.y[k] + "→" + g1.y[k])
 	: ["探针失败"];
-check("D5p", "🔴 提示出现前后，R8 各按钮的 y **一个都不许变**（「点不中」的物理根因：提示把焦点条顶上去）",
-	Boolean(g0) && Boolean(g1) && Boolean(g1.toast) && r8Drift.length === 0,
-	"无提示 r8Y=" + (g0 && g0.r8Y) + " ｜ 有提示 " + J(g1 && g1.toast) + " r8Y=" + (g1 && g1.r8Y)
-	+ " ｜ " + (r8Drift.length ? "位移：" + J(r8Drift) : "零位移（" + Object.keys((g0 && g0.y) || {}).length + " 颗按钮逐像素一致）"));
+/* 复原：把原生框里原来那句话逐字写回（本条只借用它制造提示，不拥有它） */
+if (typeof composerBefore === "string") { await ev("(()=>{try{window.__dshChatBridge.setComposerText(" + J(composerBefore) + ");}catch(e){}return 1;})()"); }
+await WAIT(200);
+/* 🔴 前置：注入条三颗按钮**必须真的量到**（`Object.keys` 为 0 时"零位移"是**空真** ——
+ *    JSON 序列化会静默丢掉 undefined，读数长得和"真的零位移"一模一样）。 */
+const d5pBarKeys = Object.keys((g0 && g0.y) || {});
+check("D5p", "🔴 提示出现前后，**注入条**各按钮的 y **一个都不许变**（「点不中」的物理根因：提示把动作行顶上去）",
+	d5pBarKeys.length === 3 && Boolean(g1) && Boolean(g1.toast) && barDrift.length === 0,
+	"注入条按钮 " + d5pBarKeys.length + "/3 ｜ 无提示 barY=" + (g0 && g0.barY) + " ｜ 有提示 " + J(g1 && g1.toast)
+	+ " barY=" + (g1 && g1.barY) + "（点击 " + (gToastTrigger && gToastTrigger.ok ? "命中" : "失败") + "）"
+	+ " ｜ " + (barDrift.length ? "位移：" + J(barDrift) : "零位移（" + d5pBarKeys.length + " 颗按钮逐像素一致）")
+	+ " ｜ 原生框原值已复原=" + (typeof composerBefore === "string"));
 
 /* ══ 四维流转：**走真实界面路径**，不直接调 store ══
  * 🔴 上一版为什么红（根因）：A7 那步为了验「空内容不登记」把
@@ -908,7 +1023,7 @@ check("D5p", "🔴 提示出现前后，R8 各按钮的 y **一个都不许变**
  *   当前会话**（`curId`，由 watchCurrentSession 写入）过滤的。测试却拿
  *   "DOM 里第一个 data-session-id" 去登记 ⇒ 两条 id 不同源，`dp-flow-item` 自然是 0。
  *   （只改测试不改产品：产品行为本来就对 —— R5 跟的是宿主当前会话，这正是用户要的。）
- * ⇒ 现在改成：往**原生输入框**写一段带时间戳的标记文本 → 真实点「📥 登记为流转」→
+ * ⇒ 现在改成：往**原生输入框**写一段带时间戳的标记文本 → 真实点注入条「登记流转」→
  *   用页面自己的 `flowSession` 落库 → 再断言 R5 里出现**这段标记文本**。
  *   这一条同时证了三件事：读的是原生真值、R5 与登记同源、同一消息两处可见。 */
 const MARK = "四维流转演练-" + Date.now();
@@ -928,12 +1043,19 @@ const dTabNow = await ev("(()=>{const b=document.querySelector('[data-testid=dp-
 	+ " flowItems:document.querySelectorAll('[data-testid=dp-flow-item]').length,"
 	+ " msgItems:document.querySelectorAll('[data-testid=dp-dir-msg]').length,"
 	+ " bodyLen:b?b.innerHTML.length:null};})()");
-/* 先把焦点目标真实点成「总监」（R8 第一键），这样登记出来的 origin 就是 director 维
- * —— 不然 focusTarget 还停在上一次的值（默认 chat），断言里写死 director 就会假红。 */
-await click('[data-testid="dp-route-director"]'); await WAIT(250);
+/* 🔴 第 6 批需求 7 之后：R8 的「目标：总监 / 对话」双键**已删除**，
+ *    改为宿主底部注入条上的**单按钮切换**（点击即切换视图）。
+ *    登记出来的 origin 取决于当前视图 ⇒ 先把它规范化到 director。
+ *    **先读、后改、再读回** —— 不这么写就会踩本文件已记录过两次的"开合型控件被点到"坑：
+ *    单按钮是**切换**，无条件点一下会把 director 翻成 chat（断言写死 director 就假红）。 */
+const viewBefore = await ev("(()=>{const s=window.__dshHostComposerSlot;return s&&s.composerSlotState?s.composerSlotState.view:null;})()");
+if (viewBefore === "chat") { await click('[data-testid="dp-host-scope-toggle"]'); await WAIT(320); }
+const viewAfter = await ev("(()=>{const s=window.__dshHostComposerSlot;return s&&s.composerSlotState?s.composerSlotState.view:null;})()");
+check("D0", "登记前把视图规范化到「总监」（R8 双键已删 ⇒ 底部单按钮切换 · 先读后改 · 读回自证）",
+	viewAfter === "director", "读前=" + viewBefore + " → 读后=" + viewAfter);
 
 /* 登记前记全现场：按钮可点性 / 页面认的会话 / 库里已有哪些会话的流转 */
-const dSnap0 = await ev("(()=>{const rg=document.querySelector('[data-testid=\"dp-register-flow\"]');"
+const dSnap0 = await ev("(()=>{const rg=document.querySelector('[data-testid=\"dp-host-register\"]');"
 	+ "const dp=document.querySelector('[data-testid=\"dp-root\"]');"
 	+ "const S=window.__dshFlow;const g=S?S.store.getState().flows:[];"
 	+ "return {rgDisabled:rg?Boolean(rg.disabled):null,"
@@ -947,7 +1069,7 @@ const sSess0 = dSnap0 ? dSnap0.sess : null;
 const wrote = await ev("(()=>{try{window.__dshChatBridge.setComposerText(" + J(MARK) + ");"
 	+ "return {ok:true, val:String(window.__dshChatBridge.readComposerText()||'')};}catch(e){return {ok:false,err:String((e&&e.message)||e)};}})()");
 await WAIT(250);
-const dClick = await click('[data-testid="dp-register-flow"]');
+const dClick = await click('[data-testid="dp-host-register"]');
 /* 🔴 等**下界**（那条真的出现在 R5 里），不是等一个固定拍 —— 异步 UI 的固定拍只是运气。
  *   同时盯住"页面认的会话"这一跳：若它漂走了，R5 的过滤依据就换了，得先把它钉回来再等。
  *   `data-session-id` 让"这条属于哪个会话"在 DOM 上可读 ⇒ 判据是"这条 MARK 出现"，
@@ -1001,7 +1123,7 @@ const dDiag = await ev("(()=>{const roots=document.querySelectorAll('[data-testi
 	+ " storeTotal:st?st.flows.length:null,"
 	+ " storeSids:st?Array.from(new Set(st.flows.map(f=>String(f.sessionId)))).slice(-3):null,"
 	+ " toast:toast?String(toast.textContent).trim():null};})()");
-check("D5", "🔴 往原生输入框写内容 → 真实点「📥 登记为流转」⇒ R5 出现该条，且文本**就是原生框里那条**（读真值 + 与 R5 同源）",
+check("D5", "🔴 往原生输入框写内容 → 真实点注入条「登记流转」⇒ R5 出现该条，且文本**就是原生框里那条**（读真值 + 与 R5 同源）",
 	Boolean(wrote) && wrote.ok && String(wrote.val || "").indexOf(MARK) >= 0
 	&& Boolean(markItem) && markItem.sid === sSess0 && r5After > r5Before,
 	"前置 " + (dPin && dPin.ok ? "composer 在场" : "composer 未建立(" + J(dPin) + ")")
@@ -1529,6 +1651,7 @@ const gCount = "(()=>{const m=document.querySelector('[data-testid=dp-r5-msg]');
 	+ "return m?(parseInt((m.textContent||'').replace(/\\D/g,''),10)||0):null;})()";
 const gBefore = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-root]');if(!dp)return null;"
 	+ "return {mode:dp.getAttribute('data-deliver-mode'),n:" + gCount + ","
+	+ "scope:dp.getAttribute('data-scope'),kind:dp.getAttribute('data-scope-kind'),"
 	+ "composer:!!(window.__dshChatBridge&&window.__dshChatBridge.findComposer())};})()");
 
 /* ── G 段前置自检（含复原）────────────────────────────────────────────────
@@ -1549,7 +1672,21 @@ const gWrite = gComposerReady
 /* 宿主级送达凭据：宿主每次接受一次直投都会把 __directChatProbe.called +1
  * ⇒ 用它做**第三方证据**，避免「点了按钮就算送达」的假绿灯。 */
 const gProbe0 = await ev("(()=>{const p=window.__directChatProbe;return p&&typeof p.called==='number'?p.called:0;})()");
-await ev("(()=>{const b=document.querySelector('[data-testid=dp-send]');if(b)b.click();return 1;})()");
+/* 🔴 2026-09-14 纠错（**本条曾以「假红」形态骗过一轮**）：
+ *   原实现在这里点 `[data-testid="dp-send"]` —— 那是 **R8 的「执行」按钮**，
+ *   第 6 批需求 9 把整条 R8 删掉后该锚点**已不存在**，而 `if(b)b.click()` 对 null **静默跳过**
+ *   ⇒ 「执行」根本没被点，`data-deliver-mode` 当然停在 idle
+ *   ⇒ G2/G2b/G3/G3a/G3b/G6 **六条一起红**，读数全是"链路没跑"，看起来像**整条真流转坏了**。
+ *   这正是本文件反复记录的那类坑：**锚点删了、判据没跟着过期**。
+ *   ⇒ 判据对象改为注入条上的**真实「执行」按钮**（`dp-host-deliver`），并用**真实鼠标**点
+ *     （顺带覆盖它的命中测试）；锚点缺失时不再静默 —— 记一条显式前置失败并由 G 段其余条 SKIP。 */
+const gDeliverBtn = await rectOf('[data-testid="dp-host-deliver"]');
+const gDeliverClick = gDeliverBtn && !gDeliverBtn.zero
+	? await click('[data-testid="dp-host-deliver"]')
+	: null;
+console.log("  · G 段触发：「执行」按钮 " + (gDeliverBtn && !gDeliverBtn.zero
+	? "在场 @" + gDeliverBtn.cx + "," + gDeliverBtn.cy + "（点击 " + (gDeliverClick && gDeliverClick.ok ? "命中" : "失败") + "）"
+	: "**不在场** —— 注入条未注入或按钮 id 变了（锚点缺失 ⇒ 其后断言无从触发）"));
 
 let gAfter = null;
 if (gComposerReady) {
@@ -1557,8 +1694,27 @@ if (gComposerReady) {
 		await WAIT(500);
 		gAfter = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-root]');if(!dp)return null;"
 			+ "return {mode:dp.getAttribute('data-deliver-mode'),busy:dp.getAttribute('data-busy'),"
-			+ "grade:dp.getAttribute('data-run-grade'),n:" + gCount + "};})()");
-		if (gAfter && gAfter.busy === "0" && gAfter.mode && gAfter.mode !== "idle") break;
+			+ "grade:dp.getAttribute('data-run-grade'),n:" + gCount + ","
+			/* 🔴 作用域必须一起读出来（失败要能自诊断）：R5 的消息计数 = `msgs.length`，
+			 *    而 `msgs` 由 `refresh()` 按 `nodeId = st.activeNodeId` 装载 ——
+			 *    计数掉到 0 有两种完全不同的原因：①没落库 ②作用域漂到别的桶。
+			 *    只读一个数字**分不出这两者**（本次 `消息 6 → 0` 就是这种形态）。 */
+			+ "scope:dp.getAttribute('data-scope'),kind:dp.getAttribute('data-scope-kind'),"
+			+ "sess:dp.getAttribute('data-flow-session')};})()");
+		/* 🔴 2026-09-14 纠错（**这条曾长期"看起来在跑、其实必然读到 0"**）：
+		 *   原提前退出条件只有 `busy=0 && mode!=idle`，而 `data-deliver-mode` 是在投递那一步
+		 *   就写好的，**消息落库发生在其后的 `await refresh()` 里** ⇒ 循环在"消息还是 0"的
+		 *   那一瞬间就退出 ⇒ G3/G3a/G3b 三条一起红，读数「消息 0 → 0」，
+		 *   而真机取证显示库里**确实有 2 条**（`segMsg` 后来变成「总监消息 2」）。
+		 *   这与 `cdp-click.mjs` 的 I9b/I9c 是**同一条纪律**（台账 10）：
+		 *   **轮询的退出条件必须是"本条要断言的那件事"**，不能拿更早出现的信号当提前退出依据。
+		 *   ⇒ 条件改为：链路给出终态 **且** 消息数真的涨到目标；另外保留一个兜底出口，
+		 *     让"确实没落库"的红以真面目出现，而不是被吞成 20 秒超时。 */
+		const settled = Boolean(gAfter) && gAfter.busy === "0" && Boolean(gAfter.mode) && gAfter.mode !== "idle";
+		const grew = Boolean(gAfter) && gAfter.n !== null && Boolean(gBefore) && gBefore.n !== null
+			&& gAfter.n >= gBefore.n + 2;
+		if (settled && grew) break;
+		if (settled && i >= 24) break;   // 12s 后链路已终态而消息没涨 ⇒ 交给 G3 如实报红
 	}
 }
 check("G2", "🔴 点「执行」后链路**有明确结果**（离开 idle，落到 sent/filled/failed 之一）—— 守「有归因」而不是「必须成功」",
@@ -1568,6 +1724,8 @@ check("G2", "🔴 点「执行」后链路**有明确结果**（离开 idle，�
 		: "SKIP",
 	gComposerReady
 		? (gAfter ? ("mode=" + gAfter.mode + " busy=" + gAfter.busy + " grade=" + gAfter.grade
+			+ " ｜ 消息 " + (gBefore && gBefore.n) + " → " + gAfter.n
+			+ " ｜ 作用域 " + J({ scope: gAfter.scope, kind: gAfter.kind, sess: gAfter.sess })
 			+ " ｜ 输入回读=" + (gWrite ? (gWrite.ok ? "ok" : gWrite.reason) : "?")) : "取不到 dp-root")
 		: "前置不成立（G0）：原生 composer 不在场，链路输入为空 ⇒ 本条无意义");
 
@@ -1587,7 +1745,7 @@ check("G2b", "投递走**首选通道 host-send**（宿主直投对话域；不�
 const gProbe1 = await ev("(()=>{const p=window.__directChatProbe;return p?{called:p.called,sessionId:p.sessionId,draft:String(p.draft||'').slice(0,40)}:null;})()");
 check("G6", "🔴 宿主侧第三方证据：`__directChatProbe.called` 增量 = 1（宿主真的受理了这次投递）",
 	gComposerReady ? (!!gProbe1 && typeof gProbe1.called === "number" && gProbe1.called === gProbe0 + 1) : "SKIP",
-	gComposerReady ? { before: gProbe0, after: gProbe1 } : "前置不成立（G0）");
+	gComposerReady ? J({ before: gProbe0, after: gProbe1 }) : "前置不成立（G0）");
 
 check("G3", "🔴 处理链真的落库：总监消息数 +2（本条 user + 总监 assistant）",
 	gComposerReady
@@ -1604,9 +1762,18 @@ await WAIT(420);
  *   对**整段 innerText** 做正则 = 在问"历史上有没有出现过这几个字"，
  *   而不是"**本次**这一轮产出对不对" —— 上一轮留下的消息会把结论同时污染成
  *   假绿（`/1\./` 命中旧消息）与假红（命中旧的「全部职责已关闭」）两种相反的方向。
- *   ⇒ 一律取 `[data-testid="dp-dir-msg"]` 的**最后一条**（那就是 G3 刚加的 assistant）。 */
-const gLast = await ev("(()=>{const l=document.querySelectorAll('[data-testid=dp-r5-body] [data-testid=dp-dir-msg]');"
-	+ "if(!l.length) return null; return String(l[l.length-1].textContent||'');})()");
+ *   ⇒ 一律取 `[data-testid="dp-dir-msg"]` 的**最后一条**（那就是 G3 刚加的 assistant）。
+ * 🔴 再补一点（2026-09-14）：取之前要**等到它出现** —— 见下。
+ *    切页签后的渲染与 `msgs` 装载都是异步的，固定拍 420ms 在繁忙时会读到 0 条，
+ *    于是 G3a/G3b 以「取不到最新一条」的形态红，看起来像"消息根本没落库"。
+ *    等到**下界**（真的出现一条）再读，才是这条断言要问的事。 */
+let gLast = null;
+for (let i = 0; i < 20; i++) {
+	gLast = await ev("(()=>{const l=document.querySelectorAll('[data-testid=dp-r5-body] [data-testid=dp-dir-msg]');"
+		+ "if(!l.length) return null; return String(l[l.length-1].textContent||'');})()");
+	if (typeof gLast === "string" && gLast.length) break;
+	await WAIT(150);
+}
 const gLastIsAssistant = typeof gLast === "string" && /^总/.test(gLast.trim());
 /* 🔴 G3b 的**前置**（2026-09-13 新增）——
  *   `director-run` 的 assistant 正文 = "【总监分析】\n" + **启用步**的逐步结论（`reasoning`）。
@@ -1659,13 +1826,14 @@ const g4n0 = gComposerReady ? await ev(gCount) : null;
 if (gComposerReady) {
 	await ev("(()=>{const b=window.__dshChatBridge;if(b)b.setComposerText('');return 1;})()");
 	await WAIT(200);
-	await ev("(()=>{const b=document.querySelector('[data-testid=dp-send]');if(b)b.click();return 1;})()");
+	/* 同 G2：点注入条的**真实「执行」按钮**（`dp-send` 随 R8 一起被删，见上） */
+	if (gDeliverBtn && !gDeliverBtn.zero) await click('[data-testid="dp-host-deliver"]');
 	await WAIT(1100);
 }
 const g4n1 = gComposerReady ? await ev(gCount) : null;
 check("G4", "🔴 反证：空输入点「执行」→ **不新增任何消息**（若这里也 +2，说明 G3 的通过是「点了就有」而非真跑了链路）",
 	gComposerReady ? (g4n0 !== null && g4n1 !== null && g4n1 === g4n0) : "SKIP",
-	gComposerReady ? { before: g4n0, after: g4n1 } : "前置不成立（G0）：composer 不在场时空输入本就无从触发，本条会**空转pass**，故跳过");
+	gComposerReady ? J({ before: g4n0, after: g4n1 }) : "前置不成立（G0）：composer 不在场时空输入本就无从触发，本条会**空转pass**，故跳过");
 
 /* G5 分支聚焦（真机内同源纯函数） */
 const g5 = await ev("(()=>{const f=window.__dshBranchFocus;if(!f)return null;"
@@ -1678,79 +1846,202 @@ check("G5", "分支聚焦真机可用：点分支含祖先链 · 开「含上一
 	!!g5 && g5.applied === true && g5.a.indexOf("1") >= 0 && g5.b.indexOf("2") >= 0, g5 ? J(g5) : "取不到 __dshBranchFocus");
 
 /* ══════════════════════════════════════════════════════════════════
- * 【H】宿主残留两行的**显示层裁剪**（2026-09-14 第 4 批交付，
- *      本轮才发现**一个闸门都没覆盖它** —— 离线与真机都没有）
+ * 【H】宿主残留区块的**显示层裁剪**（2026-09-14 第 4 批交付，第 5 批扩到三目标）
  * ══════════════════════════════════════════════════════════════════
- *  目标：宿主 `workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js:7337-7357`
- *        的「总监对话」标题行 + 「智能体 · 点击创建分支」按钮行。
+ *  目标（宿主 `workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js`）：
+ *    · 7337–7340「总监对话」标题行 —— 第 5 批改为**只隐文字**（同行 `—` 折叠按钮必须活着，bug②）
+ *    · 7342–7357「智能体 · 点击创建分支」按钮行
+ *    · 7407–7422 对话页蓝色「对话」标题栏（第 5 批新增，结构指纹唯一命中）
  *  🔴 为什么必须真机验：产品侧只能**读 DOM**（那是宿主写的），断言对象与结论同源的要求
  *     在这里意味着"必须量**计算样式**与**是否在被隐的块上**"，不能只断言"函数被调过"。
  *  🔴 为什么要有正负对照：`display:none` 可能是**别人**写的（宿主自己/别的样式）。
  *     故用模块自己的 `restoreHostPanelTrim()` 还原 ⇒ 必须变可见；再 `applyHostPanelTrim()`
  *     ⇒ 必须又变不可见。只看"现在是 hidden"是空真（可能一直就是 hidden）。
  * ⚠️ 用 `window.__dshHostPanelTrim`（该模块自带的调试面）而不是自己写选择器 ——
- *    **单一真相源**：判据与产品实现必须指向同一份目标清单。 */
+ *    **单一真相源**：判据与产品实现必须指向同一份目标清单（结构类目标直接用
+ *    `api.isHostChatTitleBar`，闸门不另写一份指纹）。 */
 section("【H】宿主残留两行显示层裁剪（第 4 批交付 · 本轮补闸门）");
 /* 起点显式建立：宿主残留只在**对话页**的总监面板里，先确保在该页（已在则点击是无害的幂等动作） */
 const hTabClicked = await clickText('[role="tab"]', "对话");
 await WAIT(1200);
 console.log("  · H 段起点：切到「对话」页 " + (hTabClicked && hTabClicked.ok ? "（已点击 @ " + hTabClicked.x + "," + hTabClicked.y + "）" : "（未找到对话页签：" + (hTabClicked && hTabClicked.why) + "）"));
 const hProbe = await ev(`(async () => {
-	const T = ['智能体 · 点击创建分支', '总监对话'];
 	const api = window.__dshHostPanelTrim || null;
-	/* 目标：**叶子**元素文本全等，且其块容器（上溯 1 层）在宿主总监面板内 */
-	const blocks = () => {
-		const out = {};
-		const all = [].slice.call(document.querySelectorAll('div,span'));
-		for (const t of T) {
-			const leaf = all.find((e) => e.children.length === 0 && String(e.textContent || '').trim() === t);
-			const b = leaf ? leaf.parentElement : null;
-			out[t] = b ? {
-				display: getComputedStyle(b).display,
-				mark: b.getAttribute('data-dsh-trimmed'),
-				inPanel: !!(b.closest && b.closest('[style*="min-width: 180px"]'))
-			} : null;
-		}
-		return out;
-	};
 	if (!api) return { api: false };
-	const before = blocks();
+	/* 🔴 第 5 批：目标从 **2 个** 扩到 **3 个**（新增对话页蓝色「对话」标题栏），
+	 *    且取块方式**逐目标不同**（与产品 TRIM_TARGETS 的 up 一致）：
+	 *      · 「智能体 · 点击创建分支」→ 文本全等 + 上溯 1 层（行）
+	 *      · 「总监对话」            → 文本全等 + 上溯 0 层（**只隐文字**，同行的折号按钮必须留着）
+	 *      · 蓝色「对话」标题栏      → 无文本，用**模块自己的** api.isHostChatTitleBar 判据
+	 *        （判据与产品同源；闸门再写一份指纹就等于两处各算各的）
+	 * ⚠️ 本段整体在**模板串**里：里面一律不许出现反引号（纪律 9 —— 会把模板串提前闭合）。 */
+	const leafByText = (text, up) => {
+		const all = [].slice.call(document.querySelectorAll('div,span'));
+		const leaf = all.find((e) => e.children.length === 0 && String(e.textContent || '').trim() === text);
+		if (!leaf) return null;
+		let b = leaf;
+		for (let k = 0; k < up && b; k++) b = b.parentElement;
+		return b;
+	};
+	const barEl = () => [].slice.call(document.querySelectorAll('div')).find((e) => {
+		try { return api.isHostChatTitleBar(e); } catch (err) { return false; }
+	}) || null;
+	const info = (b) => b ? {
+		display: getComputedStyle(b).display,
+		mark: b.getAttribute('data-dsh-trimmed'),
+		inPanel: !!(b.closest && b.closest(api.PANEL_GUARD_SELECTOR)),
+		inPlugin: !!(b.closest && b.closest(api.PLUGIN_GUARD_SELECTOR))
+	} : null;
+	const snap = () => {
+		const titleSpan = leafByText('总监对话', 0);
+		const titleRow = titleSpan ? titleSpan.parentElement : null;
+		/* 同一行里的「—」折叠按钮：**没被裁**的那颗（带标记的才是被我们隐的） */
+		const foldBtn = titleRow
+			? ([].slice.call(titleRow.querySelectorAll('button')).find((x) => !x.getAttribute('data-dsh-trimmed')) || null)
+			: null;
+		const fb = foldBtn ? foldBtn.getBoundingClientRect() : null;
+		/* 🔴 第 6 批需求 1 后，「总监对话」这条的裁剪目标由**文字**改成**整行**（up:1）
+		 *    ⇒ 量 display/mark 的对象必须是**行**，不能还是那枚内层 span。
+		 *    实测量错时的形态（2026-09-14 真机）：span 的计算 display 是 inline、
+		 *    data-dsh-trimmed 为 null ⇒ H1/H3/H5 **齐刷刷红**，
+		 *    而读数 titleRow 的 display=none 明明就在同一个对象里 ——
+		 *    典型的「尺子量错节点」（本文件已记录过一次同类：称它「尺子量错容器」）。
+		 *    ⇒ title 指向**行**（真正的裁剪目标），另留 titleSpan 只作记录。
+		 *  ⚠️ 本段在**模板串**里：一律不许出现反引号（纪律 9 —— 会把模板串提前闭合）。 */
+		const minBtn = document.getElementById("dsh-host-col-min");
+		const mb = minBtn ? minBtn.getBoundingClientRect() : null;
+		return {
+			agent: info(leafByText('智能体 · 点击创建分支', 1)),
+			title: info(titleRow),
+			titleSpan: info(titleSpan),
+			bar: info(barEl()),
+			titleRow: titleRow ? { display: getComputedStyle(titleRow).display } : null,
+			fold: foldBtn ? {
+				text: String(foldBtn.textContent || '').trim(),
+				display: getComputedStyle(foldBtn).display,
+				w: fb ? Math.round(fb.width) : 0, h: fb ? Math.round(fb.height) : 0
+			} : null,
+			/* 插件侧的最小化按钮：bug② 的能力**移交**证据（见 H5） */
+			minBtn: minBtn ? { w: mb ? Math.round(mb.width) : 0, h: mb ? Math.round(mb.height) : 0 } : null,
+			targetCount: api.TRIM_TARGETS.length
+		};
+	};
+	const before = snap();
 	const restoredN = api.restoreHostPanelTrim();
 	await new Promise((r) => setTimeout(r, 350));
-	const during = blocks();
+	const during = snap();
 	/* 还原成产品常态（裁剪生效）—— 谁污染谁治理 */
 	const applied = api.applyHostPanelTrim();
 	await new Promise((r) => setTimeout(r, 350));
-	const after = blocks();
+	const after = snap();
+	/* ── 负向校准（**植入缺陷 ⇒ 护栏必须失效**；第 6 批 H0b 的配套，纪律 6/32）──────
+	 *  只读地断言"现在 panelOk=true"是**空真**：它可能在"判据其实早就死了、
+	 *  只是没人读"的情况下也为真。故把三层面板判据**全部**抹掉，看 panelOk 会不会转 false：
+	 *    · ① 抹掉我方标记（api.PANEL_MARK 那个属性）
+	 *    · ② 宿主列的 inline minWidth 在真机上**已经是 0px**（正是本次事故的现场），无需人为改
+	 *    · ③ 把两处结构锚文本临时改成占位串
+	 *  ⇒ 此时 panelOk 必须为 false 且 panelReason **非空**（降级可以，无声不行）。
+	 *  随后逐项还原并回读自证 —— 校准**不许成为产品的破坏者**（纪律 15）。
+	 *  ⚠️ 只读 panelOk/panelReason，不去量"目标是没被裁" ——
+	 *     锚文本被临时改掉之后，目标查找本身就会失败，那样的读数是**混淆**的（两种原因同形）。
+	 *  ⚠️ 本段在**模板串**里：一律不许出现反引号（纪律 9 —— 会把模板串提前闭合）。 */
+	const calCol = api.resolvePanelRoot();
+	const calAnchors = [];
+	if (calCol) {
+		calCol.removeAttribute(api.PANEL_MARK);
+		['智能体 · 点击创建分支', '总监对话'].forEach(function (txt) {
+			const all = [].slice.call(document.querySelectorAll('div,span'));
+			const e = all.find(function (x) { return x.children.length === 0 && String(x.textContent || '').trim() === txt; });
+			if (e) { calAnchors.push({ e: e, t: e.textContent }); e.textContent = '校准占位'; }
+		});
+	}
+	api.restoreHostPanelTrim();
+	await new Promise(function (r) { setTimeout(r, 300); });
+	api.applyHostPanelTrim();
+	await new Promise(function (r) { setTimeout(r, 300); });
+	const calKilled = { panelOk: api.trimState.panelOk, panelReason: api.trimState.panelReason };
+	/* 还原（逐项写回原值 + 重新贴标记）*/
+	calAnchors.forEach(function (a) { a.e.textContent = a.t; });
+	const calRemarked = calCol ? api.markHostPanel(calCol) : false;
+	api.restoreHostPanelTrim();
+	await new Promise(function (r) { setTimeout(r, 300); });
+	api.applyHostPanelTrim();
+	await new Promise(function (r) { setTimeout(r, 300); });
+	const calBack = { panelOk: api.trimState.panelOk, anchored: calAnchors.length, remarked: calRemarked };
 	return {
 		api: true, scanCount: api.trimState.scans, degraded: api.trimState.degraded, reason: api.trimState.reason,
 		observer: api.trimState.observer, restoredN: restoredN, appliedAfter: applied,
+		/* 面板护栏的可断言面（第 6 批）：护栏失效是**静默**的 ⇒ 必须单独读出来 */
+		panelOk: api.trimState.panelOk, panelReason: api.trimState.panelReason,
+		calKilled: calKilled, calBack: calBack,
 		before: before, during: during, after: after
 	};
 })()`);
-const hTargets = ["智能体 · 点击创建分支", "总监对话"];
-const hHidden = (m) => hTargets.every((t) => m && m[t] && m[t].display === "none" && m[t].inPanel && m[t].mark);
+const hKeys = ["agent", "title", "bar"];
+/* 三个目标各自的"已被裁掉"判据：块为 display:none **且**带着我们贴的标记 */
+const hNotTrimmed = (m) => hKeys.filter((k) => !(m && m[k] && m[k].display === "none" && m[k].mark));
+const hNotBack = (m) => hKeys.filter((k) => !(m && m[k] && m[k].display !== "none"));
 if (!hProbe || !hProbe.api) {
 	check("H0", "前置：插件已挂载（含宿主裁剪模块）", false,
 		hProbe ? "window.__dshHostPanelTrim 不存在（插件未装载或该能力缺失）" : "探针取不到");
 } else {
-	/* 前提：目标真的在 DOM 里且落在宿主面板内 —— 否则下面全是空真 */
-	const hPresent = hTargets.every((t) => hProbe.before[t] && hProbe.before[t].inPanel);
-	check("H0", "前置：两行目标都在 DOM 的宿主总监面板内（否则 H1~H3 是空真）",
-		hPresent, { degraded: hProbe.degraded, reason: hProbe.reason, scanCount: hProbe.scanCount, before: hProbe.before });
+	/* 前提：三个目标真的在 DOM 里、形态符合预期 —— 否则下面全是空真。
+	 *   · 文本类两条必须在宿主总监面板内（护栏②保护的就是它们）
+	 *   · 蓝色标题栏必须在面板**之外**（它靠结构指纹唯一，不靠护栏②）
+	 *   · 三条都不许落在插件自挂容器内（护栏①） */
+	const b0 = hProbe.before || {};
+	const hPresent = !!b0.agent && !!b0.title && !!b0.bar
+		&& b0.agent.inPanel === true && b0.title.inPanel === true
+		&& b0.agent.inPlugin === false && b0.title.inPlugin === false && b0.bar.inPlugin === false
+		&& b0.bar.inPanel === false;
+	check("H0", "前置：三个目标都在 DOM 里且形态符合预期（文本两条在面板内 · 标题栏在面板外 · 三条都不在插件容器内）",
+		hPresent, J({ degraded: hProbe.degraded, reason: hProbe.reason, scanCount: hProbe.scanCount,
+			panelOk: hProbe.panelOk, panelReason: hProbe.panelReason,
+			agent: b0.agent, title: b0.title, bar: b0.bar }));
 	if (hPresent) {
-		check("H1", "🔴 两行的**块容器**计算样式为 display:none，且带 data-dsh-trimmed 标记（用户看不到）",
-			hHidden(hProbe.before), hProbe.before);
-		check("H2", "🔴 正负对照①：调模块自己的 restoreHostPanelTrim() ⇒ 两行**必须变回可见**（证明 none 是它写的，不是别人）",
-			hProbe.restoredN > 0 && hTargets.every((t) => hProbe.during[t] && hProbe.during[t].display !== "none"),
-			{ restoredN: hProbe.restoredN, during: hProbe.during });
-		check("H3", "🔴 正负对照②：再 applyHostPanelTrim() ⇒ 两行**必须又变不可见**（可逆 + 幂等），并复原成产品常态",
-			hTargets.every((t) => hProbe.after[t] && hProbe.after[t].display === "none" && hProbe.after[t].mark),
-			{ appliedAfter: hProbe.appliedAfter, after: hProbe.after });
+		check("H1", "🔴 三个目标的块计算样式均为 display:none 且带 data-dsh-trimmed 标记（用户看不到）",
+			hNotTrimmed(hProbe.before).length === 0, J({ miss: hNotTrimmed(hProbe.before), before: hProbe.before }));
+		check("H2", "🔴 正负对照①：调模块自己的 restoreHostPanelTrim() ⇒ 三个目标**必须变回可见**（证明 none 是它写的，不是别人）",
+			hProbe.restoredN === b0.targetCount && hNotBack(hProbe.during).length === 0,
+			J({ restoredN: hProbe.restoredN, 声明目标数: b0.targetCount, miss: hNotBack(hProbe.during) }));
+		check("H3", "🔴 正负对照②：再 applyHostPanelTrim() ⇒ 三个目标**必须又变不可见**（可逆 + 幂等），并复原成产品常态",
+			Array.isArray(hProbe.appliedAfter) && hProbe.appliedAfter.length === b0.targetCount && hNotTrimmed(hProbe.after).length === 0,
+			J({ appliedAfter: hProbe.appliedAfter, 声明目标数: b0.targetCount, miss: hNotTrimmed(hProbe.after) }));
+		/* 🔴 bug② 的**第 6 批形态**（原判据已随需求过期，见下）：
+		 *    第 5 批那版断言是"「总监对话」文字被隐、同行 `—` 折叠按钮仍可见"——
+		 *    那是因为当时整行保留、只隐文字。第 6 批需求 1 用户原话「这两列不要」，
+		 *    该目标已改成 `up:1`（**整行去除**），`—` 随之一起消失
+		 *    ⇒ 旧断言在新形态下**必然红**，而且红得毫无信息量（它测的那颗按钮已经不是产品形态了）。
+		 *    用户 bug② 的**实质**是「对话 tap 的总监没有最小化了」—— 能力不能消失。
+		 *    ⇒ 新判据守住"能力仍在、只是换了主人"：**整行确实不可见**，
+		 *      且**插件侧 `#dsh-host-col-min` 在场且有非零盒**（职责已移交到插件列，见
+		 *      `bridge/host-director-column.js`）。这比"某颗按钮可见"更接近用户真正在意的事。 */
+		check("H5", "🔴 bug② 第 6 批形态：宿主「总监对话」**整行已不可见**，且最小化能力**已移交**到插件侧真实控件（#dsh-host-col-min 在场且有非零盒）",
+			!!hProbe.before.titleRow && hProbe.before.titleRow.display === "none"
+			&& !!hProbe.before.title && hProbe.before.title.mark === "host-director-chat-title"
+			&& !!hProbe.before.minBtn && hProbe.before.minBtn.w > 0 && hProbe.before.minBtn.h > 0,
+			J({ row: hProbe.before.titleRow, rowMark: hProbe.before.title && hProbe.before.title.mark, minBtn: hProbe.before.minBtn }));
 	}
+	/* 🔴 面板护栏本身必须可断言（第 6 批新增）——
+	 *   2026-09-14 真机事故：`host-director-column` 为了能拖窄，**显式**把宿主列的
+	 *   inline `minWidth` 写成 `0px`，而本模块的护栏当时正是 `[style*="min-width: 180px"]`
+	 *   ⇒ 护栏命中数 0、文本类目标**静默不再被裁**（用户要求删的宿主残留又露出来），
+	 *   而 `degraded/reason` **全是正常值** ⇒ 完全无声。这条断言就是那次事故的哨兵：
+	 *   护栏解析失败时必须**红在这条**上，而不是让 H0/H1 以"目标形态不符"的形态去红。 */
+	check("H0b", "🔴 面板护栏解析成功（`trimState.panelOk`）—— 护栏失败会让文本类裁剪**静默失效**（本项目最危险的一种）",
+		hProbe.panelOk === true,
+		"panelOk=" + hProbe.panelOk + " ｜ panelReason=" + J(hProbe.panelReason));
+	/* 🔴 H0b 的**负向校准**（纪律 6/32）：把三层面板判据全部抹掉 ⇒ panelOk 必须转 false
+	 *    且必须**说出原因**；还原后必须回绿。没有这条，H0b 可能是"判据早就死了但无人读"的空真。 */
+	check("H0c", "🔴 负向校准：抹掉三层面板判据 ⇒ `panelOk` 必须转 false 且**带非空原因**；还原后必须回绿（校准不许留下污染）",
+		hProbe.calKilled && hProbe.calKilled.panelOk === false
+		&& typeof hProbe.calKilled.panelReason === "string" && hProbe.calKilled.panelReason.length > 0
+		&& hProbe.calBack && hProbe.calBack.panelOk === true
+		&& hProbe.calBack.anchored === 2 && hProbe.calBack.remarked === true,
+		J({ 抹掉后: hProbe.calKilled, 还原后: hProbe.calBack }));
 	check("H4", "裁剪未被降级（读不到就必须说清原因，不许无声）",
 		hProbe.degraded === false && hProbe.reason === null && hProbe.observer === true,
-		{ degraded: hProbe.degraded, reason: hProbe.reason, observer: hProbe.observer });
+		J({ degraded: hProbe.degraded, reason: hProbe.reason, observer: hProbe.observer }));
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1785,6 +2076,7 @@ for (let i = 0; i < 12; i++) {
 console.log("  · 收尾复原：离场前生成中=" + leavingBusy + " → 复原后 composer 可见=" + leavingComposer
 	+ (leavingBusy && !leavingComposer ? "（⚠ 未能复原，下一轮可能需等生成）" : ""));
 
+reachedFlowFinal = true;
 console.log("\n───────────────────────────────────────────────");
 console.log(" 通过 " + pass + " / 失败 " + fail + " / 跳过 " + skip);
 if (failures.length) console.log(" 失败项：\n   - " + failures.join("\n   - "));

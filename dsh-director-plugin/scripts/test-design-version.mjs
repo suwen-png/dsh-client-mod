@@ -96,10 +96,23 @@ t("B2b", "保存后不再脏", isDirty(sv1.doc) === false);
 t("B2c", "已保存标签显示具体版本名", /已保存 v1/.test(getVersionState(sv1.doc).label), getVersionState(sv1.doc).label);
 
 cur = sv1.doc;
-const moved = moveElement(cur, cur.elements[0].id, 100, 100);
-t("B3", "改坐标后判为脏", isDirty(moved) === true);
+/* 🔴 2026-09-14 修正（闸门过期，不是产品坏了 —— 先审尺子）：
+ *    原判据 `cur.elements[0].id` 是**位置序**取元素，而 `elements[0]` 现在正是
+ *    「整屏底板 window」，它在标准框架里**默认为锁定**（防误拖：拖了它会整图错位且不易察觉）
+ *    ⇒ moveElement 是空操作 ⇒ 「改坐标后判为脏」假红。
+ *    位置序从来不是判据，**可移动性**才是 ⇒ 显式挑第一个「未锁定且坐标确实会变」的元素。
+ *    同时补一条**负对照**（B3c）：锁定元素移动后**不应**变脏 —— 这是锁定生效最直接的证据；
+ *    没有它，"移动后变脏"与"锁定失效"两种状态在读数上分不开。 */
+const mvTarget = cur.elements.find((e) => !e.locked && (e.x !== 100 || e.y !== 100));
+const lockTarget = cur.elements.find((e) => e.locked);
+const moved = mvTarget ? moveElement(cur, mvTarget.id, 100, 100) : cur;
+t("B3", "改坐标后判为脏（移动对象 = 第一个未锁定且坐标会变的元素）",
+	mvTarget !== undefined && isDirty(moved) === true, mvTarget && mvTarget.label);
 t("B3b", "脏时标签为「未保存改动」（**不**假称「基于 v1」—— 基准版本可能不唯一）",
 	getVersionState(moved).label === "未保存改动", getVersionState(moved).label);
+t("B3c", "负对照：锁定元素（整屏底板）移动后**不**变脏 —— 锁定生效的直接证据",
+	lockTarget !== undefined && isDirty(moveElement(cur, lockTarget.id, 100, 100)) === false,
+	lockTarget && lockTarget.label);
 
 const sv2 = saveVersion(moved, "移动后");
 t("B4", "第二次保存生成 v2", sv2.version.label === "v2", sv2.version.label);

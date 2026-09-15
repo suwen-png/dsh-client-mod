@@ -518,8 +518,14 @@ function emit() {
 	p.push(`\t\t\t\tvar reg = __entry.installDirectorView(ctx);`);
 	p.push(`\t\t\t\ttrace.push("view:" + JSON.stringify(reg));`);
 	p.push(`\t\t\t\tif (installed && typeof installed === "object") installed.directorView = reg;`);
-	p.push(`\t\t\t} catch (e) { trace.push("view:ERR " + ((e && e.message) || e)); }`);
-	p.push(`\t\t\treturn installed;`);
+		p.push(`\t\t\t} catch (e) { trace.push("view:ERR " + ((e && e.message) || e)); }`);
+		p.push(`\t\t\ttry {`);
+		p.push(`\t\t\t\ttrace.push("modelseat:" + typeof __entry.installModelSeat);`);
+		p.push(`\t\t\t\tvar seat = __entry.installModelSeat(ctx);`);
+		p.push(`\t\t\t\ttrace.push("modelseat:" + JSON.stringify(seat));`);
+		p.push(`\t\t\t\tif (installed && typeof installed === "object") installed.modelSeat = seat;`);
+		p.push(`\t\t\t} catch (e) { trace.push("modelseat:ERR " + ((e && e.message) || e)); }`);
+		p.push(`\t\t\treturn installed;`);
 	p.push(`\t\t};`);
 		// 声明依赖的服务：slots 是 slot 注册的前置（同族先例 dsh-client-ui-trajectory 同款写法）。
 		// 🔴 sessions 是**分支血缘导图**的前置：cordis 的 ctx 服务访问是 Proxy 陷阱，

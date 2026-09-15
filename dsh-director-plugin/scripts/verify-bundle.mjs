@@ -433,11 +433,13 @@ check("🔴 纹理色走变量（--dp-tex），不再是写死的白色 —— �
 check("window.__dshDirectorBatch13 === installed（别名一致，不是另一个对象）",
 	typeof windowStub.__dshDirectorBatch13 === "object" && windowStub.__dshDirectorBatch13 === windowStub.__dshDirectorBatch1,
 	windowStub.__dshDirectorBatch13 === windowStub.__dshDirectorBatch1 ? "同一引用" : "引用不同");
-check("installed.floatDock 五项契约齐备（容器不吃点击 / 药丸吃点击 / 字色取宿主令牌 / 横向占位数）",
+check("installed.floatDock 五项契约齐备（容器不吃点击 / 药丸吃点击 / 字色取宿主令牌 / 横向占位数 / 消费者名单）",
 	(() => { const f = applied?.floatDock || {};
+		/* 消费者名单随 R6 去除而更新（第 5 批）：R6 已整块删除，其数据并入 R2。
+		 * 只剩 dp-r8（底部动作行）与 dp-personalize（右端浮标）两处真的在用。 */
 		return f.containerPointerEvents === "none" && f.pillPointerEvents === "auto"
 		&& f.pillColorToken === "--dsw-alias-label-primary" && f.reserve === 108
-		&& Array.isArray(f.reserveConsumers) && f.reserveConsumers.join(",") === "dp-r6,dp-r8"; })(),
+		&& Array.isArray(f.reserveConsumers) && f.reserveConsumers.join(",") === "dp-r8,dp-personalize"; })(),
 	JSON.stringify(applied?.floatDock));
 const dockSrc = moduleSlice("components/FloatDock.js");
 const pageSrc = moduleSlice("components/DirectorPage.js");

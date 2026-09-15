@@ -275,6 +275,40 @@ function t(id, name, cond, detail) {
 function sk(id, name, why) { skip++; console.log(`  ⏭ ${id} ${name} —— 跳过：${why}`); }
 function section(s) { console.log("\n" + s); }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * 🔴 崩溃兜底 + 断言总数对账（技能 e2e-gate-hygiene §2.6，2026-09-14 实录）
+ * ──────────────────────────────────────────────────────────────────────────
+ * 事故：本脚本在 C-M10 段因一处**无守卫的 null 解引用**（`querySelector('[data-testid=mm-stage]')`
+ *       在导图浮层不在场时返回 null，紧接着 `.getAttribute`）直接抛穿 ⇒ Node 打印一个裸栈退出，
+ *       **其后 100+ 条断言一条都没跑**，而报告读起来只是"跑到这里就没了"。
+ *       唯一线索是**断言总数对不上** —— 而这恰恰是最容易忽略的线索。
+ * 双重保险（缺一不可）：
+ *   ① `uncaughtException` / `unhandledRejection` 兜底：把**已经跑出来的**断言 + "其后未跑"
+ *      明确打出来，并以 **exit 2（INVALID）** 收尾。
+ *      为什么是 2 不是 1：**脚本自己死了 ≠ 产品不合格**（纪律 17）。
+ *      为什么不能只靠 ②：崩溃时根本走不到收尾段。
+ *   ② 收尾对账：必须**已到达末段**且实跑数 ≥ 登记下限，否则同样是 INVALID。
+ *      为什么不是"精确等于 N"：写死计数本身就会过期（纪律 14）——
+ *      真正要防的是"某段整体没跑"，`reachedFinal` + 下限正好覆盖它。
+ * ══════════════════════════════════════════════════════════════════════════ */
+/** 末段是否跑到（正常路径在汇总前把它置 true）。若为 false，任何"绿/红"都不可信。 */
+let reachedFinal = false;
+/** 断言数下限（**下限**而非精确值：加了断言就该同时抬高它，但漏抬不会造成假红）。 */
+const MIN_ASSERTIONS = 100;
+const dieReport = (why) => {
+	console.error("\n───────────────────────────────────────────────");
+	console.error(" ❌ INVALID：脚本异常终止 —— " + why);
+	console.error(` 已跑出：通过 ${pass} / 失败 ${fail} / 跳过 ${skip}（合计 ${pass + fail + skip}）`);
+	console.error(` 是否已到达末段（【15】点击质量）：${reachedFinal}`);
+	if (failures.length) console.error(" 期间失败项：\n   - " + failures.join("\n   - "));
+	console.error(" 其后段落**一条都没跑** ⇒ 不得据此判定产品好坏（INVALID＝用错用法或脚本自身故障）。");
+	console.error(" 现场勘察：看崩溃前最后一行 `· 【n】前 现场 {...}` —— 它给出当时的浮层/DOM 状态。");
+	console.error("───────────────────────────────────────────────");
+	process.exit(2);
+};
+process.on("uncaughtException", (e) => dieReport("uncaughtException：" + ((e && e.stack) || e)));
+process.on("unhandledRejection", (e) => dieReport("unhandledRejection：" + ((e && (e.stack || e.message)) || e)));
+
 /* ══════════ 阶段 0：清掉上位脚本可能留下的浮层 ══════════
  * 🔴 为什么必须有（2026-09-12）：本脚本连的是**已经在跑的** Harness 实例，不重载页面。
  *   上一套脚本（verify-flow / verify-design-studio）收尾时可能留下 fixed 浮层
@@ -592,7 +626,19 @@ section("【6】缩放组（－ % ＋ / 1:1 / 适应，含幂等反馈）");
  *    —— 曾因此多写一个 ')' 直接 SyntaxError: missing ) after argument list，
  *    整支脚本跑不起来（不是断言失败，是根本没解析）。抽成常量后不再嵌套。 */
 const ZOOM_TXT = `(document.querySelector('[data-testid="mm-zoom"]')||{}).textContent || ""`;
-const STAGE_K = `parseFloat(document.querySelector('[data-testid="mm-stage"]').getAttribute("data-zoom"))`;
+/* 🔴 契约式取值，**不许裸解引用**（2026-09-14 崩溃实录）：
+ *    原写法 `document.querySelector('[data-testid="mm-stage"]').getAttribute("data-zoom")`
+ *    在浮层不在场时 querySelector 返回 null ⇒ `.getAttribute` 抛 TypeError ⇒ **抛穿顶层、
+ *    其后 100+ 断言全丢**。改成"取不到就给 NaN + 由前置断言先说明原因"：
+ *    浮层缺失时这几条会**失败并打印 NaN**（可读），而不是让整支脚本死掉。 */
+const STAGE_K = `(function(){var e=document.querySelector('[data-testid="mm-stage"]');return e?parseFloat(e.getAttribute("data-zoom")):NaN;})()`;
+const STAGE_MATRIX = `(function(){var e=document.querySelector('[data-testid="mm-stage"]');if(!e)return NaN;return parseFloat(getComputedStyle(e).transform.split(",")[0].replace("matrix(",""));})()`;
+/* 前置：浮层必须在场。先自动补开，再断言 —— 否则下面的百分比/矩阵断言全是"空真"。
+ * （同一类陷阱本脚本在 C-M8p / C-M9p / C-M15a0a 处已各拦过一次，此处是补漏。） */
+await ensureOpen();
+await state("【C-M10】前");
+t("C-M10p", "前置：导图浮层在场且 `mm-stage` 有 DOM（否则缩放断言无从判定，会读成 NaN）",
+	await js(`!!document.querySelector('[data-testid="mm-stage"]')`), null);
 await clickSel('[data-testid="mm-zoom-100"]');
 await sleep(220);
 const z0 = await js(ZOOM_TXT);
@@ -601,7 +647,7 @@ await clickSel('[data-testid="mm-zoom-out"]');
 await sleep(220);
 const z1 = await js(ZOOM_TXT);
 const k1 = await js(STAGE_K);
-const t1 = await js(`parseFloat(getComputedStyle(document.querySelector('[data-testid="mm-stage"]')).transform.split(",")[0].replace("matrix(",""))`);
+const t1 = await js(STAGE_MATRIX);
 t("C-M10b", "点「－」后百分比下降 10%", /^90%$/.test(z1.trim()), [z0, z1]);
 t("C-M10c", "缩放值真的落到 DOM（data-zoom = 0.9）", Math.abs(k1 - 0.9) < 0.001, k1);
 t("C-M10d", "矩阵变换与 data-zoom 一致（不是只改文案）", Math.abs(t1 - k1) < 0.02, [t1, k1]);
@@ -1062,9 +1108,19 @@ t("C-M21", `本脚本全部点击，落点均在目标元素子树内（不许�
 	clickMisses.length === 0, clickMisses.length ? clickMisses : { misses: 0 });
 
 /* ══════════ 汇总 ══════════ */
+reachedFinal = true; // 🔴 必须先置位：它是"有没有段静默没跑"的唯一凭据（见上方崩溃兜底）
+const ran = pass + fail + skip;
 console.log("\n───────────────────────────────────────────────");
-console.log(` 通过 ${pass} / 失败 ${fail} / 跳过 ${skip}`);
+console.log(` 通过 ${pass} / 失败 ${fail} / 跳过 ${skip}（合计 ${ran}）`);
 if (failures.length) console.log(" 失败项：\n   - " + failures.join("\n   - "));
+/* 收尾对账（技能 §2.6）：跑到的段落数对不上 ⇒ INVALID（脚本问题），不是产品问题。 */
+const tallyOk = reachedFinal && ran >= MIN_ASSERTIONS;
+if (!tallyOk) {
+	console.log(` ❌ INVALID：断言总数对账不通过（实跑 ${ran} < 下限 ${MIN_ASSERTIONS}，或未到达末段）`);
+	console.log("    ⇒ 说明有段落**静默没跑**，本次结果不可用作产品判定。");
+	ws.close();
+	process.exit(2);
+}
 console.log(` IS_PASS: ${fail === 0 ? "TRUE" : "FALSE"}`);
 console.log("───────────────────────────────────────────────");
 ws.close();

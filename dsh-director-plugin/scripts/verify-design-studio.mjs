@@ -55,7 +55,40 @@ ws.addEventListener("message", (ev) => {
 	const m = JSON.parse(ev.data);
 	if (m.id !== undefined && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result); }
 });
-const send = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); });
+/* 🔴 连接断掉时**必须**把在飞的调用全部拒绝（2026-09-14 真机事故的真因）。
+ *   现象：脚本跑到某一处突然以 `Warning: Detected unsettled top-level await` + **exit 13** 结束，
+ *   其后全部断言一条不留；而 `tasklist` 里 Harness 仍在（**是新起的那个进程**）。
+ *   真因：Harness 被外部重启/关闭 ⇒ 本 WebSocket 被服务端关闭 ⇒ 所有 `send()` 的 Promise
+ *   **永远不会 settle**（没有 close 处理），于是 await 挂到进程结束。
+ *   为什么这条比"断言失败"危险得多：它**静默** —— 既不报错也不计入 fail，
+ *   汇总里只有一行 Node Warning，看起来像脚本写错了。
+ *   ⚠️ 这也解释了本脚本长期"失败集合每次不同（13/9/10/7）"的**假偶发**：
+ *   同机另一进程会重启 Harness，掐断点每次都不同 ⇒ 每次丢掉的断言集合都不同。 */
+const failPending = (why) => {
+	for (const [, { rej }] of pending) rej(Object.assign(new Error(why), { wsClosed: true }));
+	pending.clear();
+};
+ws.addEventListener("close", () => failPending("CDP_WS_CLOSED"));
+ws.addEventListener("error", () => failPending("CDP_WS_ERROR"));
+const rawSend = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); });
+/* 🔴 每次 CDP 往返都带**硬超时**（2026-09-14 真机事故 · 本项缺失的直接后果）。
+ *   渲染进程主线程一旦卡住（例如 `resetDesignStore()` 触发的重挂载风暴），
+ *   `Runtime.evaluate` **永不返回**，而浏览器进程仍然正常回 HTTP
+ *   （/json/list 有响应、能列出页面）—— 看起来一切正常。
+ *   本脚本此前没有超时，于是卡在 C14.0b 的第 736 行，Node 以
+ *   `Warning: Detected unsettled top-level await` + **exit 13** 结束：
+ *   C14 之后**全部断言一条不留**，而输出里只有一行 Warning，
+ *   读起来像"脚本写错了"，完全指不到"渲染进程已卡死"。
+ *   超时不是"更宽容"，而是把**挂死**换成**可命名的失败**：
+ *   报出是哪一步卡住、并给可复制的处置命令，退出码走 2（INVALID ≠ FAIL）。
+ *   ⚠️ 只包 `send`，**不包** `emit` —— Input 事件的响应在本环境稳定延迟约 5s
+ *   （见下方注释），给 emit 加 await/超时会把点击串行化，反而打穿 2.5s 上膛窗口。 */
+const CDP_TIMEOUT = Number(process.env.CDP_TIMEOUT_MS || 12000);
+const send = (method, params = {}) => new Promise((res, rej) => {
+	const h = setTimeout(() => rej(Object.assign(new Error("CDP_TIMEOUT"), { cdpTimeout: true, method })), CDP_TIMEOUT);
+	if (h.unref) h.unref();
+	rawSend(method, params).then((v) => { clearTimeout(h); res(v); }, (e) => { clearTimeout(h); rej(e); });
+});
 /* fire-and-forget：不等 CDP 响应（响应回来时 pending 无记录会被自动忽略）。
  * 🔴 实测本 Electron 环境 Input.dispatchMouseEvent 的**响应**稳定延迟约 5s，而事件本身立即送达
  * （对照：Runtime.evaluate 往返仅 2ms）。坐标点击绝不能 await Input 响应，否则一次点击串行
@@ -65,7 +98,26 @@ await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
 
 async function js(expr) {
-	const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true, includeCommandLineAPI: true });
+	let r;
+	try {
+		r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true, includeCommandLineAPI: true });
+	} catch (e) {
+		if (e && (e.cdpTimeout || e.wsClosed)) {
+			const why = e.wsClosed
+				? "CDP 连接被关闭 —— Harness 已被关闭或被外部重启（不是断言失败）"
+				: ("CDP 调用超时 " + CDP_TIMEOUT + "ms —— 渲染进程已卡死（不是断言失败）");
+			console.error("\nIS_PASS: FALSE（INVALID：" + why + "）");
+			console.error("  已跑完：" + pass + " 通过 / " + fail + " 失败；**其后断言未被评估**（不计入通过数）。");
+			console.error("  卡住的表达式：" + String(expr).slice(0, 180).replace(/\s+/g, " "));
+			console.error("  自检：node scripts/cdp-eval.mjs \"1+1\" —— 若也失败，就是渲染进程无响应/进程已退出。");
+			console.error("  处置（必须后台启动，且清掉两个环境变量）：");
+			console.error("    powershell -File scripts/restart-harness.ps1");
+			console.error("    node scripts/verify-design-studio.mjs");
+			try { ws.close(); } catch (e2) { /* 忽略 */ }
+			process.exit(2);
+		}
+		throw e;
+	}
 	if (r.exceptionDetails) throw new Error("JS异常: " + r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description || ""));
 	return r.result?.value;
 }
@@ -84,6 +136,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 不在此处直接 assert（那会因一处打偏而中断后续取证），改为收尾统一判定。 */
 const clickMisses = [];
 const clickLog = [];
+/* 🔴 「点不成」也要留痕（纪律 18：跳过必须带可分辨原因）。
+ * 为什么单列一张台账：`clickTestId` 的两条早退分支（目标不存在 / 尺寸为 0）**既不进
+ * `clickMisses`、也不进任何断言**，于是 C17.1 那句"全部 N 次点击落点均在目标子树内"
+ * 把"有几次压根没点成"整个漏掉 —— 计数只统计了**点成了的**那些。
+ * 现场后果与"打偏"同形：后续断言以"产品坏了"的形态炸掉，而真实原因是那一击**没发生**。
+ * 判据分开定：`元素不存在` 可能是**有意探测**（如判定菜单是否收起），只报不判；
+ * `元素尺寸为 0` 一定是异常（元素在 DOM 里却不可点），单列一条硬断言。 */
+const clickFails = [];
 
 async function clickAt(x, y) {
 	const X = Math.round(x), Y = Math.round(y);
@@ -117,8 +177,8 @@ async function rectOf(sel) {
 }
 async function clickTestId(tid) {
 	const r = await rectOf(`[data-testid="${tid}"]`);
-	if (!r) return { ok: false, why: "元素不存在" };
-	if (r.w < 1 || r.h < 1) return { ok: false, why: "元素尺寸为 0" };
+	if (!r) { clickFails.push({ tid, why: "元素不存在" }); return { ok: false, why: "元素不存在" }; }
+	if (r.w < 1 || r.h < 1) { clickFails.push({ tid, why: "元素尺寸为 0", w: Math.round(r.w), h: Math.round(r.h) }); return { ok: false, why: "元素尺寸为 0" }; }
 	/* 落点自检：读**点击前**该点的命中栈顶。必须落在目标子树内（自己/后代/祖先），
 	 * 否则这一击打在别人身上 —— 记名，不中断（要保留后续取证）。 */
 	const hit = await js(`(function(){
@@ -229,6 +289,33 @@ async function ensureSelected() {
 }
 
 let pass = 0, fail = 0, skipped = 0; const rows = [];
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  闸门自身异常兜底（2026-09-14 补，与 `verify-mindmap` / `verify-v20` **同一套约定**）
+ *
+ *  为什么必须补（本轮实测踩到，且**是本项目登记过的同类事故的第 2 次**）：
+ *    渲染进程主线程被占住时，`ev()` 不再抛错，而是**返回 `{__err: "CDP_TIMEOUT …"}`**。
+ *    调用方若把它当数组/对象常规使用，就会在**深层**炸出 TypeError，
+ *    而顶层没有兜底 ⇒ 进程只留一个堆栈，**后面所有断言一条都没跑，也没人知道**。
+ *    现场（同日 `verify-flow.mjs`）：崩在 1143 行，其后 D6/D7 + 收尾段全部丢失。
+ *
+ *  ⇒ 兜住任何未捕获异常 / 未处理拒绝：把**已经跑出来的**结果 + "其后未跑"明确打出来，
+ *     并以 **exit 2（INVALID）** 收尾。「脚本自己死了 ≠ 产品不合格」（纪律 17）。 */
+let reachedFinal = false;
+const dieReport = (why) => {
+	console.error("\n───────────────────────────────────────────────");
+	console.error(" ❌ INVALID：脚本异常终止 —— " + why);
+	console.error(` 已跑出：通过 ${pass} / 失败 ${fail} / 跳过 ${skipped}（合计 ${pass + fail + skipped}）`);
+	console.error(` 是否已到达收尾段：${reachedFinal}`);
+	const shown = rows.filter((r) => r.ok === false).map((r) => r.id + " " + r.name);
+	if (shown.length) console.error(" 期间失败项：\n   - " + shown.join("\n   - "));
+	console.error(" 其后段落**一条都没跑** ⇒ 不得据此判定产品好坏。");
+	console.error(" 处置：重启 Harness 重跑（本工具会话下须**同一条命令内**先启动再测）。");
+	console.error("───────────────────────────────────────────────");
+	process.exit(2);
+};
+process.on("uncaughtException", (e) => dieReport("uncaughtException：" + ((e && e.stack) || e)));
+process.on("unhandledRejection", (e) => dieReport("unhandledRejection：" + ((e && (e.stack || e.message)) || e)));
 function assert(id, name, ok, detail) {
 	rows.push({ id, name, ok, detail }); ok ? pass++ : fail++;
 	console.log(`  ${ok ? "✅" : "❌"} ${id} ${name}`);
@@ -705,12 +792,30 @@ const reopenPath = await js(`(function(){
 	if (document.querySelector('[data-testid=ds-root]')) return "already-open";
 	var b = document.getElementById('dsh-design-studio-launcher');
 	if (!b) return "no-launcher";
-	b.click();
-	return "clicked";
+	var r = b.getBoundingClientRect();
+	if (r.width < 1 || r.height < 1) return "launcher-zero-size";
+	return { cx: r.x + r.width / 2, cy: r.y + r.height / 2 };
 })()`);
-await sleep(1100);
-const reopened = await js(`Boolean(document.querySelector('[data-testid=ds-root]'))`);
-assert("C14.0", "点浮动按钮重新打开工作室（C13 收尾时已关闭）", reopened === true, { reopenPath, reopened });
+/* 🔴 必须走**真实鼠标**（2026-09-14 修正）。
+ *   旧写法是 `b.click()` —— 程序化派发：不看 z-index、不看遮挡、
+ *   祖先 `pointer-events:none` 也照样派发（`cdp-mouse.mjs` 文件头已把这条列为「假点击」）。
+ *   而浮动按钮组正好是 `containerPointerEvents:"none"` + `pillPointerEvents:"auto"` 的结构，
+ *   `.click()` 的成败与"用户点得到吗"**根本不是一回事**：它绿，不代表真人能点开。
+ *   改用与 C1.1 一致的 `clickAt(rect.cx, rect.cy)` —— 同一个入口按钮，两条断言同一种点法。
+ * 🔴 并且把固定 `sleep(1100)` 换成**带截止期的轮询**：工作室挂载是异步的，
+ *   固定等待在机器变慢时就是假失败（"点了没反应"），而真因只是还没挂完。
+ *   轮询窗口 4000ms、步长 150ms —— 与 C16.7 的 ARM_DEADLINE_MS 同一套写法。 */
+let reopened = false;
+if (reopenPath && typeof reopenPath === "object") {
+	await clickAt(reopenPath.cx, reopenPath.cy);
+	const reopenT0 = Date.now();
+	while (Date.now() - reopenT0 < 4000) {
+		await sleep(150);
+		if (await js(`Boolean(document.querySelector('[data-testid=ds-root]'))`)) { reopened = true; break; }
+	}
+}
+assert("C14.0", "点浮动按钮重新打开工作室（C13 收尾时已关闭）", reopened === true,
+	{ reopenPath, reopened, 轮询截止ms: 4000 });
 
 /* ── C14 前置（**可重复性**）：把设计图数据重置为「一张干净的标准框架图」 ──
  * 为什么必须做：C16 会**真实点击**「保存 / 新建图 / 复制 / 重载框架」——
@@ -827,7 +932,19 @@ assert("C14.7", "复制图 ⇒ 文档数 +1 且新图名带「副本」",
 await clickTestId("ds-del-doc");
 await sleep(150);
 const afterArmDocs = await js(`document.querySelectorAll('[data-testid=ds-doclist] option').length`);
-const afterArmFlag = await js(`document.querySelector('[data-testid=ds-del-doc]').getAttribute('data-armed')`);
+/* 🔴 必须判空再读属性。旧写法是 `document.querySelector('[data-testid=ds-del-doc]').getAttribute(...)`
+ *    —— **裸解引用**：一旦此刻删图按钮不在 DOM（工作室被 Esc 关掉、或上膛态把它换走了），
+ *    这一句抛 `Cannot read properties of null`，而 `js()` 的异常会**打断整个脚本**：
+ *    其后 H/I/J 各段 100+ 条断言**全部丢失且无人知晓**（汇总里看不出少了什么）。
+ *    同一形状的坑本仓库已第三次踩到（AGENTS.md 台账（二）第 1 条）。
+ *    修法不是加 `?.` 让它静默变 null，而是 **判空 + 把"按钮不在"变成一条显式前置断言** ——
+ *    这样"没测到"会以红的形式出现，而不是以"脚本少了半截"的形式消失。 */
+const afterArmFlag = await js(`(function(){
+	var b = document.querySelector('[data-testid=ds-del-doc]');
+	return b ? b.getAttribute('data-armed') : null;
+})()`);
+assert("C14.8p", "前置：上膛瞬间删图按钮仍在 DOM（旧写法在此裸解引用，会把其后 100+ 条断言静默吞掉）",
+	afterArmFlag !== null, { afterArmFlag, docs: afterArmDocs });
 await clickTestId("ds-del-doc");
 await sleep(800);
 const afterDel = await readTop();
@@ -1145,6 +1262,12 @@ const negative = await js(`(function(){
 		return o;
 	};
 	var b = document.querySelector('[data-testid=ds-save]');
+	/* 🔴 判空：本条是"人为改样式做正负对照"，工作室若已关掉 ds-save 就是 null，
+	 *    旧写法紧跟 b.style.minWidth ⇒ 裸解引用抛错 ⇒ **整个脚本在这一行死掉**，
+	 *    其后 C16.9–C17.2（含"测试自身可信度"两条）全部丢失。
+	 *    本条已经在 2026-09-14 真机 run C 上实际发生过（Error: Cannot read properties of null (reading 'style')）。
+	 *    ⚠️ 注意本段在**模板字符串**内：注释里**不许出现反引号**（纪律 9）—— 这里写错一次就炸构建。 */
+	if (!b) return { err: "no-save-btn（工作室未打开：本对照无从做起）" };
 	var before = fp(), old = b.style.minWidth;
 	b.style.minWidth = "140px";
 	var after = fp();
@@ -1238,7 +1361,16 @@ console.log("\n【C17】测试自身可信度：点击落点自检 + 环境复�
  * 打偏点到 ⚙ 设置 ⇒ 个性化面板一直开着 ⇒ Esc 被 stopPropagation 吃掉）。
  * 这一条把"静默打偏"变成点名。 */
 assert("C17.1", `本脚本全部 ${clickLog.length} 次点击，落点均在目标元素子树内（不许静默打偏）`,
-	clickMisses.length === 0, clickMisses.length ? clickMisses : { clicks: clickLog.length });
+	clickMisses.length === 0, clickMisses.length ? clickMisses : { clicks: clickLog.length, fails: clickFails });
+
+/* C17.1b 「点不成」也必须点名。
+ * 为什么单列：`clickTestId` 的早退分支此前不留任何痕迹 ⇒ 汇总里的"共 N 项"是**静态**的，
+ *   少点了几次根本看不出来，而后续断言会以"产品坏了"的形态炸掉。
+ * `元素不存在` 可能是**有意探测**（判菜单是否收起），故只随详情上报、不判分；
+ * `元素尺寸为 0` 没有正当理由 —— 元素在 DOM 里却不可点，一定是布局/遮挡缺陷。 */
+const zeroSize = clickFails.filter((f) => f.why === "元素尺寸为 0");
+assert("C17.1b", "不存在「目标在 DOM 里但尺寸为 0」的点击（有则说明布局塌了，而不是按钮没了）",
+	zeroSize.length === 0, { zeroSize, allFails: clickFails });
 
 /* C17.2 环境复原：把本次运行开出来的浮层 / 工作室关回去。
  * 为什么必须做：本脚本**不重载页面**（连的是已运行的 Harness 实例），
@@ -1272,6 +1404,7 @@ if (skippedRows.length) {
 	skippedRows.forEach((s) => console.log(`   ⏭️ ${s.id} ${s.name}\n       原因：${s.reason}`));
 }
 console.log("════════════════════════════════════════════════════════════");
+reachedFinal = true;
 console.log(`\nIS_PASS: ${fail === 0 ? "TRUE" : "FALSE"}（fail=${fail}${skipped ? " / 跳过=" + skipped : ""}）`);
 ws.close();
 process.exit(fail === 0 ? 0 : 1);

@@ -31,7 +31,7 @@
  *   否则发送按钮的 `disabled` 不会解除，点击是原生 no-op（→ 表现为"点了没反应"）。
  */
 
-import { getSplitRootRect, findChatRoot } from "./split.js";
+import { getSplitRootRect, findChatRoot, isPluginNode } from "./split.js";
 import { dshLog } from "../util/debug.js";
 
 const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
@@ -297,22 +297,148 @@ async function deliverImpl(text, opts = {}) {
 
 /* ── 右 → 左：产出观察 ─────────────────────────────────────────── */
 
-/** 找到"消息列表"容器（沿 viewArea 的单子节点链下钻） */
+/**
+ * 宿主当前选中的页签名（「总监」/「对话」/「轨迹」）。
+ * @returns {string|null} 读不到（宿主未挂载 tab 环）时回 `null` —— 调用方据此区分
+ *   "确定不在对话页签" 与 "无从判断"，不许把两者混为一谈。
+ */
+export function hostTabName() {
+	if (!hasDom()) return null;
+	try {
+		const t = document.querySelector("[role=tab][aria-selected=true]");
+		return t ? String(t.textContent || "").trim() : null;
+	} catch (e) { return null; }
+}
+
+/**
+ * 取一个元素的**布局孩子**（穿透 `display:contents` 包裹层）。
+ *
+ * 🔴 为什么必须穿透（2026-09-14 `scripts/_probe-surface.mjs` 取证）：
+ *    宿主在 `OrjXgq_centerSurface` 与 `RWZidW_root` 之间插了一层 **`display:contents`** 的
+ *    `<div>` —— 它**不生成盒子** ⇒ `getBoundingClientRect()` 恒为 `0×0`
+ *    ⇒ 原来用 `isVisible()`（宽高 > 0）过滤时它被判为"不可见"
+ *    ⇒ "单子链下钻"在第一层就 `kids.length !== 1` 而中断 ⇒ `findMessageList()` 返回 `null`
+ *    ⇒ R5 的对话视图只能显示降级文案（F8/F9/F11 那三条红）。
+ *    判据错在"用像素面积代表存在性"—— **`display:contents` 有存在性、无盒子**。
+ */
+function layoutChildren(el, out) {
+	const acc = out || [];
+	let kids = [];
+	try { kids = [...el.children]; } catch (e) { return acc; }
+	for (const k of kids) {
+		let disp = "";
+		try { disp = window.getComputedStyle(k).display; } catch (e) { disp = ""; }
+		if (disp === "contents") { layoutChildren(k, acc); continue; }
+		acc.push(k);
+	}
+	return acc;
+}
+
+/** 元素是否真的在滚（看 `overflow-y` 声明，**不看**当前是否溢出：短会话同样用滚动容器渲染） */
+function isScrollBox(el) {
+	try {
+		const y = window.getComputedStyle(el).overflowY;
+		return y === "auto" || y === "scroll";
+	} catch (e) { return false; }
+}
+
+/** 元素相对 `root` 的深度（用于在多个候选滚动容器里取**最深**那个） */
+function depthFrom(root, el) {
+	let d = 0, p = el;
+	while (p && p !== root) { d++; p = p.parentElement; }
+	return d;
+}
+
+/**
+ * 应用根内**最深**的"消息滚动容器"。
+ * 🔴 为什么是"最深"而不是"孩子最多"：真机实测消息滚动容器是 `f7fkwa_scroll`，
+ *    它**只有 1 个孩子**（`f7fkwa_column`，真正装 76 条消息的那一层）
+ *    ⇒ "孩子最多"会挑到内层非滚动容器，"最深滚动容器"才对。
+ */
+function deepestScroller(root) {
+	let best = null, bestDepth = -1;
+	let all = [];
+	try { all = root.querySelectorAll("div,ul,ol"); } catch (e) { return null; }
+	for (let i = 0; i < all.length; i++) {
+		const el = all[i];
+		try {
+			if (isPluginNode(el)) continue;
+			if (el.querySelector('textarea,[contenteditable="true"]')) continue;
+			if (!isScrollBox(el)) continue;
+			const r = el.getBoundingClientRect();
+			if (r.width < 200 || r.height < 120) continue;
+			const d = depthFrom(root, el);
+			if (d > bestDepth) { bestDepth = d; best = el; }
+		} catch (e) { /* 单个候选失败不影响其它候选 */ }
+	}
+	return best;
+}
+
+/** 不是消息列表的"排除性判据"：页签环在消息列表**之外**（落回应用根时它必然在） */
+function looksLikeRoot(el) {
+	try { return Boolean(el.querySelector("[role=tab]")); } catch (e) { return true; }
+}
+
+/**
+ * 找到"消息列表"容器。
+ *
+ * ── 🔴 判据演进（2026-09-14，两轮实测各自证伪了旧写法）────────────
+ *   · 旧写法 = "从应用根沿**可见**单子链下钻"。两处致命问题：
+ *     ① `display:contents` 包裹层被 `isVisible()` 判为不可见 ⇒ 第一层就中断 ⇒ 恒 `null`；
+ *     ② 即便钻通，落点也常常是**应用根本身**（它有多可见子节点时下钻在第一步就 break），
+ *        而 `cur === root ? null : cur` 只挡住了"原地不动"这一种形态
+ *        ⇒ 真机曾返回 `RWZidW_root`（整个应用根，3 个孩子）并把它当消息列表
+ *        ⇒ `total` 变成 3，"读到了隔壁"却**看起来有数据**（最坏的一类假绿）。
+ *   · 新写法 = **先定位真正在滚的消息列，再穿透单孩子包裹层**：
+ *     滚动容器（`overflow-y: auto|scroll`）是宿主消息区的结构性事实，
+ *     与"会话内容多少""包裹层怎么加"都无关；落点稳定在装消息行的那一层。
+ *
+ * ── 页签前置（同上一版，保留）──────────────────────────────────
+ *   宿主页签是**内容互换**不是隐藏 ⇒ 不在【对话】页签时消息列表必然不在场，
+ *   直接 `null`（而不是返回隔壁容器当"有数据"）。
+ */
 export function findMessageList() {
+	if (!hasDom()) return null;
 	const rect = getSplitRootRect();
 	if (!rect) return null;
 	const root = findChatRoot();
 	if (!root) return null;
-	// 消息列表 = 应用根内"高度占主体、且不含 composer 编辑器"的最深单子链末端
-	let cur = root;
-	let guard = 0;
+	/* 页签前置：读得到页签名且不是「对话」⇒ 消息列表不在场 */
+	const tab = hostTabName();
+	if (tab !== null && tab !== "对话") return null;
+
+	/** 单孩子包裹层穿透（带几何护栏：孩子必须**撑满**当前层，避免钻进某一条消息里） */
+	const pierce = (from, maxGuard) => {
+		let cur = from, guard = 0;
+		while (cur && guard++ < (maxGuard || 8)) {
+			const kids = layoutChildren(cur).filter((e) => !e.querySelector('textarea,[contenteditable=true]'));
+			if (kids.length !== 1) break;
+			const c = kids[0];
+			let ok = true;
+			try {
+				const cr = c.getBoundingClientRect(), pr = cur.getBoundingClientRect();
+				/* 单条消息（矮）不撑满容器 ⇒ 到此为止，`cur` 就是列表（1 条 = 1 个孩子，读数正确） */
+				if (cr.height < pr.height * 0.6) ok = false;
+			} catch (e) { ok = false; }
+			if (!ok) break;
+			cur = c;
+		}
+		return cur;
+	};
+
+	const scroller = deepestScroller(root);
+	if (scroller) return pierce(scroller, 6);
+
+	/* 兜底：下钻（穿透 `display:contents`）。命中的判据收紧到"**不能**落回应用根"，
+	 * 因为消息列表里面绝不会有页签环。 */
+	let cur = root, guard = 0;
 	while (cur && guard++ < 12) {
-		const kids = [...cur.children].filter((e) => isVisible(e));
+		const kids = layoutChildren(cur).filter((e) => !e.querySelector('textarea,[contenteditable=true]'));
 		if (kids.length !== 1) break;
-		if (kids[0].querySelector("textarea,[contenteditable=true]")) break;
 		cur = kids[0];
 	}
-	return cur === root ? null : cur;
+	if (cur === root || looksLikeRoot(cur)) return null;
+	return cur;
 }
 
 /**
@@ -322,13 +448,151 @@ export function findMessageList() {
 export function readConversation() {
 	const list = findMessageList();
 	if (!list) return { count: 0, lastText: "", listFound: false };
-	const items = [...list.children].filter(isVisible);
+	/* 🔴 用 `layoutChildren`（穿透 `display:contents` 包裹层）再按可见性过滤：
+	 *    只按 `children + isVisible` 会在宿主插入 `display:contents` 包裹层时**静默漏掉整层消息**
+	 *    （面积 0×0 ⇒ 被判为不可见），条数直接变 0 而没有任何报错。 */
+	const items = layoutChildren(list).filter(isVisible);
 	const last = items[items.length - 1];
 	return {
 		count: items.length,
 		lastText: last ? String(last.textContent || "").trim().slice(0, 400) : "",
 		listFound: true
 	};
+}
+
+/**
+ * 读取当前对话的**消息条目**（第 6 批需求 7 的 R5「对话」视图数据源）。
+ *
+ * 🔴 为什么不能直接用 `readConversation()`：它只回 `count + lastText`（一行摘要）。
+ *    用户要求「点击对话的时候, r5总监消息, 变成对话的消息, **历史信息也要在**」
+ *    ⇒ 需要**逐条**可渲染的消息。
+ *
+ * 实测（`scripts/_probe-chat-messages.mjs`，2026-09-14 真机）：
+ *   消息列表 = `DIV.f7fkwa_column`，当前 **76** 条可见子节点 —— 与 `findMessageList()`
+ *   的下钻结果一致（它是在"可见子节点数 ≠ 1"处 break 并把当前层返回）。
+ *   ⇒ 复用同一处真相源（`findMessageList`），不另写一套下钻。
+ *
+ * @param {number} [limit=40] 最多回多少条（默认取**最后** 40 条：历史要看，但不必全渲染）
+ * @returns {{ok:boolean, total:number, items:Array<{i:number,text:string}>, reason:string|null}}
+ *   `ok=false` 时**必带 reason**（纪律 19：降级可以，无声不行）—— 别让 R5 空着还不说话。
+ */
+export function readConversationItems(limit) {
+	const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.round(Number(limit)) : 40;
+	const list = findMessageList();
+	if (!list) return { ok: false, total: 0, items: [], reason: "未找到消息列表容器（对话区可能未挂载 / 当前不在对话页签）" };
+	let els;
+	try { els = layoutChildren(list).filter(isVisible); } catch (e) {
+		return { ok: false, total: 0, items: [], reason: "读取消息子节点失败：" + ((e && e.message) || e) };
+	}
+	const start = Math.max(0, els.length - n);
+	const items = [];
+	for (let i = start; i < els.length; i++) {
+		const el = els[i];
+		let text = "";
+		try { text = String(el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) { text = ""; }
+		items.push({ i, text: text.slice(0, 600) });
+	}
+	return { ok: true, total: els.length, items, reason: null };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ *  对话消息镜像（第 6 批需求 7 的真·数据源）
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 宿主对话消息的**本次运行内镜像**。
+ *
+ * ── 🔴 为什么必须有镜像（2026-09-14 实测两条，缺一不可）──────────────
+ *   ① **DOM 源在总监页签下不存在**：页签是"内容互换"不是"隐藏" ——
+ *      切到【总监】时宿主消息滚动容器（`f7fkwa_scroll`）**整体卸载**
+ *      （`scripts/_probe-tab-mount.mjs`：对话页签 5 个滚动容器，总监页签只剩 3 个，
+ *      消息列不在其中）。而 R5 恰恰**只**在总监页签可见
+ *      ⇒ "切到对话视图时现读 DOM"在结构上不可能成立。
+ *   ② **逻辑层没有对话正文**：宿主 `sessions.list.getSnapshot().byId[id]` 只有会话
+ *      **元数据**（id/标题/running/父会话…，取证 `dsh-client-runtime/lib/client.js:9222` `projectList`）；
+ *      插件 `memoryCore.conversationHistory` 只记**用户侧**投递且本机为空
+ *      （`scripts/_probe-conv-history.mjs`：`memoryCore 为空`）；
+ *      `plugin-db/directorConversations` 是**总监自己的**消息，不是宿主对话。
+ *   ⇒ 唯一有正文的地方就是那个 DOM，而它**只在对话页签存在**
+ *   ⇒ 只能"在场时持续镜像、离场时保留上次快照"。
+ *
+ * ── 语义边界（不许含糊）───────────────────────────────────────────
+ *   · 镜像**只累积到本次运行**（不落盘）：不新开 localStorage / DB 契约（R5 冻结键）。
+ *   · `at` 是最后一次**成功同步**的时刻；`reason` 是最后一次**失败**的原因。
+ *     两者分开记 ⇒ 界面才能同时说清"这是什么时候的数据"和"现在为什么没更新"。
+ */
+export const conversationMirror = {
+	items: [], total: 0, at: 0, tab: null,
+	syncs: 0, misses: 0,
+	/** null = 上一次同步成功；否则是失败原因（可显示） */
+	reason: "尚未同步（宿主【对话】页签未激活过）"
+};
+
+/**
+ * 同步一次镜像。**幂等**：在场则刷新、不在场则**保留**上一次快照并记原因。
+ * @param {number} [limit=60]
+ * @returns {typeof conversationMirror}
+ */
+export function syncConversationMirror(limit) {
+	conversationMirror.tab = hostTabName();
+	const live = readConversationItems(limit || 60);
+	if (live.ok) {
+		conversationMirror.items = live.items;
+		conversationMirror.total = live.total;
+		conversationMirror.at = Date.now();
+		conversationMirror.syncs++;
+		conversationMirror.reason = null;
+	} else {
+		conversationMirror.misses++;
+		conversationMirror.reason = live.reason;
+	}
+	return conversationMirror;
+}
+
+/** 镜像定时器（单例；重复调用只是换周期） */
+let mirrorTimer = null;
+/**
+ * 启动镜像轮询。
+ * 🔴 周期取 **2500ms**：`findMessageList()` 会走 `findChatRoot()`（扫 textarea + button 并量祖先几何），
+ *    属"中等代价"——**不能**放进 mutation 回调（那正是本文件另一处布局抖动事故的成因），
+ *    只能低频轮询。且**只在对话页签**才真正取数（其余时刻一次页签查询即返回）。
+ * @param {number} [intervalMs=2500]
+ * @returns {() => void} 停止函数
+ */
+export function startConversationMirror(intervalMs) {
+	/* 🔴 本函数在 `installBatch1` 执行链上 ⇒ **绝不抛**（纪律 C）：
+	 *    离线桩环境**没有** `setInterval`，第一版直接调用会把整条安装链打断
+	 *    ——实测后果：其后几十项能力（个性化 / 四维流转 / 批次*）全部丢失，
+	 *    外层却只看到 `TypeError: Cannot read properties of undefined (reading 'store')`
+	 *    （`verify-bundle.mjs:393` 报的就是这个，**读起来与真实缺陷无关**）。
+	 *    ⇒ 能力先探测，全程 try/catch，降级原因写进 `conversationMirror.reason`。 */
+	const hasTimer = typeof setInterval === "function" && typeof clearInterval === "function";
+	try { syncConversationMirror(60); }
+	catch (e) { conversationMirror.reason = "首次同步失败：" + ((e && e.message) || e); }
+	if (!hasTimer) {
+		conversationMirror.reason = conversationMirror.reason || "无 setInterval（离线 / 非浏览器环境）—— 镜像未启动轮询";
+		return () => {};
+	}
+	const ms = Number.isFinite(Number(intervalMs)) && Number(intervalMs) >= 500 ? Math.round(Number(intervalMs)) : 2500;
+	try {
+		if (mirrorTimer) clearInterval(mirrorTimer);
+		mirrorTimer = setInterval(() => {
+			try {
+				/* 廉价前置：不在对话页签就**只记未命中**，不跑 findChatRoot 那一串 */
+				conversationMirror.tab = hostTabName();
+				if (conversationMirror.tab !== "对话") {
+					conversationMirror.misses++;
+					conversationMirror.reason = "宿主当前不在【对话】页签 —— 消息列表不在场（已保留上次快照）";
+					return;
+				}
+				syncConversationMirror(60);
+			} catch (e) { /* 轮询绝不抛穿（纪律 C） */ }
+		}, ms);
+	} catch (e) {
+		conversationMirror.reason = "定时器挂载失败：" + ((e && e.message) || e);
+		return () => {};
+	}
+	return () => { try { clearInterval(mirrorTimer); } catch (e) { /* 已停 */ } mirrorTimer = null; };
 }
 
 /**
@@ -340,6 +604,8 @@ export function observeConversation(cb) {
 	if (!hasDom() || typeof MutationObserver === "undefined") return () => {};
 	let last = readConversation();
 	let timer = null;
+	let mo = null;
+	let retry = null;
 	const fire = () => {
 		const cur = readConversation();
 		const delta = cur.count - last.count;
@@ -347,13 +613,35 @@ export function observeConversation(cb) {
 		last = cur;
 		if (changed) { try { cb({ ...cur, delta }); } catch (e) { /* 订阅者异常不影响观察 */ } }
 	};
-	const mo = new MutationObserver(() => {
+	/* 🔴 挂载点**必须**优先是消息列表，不能无条件退回 `document.body`（2026-09-14）：
+	 *    `findMessageList()` 现在有了"宿主不在对话页签 ⇒ 返回 null"的前置判据
+	 *    ⇒ 总监页签下会落到兜底 `document.body`，那就是**全文档观察**
+	 *    （流式输出期等价于把每次渲染都过一遍 debounce），与本文件另一处布局抖动事故同源。
+	 *    折中（同时满足两个约束）：
+	 *      · 观察器**始终**创建（契约：调用方拿得到退订函数，`verify-dialog` D18 断言这条）；
+	 *      · 找不到消息列表时挂在 `body` 上但**只观察直接子节点**（`subtree:false`，代价极低），
+	 *        并低频重试，一旦消息列表出现就换成真正的目标。
+	 */
+	mo = new MutationObserver(() => {
 		if (timer) clearTimeout(timer);
 		timer = setTimeout(fire, 220); // 防抖：流式输出期间高频变更
 	});
-	const target = findMessageList() || document.body;
-	mo.observe(target, { childList: true, subtree: true, characterData: true });
-	return () => { try { mo.disconnect(); } catch (e) { /* 已断开 */ } if (timer) clearTimeout(timer); };
+	const applyTarget = () => {
+		const list = findMessageList();
+		const target = list || document.body;
+		const opts = list ? { childList: true, subtree: true, characterData: true } : { childList: true, subtree: false };
+		try { mo.disconnect(); } catch (e) { /* 未挂过 */ }
+		try { mo.observe(target, opts); } catch (e) { return false; }
+		return Boolean(list);
+	};
+	if (!applyTarget()) {
+		retry = setInterval(() => { if (applyTarget()) { clearInterval(retry); retry = null; fire(); } }, 1500);
+	}
+	return () => {
+		try { mo.disconnect(); } catch (e) { /* 已断开 */ }
+		if (timer) clearTimeout(timer);
+		if (retry) { clearInterval(retry); retry = null; }
+	};
 }
 
 /** 安装全局契约（调试与验证脚本用） */
@@ -361,10 +649,12 @@ export function installChatBridgeApi() {
 	if (!hasDom()) return null;
 	const api = {
 		SEND_ARIA, COMPOSER_PLACEHOLDER,
-		findComposer, findSendButton, findMessageList,
+		findComposer, findSendButton, findMessageList, hostTabName,
 		setComposerText, readComposerText, submitComposer, sendToChat, sendToHost, deliverToChat, getLastDeliver,
 		isAgentGenerating,
-		readConversation, observeConversation
+		readConversation, observeConversation,
+		/* 第 6 批需求 7：R5「对话」视图的数据源与镜像（闸门 / 探针要用，**不要改名**） */
+		readConversationItems, conversationMirror, syncConversationMirror, startConversationMirror
 	};
 	window.__dshChatBridge = api;
 	dshLog("bridge", "chat-bridge 已安装（composer 锚点：" + COMPOSER_PLACEHOLDER + " / " + SEND_ARIA + "）");

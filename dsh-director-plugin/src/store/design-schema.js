@@ -216,6 +216,189 @@ export const ELEMENT_KINDS = Object.freeze({
 /** 全部类型 key（校验 / 遍历用） */
 export const ELEMENT_KIND_KEYS = Object.freeze(Object.keys(ELEMENT_KINDS));
 
+/**
+ * 各图元的**默认层**（单一真相源 —— 层由"这是什么类型的元素"决定，不是逐实例填的）。
+ * 为什么挂在类型上而不是写进 FRAME_SEEDS：
+ *   ① 一条事实只留一份 —— 若种子里逐个再写一遍 layer，改了类型默认值就会与种子不一致，
+ *      而"重复即漂移"正是本项目栽过的坑（纪律 21）。
+ *   ② **旧数据迁移的正确性依赖它**：落死基线写下的 doc 没有 layer 字段，
+ *      读回时只能由类型反推 —— 只要 `window` 默认 base、`sidebar` 默认 content，
+ *      迁移结果就与新建的标准框架**完全一致**（不会凭空冒出"N2 同层重叠"告警）。
+ * 特例仍可覆盖：createElement 的 patch 里带 layer 时以 patch 为准。
+ */
+export const KIND_DEFAULT_LAYER = Object.freeze({
+	// 结构类
+	window: "base",      // 整屏底板
+	sidebar: "content",  // 嵌在窗口内 ⇒ 不能与 window 同层（否则必然相交，违反 N2）
+	tabring: "content",
+	region: "content",
+	panel: "content",
+	canvas: "base",      // 画布自身是底，节点才是内容
+	// 控件类
+	button: "content", input: "content", select: "content",
+	badge: "deco", text: "deco", icon: "deco", list: "content",
+	card: "content", progress: "deco",
+	// 语义类
+	node: "content", edge: "content", overline: "deco"
+});
+
+/* ══════════════════════════════════════════════════════════════════
+ * 一之二、画面（SCREEN）与层（LAYER）—— 2026-09-14 新增
+ *
+ * 🔴 为什么必须加这一层（成因见 docs/50-信息中心/V20-设计图分层与AI可读规格.html §A）：
+ *   本文件原有 20 个标准框架元素其实是**三幅画面**：总监页底图（13）/ 右侧对话弹窗（2）/
+ *   导图态（5）。它们被摊平进同一个 elements[]，从属关系**只编码在一个裸整数 z 里**
+ *   （0-3 底图 / 6、8 浮层 / 10-11 模态）—— 这个约定只活在作者脑子里，代码里没有一处声明它。
+ *   后果是实测出来的：9/20 元素的中心点**点不中**（被导图画布整块吃掉），
+ *   于是"不知道该从哪些部分、按什么顺序改"成为必然结果，而不是操作不熟练。
+ *   ⇒ 把「画面」升为一等公民：**归属显式化、顺序可声明、重叠可校验、可整幅聚焦**。
+ *
+ * ⚠️ 三条不可动摇的约束（改本段前先读）：
+ *   ① `screen` **只标身份，不动坐标** —— x/y/w/h 一个都不许因归属变化而改写。
+ *      这是照 Excalidraw `frameId` 的正交设计（成员身份不改子元素坐标）；
+ *      若顺手偏移坐标，聚焦/取消聚焦会来回改图，用户会以为"我只是看了看它自己动了"。
+ *   ② `z` 仍然存在且语义不变 —— 它退化为**画面内**的次序（N5 不变量）。
+ *      跨画面比 z 无意义：画面之间的先后由 SCREEN_ORDER 决定，**不是**用 z 大的压 z 小的。
+ *   ③ 新字段一律**可缺省**，缺省值由 `screenFromZ()` 从 z 反推 ⇒ 已落死基线写的数据
+ *      读进来不用迁移（双向可读，见 baseline-check 的指纹纪律）。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 画面（一幅可独立查看、独立编辑的完整屏）。
+ * `overlap` = 重叠序：数字大者盖在数字小者之上。
+ * `hint` 是给**修改顺序**用的（用户原话："不知道该从哪些部分、按什么顺序去修改"）。
+ */
+export const SCREENS = Object.freeze({
+	director: { label: "总监页", overlap: 1, hint: "底图 · 先把这一屏改对，再谈浮层" },
+	chat: { label: "右侧对话弹窗", overlap: 2, hint: "浮在总监页之上 · 底图定了再动它" },
+	mindmap: { label: "导图态", overlap: 3, hint: "模态覆盖 · 最后改" }
+});
+
+/** 全部画面 key（校验 / 遍历用） */
+export const SCREEN_KEYS = Object.freeze(Object.keys(SCREENS));
+
+/** 画面按重叠序从下到上 —— 即**修改顺序**（自下而上改，上层不会挡住下层） */
+export const SCREEN_ORDER = Object.freeze(
+	SCREEN_KEYS.slice().sort((a, b) => SCREENS[a].overlap - SCREENS[b].overlap)
+);
+
+/**
+ * 由 z 反推画面 —— **仅用于旧数据兜底**（缺 screen 字段时）。
+ * 阈值与 FRAME_SEEDS 的既有 z 取值**逐段对齐**（这是"老数据也读得对"的唯一依据）：
+ *   z ≤ 4   → director（seed 实际取值 0/1/2/3）
+ *   5 ≤ z ≤ 9 → chat（seed 实际取值 6/8）
+ *   z ≥ 10  → mindmap（seed 实际取值 10/11）
+ * 🔴 这三个阈值是**兼容契约**，不是调优参数：改了会让基线写的数据读成另一幅画面。
+ */
+export const SCREEN_Z_MAX = Object.freeze({ director: 4, chat: 9 });
+
+/** @param {number} z @returns {string} 画面 key */
+export function screenFromZ(z) {
+	const n = Number(z);
+	if (!Number.isFinite(n)) return "director";
+	if (n <= SCREEN_Z_MAX.director) return "director";
+	if (n <= SCREEN_Z_MAX.chat) return "chat";
+	return "mindmap";
+}
+
+/** 取元素的画面（显式字段优先，否则按 z 兜底）。永不返回空 —— 未知一律回落 director。 */
+export function screenOf(el) {
+	const s = String((el && el.screen) || "");
+	if (SCREENS[s]) return s;
+	return screenFromZ(el && el.z);
+}
+
+/**
+ * 层（画面内的分层）。`order` 即**同画面内的修改次序**：先 base、再 content、最后 deco。
+ * 🔴 与 z 的分工：`layer` 管"先改谁"（语义，跨画面一致），`z` 管"同层内的压盖"（数值，画面内）。
+ */
+export const LAYERS = Object.freeze({
+	base: { label: "底图", order: 1, hint: "容器与底板 —— 先定，之后别再动" },
+	content: { label: "内容", order: 2, hint: "正片元素 —— 主要工作区" },
+	deco: { label: "装饰", order: 3, hint: "徽章 / 提示等点缀 —— 最后加" }
+});
+
+/** 全部层 key */
+export const LAYER_KEYS = Object.freeze(Object.keys(LAYERS));
+
+/** 按修改次序排列的层 key */
+export const LAYER_ORDER = Object.freeze(
+	LAYER_KEYS.slice().sort((a, b) => LAYERS[a].order - LAYERS[b].order)
+);
+
+/** 取元素的层（未知回落 base —— 与 createElement 的缺省一致） */
+export function layerOf(el) {
+	const l = String((el && el.layer) || "");
+	return LAYERS[l] ? l : "base";
+}
+
+/** 层的修改次序（用于排序；未知层排最后而不是抛错） */
+export function layerOrderOf(el) {
+	return (LAYERS[layerOf(el)] || { order: 99 }).order;
+}
+
+/**
+ * 绘制序（谁压谁）—— **唯一真相源**。
+ *
+ * 🔴 为什么不能再看裸 z（2026-09-14 新增，非改不可）：
+ *   原来画布只是 `sort((a,b) => a.z - b.z)`，因为三幅画面的 z 恰好互不重叠
+ *   （底图 0–3 / 浮层 6–8 / 模态 10–11）—— **这是巧合，不是设计**。
+ *   一旦有人在本画面内重排（reorderInScreen 会把本画面 z 规范化为 1..n），
+ *   总监页的 z 就会爬进 5–13，于是**导图态的画布会被总监页的方块盖住** ——
+ *   表现为"点了聚焦按钮之后整张图乱了"。⇒ 必须按语义排序：
+ *   **画面重叠序 → 层序 → z**（N5：z 只在画面内有意义）。
+ */
+export function paintOrderKey(el) {
+	return [
+		(SCREENS[screenOf(el)] || { overlap: 0 }).overlap,
+		layerOrderOf(el),
+		Number(el && el.z) || 0
+	];
+}
+
+/** 按绘制序排好的元素数组（供画布渲染；不改入参） */
+export function sortForPaint(elements) {
+	return (elements || []).slice().sort((a, b) => {
+		const A = paintOrderKey(a), B = paintOrderKey(b);
+		return (A[0] - B[0]) || (A[1] - B[1]) || (A[2] - B[2]);
+	});
+}
+
+/* ── 几何：矩形相交与"同画面同层内碰撞" ──────────────────────────────
+ * 为什么需要它：加了画面/层之后，"两个元素叠住了"才第一次有了**语义** ——
+ *   跨画面相交 = 正常的重叠语义（导图就该盖住总监页）；
+ *   同画面同层相交 = **真的摆错了**（R4 与 R5 本该并排）。
+ * 在此之前这两件事长得一模一样，只能靠肉眼判断，也就没人判得准。
+ */
+
+/** 两矩形交集面积（无交集返回 0） */
+export function intersectArea(a, b) {
+	if (!a || !b) return 0;
+	const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+	const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+	return w > 0 && h > 0 ? w * h : 0;
+}
+
+/**
+ * 列出「同画面 + 同层 + 都可见」的元素两两碰撞（N2 不变量的实现）。
+ * 隐藏元素不参与 —— 它不在画面上，叠住谁都不算错。
+ * @returns {Array<{screen:string, layer:string, a:string, b:string, area:number}>}
+ */
+export function layerCollisions(elements) {
+	const els = (elements || []).filter((e) => e && e.id && !e.hidden && isRenderable(e));
+	const out = [];
+	for (let i = 0; i < els.length; i++) {
+		for (let j = i + 1; j < els.length; j++) {
+			const a = els[i], b = els[j];
+			if (screenOf(a) !== screenOf(b)) continue;   // 跨画面相交是允许的
+			if (layerOf(a) !== layerOf(b)) continue;     // 跨层也不判（上层就是要盖下层）
+			const area = intersectArea(a, b);
+			if (area > 0) out.push({ screen: screenOf(a), layer: layerOf(a), a: a.id, b: b.id, area });
+		}
+	}
+	return out;
+}
+
 /** 按 group 分组（工具栏渲染用） */
 export function kindsByGroup() {
 	const out = {};
@@ -287,6 +470,8 @@ export function createElement(kind, patch = {}) {
 	const spec = ELEMENT_KINDS[kind];
 	if (!spec) return null;
 	const p = patch || {};
+	/* z 先算出来 —— 画面兜底要靠它反推，所以不能像原来那样只在字面量里内联一次 */
+	const z = Math.round(num(p.z, 1));
 	const el = {
 		id: p.id || nextElementId(kind),
 		kind,
@@ -294,11 +479,25 @@ export function createElement(kind, patch = {}) {
 		y: Math.round(clamp(num(p.y, 0), 0, CANVAS_H)),
 		w: Math.round(clamp(num(p.w, spec.w), MIN_SIZE, CANVAS_W)),
 		h: Math.round(clamp(num(p.h, spec.h), MIN_SIZE, CANVAS_H)),
-		z: Math.round(num(p.z, 1)),
+		z,
 		label: String(p.label == null ? spec.label : p.label),
 		props: { ...(p.props || {}) },
 		// 逻辑骨架来自类型默认值，再用实例覆盖 —— 保证「每个元素都有逻辑可显示」
-		logic: { ...emptyLogic(), ...(spec.logic || {}), ...(p.logic || {}) }
+		logic: { ...emptyLogic(), ...(spec.logic || {}), ...(p.logic || {}) },
+		/* ── 2026-09-14 新增五项（全部带缺省 ⇒ 旧数据读入即得合理值，无需迁移）──
+		 * 🔴 追加在**对象末尾**是刻意的：既有九个键的书写顺序保持不变，
+		 *    任何按 JSON 文本比对/落库的旧数据不会因"键序变了"而看起来像内容变了。 */
+		screen: SCREENS[p.screen] ? p.screen : screenFromZ(z),
+		// 层：实例覆盖优先 → 类型默认 → 兜底 base（三级，保证永不 undefined）
+		layer: LAYERS[p.layer] ? p.layer : (LAYERS[KIND_DEFAULT_LAYER[kind]] ? KIND_DEFAULT_LAYER[kind] : "base"),
+		/* 隐藏 / 锁定刻意**不用** Boolean(p.x) 那种宽松转换：
+		 * 传字符串 "false" 会被 Boolean 判成 true —— 而这两个字段的真值只可能来自
+		 * 布尔或 JSON，遇到其它类型一律取保守值（不隐藏、不锁定），
+		 * 让"意外锁定导致拖不动"这种最难查的问题从类型层面不可能发生。 */
+		hidden: p.hidden === true,
+		locked: p.locked === true,
+		/* 一句话说明这块干什么用 —— 专给 AI 读（DSL 导出与系统提示都用它） */
+		note: String(p.note == null ? "" : p.note).slice(0, 160)
 	};
 	return el;
 }
@@ -336,39 +535,55 @@ export function hitTest(elements, x, y) {
 /**
  * 模板定义：`seed` 是 createElement 的 patch 列表。
  * 🔴 坐标与 V16 板块 A 的高保真画面**逐块对应**，改画面时同步改这里。
+ *
+ * 2026-09-14：每条 seed 补 `screen`（原来靠 z 区间隐式表达，现改为显式声明）。
+ *   归属划分：director 13 条 / chat 2 条 / mindmap 5 条 —— 与探测结果一致。
+ *   ⚠️ `layer` **不写在这里** —— 层由 KIND_DEFAULT_LAYER（类型默认层）决定，一条事实一份真相源。
+ *   层划分的唯一硬约束是**同画面同层不许相交**（N2 不变量，由 layerCollisions 校验）：
+ *     · window 与 sidebar 在几何上必然重叠（侧栏整块嵌在窗口里），
+ *       因此二者**不能同层** —— window 默认 base（唯一一块整屏底板），sidebar 默认 content。
+ *     · 其余 director/content 各块是**平铺**的（R1…R8 互不相交），天然满足 N2。
+ *     · chat / mindmap 两幅各自只有 1 条 base，内容层内部亦不相交。
+ *   ⇒ 默认框架是「N2 全绿」的样板；一旦有人摆歪，闸门会指出来是哪两个元素。
+ *   🔴 `screen` 与本文件 screenFromZ() 的推断结果**必须逐条相同**（闸门 test-design-layers 有断言）：
+ *      这是"老数据靠 z 反推也能读对"的前提；两者一旦漂移，基线的数据就会被读成另一幅画面。
  */
 const FRAME_SEEDS = [
-	// 窗口 + 侧栏
-	{ kind: "window", label: "Harness 主窗口", x: 0, y: 0, w: 1180, h: 644, z: 0 },
-	{ kind: "sidebar", label: "侧栏 · 会话树", x: 0, y: 0, w: 230, h: 644, z: 1 },
+	// ── 画面 1：总监页底图（z 0–3 · overlap 1）──
+	{ kind: "window", label: "Harness 主窗口", x: 0, y: 0, w: 1180, h: 644, z: 0, screen: "director",
+		// 唯一一条默认锁定的元素：它是整屏底板，误拖会让"图整体错位"而不易察觉
+		locked: true },
+	{ kind: "sidebar", label: "侧栏 · 会话树", x: 0, y: 0, w: 230, h: 644, z: 1, screen: "director" },
 	// 页签环
-	{ kind: "tabring", label: "页签环 · 总监/对话/轨迹", x: 240, y: 6, w: 440, h: 28, z: 3 },
+	{ kind: "tabring", label: "页签环 · 总监/对话/轨迹", x: 240, y: 6, w: 440, h: 28, z: 3, screen: "director" },
 	// R1 顶栏
-	{ kind: "region", label: "R1 顶部栏", x: 240, y: 40, w: 930, h: 34, z: 2 },
+	{ kind: "region", label: "R1 顶部栏", x: 240, y: 40, w: 930, h: 34, z: 2, screen: "director" },
 	// R2 总览四卡
-	{ kind: "card", label: "R2 项目总览 · 四指标", x: 240, y: 80, w: 930, h: 76, z: 2 },
+	{ kind: "card", label: "R2 项目总览 · 四指标", x: 240, y: 80, w: 930, h: 76, z: 2, screen: "director" },
 	// R2.5 控制台
-	{ kind: "region", label: "R2.5 总监控制台", x: 240, y: 162, w: 930, h: 56, z: 2 },
+	{ kind: "region", label: "R2.5 总监控制台", x: 240, y: 162, w: 930, h: 56, z: 2, screen: "director" },
 	// R3 资源行
-	{ kind: "region", label: "R3 智能体 / 技能 / 资源", x: 240, y: 224, w: 930, h: 34, z: 2 },
+	{ kind: "region", label: "R3 智能体 / 技能 / 资源", x: 240, y: 224, w: 930, h: 34, z: 2, screen: "director" },
 	// 三栏 R4 / R5 / R7
-	{ kind: "panel", label: "R4 项目导航（三 Tab）", x: 240, y: 264, w: 200, h: 240, z: 2 },
-	{ kind: "panel", label: "R5 总监对话区", x: 447, y: 264, w: 520, h: 240, z: 2 },
-	{ kind: "panel", label: "R7 详情 / 产出物", x: 974, y: 264, w: 196, h: 240, z: 2 },
+	{ kind: "panel", label: "R4 项目导航（三 Tab）", x: 240, y: 264, w: 200, h: 240, z: 2, screen: "director" },
+	{ kind: "panel", label: "R5 总监对话区", x: 447, y: 264, w: 520, h: 240, z: 2, screen: "director" },
+	{ kind: "panel", label: "R7 详情 / 产出物", x: 974, y: 264, w: 196, h: 240, z: 2, screen: "director" },
 	// R6 记忆 + R8 输入
-	{ kind: "region", label: "R6 记忆面板", x: 240, y: 510, w: 930, h: 62, z: 2 },
-	{ kind: "input", label: "R8 全局输入条", x: 240, y: 578, w: 850, h: 30, z: 3 },
-	{ kind: "badge", label: "目标徽章 · 总监/对话", x: 240, y: 612, w: 96, h: 20, z: 3 },
-	// 右侧对话弹窗（浮层三态）
-	{ kind: "panel", label: "右侧「对话」弹窗", x: 858, y: 40, w: 312, h: 604, z: 6 },
+	{ kind: "region", label: "R6 记忆面板", x: 240, y: 510, w: 930, h: 62, z: 2, screen: "director" },
+	{ kind: "input", label: "R8 全局输入条", x: 240, y: 578, w: 850, h: 30, z: 3, screen: "director" },
+	{ kind: "badge", label: "目标徽章 · 总监/对话", x: 240, y: 612, w: 96, h: 20, z: 3, screen: "director" },
+
+	// ── 画面 2：右侧对话弹窗（z 6–8 · overlap 2）──
+	{ kind: "panel", label: "右侧「对话」弹窗", x: 858, y: 40, w: 312, h: 604, z: 6, screen: "chat" },
 	// 浮动按钮组（导图在总监之前）
-	{ kind: "overline", label: "浮动组 · 🧠思维导图 / ◆总监", x: 900, y: 590, w: 170, h: 34, z: 8 },
-	// 导图态（覆盖层）
-	{ kind: "canvas", label: "导图态 · 分支血缘画布", x: 60, y: 80, w: 1060, h: 440, z: 10 },
-	{ kind: "node", label: "分支节点 · 根", x: 180, y: 180, w: 130, h: 44, z: 11 },
-	{ kind: "node", label: "分支节点 · 子 A", x: 400, y: 140, w: 130, h: 44, z: 11 },
-	{ kind: "node", label: "分支节点 · 子 B", x: 400, y: 240, w: 130, h: 44, z: 11 },
-	{ kind: "edge", label: "血缘连线", x: 310, y: 200, w: 90, h: 2, z: 10 }
+	{ kind: "overline", label: "浮动组 · 🧠思维导图 / ◆总监", x: 900, y: 590, w: 170, h: 34, z: 8, screen: "chat" },
+
+	// ── 画面 3：导图态（z 10–11 · overlap 3 · 模态覆盖）──
+	{ kind: "canvas", label: "导图态 · 分支血缘画布", x: 60, y: 80, w: 1060, h: 440, z: 10, screen: "mindmap" },
+	{ kind: "node", label: "分支节点 · 根", x: 180, y: 180, w: 130, h: 44, z: 11, screen: "mindmap" },
+	{ kind: "node", label: "分支节点 · 子 A", x: 400, y: 140, w: 130, h: 44, z: 11, screen: "mindmap" },
+	{ kind: "node", label: "分支节点 · 子 B", x: 400, y: 240, w: 130, h: 44, z: 11, screen: "mindmap" },
+	{ kind: "edge", label: "血缘连线", x: 310, y: 200, w: 90, h: 2, z: 10, screen: "mindmap" }
 ];
 
 /** 预置的标准框架（key → {label, desc, seed}） */

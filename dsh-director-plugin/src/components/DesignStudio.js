@@ -48,16 +48,22 @@
 
 import * as react from "react";
 import {
-	ELEMENT_KINDS, LOGIC_FIELDS, CANVAS_W, CANVAS_H, kindsByGroup, docStats, VERSION_LIMIT
+	ELEMENT_KINDS, LOGIC_FIELDS, CANVAS_W, CANVAS_H, kindsByGroup, docStats, VERSION_LIMIT,
+	layerOf,
+	/* 画面 / 层（2026-09-14 新增 · 需求「元素层层堆叠、不知道该从哪改」） */
+	SCREENS, SCREEN_ORDER
 } from "../store/design-schema.js";
 import {
 	getActiveDoc, getState, subscribe, newDoc, saveDoc, deleteDoc, setActiveDoc, listDocs,
 	addElement, moveElement, resizeElement, removeElement, duplicateElement, reorderElement,
-	updateElement, updateLogic, visibleElements, loadStandardFrame,
+	updateElement, updateLogic, focusView, loadStandardFrame,
 	appendThread, parseDesignCommand, applyOps, DESIGN_ROLE,
 	/* 版本快照（2026-09-12 新增 · 用户要求「也没有保存 和不同版本的选择」） */
 	saveVersion, listVersions, restoreVersion, deleteVersion,
-	renameDoc, duplicateDoc, getVersionState
+	renameDoc, duplicateDoc, getVersionState,
+	/* 结构视图（2026-09-14 新增 · V20 §B/§D/§E） */
+	outlineOf, designStats, layerOverlaps, setElementFlags, setScreenHidden, reorderInScreen,
+	toDesignDSL
 } from "../store/design.js";
 import { dshLog } from "../util/debug.js";
 import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
@@ -141,6 +147,53 @@ const S = {
 	},
 	leftHead: { padding: "8px 10px 6px", borderBottom: "1px solid #26282e", display: "flex", alignItems: "center", gap: 6 },
 	leftBody: { flex: 1, minHeight: 0, overflowY: "auto", padding: 10, display: "flex", flexDirection: "column", gap: 9 },
+	/* ── 结构大纲（2026-09-14 新增 · V20 §D1）─────────────────────────────
+	 * 左栏改成**两段式**：大纲在上（占满可用高度、必要时滚动），逻辑面板在下。
+	 * 🔴 为什么不改成 Tab 二选一：既有真机断言（verify-design-studio C9.1）
+	 *    要求"选中元素后逻辑面板必须存在"，而选中是随时发生的 ——
+	 *    若默认停在"大纲"页签，逻辑面板就不在 DOM 里 ⇒ 每次选中都要先切页签才能改逻辑，
+	 *    这是把一次点击的成本从 1 次变成 2 次，且会让既有断言假红。
+	 *
+	 * 🔴 `flex` 必须写 `"0 1 auto"` + `maxHeight: "50%"`，**不能**写 `"1 1 auto"`：
+	 *    写成 `1 1 auto` 时基准是**内容高度**（20 行 ≈ 600px），而逻辑面板的基准是 0，
+	 *    于是剩余空间按 grow 平分 ⇒ 大纲吃到 ~657px、逻辑面板只剩 **20px**，
+	 *    其内容（609px）被压进一条 20px 的缝里 ⇒ 「复制 / 置顶 / 删除」落在 y≈1308
+	 *    （视口高 920）**既看不见也点不到**。
+	 *    这不是估算：2026-09-14 真机实测 `ds-dup.y = 1308`、`ds-logic.clientHeight = 20`，
+	 *    由 verify-design-studio 的 C7.2 / C17.1 两条同时转红抓到（落点 `landedOn: null`）。
+	 *    根因是**用内容高度当基准**，所以修法不是调数字，而是把基准归零、只留一个上限。 */
+	outlineWrap: { flex: "0 1 auto", maxHeight: "50%", minHeight: 120, display: "flex", flexDirection: "column", borderBottom: "1px solid #26282e" },
+	outlineHead: { padding: "7px 10px 6px", display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" },
+	outlineChips: { padding: "0 10px 6px", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", flex: "0 0 auto" },
+	outlineBody: { flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "0 6px 8px", display: "flex", flexDirection: "column", gap: 1 },
+	screenRow: {
+		display: "flex", alignItems: "center", gap: 5, padding: "4px 6px", marginTop: 3,
+		borderRadius: 5, background: "var(--dsw-alias-bg-base, #1c1d21)", border: "1px solid #2b2e34",
+		fontSize: 11, fontWeight: 650, cursor: "pointer"
+	},
+	layerRow: { display: "flex", alignItems: "center", gap: 5, padding: "2px 6px 2px 14px", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)" },
+	oRow: {
+		display: "flex", alignItems: "center", gap: 5, padding: "3px 6px 3px 20px", borderRadius: 4,
+		fontSize: 11, cursor: "pointer", border: "1px solid transparent", whiteSpace: "nowrap", overflow: "hidden"
+	},
+	oRowGhost: { opacity: 0.45 },
+	oRowLocked: { borderColor: "#6b5320", background: "rgba(210,153,34,.10)" },
+	oNote: { fontSize: 10.5, padding: "0 6px 2px 34px", color: "var(--dsw-alias-label-tertiary, #6f757d)", lineHeight: 1.4 },
+	oAct: {
+		display: "inline-flex", alignItems: "center", justifyContent: "center", height: 16, minWidth: 16,
+		padding: "0 3px", borderRadius: 3, fontSize: 10.5, cursor: "pointer", flex: "0 0 auto",
+		border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-base, #212429)",
+		color: "var(--dsw-alias-label-secondary, #c3c8ce)"
+	},
+	oActOn: { borderColor: "#6b5320", background: "rgba(210,153,34,.18)", color: "#e0b341" },
+	/* 聚焦态：非聚焦画面的元素**只做淡影**且不吃点击（pointerEvents:none）
+	 * —— 保留"它们还在那儿"的空间感，同时保证聚焦画面的每个元素都点得中。 */
+	elGhost: { position: "absolute", boxSizing: "border-box", pointerEvents: "none", opacity: 0.16, overflow: "hidden" },
+	focusSel: {
+		height: 22, borderRadius: 5, fontSize: 10.5, padding: "0 4px",
+		border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-base, #212429)",
+		color: "var(--dsw-alias-label-secondary, #c3c8ce)"
+	},
 	lbl: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", letterSpacing: ".3px" },
 	field: { display: "flex", flexDirection: "column", gap: 3 },
 	fieldLabel: { fontSize: 11, color: "#b794f6", display: "flex", alignItems: "center", gap: 5 },
@@ -276,6 +329,138 @@ const S = {
 };
 
 /* ══════════════════════════════════════════════════════════════════
+ * D-ST · 结构大纲（2026-09-14 新增 · V20 §D）
+ *
+ * 解决的是「元素层层堆叠，我不知道该从哪些部分、按什么顺序去修改」：
+ *   ① 层级**看得见** —— 画面 → 层 → 元素三层树，缩进即从属；
+ *   ② 元素**点得到** —— 画布上被上层盖住的元素（实测 9/20）在树里一行一个，
+ *      点行即选中，不依赖画布命中测试；
+ *   ③ 顺序**有名字** —— 画面按重叠序（＝修改顺序）排，层按 base→content→deco 排，
+ *      图元行内还能上移/下移。
+ * ══════════════════════════════════════════════════════════════════ */
+
+function OutlinePanel({ doc, selected, focusScreen, onFocus, onSelect, onFlags, onReorder, onScreenHidden }) {
+	const tree = react.useMemo(() => (doc ? outlineOf(doc) : []), [doc]);
+	const stats = react.useMemo(() => (doc ? designStats(doc) : null), [doc]);
+	if (!doc || !stats) {
+		return h("div", { style: S.outlineWrap, "data-testid": "ds-outline-empty" }, [
+			h("div", { key: "h", style: S.outlineHead }, [h("span", { key: "t", style: { fontWeight: 650, fontSize: 11.5 } }, "结构大纲")]),
+			h("div", { key: "m", style: { ...S.muted, padding: "0 10px 8px" } }, "尚无设计图 —— 点「＋ 新建图」或「↺ 载入标准框架」开始。")
+		]);
+	}
+	const collisions = layerOverlaps(doc);
+	const hiddenTotal = stats.hidden, lockedTotal = stats.locked;
+	return h("div", { style: S.outlineWrap, "data-testid": "ds-outline", "data-focus": focusScreen },
+		[
+			h("div", { key: "hd", style: S.outlineHead }, [
+				h("span", { key: "t", style: { fontWeight: 650, fontSize: 11.5 } }, "结构大纲"),
+				h("select", {
+					key: "f", style: S.focusSel, "data-testid": "ds-focus",
+					title: "聚焦某一幅画面 —— 其余画面只留淡影且不接收点击（消除跨画面遮挡）",
+					value: focusScreen,
+					onChange: (e) => onFocus(e.target.value)
+				}, [
+					h("option", { key: "all", value: "all" }, "全景（3 幅）"),
+					...SCREEN_ORDER.map((sk) => h("option", { key: sk, value: sk },
+						(SCREENS[sk] || {}).label + "（" + (stats.screens.find((s) => s.screen === sk) || { total: 0 }).total + "）"))
+				]),
+				h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" } },
+					selected ? selected : "未选中")
+			]),
+			h("div", { key: "ch", style: S.outlineChips }, [
+				h("span", { key: "t", style: { ...S.chip, "data-testid": "ds-chip-total" } },
+					"元素 " + stats.total),
+				hiddenTotal ? h("span", { key: "h2", style: { ...S.chip, "data-testid": "ds-chip-hidden" } }, "隐藏 " + hiddenTotal) : null,
+				lockedTotal ? h("span", { key: "l", style: { ...S.chip, "data-testid": "ds-chip-locked" } }, "锁定 " + lockedTotal) : null,
+				/* 同层重叠是 N2 不变量的现场读数 —— 一旦摆歪立刻可见，不必等到截图时肉眼发现 */
+				h("span", {
+					key: "c", "data-testid": "ds-chip-collide",
+					style: collisions.length
+						? { ...S.chip, borderColor: "#6b2b28", background: "rgba(248,81,73,.14)", color: "#ff9a92" }
+						: { ...S.chip, borderColor: "#2b6b3a", background: "rgba(63,185,80,.12)", color: "#8fd48f" },
+					title: collisions.length
+						? collisions.map((c) => c.a + " × " + c.b).join("；")
+						: "同画面同层内没有元素互相遮挡"
+				}, "同层重叠 " + collisions.length)
+			]),
+			h("div", { key: "bd", style: S.outlineBody }, tree.flatMap((sc) => {
+				const rows = [h("div", {
+					key: "sc-" + sc.screen, style: {
+						...S.screenRow,
+						// 聚焦中的画面高亮；其余压暗（但**仍可点**，点一下即切过去）
+						opacity: focusScreen === "all" || focusScreen === sc.screen ? 1 : 0.55,
+						borderColor: focusScreen === sc.screen ? "#2b3f5e" : "#2b2e34",
+						background: focusScreen === sc.screen ? "#1d2739" : "var(--dsw-alias-bg-base, #1c1d21)"
+					},
+					"data-testid": "ds-screen-row", "data-screen": sc.screen,
+					title: sc.hint + "（重叠序 " + sc.overlap + "）",
+					onClick: () => onFocus(focusScreen === sc.screen ? "all" : sc.screen)
+				}, [
+					h("span", { key: "lv", style: { ...S.chip, padding: "0 5px", margin: 0 } }, "序" + sc.overlap),
+					h("span", { key: "n", style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, sc.label),
+					h("span", { key: "c", style: { ...S.muted, fontSize: 10.5 } }, sc.stats.total + " 项"),
+					h("span", {
+						key: "eh", style: S.oAct, title: "整幅收起 / 展开",
+						"data-testid": "ds-screen-hide-" + sc.screen,
+						onClick: (e) => { e.stopPropagation(); onScreenHidden(sc.screen, sc.stats.visible > 0); }
+					}, sc.stats.visible > 0 ? "◎" : "◌")
+				])];
+				for (const g of sc.layers) {
+					rows.push(h("div", { key: "ly-" + sc.screen + "-" + g.layer, style: S.layerRow, "data-layer": g.layer, title: g.hint }, [
+						h("span", { key: "d", style: { opacity: 0.6 } }, "└"),
+						h("span", { key: "n" }, g.label),
+						h("span", { key: "c", style: { marginLeft: "auto", opacity: 0.7 } }, g.items.length)
+					]));
+					for (const it of g.items) {
+						const spec = ELEMENT_KINDS[it.kind] || { icon: "?", label: it.kind };
+						const gg = gc(spec.group);
+						const isSel = selected === it.id;
+						rows.push(h("div", {
+							key: "el-" + it.id,
+							style: {
+								...S.oRow,
+								...(isSel ? { background: "#1d2739", borderColor: "#2b3f5e" } : null),
+								...(it.hidden ? S.oRowGhost : null),
+								...(it.locked ? S.oRowLocked : null)
+							},
+							"data-testid": "ds-oline", "data-el-id": it.id, "data-el-kind": it.kind,
+							title: it.id + " · " + spec.label + " · " + it.x + "," + it.y + " " + it.w + "×" + it.h
+								+ (it.note ? ("\n" + it.note) : ""),
+							onClick: () => onSelect(it.id)
+						}, [
+							h("span", { key: "i", style: { color: gg.text } }, spec.icon),
+							h("span", { key: "n", style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, it.label),
+							h("span", { key: "g", style: { ...S.muted, fontSize: 10.5 } }, it.x + "," + it.y),
+							/* 行内动作：每个都 stopPropagation —— 否则点"隐藏"会顺带选中它 */
+							h("span", {
+								key: "v", style: { ...S.oAct, ...(it.hidden ? S.oActOn : null) },
+								"data-testid": "ds-o-hide-" + it.id, title: it.hidden ? "显示" : "隐藏（不删，随时可回）",
+								onClick: (e) => { e.stopPropagation(); onFlags(it.id, { hidden: !it.hidden }); }
+							}, it.hidden ? "◌" : "◎"),
+							h("span", {
+								key: "k", style: { ...S.oAct, ...(it.locked ? S.oActOn : null) },
+								"data-testid": "ds-o-lock-" + it.id, title: it.locked ? "解锁" : "锁定（防误拖）",
+								onClick: (e) => { e.stopPropagation(); onFlags(it.id, { locked: !it.locked }); }
+							}, it.locked ? "🔒" : "🔓"),
+							h("span", {
+								key: "u", style: { ...S.oAct }, "data-testid": "ds-o-up-" + it.id, title: "上移一位（本画面内）",
+								onClick: (e) => { e.stopPropagation(); onReorder(it.id, "up"); }
+							}, "↑"),
+							h("span", {
+								key: "d2", style: { ...S.oAct }, "data-testid": "ds-o-down-" + it.id, title: "下移一位（本画面内）",
+								onClick: (e) => { e.stopPropagation(); onReorder(it.id, "down"); }
+							}, "↓")
+						]));
+					}
+				}
+				return rows;
+			})),
+			h("div", { key: "ft", style: { ...S.muted, padding: "4px 10px 8px", flex: "0 0 auto", fontSize: 10.5 } },
+				"改图顺序：① 选画面 → ② 按 base → content → deco 逐层改 → ③ 回全景核对。")
+		]);
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * D3 · 左侧交互逻辑面板 —— 显示并**可编辑**选中元素的七元组
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -324,8 +509,21 @@ function LogicPanel({ doc, selected, onLogicChange, onRelabel, onDelete, onDupli
 				onChange: (e) => onLogicChange(f.key, e.target.value)
 			})
 		])),
-		// 元素级动作
-		h("div", { key: "ops", style: { display: "flex", gap: 5, flexWrap: "wrap", marginTop: 2 } }, [
+		// 元素级动作 —— **常驻底部**（sticky）
+		/* 🔴 为什么必须 sticky：这两段式左栏里，逻辑面板的内容（名称 + 七元组 + 动作行）约 609px，
+		 *    而它能分到的可视高度 ≈ 325px ⇒ 若不常驻，用户每次「复制 / 置顶 / 删除」都要先滚到底。
+		 *    实测这笔账很具体：不加 sticky 时 `ds-dup` 的矩形 y≈1308、视口 920 —— 按钮**压根在屏幕外**，
+		 *    真机点击的落点是 `null`（打空），读起来像"复制功能坏了"。
+		 *    `bottom: -10` 是抵消容器自身的 `padding: 10`，让它贴到底边而不是悬空 10px。 */
+		h("div", {
+			key: "ops",
+			style: {
+				position: "sticky", bottom: -10, zIndex: 2,
+				display: "flex", gap: 5, flexWrap: "wrap", marginTop: 2,
+				padding: "8px 0", background: "var(--dsw-alias-bg-sunken, #141519)",
+				borderTop: "1px solid #26282e"
+			}
+		}, [
 			h("button", { key: "d", style: S.btn, "data-testid": "ds-dup", onClick: onDuplicate }, "复制"),
 			h("button", { key: "t", style: S.btn, "data-testid": "ds-top", onClick: () => onReorder("top") }, "置顶"),
 			h("button", { key: "x", style: S.btnDanger, "data-testid": "ds-del", onClick: onDelete }, "删除")
@@ -338,7 +536,7 @@ function LogicPanel({ doc, selected, onLogicChange, onRelabel, onDelete, onDupli
  * D6 · 底部设计图专用临时对话 —— 只处理本图修订
  * ══════════════════════════════════════════════════════════════════ */
 
-function ThreadBar({ doc, onCommit, onApply, onDiscard, pending, draft, setDraft }) {
+function ThreadBar({ doc, onCommit, onApply, onDiscard, pending, draft, setDraft, onExportDSL }) {
 	// 🔴 同 LogicPanel：doc 可能为 null（首帧早于 useMemo/useEffect 建图）⇒ 一律走局部安全值
 	const thread = (doc && doc.thread) || [];
 	const hasDoc = Boolean(doc);
@@ -347,7 +545,17 @@ function ThreadBar({ doc, onCommit, onApply, onDiscard, pending, draft, setDraft
 			h("span", { key: "i" }, "🖌"),
 			h("span", { key: "t", style: { fontWeight: 650 } }, "设计图修订对话"),
 			h("span", { key: "c", style: S.chip }, "临时 · 只处理本图"),
-			h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" } },
+			/* 「导出结构 DSL」放在这里而不是顶栏，有两个理由：
+			 *   ① 语义：这是**交给 AI 的那一份**，紧挨着"与 AI 说怎么改"的输入框最顺手；
+			 *   ② 工程：顶栏已有 12 个按钮并在 1441 宽度下实测溢出过（V17 P2-2 的窄屏收纳就是为此），
+			 *      再塞一个会把 C15.x 的溢出断言逼到临界。底栏这一行有 marginLeft:auto 的空档。 */
+			h("button", {
+				key: "dsl", style: { ...S.btn, height: 20, padding: "0 7px", fontSize: 10.5, marginLeft: "auto" },
+				"data-testid": "ds-export-dsl",
+				title: "导出结构 DSL —— 按「画面 → 元素 → 逻辑」的行式文本，AI 可直接读写（V20 §E）",
+				onClick: onExportDSL
+			}, "⤓ 导出 DSL"),
+			h("span", { key: "n", style: { ...S.muted, marginLeft: 8 } },
 				"不与宿主会话、也不与总监对话共用（三向隔离）")
 		]),
 		h("div", { key: "bd", style: { ...S.threadBody, flex: "0 1 auto", maxHeight: 104 } }, thread.length
@@ -429,6 +637,13 @@ export function DesignStudio({ open, onClose }) {
 		}
 	}, [flowSnap, open]);
 	const [scale, setScale] = react.useState(1);
+	/* ── 画面聚焦（2026-09-14 新增 · V20 §C1 第 ② 步）─────────────────────
+	 * 🔴 这是**纯视图态**：不落库、不进版本、不动任何元素的坐标或 z。
+	 *    理由：聚焦只是"我现在改这一屏"，不是"图变了"。
+	 *    若把它写进 doc，用户每看一屏就会多出一个"未保存改动"和一个内容相同的版本，
+	 *    版本列表会被"我只是看了看"污染（同 sameElements 对 hidden/locked 的取舍）。
+	 *    默认 `all` = 与改动前完全一致的渲染，既有断言不受影响。 */
+	const [focusScreen, setFocusScreen] = react.useState("all");
 	/* 版本面板开合 · 顶栏右侧安全区宽度 · 重命名输入态（null = 不在重命名） */
 	const [verOpen, setVerOpen] = react.useState(false);
 	/* 初值直接取一次真值（而不是 0 再等 effect 回调）—— 否则首帧 ✕ 会先出现在被压的位置再跳开 */
@@ -537,6 +752,13 @@ export function DesignStudio({ open, onClose }) {
 		// 🔴 同 MindMap：阻止原生文本选择/原生拖拽把渲染主线程挂进桌面壳原生交互状态机
 		e.preventDefault();
 		setSelected(el.id);
+		/* 锁定元素：**仍可被选中**（要能看见它的逻辑、要能解锁），但不起拖拽。
+		 * 🔴 不用 early return 跳过 setSelected —— 那样点一下锁住的东西会"什么反应都没有"，
+		 *    用户分不清是"锁了"还是"这个元素坏了"。选中 + 一条明确提示才说得清。 */
+		if (el.locked) {
+			setToast("已锁定：「" + el.label + "」 —— 点大纲里的 🔒 解锁后才能拖动 / 缩放");
+			return;
+		}
 		dragRef.current = {
 			mode, id: el.id, x0: e.clientX, y0: e.clientY,
 			ex0: el.x, ey0: el.y, w0: el.w, h0: el.h,
@@ -589,6 +811,11 @@ export function DesignStudio({ open, onClose }) {
 			if (!selected) return;
 			const cur = getActiveDoc();
 			if (!cur) return;
+			/* 锁定元素不吃键盘编辑：与拖拽同一条口径
+			 * （否则"我把它锁住了，方向键还是能挪走"）。Escape 已在上面单独处理并 return，
+			 * 所以这里只需拦"改图"的那些键。 */
+			const selEl = (cur.elements || []).find((x) => x.id === selected);
+			if (selEl && selEl.locked) return;
 			const STEP = e.shiftKey ? 1 : 10;
 			if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); commit(removeElement(cur, selected)); }
 			else if (e.key === "ArrowLeft") { e.preventDefault(); commit(applyOps(cur, [{ op: "move", target: selected, args: { dx: -STEP, dy: 0 } }])); }
@@ -632,11 +859,15 @@ export function DesignStudio({ open, onClose }) {
 	/* ── 工具栏：点类型 → 增加元素（D2）── */
 	const onAddKind = (kind) => {
 		if (!doc) return;
-		const next = addElement(doc, kind, {});
+		/* 聚焦某画面时，新元素归到**当前画面**（不然它会按 z 落到模态区间，
+		 * 而你正在改的那一屏里什么也没出现 —— 看起来像"点了工具栏没反应"）。
+		 * 未聚焦时不传 screen，落到既有行为（逐字不变）。 */
+		const next = addElement(doc, kind, {}, focusScreen === "all" ? {} : { screen: focusScreen });
 		commit(next);
 		const added = (next.elements || [])[(next.elements || []).length - 1];
 		if (added) setSelected(added.id);
-		setToast("已添加：" + (ELEMENT_KINDS[kind] || {}).label);
+		setToast("已添加：" + (ELEMENT_KINDS[kind] || {}).label
+			+ (focusScreen === "all" ? "" : ("（归入「" + (SCREENS[focusScreen] || {}).label + "」）")));
 	};
 
 	/* ── 顶栏动作 ── */
@@ -727,21 +958,45 @@ export function DesignStudio({ open, onClose }) {
 		} catch (e) { return false; }
 	};
 
+	/**
+	 * 统一的"把一段文本交到用户手上"—— 三级降级：剪贴板 API → execCommand → 摆出文本框。
+	 * 🔴 抽出来是因为现在有两个导出（JSON / 结构 DSL），而**三级降级是有顺序要求的**：
+	 *    `navigator.clipboard` 在桌面壳里会 reject，此时必须落到 execCommand；
+	 *    execCommand 也可能被拒，此时必须把文本摆出来（而不是只报一句"复制失败"）。
+	 *    两个导出各抄一份，早晚会有一个漏掉第三级 —— 那就是"功能在、数据出不来"。
+	 */
+	const copyOut = (text, label, fallbackNote) => {
+		const fallback = () => {
+			if (copyViaExecCommand(text)) { setToast("已复制" + label + "到剪贴板（" + text.length + " 字符）"); return; }
+			setExportText(text);
+			setToast("系统剪贴板不可用，已展开" + (fallbackNote || label) + "供手动复制");
+		};
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(text).then(
+				() => setToast("已复制" + label + "到剪贴板（" + text.length + " 字符）"),
+				fallback
+			);
+		} else fallback();
+	};
+
 	const onExportJson = () => {
 		if (!doc) { setToast("没有可导出的图"); return; }
 		try {
-			const text = JSON.stringify({ schema: 1, exportedAt: new Date().toISOString(), doc }, null, 2);
-			const fallback = () => {
-				if (copyViaExecCommand(text)) { setToast("已复制 JSON 到剪贴板（" + text.length + " 字符）"); return; }
-				setExportText(text);
-				setToast("系统剪贴板不可用，已展开 JSON 供手动复制");
-			};
-			if (navigator.clipboard && navigator.clipboard.writeText) {
-				navigator.clipboard.writeText(text).then(
-					() => setToast("已复制 JSON 到剪贴板（" + text.length + " 字符）"),
-					fallback
-				);
-			} else fallback();
+			copyOut(JSON.stringify({ schema: 1, exportedAt: new Date().toISOString(), doc }, null, 2), " JSON", " JSON");
+		} catch (e) { setToast("导出失败：" + String((e && e.message) || e)); }
+	};
+
+	/**
+	 * 导出**结构 DSL**（V20 §E）—— 这是给 AI 读的那一份，与 JSON 的区别不在"格式新旧"，
+	 * 而在于：JSON 里 20 个元素是**一张没有从属关系的坐标表**，AI 每次都要重新推断
+	 * "这图里有几幅画面"；DSL 把画面/层/次序写成了文本结构，推理成本降到"读行"。
+	 * 带 `logic:true` ⇒ 七元组一并导出，**逐字段可回读**（含被清空的字段，见 toDesignDSL 注释）。
+	 */
+	const onExportDSL = () => {
+		if (!doc) { setToast("没有可导出的图"); return; }
+		try {
+			const text = toDesignDSL(doc, { logic: true });
+			copyOut(text, "结构 DSL", " DSL");
 		} catch (e) { setToast("导出失败：" + String((e && e.message) || e)); }
 	};
 
@@ -801,6 +1056,10 @@ export function DesignStudio({ open, onClose }) {
 	const groups = kindsByGroup();
 	/* 版本状态一屏取（dirty 两态 + 角标数 + 面板文案都从这里出，一处算三处用） */
 	const vstate = getVersionState(doc);
+	/* 聚焦视图（N6）从**数据层**取，不在本组件里 filter ——
+	 * 见 store/design.js `focusView()` 的说明：遮挡类缺陷的表现是
+	 * "点了上面的按钮没反应"，必须在离线闸门里就能逐画面断言，而不是只能靠真机碰。 */
+	const view = focusView(doc, focusScreen);
 
 	return h("div", {
 		id: STUDIO_ID, style: S.root, "data-testid": "ds-root", role: "dialog", "aria-label": "设计图工作室",
@@ -1001,6 +1260,18 @@ export function DesignStudio({ open, onClose }) {
 		/* ── 中段：左栏 + 画布 ── */
 		h("div", { key: "mid", style: S.mid }, [
 			h("div", { key: "l", style: S.left }, [
+				/* 上段 · 结构大纲（画面 → 层 → 元素）
+				 * 🔴 与逻辑面板**同时存在**而不是二选一 Tab：
+				 *    选中是随时发生的，若逻辑面板藏在另一个页签后面，
+				 *    "选中 → 看逻辑"就从 1 次点击变成 2 次，且既有断言（C9.1）会假红。 */
+				h(OutlinePanel, {
+					key: "ol", doc, selected, focusScreen,
+					onFocus: setFocusScreen,
+					onSelect: setSelected,
+					onFlags: (id, p) => commit(setElementFlags(getActiveDoc(), id, p)),
+					onReorder: (id, dir) => commit(reorderInScreen(getActiveDoc(), id, dir)),
+					onScreenHidden: (sc, hid) => commit(setScreenHidden(getActiveDoc(), sc, hid))
+				}),
 				h("div", { key: "lh", style: S.leftHead }, [
 					h("span", { key: "t", style: { fontWeight: 650, fontSize: 11.5 } }, "元素交互逻辑"),
 					h("span", { key: "s", style: { ...S.muted, marginLeft: "auto" } }, selected ? selected : "未选中")
@@ -1017,32 +1288,71 @@ export function DesignStudio({ open, onClose }) {
 			h("div", { key: "c", style: S.canvasWrap, ref: wrapRef, "data-testid": "ds-canvas-wrap" },
 				h("div", {
 					key: "g", ref: gridRef, style: { ...S.grid, transform: "scale(" + scale + ")", transformOrigin: "top left" },
-					"data-testid": "ds-canvas",
+					"data-testid": "ds-canvas", "data-focus": focusScreen,
 					onPointerDown: () => setSelected(null) // 点空白 = 取消选中
-				}, visibleElements(doc).map((el) => h("div", {
-					key: el.id,
-					/* 🔴 坐标必须写进 `style`（2026-09-12 真机事故 · 单点故障复盘）：
-					 *   原写法把 `left / top / width / height / transform` 放在 **props 顶层**，
-					 *   它们不是合法 DOM 属性 ⇒ React 不当作 CSS ⇒ **坐标被静默丢弃**
-					 *   ⇒ 元素退回文档流按顺序堆叠（`getComputedStyle().transform === "none"`）。
-					 *   后果：拖拽 / 缩放 / 方向键在**数据层完全正确**（回读 model 已改），
-					 *   但 DOM 纹丝不动 ⇒ 表现为"四个交互全坏"，实际只有这一行在坏。
-					 *   本轮 e2e 的 C4.1（拖拽位移断言）正是靠"比对 DOM 实际位移"抓到了它。
-					 *   判据：**只要模型改了而 getBoundingClientRect 不变，就先查 style 有没有生效**。 */
-					style: {
-						...S.el(selected === el.id, el.kind),
-						left: el.x, top: el.y, width: el.w, height: el.h
-					},
-					"data-testid": "ds-el", "data-el-id": el.id, "data-el-kind": el.kind,
-					title: el.id + " · " + (ELEMENT_KINDS[el.kind] || {}).label + " · " + ((el.logic && el.logic.action) || ""),
-					onPointerDown: (e) => onElPointerDown(e, el, "move")
 				}, [
-					h("span", { key: "t", style: { pointerEvents: "none", lineHeight: 1.35 } }, (ELEMENT_KINDS[el.kind] || {}).icon + " " + el.label),
-					selected === el.id ? h("div", {
-						key: "h", style: S.elHandle(el.kind), "data-testid": "ds-handle",
-						onPointerDown: (e) => onElPointerDown(e, el, "resize")
-					}) : null
-				])))
+					/* 聚焦时：非当前画面的元素先画成**淡影**（有序、在最下层），
+					 * `pointerEvents:none` + 不带 `data-testid=ds-el` ⇒
+					 * 它们既不被命中、也不被元素计数算进去 —— 这就是"跨画面遮挡归零"的落点。 */
+					...view.ghost
+						.map((el) => h("div", {
+							key: "ghost-" + el.id, style: { ...S.elGhost, left: el.x, top: el.y, width: el.w, height: el.h },
+							"data-testid": "ds-ghost", "data-el-id": el.id
+						}, h("span", { key: "t", style: { fontSize: 10.5 } }, (ELEMENT_KINDS[el.kind] || {}).icon + " " + el.label))),
+					...view.interactive
+						.map((el) => h("div", {
+							key: el.id,
+							/* 🔴 坐标必须写进 `style`（2026-09-12 真机事故 · 单点故障复盘）：
+							 *   原写法把 `left / top / width / height / transform` 放在 **props 顶层**，
+							 *   它们不是合法 DOM 属性 ⇒ React 不当作 CSS ⇒ **坐标被静默丢弃**
+							 *   ⇒ 元素退回文档流按顺序堆叠（`getComputedStyle().transform === "none"`）。
+							 *   后果：拖拽 / 缩放 / 方向键在**数据层完全正确**（回读 model 已改），
+							 *   但 DOM 纹丝不动 ⇒ 表现为"四个交互全坏"，实际只有这一行在坏。
+							 *   本轮 e2e 的 C4.1（拖拽位移断言）正是靠"比对 DOM 实际位移"抓到了它。
+							 *   判据：**只要模型改了而 getBoundingClientRect 不变，就先查 style 有没有生效**。 */
+							style: {
+								...S.el(selected === el.id, el.kind),
+								left: el.x, top: el.y, width: el.w, height: el.h,
+								/* 锁定态给一个可见的实线边框差异 —— 拖不动但看不出为什么 = 说不清的缺陷 */
+								...(el.locked ? { outline: "1px dashed #d29922", outlineOffset: -1 } : null),
+								/* 🔴 base 层 = 背景板，**不接收画布指针事件**。
+								 *   本缺陷的现场（2026-09-14 真机，verify-design-studio C5.0）：
+								 *     整屏底板 `window`（0,0 1180×644）铺满整个画布 ⇒ 它成了
+								 *     "点哪儿都命中它"的元素。于是：
+								 *       ① 想点空白取消选中 → 选中的是底板（`selected = el-2-win`）；
+								 *       ② 底板同时是 **locked**，键盘守卫随之 early-return
+								 *          ⇒ 方向键 / Ctrl+D / Delete **一条都不生效**，
+								 *          后续 C5.1 / C8.4 / C12.1–C12.4 六条连锁红，
+								 *          而每条的现场读数都指向"功能坏了"，与真因隔了两层；
+								 *       ③ 用户侧的表现就是原始需求里那句话 ——「元素层层堆叠，
+								 *          我不知道该从哪些部分改」：他点到的永远是**最底下那层背景**。
+								 *   修法取"正交"而非"特判"：**按层判定**，凡 base 层一律不参与画布命中，
+								 *     与具体是 window 还是 canvas 无关（两者都是背景板）。
+								 *     点空白于是回到 `ds-canvas` 网格自己的 onPointerDown ⇒ 正常取消选中。
+								 *   底板**仍然可选中** —— 从**结构大纲**里点它那一行即可（那里是"看它的逻辑 /
+								 *     解锁 / 改显示"的正确入口），只是不再从画布上抢点击。
+								 *   ⚠️ 不要改成 `display:none` 或从 `visibleElements` 里剔除：
+								 *     底板是**看得见的**背景，删掉它整幅图会失去底色，
+								 *     且会破坏 N1（画面全覆盖）与 C10.1（元素计数）两条既有判据。 */
+								...(layerOf(el) === "base" ? { pointerEvents: "none" } : null)
+							},
+							"data-testid": "ds-el", "data-el-id": el.id, "data-el-kind": el.kind,
+							"data-el-locked": el.locked ? "1" : "0",
+							"data-el-layer": layerOf(el),
+							title: el.id + " · " + (ELEMENT_KINDS[el.kind] || {}).label + " · " + ((el.logic && el.logic.action) || "")
+								+ (el.locked ? "（已锁定）" : "")
+								+ (layerOf(el) === "base" ? "（背景板：从左侧结构大纲点选）" : ""),
+							/* base 层不挂指针处理器：`pointerEvents:none` 已保证它收不到事件，
+							 * 这里再显式不绑，避免"读代码以为它能拖动"。 */
+							onPointerDown: layerOf(el) === "base" ? undefined : (e) => onElPointerDown(e, el, "move")
+						}, [
+							h("span", { key: "t", style: { pointerEvents: "none", lineHeight: 1.35 } }, (ELEMENT_KINDS[el.kind] || {}).icon + " " + el.label),
+							selected === el.id ? h("div", {
+								key: "h", style: S.elHandle(el.kind), "data-testid": "ds-handle",
+								onPointerDown: (e) => onElPointerDown(e, el, "resize")
+							}) : null
+						]))
+				])
 			)
 		]),
 
@@ -1051,7 +1361,8 @@ export function DesignStudio({ open, onClose }) {
 			key: "b", doc: doc || { thread: [], title: "" }, draft, setDraft, pending,
 			onCommit: onSubmitThread,          // 发送：解析指令 → 生成待确认
 			onApply: onApplyPending,           // 应用到图：真正落库（两个入口共用）
-			onDiscard: () => { setPending(null); setToast("已丢弃"); }
+			onDiscard: () => { setPending(null); setToast("已丢弃"); },
+			onExportDSL: onExportDSL           // 导出给 AI 读的结构 DSL（V20 §E）
 		}),
 		pending && pending.ops.length ? h("div", {
 			key: "apply", style: { position: "absolute", right: 14, bottom: 150, display: "flex", gap: 6 }

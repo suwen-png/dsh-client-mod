@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：A11 布局 store（弹窗三态扩展版）
  * 引用：T-PLUG-015
- * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js
+ * 上游：bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -46,6 +46,37 @@ export const PANEL_MAX_RATIO = 0.55;
 export const PANEL_DEFAULT_WIDTH = 300;
 /** 折叠后的竖条宽度 */
 export const PANEL_RAIL_WIDTH = 40;
+
+/* ── 第 6 批（V20 需求 5）：「R4 / R7 宽度自由拖拽」的边界 ──────────────────
+ *  用户原话：「r4和r7的宽度都要允许自由拖拽」。
+ *  改前 `COL_R4_W = 200` / `COL_R7_W = 210` 是写死在 DirectorPage 里的常量 ⇒ 拖不动。
+ *  ⇒ 宽度搬进本 store（**与"在哪"同属一个语义域**，不新开持久化 key —— 理由同 mmPos）。
+ *  ⚠️ 上下限不是"越小越好"：R4 里一行要放「描述 + 编号+日期靠右」两行文本，
+ *     低于 140 会把编号挤成逐字竖排（第 6 批实测截图里就是那个形态）。 */
+export const RAIL_WIDTH_MIN = 140;
+export const RAIL_WIDTH_MAX = 420;
+export const RAIL_WIDTH_DEFAULT = Object.freeze({ r4: 200, r7: 210 });
+
+/* ── 第 6 批（V20 需求 3）：「未完成项可展开补说明」的存储 ─────────────────
+ *  用户原话：「未完成任务我可以展开，增加补充说明之类的，在执行的时候读取尽量不影响上下文？
+ *             不确定具体执行逻辑，怎么添加可以不影响上下文，如果可行的话」
+ *
+ *  🔴 **"不影响上下文"就是 O(1) 注入**：`director-run` 跑到某一步时**只读那一条**，
+ *     不把整张补充说明表拼进 prompt。⇒ 键必须**能由 (作用域, 任务号) 直接算出**
+ *     （不做全表扫描、不做模糊匹配），`scopeKey` 出自 `store/hierarchy.js` 的
+ *     `scopeKeyOf()`（**唯一真相源**，总监页与工作台都调它，不许各算各的）。
+ *
+ *  ⚠️ 上限不是"防手滑"，是**防一条说明把五步 prompt 顶爆**：超长直接截断
+ *     并把"已截断"事实告诉调用方（`truncated`），不静默丢字（纪律 19）。 */
+export const TODO_NOTE_MAX_CHARS = 600;
+
+/** 单条补充说明的键：`<scopeKey>::<taskId>`（纯函数，读写两端共用，避免各拼各的） */
+export function todoNoteKey(scopeKey, taskId) {
+	const s = String(scopeKey == null ? "" : scopeKey).trim();
+	const t = String(taskId == null ? "" : taskId).trim();
+	if (!s || !t) return "";
+	return s + "::" + t;
+}
 
 /** 左面板分段（单一真相源，勿另写字面量） */
 export const LEFT_TAB = Object.freeze({ DIRECTOR: "director", LEVELS: "levels", AGENTS: "agents" });
@@ -108,9 +139,67 @@ const DEFAULTS = Object.freeze({
 	 *    形如 { "<sessionId>": { x, y } }
 	 */
 	mmPos: {},
-	/* ── V17 P2：总监页 R2/R4/R6 区域折叠偏好（跨会话持久化，首次默认全展开）──
-	 *   只新增字段，不动既有键（R5）。形如 { r2:false, r4:false, r6:false }。 */
-	sectionCollapsed: { r2: false, r4: false, r6: false }
+	/* ── V17 P2：总监页 R2/R4 区域折叠偏好（跨会话持久化，首次默认全展开）──
+	 *   只新增字段，不动既有键（R5）。形如 { r2:false, r4:false }。
+	 *   🔴 2026-09-14 第 5 批：R6 已整块去除（用户：「R6 这一样都不要了」）⇒
+	 *      UI 上再无写 `r6` 的入口。但**键仍保留** —— 用户的 localStorage 里可能
+	 *      已有 `{r2,r4,r6}` 的存量值，删键会让"整体读入 + 按已知字段合并"这一步
+	 *      丢掉一个曾存在的字段（下一轮再加回同名键时旧值就找不回来了）。
+	 *      ⇒ 留键、摘入口；`setSectionCollapsed` 的白名单同样保留 r6 并注明原因。 */
+	sectionCollapsed: { r2: false, r4: false, r6: false },
+	/* ── 第 5 批新增：R4 / R7 的「左右缩回 · 弹出 · 固定」钉住态（V18 板块 E3）──
+	 *   设计稿要求三处（对话 tap 的总监列 / 总监页 R4 / 总监页 R7）**共用同一份**，
+	 *   不各写一套。`railExpanded` 是**易失**的（鼠标进出），故**不持久化**，
+	 *   由组件本地 state 承担；这里只存用户显式"钉住"的偏好。形如 { r4:false, r7:false }。 */
+	railPinned: { r4: false, r7: false },
+	/* ── 第 6 批新增：R4 / R7 的**展开宽度**（V20 需求 5「允许自由拖拽」）──
+	 *   形如 { r4:200, r7:210 }。搬进来之前是 DirectorPage 里的写死常量。
+	 *   ⚠️ 与 `railPinned` 一样用「只合并已知字段 + 嵌套兜底」策略读入，
+	 *      老用户的 localStorage 里没有这个键 ⇒ 走 DEFAULTS，不报错。 */
+	railWidth: { r4: RAIL_WIDTH_DEFAULT.r4, r7: RAIL_WIDTH_DEFAULT.r7 },
+	/* ── 第 6 批新增：未完成项的**补充说明**（V20 需求 3）──
+	 *   形如 `{ "<scopeKey>::<taskId>": { note:"…", at:<ms> } }`。
+	 *   ⚠️ 这是一张**按需增长**的表（每补一条多一个键），不是固定字段；
+	 *      读入时**整表原样保留**（合并已知字段策略只适用于固定字段，
+	 *      对映射表必须整体接管 —— 否则用户写的说明会在下次启动时被清空）。 */
+	todoNotes: {},
+	/* ── 第 6 批新增：每个作用域**正在执行的那一条**未完成项（V20 需求 3）──
+	 *   形如 `{ "<scopeKey>": "<taskId>" }`。
+	 *   🔴 为什么需要它：用户要的是「在执行的时候读取补充说明，**尽量不影响上下文**」。
+	 *      要做到 O(1) 注入，执行链必须能**唯一确定**"现在跑的是哪一条任务" ——
+	 *      靠标题模糊匹配（"现在在做的事"里出现的字）是不可证的（匹配错就注错）；
+	 *      靠 `selectedItem` 也不行（那只是"正在看"，用户随时会点别条）。
+	 *      ⇒ 由用户在详情卡里**显式**「设为当前任务」，一处真相源。
+	 *   ⚠️ 与 `todoNotes` 同为映射表：整体接管 + 类型兜底。 */
+	activeTasks: {},
+	/* ── 第 6 批新增：对话页，宿主左栏（宿主渲染的「总监列」）的插件侧几何 ──
+	 *   🔴 为什么必须**在插件 store 里**存这两个值，而不是只改宿主 store：
+	 *      实测（`scripts/_probe-store-identity.mjs` / `_probe-panel-geometry.mjs`）——
+	 *      宿主的 `useDirectorLayoutStore()` 是 `client.js:6479` 的**模块内闭包**，
+	 *      订阅的是宿主**自己**那份 store；插件 `layout.js` 虽把同名对象挂到
+	 *      `window.__directorLayoutStore`（后加载覆盖宿主 6478 行的赋值），但**宿主根本不读它**。
+	 *      故：翻全局 store 的 `directorPanelCollapsed` 对宿主左栏**零影响**（实测宽 301px 不变）。
+	 *      ⇒ 折叠/宽度必须由插件的 `bridge/host-director-column.js` **直接落到 DOM 几何**上，
+	 *        这里只是那套几何的**唯一真相源**（用户点最小化 = 改这里）。
+	 *   ⚠️ 复用既有 `directorPanelWidth` / `directorPanelCollapsed` 两个键（R5 冻结契约：
+	 *      既有键**不得改名**），不新开键 —— 语义完全一致，只是执行者从宿主换成了插件。 */
+	/* 总监记忆面板的**悬停展开延迟**（毫秒）。用户原话：
+	 *   「增加一个秒数,目前太灵敏了 总监及以下面的有不同的记忆索引等 把这边部分逻辑完善掉,
+	 *     这个固定也不好用需要修正, 还要可以上下调整高度」
+	 *   宿主实现（client.js:7357）是 `onMouseEnter` **立即** `setBottomPanelCollapsed(false)`，
+	 *   零延迟 ⇒ 鼠标扫过就弹。改为可配延迟，0 = 恢复宿主原行为（可回退）。 */
+	memoryHoverDelayMs: 500,
+	/* 总监记忆面板**内容区高度**（px）。宿主写死 `maxHeight:160`（client.js:7396）。
+	 *   用户：「这个固定也不好用需要修正, 还要可以上下调整高度」⇒ 由本字段驱动，
+	 *   并在面板上沿提供拖拽手柄写回这里。 */
+	memoryPanelHeight: 160,
+	/* 总监记忆面板是否被**锁定**（锁定 = 鼠标移出也不收回）。
+	 *   与宿主全局 `window.__dshMemoryLocked` 是**同一件事的同一份真相**：
+	 *   本字段持久化，宿主那个全局变量在 boot 时由我们按本字段回填。
+	 *   🔴 宿主原实现（client.js:7367）的锁定点击是 `__dshMemoryLocked = !locked;
+	 *      toggleBottomPanel();` —— 锁定时**仍翻转面板** ⇒ 「点锁定反而收起」。
+	 *      本字段 + bridge 接管点击后，语义改为：加锁 = 保持展开；解锁 = 收起（不再翻转）。 */
+	memoryLocked: false
 });
 
 export function createDirectorLayoutStore() {
@@ -129,6 +218,14 @@ export function createDirectorLayoutStore() {
 	} catch (e) { /* 解析失败 → 用默认值 */ }
 	// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
 	state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
+	state.railPinned = { ...DEFAULTS.railPinned, ...(state.railPinned || {}) };
+	/* 映射表类字段：**整体接管**（不是与 DEFAULTS 合并）—— 见 DEFAULTS 里的说明。
+	 * 这里只做"类型兜底"：老数据没有该键 / 被写坏成非对象 ⇒ 退回空表，不抛。 */
+	state.todoNotes = (state.todoNotes && typeof state.todoNotes === "object" && !Array.isArray(state.todoNotes))
+		? { ...state.todoNotes } : {};
+	state.activeTasks = (state.activeTasks && typeof state.activeTasks === "object" && !Array.isArray(state.activeTasks))
+		? { ...state.activeTasks } : {};
+	state.railWidth = { ...DEFAULTS.railWidth, ...(state.railWidth || {}) };
 	const listeners = new Set();
 	function notify() {
 		try { if (typeof localStorage !== "undefined") localStorage.setItem(DIRECTOR_LAYOUT_KEY, JSON.stringify(state)); } catch (e) { /* 隐私模式 */ }
@@ -217,6 +314,26 @@ export function createDirectorLayoutStore() {
 			notify();
 			return true;
 		},
+		/**
+		 * 关闭**所有**浮层（设计图工作室 / 思维导图 / 总监弹窗）—— 浮层关闭的**唯一真相源**。
+		 *
+		 * 为什么必须有（2026-09-14 第 6 批实测）：
+		 *   三个浮层都是**全屏 / 大区域覆盖层**。任一开着时，它底下的元素全部被
+		 *   `elementFromPoint` 判为"没被点到" ⇒ 其下所有点击与拖动**整体打空**，
+		 *   而读数与"功能坏了"**一模一样**（实测命中：`hit:"ds-el"` + `inside:false`）。
+		 *   这是真机 e2e 的经典假红形态，本次连跑时红时绿就是这么来的。
+		 *
+		 * 用途：① 自动化闸门**显式建立干净起点**；② 宿主 Esc 逐层退出时的收口。
+		 * ⚠️ 会写盘（这四个键是持久化的）⇒ 调用方若需要，必须自行快照 + 还原（纪律 15）。
+		 *
+		 * @returns {boolean} 是否**确实发生了关闭**；本就全关 ⇒ false（便于断言"起点已干净"）
+		 */
+		closeFloatLayers: () => {
+			if (!state.designStudioOpen && !state.mindmapOpen && !state.dialogOpen) return false;
+			state = { ...state, designStudioOpen: false, mindmapOpen: false, dialogOpen: false, dialogCollapsed: false };
+			notify();
+			return true;
+		},
 		/** 记录用户把某个框拖到哪（**只改画面位置，不改血缘**） */
 		setNodePos: (sessionId, pos) => {
 			if (!sessionId || !pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false;
@@ -239,13 +356,193 @@ export function createDirectorLayoutStore() {
 			notify();
 			return true;
 		},
-		/** V17 P2：切换/设置总监页区域折叠态（r2/r4/r6），并持久化 */
+		/** V17 P2：切换/设置总监页区域折叠态（r2/r4/r6），并持久化
+		 *  🔴 白名单**保留 r6**：R6 已整块去除（第 5 批），UI 上再无入口，
+		 *     但存量 localStorage 里可能仍有该键 —— 保留它只是为了让"已知字段合并"
+		 *     不丢字段，**不是还有 R6**。见 DEFAULTS.sectionCollapsed 的注释。 */
 		setSectionCollapsed: (key, v) => {
 			if (["r2", "r4", "r6"].indexOf(String(key)) < 0) return false;
 			const prev = state.sectionCollapsed || {};
 			state = { ...state, sectionCollapsed: { ...prev, [String(key)]: Boolean(v) } };
 			notify();
 			return true;
+		},
+		/** 第 5 批：钉住 / 取消钉住某一侧的缩回栏（"r4" 左 / "r7" 右）。
+		 *  钉住 = 鼠标移出也不缩回（V18 板块 E2）。只接受这两个键，别的键一律 false。 */
+		setRailPinned: (side, v) => {
+			const k = String(side || "");
+			if (k !== "r4" && k !== "r7") return false;
+			const prev = state.railPinned || {};
+			state = { ...state, railPinned: { ...prev, [k]: Boolean(v) } };
+			notify();
+			return true;
+		},
+		/** 读取某侧是否钉住（读端兜底：老数据缺该键 ⇒ false） */
+		isRailPinned: (side) => Boolean((state.railPinned || {})[String(side || "")]),
+
+		/* ── 第 6 批：R4 / R7 宽度（V20 需求 5）───────────────────────────
+		 *  🔴 只接受 r4 / r7 两个键（同 `setRailPinned` 的口径）：写进别的键会让
+		 *     "整体读入 + 已知字段合并"多出一个**永远不会被用**的字段，属于静默垃圾。
+		 *  🔴 clamp 在**写入端**做且返回真实落定值：拖动是高频的，
+		 *     让调用方"猜自己拖到哪"必然会与画面不一致（读端兜底只在读端）。 */
+		setRailWidth: (side, w) => {
+			const k = String(side || "");
+			if (k !== "r4" && k !== "r7") return false;
+			const n = Number(w);
+			const clamped = !Number.isFinite(n) ? RAIL_WIDTH_DEFAULT[k]
+				: Math.max(RAIL_WIDTH_MIN, Math.min(Math.round(n), RAIL_WIDTH_MAX));
+			const prev = state.railWidth || {};
+			if (prev[k] === clamped) return false;
+			state = { ...state, railWidth: { ...prev, [k]: clamped } };
+			notify();
+			return true;
+		},
+		/** 读取某侧展开宽度（读端兜底：老数据缺该键 ⇒ 默认值） */
+		getRailWidth: (side) => {
+			const k = String(side || "");
+			const cur = (state.railWidth || {})[k];
+			return Number.isFinite(cur) ? cur : (RAIL_WIDTH_DEFAULT[k] || RAIL_WIDTH_DEFAULT.r4);
+		},
+
+		/* ── 总监记忆面板的三个可配项（第 6 批需求 2）──────────────────────
+		 * 🔴 为什么这三项要进 store 而不是散在 bridge 的模块变量里：
+		 *    `bridge/host-director-column.js` 是**纯 DOM 执行层**（装监听、改几何），
+		 *    它每次重装/重扫都要能读回"用户设置的是什么"。放模块变量 ⇒ 宿主重渲染
+		 *    或插件热重载后设置丢失，而且**不报错**（表现为"秒数又变回默认"）。
+		 *    放进 store ⇒ 与宽度/折叠一样持久化，且闸门可以直接读 store 交叉校验 DOM。
+		 * ⚠️ 三个 setter 都做 clamp + 相等短路（相等不 notify，避免无谓重渲染）。 */
+		/** 悬停展开延迟（毫秒）。0 = 立即（等价宿主原行为）。上限 3000 防"设成 1 分钟"。 */
+		setMemoryHoverDelay: (ms) => {
+			const n = Number(ms);
+			const v = !Number.isFinite(n) ? 0 : Math.max(0, Math.min(Math.round(n), 3000));
+			if (state.memoryHoverDelayMs === v) return v;
+			state = { ...state, memoryHoverDelayMs: v };
+			notify();
+			return v;
+		},
+		getMemoryHoverDelay: () => {
+			const v = state.memoryHoverDelayMs;
+			return Number.isFinite(v) ? v : 0;
+		},
+		/** 记忆面板内容区高度（px）。下限 60（再小看不见内容）、上限 520（防顶穿整列）。 */
+		setMemoryPanelHeight: (px) => {
+			const n = Number(px);
+			const v = !Number.isFinite(n) ? 160 : Math.max(60, Math.min(Math.round(n), 520));
+			if (state.memoryPanelHeight === v) return v;
+			state = { ...state, memoryPanelHeight: v };
+			notify();
+			return v;
+		},
+		getMemoryPanelHeight: () => {
+			const v = state.memoryPanelHeight;
+			return Number.isFinite(v) ? v : 160;
+		},
+		/** 记忆面板锁定态（true = 鼠标移出也不收回）。**同时**回填宿主那个全局变量。 */
+		setMemoryLocked: (v) => {
+			const b = Boolean(v);
+			if (state.memoryLocked === b) return b;
+			state = { ...state, memoryLocked: b };
+			/* 宿主原实现读的是 `window.__dshMemoryLocked`（client.js:7357/7367）——
+			 * 两侧必须同步，否则"插件的开关"与"宿主的行为"各说各话（同源纪律 27）。 */
+			try { if (typeof window !== "undefined") window.__dshMemoryLocked = b; } catch (e) { /* 无 window（离线桩） */ }
+			notify();
+			return b;
+		},
+		getMemoryLocked: () => Boolean(state.memoryLocked),
+
+		/* ── 未完成项补充说明（V20 需求 3）────────────────────────────────
+		 * 🔴 三个方法都走 `todoNoteKey()`（**唯一真相源**）——
+		 *    读写两端各拼一次键 = 迟早一端口拼错、另一端读不到，
+		 *    表现是"写进去了但执行时读不到"，而且**不报错**。 */
+		/** 写入一条补充说明。空串 = 删除该条（不是存一条空记录）。返回 {ok, note, at, truncated} */
+		setTodoNote: (scopeKey, taskId, text) => {
+			const k = todoNoteKey(scopeKey, taskId);
+			if (!k) return { ok: false, why: "bad-key" };
+			const raw = String(text == null ? "" : text);
+			const trimmed = raw.trim();
+			const prev = state.todoNotes || {};
+			if (!trimmed) {
+				if (!(k in prev)) return { ok: false, why: "empty" };
+				const next = { ...prev }; delete next[k];
+				state = { ...state, todoNotes: next };
+				notify();
+				return { ok: true, removed: true };
+			}
+			const truncated = trimmed.length > TODO_NOTE_MAX_CHARS;
+			const note = truncated ? trimmed.slice(0, TODO_NOTE_MAX_CHARS) : trimmed;
+			const at = Date.now();
+			state = { ...state, todoNotes: { ...prev, [k]: { note, at } } };
+			notify();
+			return { ok: true, note, at, truncated };
+		},
+		/** 读一条。**执行链只调这个**（O(1)，不看全表） */
+		getTodoNote: (scopeKey, taskId) => {
+			const k = todoNoteKey(scopeKey, taskId);
+			if (!k) return null;
+			const row = (state.todoNotes || {})[k];
+			return (row && typeof row.note === "string" && row.note) ? { note: row.note, at: row.at || null } : null;
+		},
+		/** 列某作用域下的全部说明（**只给 UI 用**，执行链不许调 —— 那会变成 O(n) 注入） */
+		listTodoNotes: (scopeKey) => {
+			const s = String(scopeKey == null ? "" : scopeKey).trim();
+			const out = [];
+			if (!s) return out;
+			const prefix = s + "::";
+			const all = state.todoNotes || {};
+			for (const k of Object.keys(all)) {
+				if (k.indexOf(prefix) === 0) out.push({ taskId: k.slice(prefix.length), note: all[k].note, at: all[k].at || null });
+			}
+			return out;
+		},
+		/** 显式删除（与 setTodoNote("") 等价，供 UI 的「清除」按钮用）。
+		 *  ⚠️ 不反向调用 `directorLayoutStore.setTodoNote` —— 那会形成对
+		 *      "本工厂之外的单例"的隐式依赖（测试里用 createDirectorLayoutStore()
+		 *      造第二个实例时，删除会**写到另一个实例上**，且不报错）。 */
+		clearTodoNote: (scopeKey, taskId) => {
+			const k = todoNoteKey(scopeKey, taskId);
+			if (!k) return false;
+			const prev = state.todoNotes || {};
+			if (!(k in prev)) return false;
+			const next = { ...prev }; delete next[k];
+			state = { ...state, todoNotes: next };
+			notify();
+			return true;
+		},
+		/* ── 每个作用域"正在执行的那一条"（执行链 O(1) 注入的定位依据）──── */
+		/** 设为当前任务；传空 = 清除。返回落定后的 taskId（或 null） */
+		setActiveTask: (scopeKey, taskId) => {
+			const s = String(scopeKey == null ? "" : scopeKey).trim();
+			if (!s) return null;
+			const t = String(taskId == null ? "" : taskId).trim();
+			const prev = state.activeTasks || {};
+			if (!t) {
+				if (!(s in prev)) return null;
+				const next = { ...prev }; delete next[s];
+				state = { ...state, activeTasks: next };
+				notify();
+				return null;
+			}
+			if (prev[s] === t) return t;
+			state = { ...state, activeTasks: { ...prev, [s]: t } };
+			notify();
+			return t;
+		},
+		getActiveTask: (scopeKey) => {
+			const s = String(scopeKey == null ? "" : scopeKey).trim();
+			if (!s) return null;
+			const t = (state.activeTasks || {})[s];
+			return (typeof t === "string" && t) ? t : null;
+		},
+		/** **执行链的唯一取数口**：当前任务 + 它的补充说明，一起给出去。
+		 *  没设当前任务 / 没有说明 ⇒ `null`（调用方据此**如实说明"没有可注入的补充"**，
+		 *  不许编一段占位内容顶替 —— 纪律 19）。 */
+		getActiveTaskNote: (scopeKey) => {
+			const s = String(scopeKey == null ? "" : scopeKey).trim();
+			const taskId = (state.activeTasks || {})[s];
+			if (typeof taskId !== "string" || !taskId) return null;
+			const row = (state.todoNotes || {})[todoNoteKey(s, taskId)];
+			const note = (row && typeof row.note === "string" && row.note) ? row.note : "";
+			return { taskId, note, hasNote: !!note };
 		}
 	};
 }

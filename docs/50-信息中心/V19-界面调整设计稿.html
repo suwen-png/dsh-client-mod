@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V19 · 第 5 批界面调整设计稿 — dsh-director（10 条 · 含 2 处 bug 根治 · 先行评审）</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --sbg:#101114; --sbg2:#15161a; --sbg3:#1a1b1f; --sbg4:#1c1d21;
+    --panel:#212227; --line:#26282e; --line2:#2e3138; --line3:#34373e; --line4:#3d4148;
+    --fg:#e8eaed; --fg2:#c9ced6; --fg3:#9aa0a6; --fg4:#6b7076;
+    --acc:#2f6feb; --acc2:#8ab4f8; --accbg:#1d2739; --accbd:#2b3f5e;
+    --pur:#8957e5; --pur2:#c9a8ff; --purbg:#1a1524; --purbd:#4c3a6b;
+    --teal:#39c5cf; --teal2:#7fe3e8; --tealbg:#15201f; --tealbd:#2b6b70;
+    --ok:#3fb950; --ok2:#8fd48f; --okbg:#152318; --okbd:#2b6b3a;
+    --warn:#d29922; --warn2:#e3c07a; --warnbg:#241d10; --warnbd:#6b5320;
+    --err:#f85149; --err2:#ff9a92; --errbg:#1e1416; --errbd:#6b2b28;
+    --doc:#0d0e11;
+  }
+  body{background:var(--doc);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;font-size:11.5px;padding:26px 18px 70px}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:9px}
+  .sub{font-size:12.5px;color:var(--fg3);margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #24262c}
+  .sub b{color:var(--acc2);font-weight:600}
+  .blk{margin-bottom:30px}
+  .bh{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:9px;border-bottom:1px solid #24262c}
+  .bh .k{font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 11px;border-radius:6px;background:var(--acc);color:#fff;white-space:nowrap}
+  .bh .k.p{background:var(--pur)}
+  .bh .k.t{background:var(--teal);color:#0d0e11}
+  .bh .k.e{background:var(--err);color:#fff}
+  .bh h2{font-size:17px;font-weight:650}
+  .bh .r{margin-left:auto;font-size:11.5px;color:var(--fg4);white-space:nowrap}
+  .sec{background:var(--sbg3);border:1px solid #26282e;border-radius:12px;margin-bottom:18px;overflow:hidden}
+  .sec > header{padding:11px 16px;background:var(--sbg2);border-bottom:1px solid #26282e;display:flex;align-items:center;gap:10px}
+  .sec > header .no{font-size:11px;font-weight:700;padding:2px 9px;border-radius:5px;background:#2b2e35;color:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+  .sec > header h3{font-size:14px;font-weight:600}
+  .sec > header .tag{margin-left:auto;font-size:11px;color:var(--fg4);white-space:nowrap}
+  .sec > .bd{padding:16px}
+  .note{font-size:11.5px;color:var(--fg3);background:var(--sbg2);border-left:3px solid var(--acc);padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--pur)}
+  .note.t{border-left-color:var(--teal)}
+  .note.e{border-left-color:var(--err)}
+  .note b{color:var(--fg)}
+  .note .src{color:var(--fg4)}
+  .cap{font-size:11px;color:var(--fg4);margin-top:8px;text-align:center}
+  .frame{background:var(--sbg4);border:1px solid #2b2e34;border-radius:10px;overflow:hidden}
+  .fbar{height:28px;background:var(--sbg2);border-bottom:1px solid #232529;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:11px;color:var(--fg4)}
+  .fbar .tl{width:9px;height:9px;border-radius:50%}
+  .fbar .tl.r{background:#ec6a5e}.fbar .tl.y{background:#f4bf4f}.fbar .tl.g{background:#61c554}
+  .fbd{padding:10px}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ttl{font-size:11px;font-weight:600;margin-bottom:6px}
+  .ttl.bad{color:var(--err2)}
+  .ttl.good{color:var(--ok2)}
+  .mark{border:1.5px dashed var(--err);border-radius:8px;padding:9px;position:relative}
+  .mark .lb{position:absolute;top:-9px;left:8px;background:var(--err);color:#fff;font-size:10.5px;padding:1px 7px;border-radius:4px;white-space:nowrap}
+  .mark.ok{border-color:var(--ok)}
+  .mark.ok .lb{background:var(--ok);color:#0d0e11}
+  .kbd{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--sbg2);border:1px solid var(--line3);border-radius:4px;padding:1px 5px;color:var(--fg2)}
+  .chip{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line3);background:var(--sbg3);color:var(--fg3);margin:2px 5px 2px 0}
+  .chip.on{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .chip.p{border-color:var(--purbd);background:var(--purbg);color:var(--pur2)}
+  .chip.t{border-color:var(--tealbd);background:var(--tealbg);color:var(--teal2)}
+  .chip.x{border-color:var(--errbd);background:var(--errbg);color:var(--err2)}
+  .chip.g{border-color:var(--okbd);background:var(--okbg);color:var(--ok2)}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;padding:6px 10px;background:var(--sbg2);border-bottom:1px solid var(--line2);color:var(--fg3);font-weight:600}
+  td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(--fg2);vertical-align:top}
+  .ok-t{color:var(--ok2)}
+  .warn-t{color:var(--warn2)}
+  .err-t{color:var(--err2)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step{background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;padding:6px 10px;font-size:11px;color:var(--fg2)}
+  .step.hi{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .step.x{border-color:var(--errbd);background:var(--errbg);color:var(--err2)}
+  .arrow{color:var(--fg4);font-size:12px}
+  .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .sp{margin-left:auto}
+  .box{border:1px solid var(--line2);border-radius:7px;padding:7px 9px;background:var(--panel);font-size:11px;color:var(--fg3)}
+  .lbl{font-size:10.5px;color:var(--fg4);letter-spacing:.4px}
+  .val{font-size:11.5px;color:var(--fg2)}
+  .bar{height:3px;border-radius:2px;background:var(--line3);margin-top:4px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--acc)}
+  .side{display:flex;gap:8px;align-items:stretch}
+  .rail{width:26px;background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--acc2);font-size:12px}
+  .wire{border:1px solid var(--line3);border-radius:8px;background:var(--sbg2);padding:8px}
+  .mline{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start}
+  .mline.me{flex-direction:row-reverse}
+  .mbub{max-width:74%;border-radius:7px;padding:5px 9px;font-size:11px;line-height:1.5}
+  .mbub.ai{background:var(--sbg4);border:1px solid var(--line3);color:var(--fg2)}
+  .mbub.you{background:var(--accbg);border:1px solid var(--accbd);color:var(--acc2)}
+  .mname{font-size:10.5px;color:var(--fg4);padding-top:3px;white-space:nowrap}
+  .tabs{display:flex;gap:0;border:1px solid var(--line3);border-radius:6px;overflow:hidden;margin-bottom:8px}
+  .tab{flex:1;text-align:center;font-size:10.5px;padding:4px 0;color:var(--fg4);background:var(--sbg2)}
+  .tab.on{color:var(--acc2);background:var(--accbg);font-weight:600}
+  .tab.gone{color:var(--fg4);background:transparent;text-decoration:line-through}
+  .pop{border:1px solid var(--accbd);border-radius:8px;background:var(--accbg);padding:8px;font-size:11px;color:var(--acc2)}
+  .fade{opacity:.45}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V19 · 界面调整设计稿 <small>第 5 批 10 条（含 2 处 bug 根治）· 先行评审</small></h1>
+<div class="sub">
+  范围：<b>对话页宿主残留清理</b> · <b>总监最小化补齐</b> · <b>R3 整行去除</b> · <b>R4/R7 左右缩回</b> · <b>对话消息左右分栏</b> · <b>智能体/技能浮窗</b> · <b>按消息判定归属对话</b> · <b>R6 并入 R2</b> · <b>R4 三 Tab 重定义</b> · <b>R7 双 Tab</b> · <b>文档逻辑固定</b>
+  ｜ 原则：只调整形态与信息层级；<b>不改数据口径、不动冻结契约</b>（localStorage key / DOM 锚点 / view order）
+</div>
+
+<!-- ═══════════ 板块 0 ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">0</span><h2>本批与 V18 的关系（先看这张表，避免重复设计）</h2><span class="r">评审用</span></div>
+
+  <div class="note">
+    <b>关键背景</b>：V18 已把「第 3 批 14 条」设计完毕，其中 9 条<b>尚未落地</b>（即 03 清单的 T-PLUG-032）。
+    本批 10 条里 <b>4 条就是那 9 条中的条目</b>（图中标「沿用 V18」），另 <b>6 条是新调整</b>。
+    <span class="src">（来源：docs/00-统筹入口/03-待完成任务清单.md 第 16 行）</span>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:38px">#</th><th>你的原话（摘）</th><th style="width:230px">对位</th><th style="width:150px">性质</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>对话 tap 上面这一行也去掉</td><td>宿主对话页蓝色标题栏（「对话」+ 5 按钮），<span class="err-t">在 viewArea 内、总监面板之外</span></td><td><span class="chip x">越界·需扩护栏</span></td></tr>
+      <tr><td>1b</td><td>刚点开对话的页面会一闪而逝，查原因</td><td><span class="err-t">300ms 延迟裁剪</span> ⇒ 元素先可见再被隐藏</td><td><span class="chip x">bug 根治</span></td></tr>
+      <tr><td>2</td><td>对话 tap 的总监没有最小化了，加上</td><td>裁剪把标题行<span class="err-t">整块</span>隐藏 ⇒ 行内折叠按钮一起没了</td><td><span class="chip x">bug 根治</span></td></tr>
+      <tr><td>3</td><td>这一列还在，不需要了</td><td><b>R3 资源行整行</b>（智能体 5 + 技能 3 + 模型 + 上下文）</td><td><span class="chip g">沿用 V18 板块 C</span></td></tr>
+      <tr><td>4</td><td>R4/R7 没占整列、也没弹窗；消息要左右分栏 + 颜色区分</td><td>R4/R7 缩回 + 弹窗；R5 消息分栏</td><td><span class="chip g">沿用 V18 板块 E + H</span></td></tr>
+      <tr><td>5</td><td>提的「正在使用智能体和技能」小窗没有</td><td>该浮窗未实现</td><td><span class="chip g">沿用 V18 板块 A2</span></td></tr>
+      <tr><td>6</td><td>总监有流转，但没按消息判断归属哪个对话</td><td>判定结果<span class="err-t">只写了记录、没接投递</span></td><td><span class="chip g">沿用 V18 板块 F</span> + 补投递</td></tr>
+      <tr><td>7</td><td>R6 有用的数据整合到 R2，R6 这一样都不要了</td><td>R6 记忆面板整块去除</td><td><span class="chip t">本批新增</span></td></tr>
+      <tr><td>8</td><td>R4 修订：路线图待办 / 已完成任务 / 文档树</td><td>R4 三 Tab 重定义</td><td><span class="chip t">本批新增</span></td></tr>
+      <tr><td>9</td><td>R4 的关键文件放到 R7，变成 关键文件 / 产出物</td><td>R7 双 Tab</td><td><span class="chip t">本批新增</span></td></tr>
+      <tr><td>10</td><td>R4 和 R7 对应的功能完善掉，指向的文档逻辑固定</td><td>去占位、接真实数据源</td><td><span class="chip t">本批新增</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══════════ 板块 A ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k e">A</span><h2>对话页 — 标题栏去除 · 最小化补齐 · 「一闪而逝」根治</h2><span class="r">需求 1 / 2</span></div>
+
+  <div class="sec">
+    <header><span class="no">A1</span><h3>去掉宿主蓝色「对话」标题栏（含 5 颗分支按钮）</h3><span class="tag">现状 → 目标</span></header>
+    <div class="bd">
+      <div class="note warn">
+        <b>为什么现有裁剪够不着它</b>：<span class="kbd">host-panel-trim.js</span> 的护栏是
+        <span class="kbd">closest('[style*="min-width: 180px"]')</span>（必须落在<b>宿主总监面板内</b>）。
+        这一行是<b>宿主对话页自己的标题栏</b>，挂在 <span class="kbd">RWZidW_viewArea</span> 下，
+        <b>不在总监面板内</b> ⇒ 判据直接 continue。
+      </div>
+      <div class="note">
+        <b>它有没有后端逻辑？有。</b>实测宿主 <span class="kbd">workspace/…/client.js:7414</span>：
+        onClick 调 <span class="kbd">window.__dshCreateBranch(agent.key, agent.label)</span>，
+        而该函数<b>运行时确实存在</b>（<span class="kbd">typeof === "function"</span>）——
+        宿主 5838 行定义一份、插件 <span class="kbd">src/store/branch.js:260</span> 又定义一份（后者覆盖）。
+        ⇒ 按你「<b>有后端逻辑就保留</b>」的口径：<b>只做显示层隐藏，一行代码都不删</b>；
+        分支创建入口仍在<b>导图 / 总监页</b>。
+      </div>
+
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状（截图 1）</div>
+          <div class="frame"><div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span>对话页</span></div>
+            <div class="fbd">
+              <div style="background:#2f6feb;border-radius:5px;padding:5px 12px;display:flex;align-items:center;gap:8px;color:#fff;font-size:11px">
+                <span style="font-weight:600">对话</span>
+                <span style="margin-left:auto;display:flex;gap:4px">
+                  <span class="chip" style="border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.15);color:#fff;margin:0">代码</span>
+                  <span class="chip" style="border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.15);color:#fff;margin:0">文档</span>
+                  <span class="chip" style="border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.15);color:#fff;margin:0">调研</span>
+                  <span class="chip" style="border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.15);color:#fff;margin:0">测试</span>
+                  <span class="chip" style="border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.15);color:#fff;margin:0">审核</span>
+                </span>
+              </div>
+              <div class="cap" style="margin-top:6px">蓝色标题行 = <span class="err-t">待去除</span></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标</div>
+          <div class="frame"><div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span>对话页</span></div>
+            <div class="fbd">
+              <div class="fade" style="border:1px dashed var(--line3);border-radius:5px;padding:5px 12px;font-size:10.5px;text-align:center;color:var(--fg4)">（该行隐藏 —— display:none，代码保留）</div>
+              <div class="cap" style="margin-top:6px">视频区上移，无重复标题</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note p" style="margin-top:12px">
+        <b>实现要点</b>：<span class="kbd">TRIM_TARGETS</span> 新增第 3 项 —— 按<b>文本全等</b>定位
+        <span class="kbd">「对话」</span>叶子节点后<b>上溯 2 层</b>拿到蓝色整行（其父是 5 按钮容器，再上才是行）。
+        护栏<b>不能放宽成"全页"</b>，否则会误伤插件自己的「对话」分栏标签 —— 新增第二条护栏：
+        <b>必须能 closest 到 <span class="kbd">.RWZidW_viewArea</span>，且<b>不能</b>落在插件自挂容器内</b>。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">A2</span><h3>「刚点开就一闪而逝」根因</h3><span class="tag">bug 根治</span></header>
+    <div class="bd">
+      <div class="note e">
+        <b>根因（已定位到行）</b>：<span class="kbd">installHostPanelTrim()</span> 给 MutationObserver 的回调套了
+        <span class="kbd">setTimeout(…, 300)</span> 做"代价控制"。
+        ⇒ <b>首次安装</b>时是立即裁剪的（不闪）；但<b>宿主切页签 / 重挂载</b>时节点被重建，
+        新节点<b>先以可见状态渲染</b>，300ms 后才被我们隐藏 ⇒ 你看到的<b>闪一下</b>就是这 300ms。
+      </div>
+      <div class="flow">
+        <span class="step x">点「对话」页签</span><span class="arrow">→</span>
+        <span class="step x">宿主重挂载该行（可见）</span><span class="arrow">→</span>
+        <span class="step x">等 300ms</span><span class="arrow">→</span>
+        <span class="step x">裁剪生效（消失）</span>
+        <span class="arrow">＝</span><span class="step hi">视觉"一闪而逝"</span>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>修法</b>：MutationObserver 回调里<b>同步</b>处理新增节点（微任务阶段，早于浏览器绘制帧），
+        去掉 <span class="kbd">setTimeout</span>。为守住"代价控制"，只扫 <span class="kbd">mutation.addedNodes</span>
+        而<b>不做全文扫描</b>，并保留 <span class="kbd">markersAlive()</span> 快速返回。
+        <b>验收判据</b>：连续切页签 3 次，被裁元素的"可见帧数"必须为 <b>0</b>（用 rAF 采样计数，而不是目测）。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">A3</span><h3>把「最小化」还回来</h3><span class="tag">需求 2</span></header>
+    <div class="bd">
+      <div class="note e">
+        <b>根因</b>：现有裁剪目标是按<b>文本全等</b>定位「总监对话」这个叶子，再<b>上溯 1 层</b>拿到"整行"并整块隐藏。
+        而宿主源码 <span class="kbd">client.js:7337–7340</span> 写明：该行 = <b>标题文字 + 一枚折叠按钮</b>。
+        ⇒ 我们<b>把折叠按钮连同标题一起隐了</b>。这就是"最小化没了"。
+      </div>
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状（整行被隐 ⇒ 按钮陪葬）</div>
+          <div class="wire">
+            <div class="fade" style="border:1px dashed var(--errbd);border-radius:5px;padding:6px 9px;font-size:10.5px;color:var(--err2)">
+              总监对话 <span class="sp" style="float:right">—</span>
+            </div>
+            <div class="cap">整块 display:none</div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标（只隐文字，控件留下）</div>
+          <div class="wire">
+            <div style="border:1px solid var(--line3);border-radius:5px;padding:6px 9px;display:flex;align-items:center;gap:6px">
+              <span class="fade" style="color:var(--fg4)">总监对话</span>
+              <span class="sp" style="margin-left:auto;display:flex;gap:5px">
+                <span class="chip on" style="margin:0">— 最小化</span>
+                <span class="chip" style="margin:0">✕</span>
+              </span>
+            </div>
+            <div class="cap">仅标题文字 opacity:0 / 宽度 0</div>
+          </div>
+        </div>
+      </div>
+      <div class="note warn" style="margin-top:12px">
+        <b>两种可选口径（评审时请择一）</b>：<br>
+        <b>① 细粒度裁剪</b>：把 <span class="kbd">up: 1</span>（隐整行）改成"只隐行内<b>纯文字节点</b>"，保留按钮。
+        —— 改动小，但依赖宿主 DOM 结构。<br>
+        <b>② 插件侧补齐</b>：不管宿主那枚按钮，在<b>插件自己的总监容器</b>上提供最小化（
+        <span class="kbd">directorLayoutStore.setDialogCollapsed(true)</span> → 右下角 chip），
+        与现有 <span class="kbd">Alt+3</span> 一致。<b>推荐 ②</b>：不依赖宿主结构，且符合"入口只留一处真相源"。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 B ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">B</span><h2>R3 资源行整行去除</h2><span class="r">需求 3 ＝ V18 板块 C</span></div>
+
+  <div class="sec">
+    <header><span class="no">B1</span><h3>现状 → 目标</h3><span class="tag">R3 / R8</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>实测现状</b>（CDP 实抓）：<span class="kbd">[data-testid=dp-r3]</span> 位于 <b>y=301 · x=280 · w=1632 · h=31</b>，
+        innerText ＝
+        <span class="kbd">智能体 | 🧑💻代码 | 📄文档 | 🔍调研 | 🧪测试 | 🎯审核 | 技能 | 🔎搜索 | ✍️写作 | ⚙️重构 | 模型 | qwen2:7b | ▾ | ｜ | 上下文 | 78%</span>
+        —— <b>就是截图 2</b>。
+      </div>
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状：占 1632×31 的一整行</div>
+          <div class="wire">
+            <div class="row" style="font-size:10.5px">
+              <span class="lbl">智能体</span>
+              <span class="chip">🧑💻 代码</span><span class="chip">📄 文档</span><span class="chip">🔍 调研</span><span class="chip">🧪 测试</span><span class="chip">🎯 审核</span>
+              <span class="lbl">技能</span>
+              <span class="chip">🔎 搜索</span><span class="chip">✍️ 写作</span><span class="chip">⚙️ 重构</span>
+              <span class="sp"><span class="lbl">模型</span> <span class="val">qwen2:7b</span> <span class="lbl">｜ 上下文 78%</span></span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标：整行删除</div>
+          <div class="wire">
+            <div class="fade" style="text-align:center;color:var(--fg4);font-size:10.5px;padding:8px">（R3 不再渲染）</div>
+            <div class="cap">腾出 31px 给对话区</div>
+          </div>
+        </div>
+      </div>
+      <div class="note warn" style="margin-top:12px">
+        <b>删除前必须安置两样东西</b>（否则是能力退步，不是瘦身）：<br>
+        <b>① 模型选择器</b>（<span class="kbd">dp-model</span>，当前值 qwen2:7b）—— 按 V18 板块 C/D 的口径
+        <b>前移到 R8 输入栏左侧</b>，保留"可切换"能力。<br>
+        <b>② 上下文 78%</b> —— 并入 R8 输入栏右侧的计数徽标（或与"待办计数"同区）。
+        技能/智能体徽标本身<b>不搬</b>（它们的信息由板块 D 的浮窗承载）。
+      </div>
+      <div class="note p">
+        <b>锚点变更</b>：<span class="kbd">dp-r3</span> / <span class="kbd">dp-agent-*</span> 将消失 ⇒
+        <b>必须先改闸门</b>：<span class="kbd">verify-flow.mjs</span> 里凡按 <span class="kbd">dp-agent-</span> 取元素的断言，
+        一律改指向 R8 的新锚点（<span class="kbd">dp-model</span> 保留、新增 <span class="kbd">dp-ctx</span>）。
+        <b>冻结契约提醒</b>：DOM 锚点属冻结面，删锚点必须<b>同步改闸门 + 更新锚点文档</b>。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 C ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">C</span><h2>R4 / R7 左右缩回 + 弹窗；对话消息左右分栏</h2><span class="r">需求 4 ＝ V18 板块 E + H</span></div>
+
+  <div class="sec">
+    <header><span class="no">C1</span><h3>R4 / R7：从「固定窄栏」改为「缩回 · hover 弹出 · 可固定」</h3><span class="tag">R4 / R7</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>实测现状</b>：<span class="kbd">dp-r4</span> ＝ <b>200px 固定宽</b>（y=339, h=440）；
+        <span class="kbd">dp-r7</span> ＝ <b>210px 固定宽</b>。两者<b>常驻占据</b>，中栏 R5 只剩中间那一块，
+        既不是"占整列"也没有"弹窗"形态 —— 你描述的"没有占据整列、也没有弹窗"正是这个<b>中间态缺失</b>。
+      </div>
+      <table>
+        <thead><tr><th style="width:110px">态</th><th>触发</th><th>宽度</th><th>退出</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip">缩回</span></td><td>默认</td><td>26px 竖排 rail（复用现有 <span class="kbd">S.rail</span>）</td><td>hover 5s</td></tr>
+          <tr><td><span class="chip on">弹出</span></td><td>hover 满 5 秒</td><td><b>占满该整列</b>（含纵向完整高度）</td><td>鼠标移出 / Esc</td></tr>
+          <tr><td><span class="chip p">固定</span></td><td>弹出态点击「📌 固定」</td><td>保持占满，直到再点</td><td>再点固定 / ✕</td></tr>
+        </tbody>
+      </table>
+      <div class="flow" style="margin-top:12px">
+        <span class="step">缩回 26px</span><span class="arrow">— hover 5s →</span>
+        <span class="step hi">弹出（占满整列）</span><span class="arrow">— 点击 📌 →</span>
+        <span class="step hi">固定</span><span class="arrow">— 移出/Esc →</span><span class="step">缩回</span>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>为什么是 hover 5 秒而不是 hover 即弹</b>：R4/R7 与对话区相邻，鼠标横穿必然路过。
+        即弹会"刚想点对话就被侧栏顶开"，属高频误触 ⇒ 用<b>时间闸</b>过滤路过，用<b>点击固定</b>给真需要的场景。
+        三处（总监页 / 对话页 / 导图）<b>共用同一份 store 字段</b>，不各写一套。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">C2</span><h3>R5 对话消息：左右分栏 + 轻微颜色区分</h3><span class="tag">需求 4 后半</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>现状</b>：<span class="kbd">S.msg</span> 是<b>单列</b>（头像 + 气泡横排，两侧都左对齐），
+        你自己的话和总监的话<b>靠头像字母区分</b>，扫读时找不到"我说到哪了"。
+      </div>
+      <div class="wire">
+        <div class="mline me"><span class="mname">你</span><span class="mbub you">把这句话放进对话执行</span></div>
+        <div class="mline"><span class="mname">总监</span><span class="mbub ai">【总监分析】1.整理语言 2.切换分支 3.调整模型 4.上下游文 5.自动审核</span></div>
+        <div class="mline me"><span class="mname">你</span><span class="mbub you">再跑一次，这次走分支</span></div>
+        <div class="mline"><span class="mname">总监</span><span class="mbub ai">已切到分支「导图侧测试」，准备重跑</span></div>
+      </div>
+      <div class="cap">左＝总监（冷色 · <span class="kbd">--sbg4</span>）｜右＝你（品牌蓝 · <span class="kbd">--accbg</span>）；两侧最大宽度 74%，长文自动换行</div>
+      <div class="note warn" style="margin-top:12px">
+        <b>颜色只做"轻微"区分</b>：不加大色块，只用<b>背景 + 1px 边框</b>两档；
+        文字对比度须过 <b>WCAG AA</b>（这也是既有闸门 <span class="kbd">verify-design-studio</span> 的 C15/C16 系列会查的）。
+        <b>不改数据</b>：<span class="kbd">role</span> 字段本就存在，纯渲染层改动。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 D ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">D</span><h2>「正在使用 智能体 / 技能」小浮窗</h2><span class="r">需求 5 ＝ V18 板块 A2</span></div>
+
+  <div class="sec">
+    <header><span class="no">D1</span><h3>新增：运行中能力的实时浮窗</h3><span class="tag">新增</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>为什么需要它</b>：R3 删掉后（板块 B），"当前有哪些智能体/技能在跑"就没有常驻可见处了。
+        这个浮窗正好承接该信息，且<b>只在有东西在跑时出现</b>，不占常驻版面。
+      </div>
+      <div class="cmp">
+        <div>
+          <div class="ttl">空闲态：不渲染</div>
+          <div class="wire"><div class="fade" style="text-align:center;color:var(--fg4);font-size:10.5px;padding:10px">（无运行中能力 ⇒ 浮窗不存在）</div></div>
+        </div>
+        <div>
+          <div class="ttl good">运行态：右上角浮窗</div>
+          <div class="wire">
+            <div class="pop">
+              <div style="font-size:10.5px;font-weight:600;margin-bottom:5px">正在使用</div>
+              <div class="row" style="font-size:10.5px">
+                <span class="chip t">🧑💻 代码</span><span class="chip t">🔎 搜索</span><span class="chip t">🎯 审核</span>
+              </div>
+              <div class="cap" style="text-align:left;margin-top:5px">数据源：<span class="kbd">listAgentRuns()</span>（已有实现）</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>数据不新造</b>：<span class="kbd">DirectorDialog.js</span> 已在导入并使用 <span class="kbd">listAgentRuns()</span>
+        与 <span class="kbd">AGENTS</span> / <span class="kbd">SKILLS</span> 常量 ⇒ 浮窗<b>直接消费同一份</b>，不再写第二套。
+        运行态为空时<b>整个浮窗不挂载</b>（避免"空窗常驻"这种看着像坏了的状态）。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 E ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k">E</span><h2>按消息判定归属哪个对话</h2><span class="r">需求 6 ＝ V18 板块 F + 补投递</span></div>
+
+  <div class="sec">
+    <header><span class="no">E1</span><h3>根因：判定结果只写了记录，没接投递</h3><span class="tag">bug 根治</span></header>
+    <div class="bd">
+      <div class="note e">
+        <b>判定能力本身是好的</b>：<span class="kbd">logic/routing.js</span> 的
+        <span class="kbd">scoreNodes()</span> 会给每个节点打分（名称命中 ×3 / 会话记录命中 ×1.2 / 近 3 日活跃 +0.8 /
+        会话级 +0.3），<span class="kbd">suggestDestination()</span> 据此给出三条去向
+        （<b>转给该对话的总监 / 直接调用对应对话 / 新建对话</b>）。
+      </div>
+      <div class="note e">
+        <b>断在这两处</b>：<br>
+        <span class="kbd">DirectorPage.js:586</span> ——
+        <span class="kbd">flowStore.move(flowId, DIM.CHAT, …, { status:"routed", <b>target: flowSession</b> })</span>
+        ⇒ 目标写死<b>当前会话</b>；<br>
+        <span class="kbd">DirectorDialog.js:572</span> ——
+        <span class="kbd">sendToChat(subtasks.join("\n"), { autoSend })</span>
+        ⇒ <b>没传任何目标会话</b>（<span class="kbd">sendToChat</span> 本身也只操作当前会话）。
+        <br>⇒ 判定的 <span class="kbd">candidates[0].nodeId</span> <b>只被 saveDecision 存进了决策记录</b>，投递路径完全不知道它。
+      </div>
+      <div class="flow">
+        <span class="step">用户消息</span><span class="arrow">→</span>
+        <span class="step hi">route() 判定 → 候选 nodeId</span><span class="arrow">→</span>
+        <span class="step x">saveDecision 只存记录</span>
+        <span class="arrow">⤳</span>
+        <span class="step x">投递用 flowSession（当前会话）</span>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>修法（三处贯通）</b>：<br>
+        <b>① 传下去</b>：<span class="kbd">confirmRoute(dest)</span> 取出 <span class="kbd">routeResult.candidates[0].nodeId</span>
+        作为 <span class="kbd">targetNodeId</span>；<br>
+        <b>② 走对通道</b>：<span class="kbd">bridge/chat-bridge.js</span> 已有
+        <span class="kbd">sendToHost(sessionId, text)</span>（<b>带会话参数</b>）—— 目标非当前会话时改走它，
+        而不是继续用只认当前会话的 <span class="kbd">sendToChat</span>；<br>
+        <b>③ 留痕</b>：<span class="kbd">flowStore.move</span> 的 <span class="kbd">target</span> 写真实目标 id，
+        无候选时才回落到当前会话（且 UI 上明示"未命中，发当前会话"，<b>不静默</b>）。
+      </div>
+      <div class="note warn">
+        <b>验收判据（必须能反证）</b>：造两条消息 —— 一条含<b>目标对话名</b>（应路由到它）、
+        一条含<b>无关词</b>（应回落当前会话）。两条的落点必须<b>不同</b>；
+        若两条都进当前会话 ⇒ 判据转红（证明接线没生效）。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 F ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">F</span><h2>R6 有效数据并入 R2 · R6 整块去除</h2><span class="r">需求 7</span></div>
+
+  <div class="sec">
+    <header><span class="no">F1</span><h3>先把 R6 有什么讲清楚，再决定搬什么</h3><span class="tag">R6 / R2</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>实测现状</b>：<span class="kbd">dp-r6</span> 是一条<b>通栏横条</b>（x=289 · w=1506 · h=51，y=786），
+        内含 <span class="kbd">dp-db-nodes</span> / <span class="kbd">dp-db-msgs</span> / <span class="kbd">dp-db-problems</span>
+        <b>三个数字</b>（节点数 / 消息数 / 问题数）+ 独立库统计。标题文案「总监记忆」。
+      </div>
+      <table>
+        <thead><tr><th style="width:180px">R6 现有内容</th><th style="width:90px">处置</th><th>去向</th></tr></thead>
+        <tbody>
+          <tr><td>节点数 / 消息数 / 问题数（三数）</td><td><span class="chip g">搬走</span></td><td>并入 <b>R2 四指标卡</b>区域下方一行小字（R2 已是 4 卡 grid，加 3 个轻量计数不破坏版式）</td></tr>
+          <tr><td>独立库统计（<span class="kbd">pluginDbStats()</span>）</td><td><span class="chip g">搬走</span></td><td>同上，作为"数据落在插件独立库"的说明行</td></tr>
+          <tr><td>「总监记忆」标题 + 折叠开关</td><td><span class="chip x">删除</span></td><td>整块不渲染；<span class="kbd">dp-r6-toggle</span> 一并移除</td></tr>
+        </tbody>
+      </table>
+      <div class="note warn" style="margin-top:12px">
+        <b>连带影响（必须先查后改）</b>：<span class="kbd">collapse</span> 里有一个
+        <span class="kbd">r6</span> 折叠态字段（<span class="kbd">st.sectionCollapsed.r6</span>，已持久化到 layout store）。
+        删 R6 后该字段<b>不能再被 UI 写</b>，但<b>也不该从 store 里删</b>（历史持久化数据仍在用户 localStorage 里，
+        强行删会造成"旧值被下一次写入抹掉"）。<b>正确做法</b>：留字段、只摘 UI 入口，并在注释里写明原因。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 G ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">G</span><h2>R4 三 Tab 重定义</h2><span class="r">需求 8</span></div>
+
+  <div class="sec">
+    <header><span class="no">G1</span><h3>现状 → 目标</h3><span class="tag">R4_TABS</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>现状</b>（源码 <span class="kbd">DirectorPage.js:95-99</span> 的 <span class="kbd">R4_TABS</span>）：
+        文档树 / 路线图 · 待办 / 关键文件。
+        <b>目标</b>：路线图 · 待办 / 已完成任务 / 文档树 —— 注意<b>顺序也变了</b>（待办提到最前），
+        且<b>关键文件搬去 R7</b>（见板块 H）。
+      </div>
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">现状</div>
+          <div class="wire">
+            <div class="tabs"><span class="tab on">文档树</span><span class="tab">路线图 · 待办</span><span class="tab">关键文件</span></div>
+            <div class="fade" style="font-size:10.5px;color:var(--fg4)">关键文件：直接指向改代码时最常动的文件（client-entry / mount / …）</div>
+          </div>
+        </div>
+        <div>
+          <div class="ttl good">目标</div>
+          <div class="wire">
+            <div class="tabs"><span class="tab on">路线图 · 待办</span><span class="tab">已完成任务</span><span class="tab">文档树</span></div>
+            <div style="font-size:10.5px;color:var(--fg2)">按 <span class="kbd">docs/00-统筹入口/03-待完成任务清单.md</span> 逐条渲染</div>
+          </div>
+        </div>
+      </div>
+      <div class="note ok" style="margin-top:12px">
+        <b>「文档树」不缩水</b>：数据源已是真实的 <span class="kbd">window.__dshDocsIndex</span>
+        （<span class="kbd">assets/docs-index.json</span>，<b>915,314 B / 90 篇</b>），搬位置不影响它。
+        <b>新增的「已完成任务」</b>指向 <span class="kbd">04-已完成任务清单.md</span> —— 与 03 同源、同解析器，
+        <b>不新写第二套解析</b>。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 H ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">H</span><h2>R7 ＝ 关键文件 / 产出物</h2><span class="r">需求 9</span></div>
+
+  <div class="sec">
+    <header><span class="no">H1</span><h3>接住从 R4 搬来的「关键文件」</h3><span class="tag">R7</span></header>
+    <div class="bd">
+      <div class="note">
+        <b>为什么放 R7 更合理</b>：R4 是"项目导航"（<b>去哪</b>），R7 是"详情 / 产出物"（<b>这一步产出了什么</b>）。
+        「关键文件」是"改这个任务时要动哪些文件"，性质上属于<b>当前工作项的详情</b>，放 R7 与「产出物」并列才连贯。
+      </div>
+      <div class="wire">
+        <div class="tabs"><span class="tab on">关键文件</span><span class="tab">产出物</span></div>
+        <table>
+          <thead><tr><th style="width:190px">文件</th><th>作用</th><th style="width:70px">热度</th></tr></thead>
+          <tbody>
+            <tr><td>src/client-entry.js</td><td>插件入口 / 安装批次</td><td><span class="chip on">高</span></td></tr>
+            <tr><td>src/mount.js</td><td>四层挂载（dialog/studio/mindmap/dock）</td><td><span class="chip on">高</span></td></tr>
+            <tr><td>src/components/DirectorPage.js</td><td>总监页 R1–R8</td><td><span class="chip on">高</span></td></tr>
+            <tr><td>src/components/DirectorDialog.js</td><td>弹窗 / 分屏 / 焦点路由</td><td><span class="chip">中</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cap">产出物 tab ＝ 现有「详情 / 产出物」内容原地保留（层级 / 文档·对话·决策计数 / 分层总结）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 I ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k t">I</span><h2>R4 / R7 功能完善 · 指向的文档逻辑固定</h2><span class="r">需求 10</span></div>
+
+  <div class="sec">
+    <header><span class="no">I1</span><h3>把"占位文字"换成"真实数据源"</h3><span class="tag">本轮最实质的一条</span></header>
+    <div class="bd">
+      <div class="note warn">
+        <b>现状问题</b>：R4 的「关键文件」是一句<b>写死的说明文字</b>（"直接指向改代码时最常动的文件（client-entry / mount /
+        DirectorDialog / DesignStudio / MindMap）"）—— 它<b>不可点、不随项目变化、无法验证</b>。
+        三个文件名单硬编码在 JSX 里，属"看着有用、其实是装饰"。
+      </div>
+      <table>
+        <thead><tr><th style="width:120px">区域</th><th style="width:220px">数据源（固定下来）</th><th>落地形态</th></tr></thead>
+        <tbody>
+          <tr><td>R4 · 路线图 · 待办</td><td><span class="kbd">docs/00-统筹入口/03-待完成任务清单.md</span></td><td>逐条渲染，状态色与文档一致（待授权 / 待排期 / backlog）</td></tr>
+          <tr><td>R4 · 已完成任务</td><td><span class="kbd">docs/00-统筹入口/04-已完成任务清单.md</span></td><td>同上，按完成时间倒序</td></tr>
+          <tr><td>R4 · 文档树</td><td><span class="kbd">window.__dshDocsIndex</span>（<span class="kbd">assets/docs-index.json</span>）</td><td>90 篇真实文档树，点节点 → 打开文档</td></tr>
+          <tr><td>R7 · 关键文件</td><td><span class="kbd">src/**</span> 源码映射索引（<span class="kbd">docs/12-源码映射索引.md</span> 同源）</td><td><b>可点击</b>跳转；每项带真实字节数/行数，不用手写名单</td></tr>
+          <tr><td>R7 · 产出物</td><td><span class="kbd">pluginDbStats()</span> + 当前节点</td><td>沿用现状（层级 / 计数 / 分层总结）</td></tr>
+        </tbody>
+      </table>
+      <div class="note p" style="margin-top:12px">
+        <b>"固定"的三个含义</b>（评审时按这三条验收）：<br>
+        <b>① 单一真相源</b> —— 每个区域只读一处数据源，不在 JSX 里另写名单；<br>
+        <b>② 可验证</b> —— 每条断言都能指出"这个数字来自哪个文件"，且闸门能读同一处做对账；<br>
+        <b>③ 不因宿主改版失效</b> —— 数据源是<b>我们自己的</b> <span class="kbd">docs/</span> 与 <span class="kbd">assets/</span>，
+        不依赖宿主 DOM 结构。
+      </div>
+      <div class="note">
+        <b>降级口径（纪律：降级可以，无声不行）</b>：<span class="kbd">docs-index.json</span> 加载失败时，
+        区块显示"索引不可用（原因）"，<b>不允许静默显示空树</b> —— 空树与"真的没有文档"在界面上无法区分。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 板块 J ═══════════ -->
+<div class="blk">
+  <div class="bh"><span class="k p">J</span><h2>改动映射（落到哪个文件 / 字段）</h2><span class="r">评审用</span></div>
+
+  <div class="sec">
+    <header><span class="no">J1</span><h3>只增不改优先 · 冻结契约单独标注</h3><span class="tag">施工单</span></header>
+    <div class="bd">
+      <table>
+        <thead><tr><th style="width:36px">#</th><th style="width:300px">文件</th><th>改动</th><th style="width:88px">风险</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>src/bridge/host-panel-trim.js</td><td>+1 个 <span class="kbd">TRIM_TARGETS</span> 项（对话页标题栏）；护栏加"须在 viewArea 内且不在插件容器内"</td><td><span class="chip x">护栏须正负对照</span></td></tr>
+          <tr><td>1b</td><td>src/bridge/host-panel-trim.js</td><td>MutationObserver 回调去掉 <span class="kbd">setTimeout(300)</span>，改同步处理 <span class="kbd">addedNodes</span></td><td><span class="chip">性能须复测</span></td></tr>
+          <tr><td>2</td><td>src/bridge/host-panel-trim.js · store/layout.js</td><td>细粒度裁剪 或 插件侧补最小化（评审择一）</td><td><span class="chip">二选一</span></td></tr>
+          <tr><td>3</td><td>src/components/DirectorPage.js <span class="kbd">sectionR3()</span></td><td>整段删除；模型/上下文迁 R8</td><td><span class="chip x">锚点变更·须同步闸门</span></td></tr>
+          <tr><td>4</td><td>DirectorPage.js · store/layout.js</td><td>R4/R7 缩回+弹窗（复用 hover 时间闸）；R5 消息分栏样式</td><td><span class="chip">纯渲染层</span></td></tr>
+          <tr><td>5</td><td>components/（新增浮窗组件）</td><td>消费 <span class="kbd">listAgentRuns()</span></td><td><span class="chip">新增文件</span></td></tr>
+          <tr><td>6</td><td>DirectorPage.js · DirectorDialog.js · bridge/chat-bridge.js</td><td>判定结果接入投递（<span class="kbd">targetNodeId</span> → <span class="kbd">sendToHost</span>）</td><td><span class="chip x">行为变更·须真机反证</span></td></tr>
+          <tr><td>7</td><td>DirectorPage.js <span class="kbd">sectionR6()</span></td><td>整段删除；三数并入 R2；<span class="kbd">sectionCollapsed.r6</span> 留字段摘入口</td><td><span class="chip">锚点变更</span></td></tr>
+          <tr><td>8</td><td>DirectorPage.js <span class="kbd">R4_TABS</span></td><td>三 Tab 重定义 + 顺序变更</td><td><span class="chip x">冻结契约·须同步闸门+文档</span></td></tr>
+          <tr><td>9</td><td>DirectorPage.js <span class="kbd">sectionR7()</span></td><td>双 Tab；接住关键文件</td><td><span class="chip">纯渲染层</span></td></tr>
+          <tr><td>10</td><td>DirectorPage.js · 各 section 取数</td><td>去硬编码名单，改读 03 / 04 / docs-index.json / 源码映射</td><td><span class="chip x">数据源变更·须降级口径</span></td></tr>
+        </tbody>
+      </table>
+      <div class="note warn" style="margin-top:12px">
+        <b>冻结面提醒</b>（纪律：冻结契约不可改名）：本批会动到 <span class="kbd">dp-r3</span> ·
+        <span class="kbd">dp-agent-*</span> · <span class="kbd">dp-r6*</span> · <span class="kbd">dp-r4-docs/roadmap/files</span>
+        等 DOM 锚点。⇒ <b>改锚点 = 必须同批完成</b>：① 改闸门（<span class="kbd">verify-flow</span> /
+        <span class="kbd">verify-mindmap</span> / <span class="kbd">verify-design-studio</span> /
+        <span class="kbd">verify-walk</span>）② 更新 <span class="kbd">10-当前基线-落死锚点-V16.md</span>
+        ③ 重跑 <span class="kbd">baseline-check --write</span>。
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="cap" style="margin-top:24px">V19 · 第 5 批界面调整设计稿 — 先行评审版 ｜ 落地前请确认板块 A3 的两种口径（细粒度裁剪 vs 插件侧补齐）</div>
+
+</div>
+</body>
+</html>

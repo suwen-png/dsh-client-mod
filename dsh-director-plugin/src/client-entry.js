@@ -2,8 +2,8 @@
  * 职责：插件浏览器侧入口（批次 1 已落地）
  * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
  * 上游：（无：插件入口层）
- * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, components/DirectorDialog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js
- * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】
+ * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
+ * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 十（7 个内核 API 逐模块 try/catch 挂载）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
 /**
@@ -122,11 +122,21 @@ import { DirectorWorkbench } from "./components/DirectorWorkbench.js";
 import { installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME } from "./store/plugin-db.js";
 import { installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION } from "./logic/routing.js";
 import { installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive } from "./bridge/split.js";
-import { installChatBridgeApi, sendToChat, readConversation } from "./bridge/chat-bridge.js";
+import { installChatBridgeApi, sendToChat, readConversation, startConversationMirror, syncConversationMirror, conversationMirror } from "./bridge/chat-bridge.js";
 import { installNavHook, installNavHookApi } from "./bridge/nav-hook.js";
 // 宿主残留区块的显示层裁剪（2026-09-14 第 4 批 · 需求 ⑤「只在页面上不显示就行」）
 import { installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, trimState } from "./bridge/host-panel-trim.js";
+import { installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID } from "./bridge/host-director-column.js";
+import { installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID } from "./bridge/host-composer-slot.js";
 import { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } from "./components/DirectorDialog.js";
+/* 第 6 批需求 6：执行状态（技能 / 智能体调用）—— **唯一真相源**。
+ * 改前它只是 DirectorDialog 内的模块级内存数组（页内刷新即丢、真实执行链一条不写）。 */
+import {
+	installAgentRuns, AGENT_RUNS_KEY, RUN_STATUS, runsState as agentRunsState,
+	recordAgentRun, beginChain, fillChainSteps, endChain, listChains, latestChain, activeChain
+} from "./store/agent-runs.js";
+/* 第 6 批「完善技能和智能体的指向」：技能/链条指向表（纯函数，零 import） */
+import { SKILL_CATALOG, CHAIN_STEPS, CHAIN_TARGETS, auditCatalog, installCatalogApi } from "./logic/catalog.js";
 // ── 批次 10 设计图工作室 + 总监 tab（T-PLUG-018）──
 //    设计图：store/design-schema.js（元素原子）+ store/design.js（CRUD）+ components/DesignStudio.js
 //    总监 tab：components/DirectorPage.js（R1–R8）+ 下面的 installDirectorView(ctx)
@@ -134,6 +144,9 @@ import { installDesignApi, DESIGN_KEY } from "./store/design.js";
 import { DesignStudio, STUDIO_ID } from "./components/DesignStudio.js";
 import { FloatDock, FLOATDOCK_ID, FLOAT_DOCK_RESERVE } from "./components/FloatDock.js";
 import { DirectorPage, DIRECTOR_PAGE_ID } from "./components/DirectorPage.js";
+/* 第 6 批需求 8：标准模型选择席位（宿主 conversation.input.model 插槽）
+ * 组件：components/ModelSeat.js（含纯函数 selectedModelOf / applyModelChoice / modelOptions） */
+import { ModelSeat, MODEL_SEAT_SLOT } from "./components/ModelSeat.js";
 import { installBranchTreeApi } from "./logic/branch-tree.js";
 import { MindMap, MINDMAP_ID } from "./components/MindMap.js";
 // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）──
@@ -146,7 +159,18 @@ import { installBranchFocusApi } from "./logic/branch-focus.js";
 import { installOverviewApi } from "./logic/overview.js";
 import { installOrchestrateApi } from "./logic/orchestrate.js";
 import { NodeDetailPanel, NODE_DETAIL_ID } from "./components/NodeDetailPanel.js";
-
+/* ── 批次 16 多智能体编排内核（2026-09-14 架构补全）──
+ * 用户原话：「OrganizeAgent 和 agency-orchestrator 完全适合目前我开发这个插件的执行架构，
+ *           应该还有更多开源的信息能优化我的架构设计，那么需要你去找然后补全我的架构体系」
+ * ⚠️ 导入顺序：roles 必须最先（policy 依赖它的档位常量为**编译期引用**）。 */
+import { installRolesApi } from "./logic/roles.js";
+import { installDagApi } from "./logic/dag.js";
+import { installVerifyApi } from "./logic/verify.js";
+import { installDelegateApi } from "./logic/delegate.js";
+import { installTaskStateApi } from "./logic/task-state.js";
+import { installCheckpointApi } from "./logic/checkpoint.js";
+import { installPolicyApi } from "./logic/policy.js";
+import { OrchestratorPanel } from "./components/OrchestratorPanel.js";
 export const PLUGIN_VERSION = "0.15.0-batch15";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
@@ -172,6 +196,36 @@ export function installBatch1(options = {}) {
 	//     ⚠️ 返回值不在这里接：真状态在 `trimState`（见下方 installed.hostPanelTrim），
 	//        因为"调用过"与"真的贴上去了"是两件事。
 	installHostPanelTrim();
+
+	// 1.7 对话页**宿主左栏（总监列）的几何接管 + 记忆面板时序**（2026-09-14 第 6 批 · 需求 1/2）
+	//     用户原话：「[图3] 最小化这个空白还是存在的, 最小化之后旁边的对话要占满」、
+	//               「增加一个秒数, 目前太灵敏了 …这个固定也不好用需要修正, 还要可以上下调整高度」。
+	//     🔴 为什么必须走 DOM 几何接管而不能改宿主 store（三连实测，脚本在 scripts/ 下）：
+	//        ① 翻 `window.__directorLayoutStore.directorPanelCollapsed` ⇒ 宿主左栏**纹丝不动**（仍 301px）；
+	//        ② `window.__directorLayoutStore` 上是**插件**那份 store（有 railPinned/todoNotes 等插件字段）；
+	//        ③ 宿主 `useDirectorLayoutStore()`（client.js:6479）是**模块内闭包**，订阅自己那份，**不读 window**。
+	//     🔴 宿主自身的两个缺陷也是 [图3] 的成因：折叠分支仍写 `width: directorPanelWidth`（=300）
+	//        ⇒ 折叠后照样留 300px 空白；拖拽手柄 clamp 到 [180,600] ⇒ 永远回不到 0。
+	//     细节（三层做法 / 为什么拦 document 捕获相 / 可逆记账）见 bridge/host-director-column.js 头注。
+	//     ⚠️ 与裁剪同源：返回值不在这里接，真状态在 `hostColumnState`。
+	installHostDirectorColumn();
+
+	// 1.8 宿主底部统计行「N 轮 · N 步」**之前**注入插件控件条（第 6 批 · 需求 7/9）
+	//     用户原话：「把 [图6] 这一列的总监和对话切换的部分, 放到最下面 "58 轮 · 58 步") 之前,
+	//               只用一个按钮位置, 点击切换」；「都完成之后去掉这一行」（R8）。
+	//     🔴 必须在 **boot 时**装（而不是等总监页挂载）：
+	//        ① 注入条落在**宿主 composer** 里（常驻），与总监页的挂载时机无关；
+	//        ② 行为 handler 由总监页的 effect 后注入（`setHostComposerHandlers`），
+	//           装 DOM 与接行为**解耦** —— 否则"没进过总监页就没有切换按钮"。
+	//     细节（锚点跟随 / 事件契约 / 为什么必须 insertBefore 统计 span）见 bridge/host-composer-slot.js 头注。
+	installHostComposerSlot();
+
+	// 1.9 执行状态数据层（第 6 批需求 6）+ 指向表自挂（同批「完善技能和智能体的指向」）
+	//     🔴 必须在**渲染之前**装载：`store/agent-runs.js` 的读回会把上次遗留的
+	//        `running` 改判为 `interrupted`（否则重启后窗口永远停在"运行中"，那是撒谎）。
+	//     ⚠️ 两者都**不抛穿**（installBatch1 执行链纪律）。
+	try { installAgentRuns(); } catch (e) { /* 诊断面失败不影响主流程 */ }
+	try { installCatalogApi(); } catch (e) { /* 同上 */ }
 
 	// 2. 状态层（构造时即自挂 window，见各模块）
 	//    directorLayoutStore → window.__directorLayoutStore
@@ -250,6 +304,13 @@ export function installBatch1(options = {}) {
 		window.__dshRouter = installRoutingApi();
 		window.__dshSplitApi = installSplitApi();
 		window.__dshChatBridge = installChatBridgeApi();
+		/* 第 6 批需求 7：宿主对话消息**后台镜像**。
+		 *  🔴 为什么必须后台常驻（2026-09-14 实测）：宿主页签是"内容互换"不是"隐藏" ——
+		 *     切到【总监】页签时消息滚动容器**整体卸载**，而 R5 的「对话」视图**只**在总监页签可见
+		 *     ⇒ "切视图时现读 DOM"在结构上不可能成立。镜像在宿主【对话】页签在场时持续累积，
+		 *     离场时保留上次快照（原因由 `conversationMirror.reason` 如实带出）。
+		 *  成本：2.5s 一次；不在对话页签时只做一次页签查询就返回，**不跑** findChatRoot。 */
+		try { startConversationMirror(); } catch (e) { /* 在 installBatch1 执行链上：绝不抛穿 */ }
 		window.__dshNavApi = installNavHookApi();
 		window.__dshReview6 = { REVIEW_DIMS, review6 };
 		window.__dshDirectorDialog = DirectorDialog;
@@ -261,6 +322,12 @@ export function installBatch1(options = {}) {
 		window.__dshMindMap = MindMap;
 		window.__dshFloatDock = FloatDock;
 		window.__dshDirectorPage = DirectorPage;
+		/* 🔴 **产物身份自报**（被闸门实读，不给人看）：本机存在**并发工作线**，
+		 *    会在两套代码之间反复重装/重启 Harness ⇒ 闸门必须能回答
+		 *    「我现在测的到底是哪一版产物」。没有这个锚点时，跨线重装会把
+		 *    "测的是别人的构建"读成"我这版改了没用"（2026-09-14 实测踩到）。
+		 *    与 `dp-root[data-rail-*]` 同属"环境的量交给环境自己声明"（纪律 29）。 */
+		window.__dshPluginVersion = PLUGIN_VERSION;
 		// ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）──
 		//    需求原文：「全部找审美重新审核一下质感加上，同时都在右上角加自定义个性化设定」
 		//              「保证同一个消息能在上面几个维度进行流转」
@@ -274,6 +341,34 @@ export function installBatch1(options = {}) {
 		window.__dshBranchFocus = installBranchFocusApi();
 		window.__dshOverview = installOverviewApi();
 		window.__dshOrchestrate = installOrchestrateApi();
+		// ── 批次 16 多智能体编排内核（2026-09-14 架构补全）──
+		//    四层组织 window.__dshRoles      → 角色注册表（Agent Card · 三层渐进式披露 · 路由）
+		//    声明式图 window.__dshDag        → 步骤图校验 / 拓扑 / 波次 / 条件求值
+		//    双层验收 window.__dshVerify     → 机械 assert + 语义 judge（跨族 / 位置交换 / 三态）
+		//    委派装配 window.__dshDelegate   → 四段式简报 + 只拼依赖命中的上下文
+		//    任务状态 window.__dshTaskState  → 九态机（含 INPUT_REQUIRED / AUTH_REQUIRED 两暂停态）
+		//    断点续跑 window.__dshCheckpoint → 不可变快照链 + Fork 时间旅行
+		//    模式策略 window.__dshPolicy     → direct/light/full × strict/balanced/unlimited/auto
+		//    ⚠️ 这 7 个 install 调用**必须全链路 try/catch**（纪律：installBatch1 执行链上的
+		//       模块一律不许抛穿 —— 抛一次会让其后几十项能力全丢，外层吞成「插件整体坏了」）。
+		for (const [name, fn] of [
+			["__dshRoles", installRolesApi],
+			["__dshDag", installDagApi],
+			["__dshVerify", installVerifyApi],
+			["__dshDelegate", installDelegateApi],
+			["__dshTaskState", installTaskStateApi],
+			["__dshCheckpoint", installCheckpointApi],
+			["__dshPolicy", installPolicyApi]
+		]) {
+			try {
+				window[name] = fn();
+			} catch (e) {
+				/* 降级但**不无声**：把原因写进全局诊断，供 probe/verify 读取 */
+				window.__dshOrchestrationDiag = window.__dshOrchestrationDiag || { fails: [] };
+				window.__dshOrchestrationDiag.fails.push(name + "：" + (e && e.message ? e.message : String(e)));
+			}
+		}
+		window.__dshOrchestratorPanel = OrchestratorPanel;
 	} else {
 		// 无 DOM 环境（离线测试）：仍要建立 store，保证 import 侧行为一致
 		installPersonalizeApi();
@@ -281,6 +376,10 @@ export function installBatch1(options = {}) {
 		installBranchFocusApi();
 		installOverviewApi();
 		installOrchestrateApi();
+		for (const fn of [installRolesApi, installDagApi, installVerifyApi, installDelegateApi,
+			installTaskStateApi, installCheckpointApi, installPolicyApi]) {
+			try { fn(); } catch (e) { /* 无 DOM 时 install 只返回 null，此处仅为一致性 */ }
+		}
 	}
 
 	// 8. 批次 6：多层级总监结构（对话级 / 文件夹级 / 全局级）
@@ -447,7 +546,11 @@ export function installBatch1(options = {}) {
 		pillPointerEvents: "auto",
 		pillColorToken: "--dsw-alias-label-primary",
 		reserve: FLOAT_DOCK_RESERVE,
-		reserveConsumers: ["dp-r6", "dp-r8"]
+		/* 谁在消费这个横向占位（第 5 批随 R6 去除同步更新）：
+		 *   dp-r8          —— 底部动作行（`padding-right` 加 reserve，避免浮动组压住右端按钮）
+		 *   dp-personalize —— 右上角「⚙ 设置」浮标位（`right` 用 max(9, inset + 9 + reserve)）
+		 * 原列出的 `dp-r6` 已随 R6 整块去除（其有效数据并入 R2），不再是消费者。 */
+		reserveConsumers: ["dp-r8", "dp-personalize"]
 	};
 
 	/* ── 批次 15（T-PLUG-024/026/027/028）：真流转 / 分支聚焦 / 总览 / 统筹打分 ──
@@ -494,6 +597,38 @@ export function installBatch1(options = {}) {
 		mark: "data-dsh-trimmed",
 		reversible: true,
 		guard: "作用域护栏：必须落在宿主总监面板 [style*=\"min-width: 180px\"] 内"
+	};
+	/* 2026-09-14 第 6 批：宿主左栏几何接管 + 记忆面板时序（需求 1/2）。
+	 * ⚠️ `installed` 用「是否找到宿主列」判，**不用**"有没有最小化" ——
+	 *    总监页压根没有宿主左栏，那种情况下 `installed=false` 是**正常缺省**而非缺陷。
+	 *    折叠态的真实读数看 `minimized`；记忆面板延迟看 `hoverDelayMs`。 */
+	installed.hostDirectorColumn = {
+		installed: Boolean(hostColumnState.minBtn || hostColumnState.resizer),
+		minimized: hostColumnState.minimized,
+		hoverDelayMs: hostColumnState.hoverDelayMs,
+		memHeight: hostColumnState.memHeight,
+		memLockFix: hostColumnState.memLockFix,
+		observer: hostColumnState.observer,
+		degraded: hostColumnState.degraded,
+		reason: hostColumnState.reason,
+		reversible: true
+	};
+	/* 第 6 批需求 7/9：宿主底部注入条。
+	 * ⚠️ `installed` 判"注入条真的在 DOM 且在统计行之前"，不是"调用过 install"；
+	 *    `inPlace=false` 而 `installed=true` 表示在 DOM 里但**位置不对**（归位失败）——
+	 *    这两种都必须能读出来，否则"按钮没出现在该在的地方"会被读成"没问题"。 */
+	installed.hostComposerSlot = {
+		installed: composerSlotState.installed,
+		inPlace: composerSlotState.inPlace,
+		rescued: composerSlotState.rescued,
+		view: composerSlotState.view,
+		toggleClicks: composerSlotState.toggleClicks,
+		deliverClicks: composerSlotState.deliverClicks,
+		registerClicks: composerSlotState.registerClicks,
+		observer: composerSlotState.observer,
+		degraded: composerSlotState.degraded,
+		reason: composerSlotState.reason,
+		reversible: true
 	};
 
 	if (typeof window !== "undefined") {
@@ -593,6 +728,58 @@ function installDirectorView(ctx) {
 	return out;
 }
 
+/**
+ * 标准模型选择席位（第 6 批需求 8：「把本地模型的配置配到标准的模型选择中」）。
+ *
+ * 接入点（**真机核实**，不是猜的）：
+ *   宿主 `dsh-client-ui-conversation/lib/client.js`
+ *     · :11829 声明 `conversation.input.model`（`kind:"single"`, `scope:"session"`）
+ *     · :4022  `renderSlot("conversation.input.model", { locked: modelSeatLocked })`
+ *       渲染在输入条 **trailing** 区 —— 即标准模型选择的位置
+ *   宿主**自己零注册**（全仓只有"声明"与"渲染"，没有 register）⇒ 这是个**空席位**。
+ *
+ * 🔴 三条工程约束：
+ *   ① `kind:"single"` 的插槽在**同优先级**重复注册会**抛**
+ *      （slots/lib/index.js:73 `single slot "…" already has a registration`）。
+ *      故这里**不抢优先级**（用默认 0）：若将来宿主自己注册了，我们**让位**并如实
+ *      把原因写进 `window.__dshModelSeat.reason` —— 悄悄 shadow 掉宿主的选择器
+ *      才是更坏的做法（用户会以为"官方选择器不见了"）。
+ *   ② 必须包在 `ctx.slots.inject(...)` 回调里：slot 未声明前注册会抛
+ *      `slot "…" is not declared`（slots/lib/index.js:66）。
+ *   ③ 失败**不抛**（本函数可能在 boot 早期被调用；抛穿会带走其后所有能力）。
+ *
+ * @param {object} ctx cordis 上下文
+ * @returns {{registered:boolean, slot:string, reason:string|null}}
+ */
+function installModelSeat(ctx) {
+	const out = { registered: false, slot: MODEL_SEAT_SLOT, reason: null };
+	const safeLog = (msg) => { try { dshLog("hierarchy", msg); } catch (_) { } };
+	const publish = () => { if (typeof window !== "undefined") window.__dshModelSeat = out; };
+	publish(); // 前置落盘（同 installDirectorView：每条退出路径都要能读到原因）
+	try {
+		if (!ctx || !ctx.slots) {
+			out.reason = "ctx.slots 不可用（宿主版本差异）—— 标准模型席位未接入";
+			publish();
+			safeLog("标准模型席位注册跳过: " + out.reason);
+			return out;
+		}
+		ctx.slots.inject(MODEL_SEAT_SLOT, () => ctx.slots.register({
+			name: MODEL_SEAT_SLOT,
+			/* scope=session ⇒ 宿主按会话给 id；席位本身不依赖会话，但如实接住。 */
+			inject: (sessionId) => ({ sessionId })
+		}, ModelSeat));
+		out.registered = true;
+		publish();
+		safeLog("已注册标准模型席位（conversation.input.model，含本地 Ollama 模型）");
+	} catch (e) {
+		out.reason = String((e && e.message) || e);
+		publish();
+		safeLog("标准模型席位注册失败（宿主可能已占用该席位）: " + out.reason);
+	}
+	publish();
+	return out;
+}
+
 export {
 	directorLayoutStore,
 	dshThemeStore,
@@ -626,6 +813,7 @@ export {
 	installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3
 	installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏
 	installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动
+	startConversationMirror, syncConversationMirror, conversationMirror, // 第 6 批需求 7 对话镜像
 	installNavHook, installNavHookApi,                      // 要求 7/9 层级入口
 	DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns, // 要求 6/10/11 弹窗本体
 	// ── 批次 10 设计图工作室 + 分支导图 + 总监 tab（T-PLUG-018）──
@@ -640,5 +828,18 @@ export {
 	NodeDetailPanel, NODE_DETAIL_ID,
 	installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册
 	// ── 批次 12 · 第 4 批界面调整（2026-09-14）──
-	installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS // 宿主残留区块显示层裁剪
+	installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, // 宿主残留区块显示层裁剪
+	// ── 批次 12 · 第 6 批界面调整（2026-09-14）──
+	installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState,
+	MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序
+	// ── 第 6 批需求 7/9：宿主底部注入条（单按钮视图切换 + 执行/登记流转搬迁）──
+	installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState,
+	SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID,
+	// ── 第 6 批需求 6：执行状态（技能 / 智能体调用）数据层 ──
+	installAgentRuns, AGENT_RUNS_KEY, RUN_STATUS, agentRunsState, recordAgentRun, beginChain,
+	fillChainSteps, endChain, listChains, latestChain, activeChain,
+	// ── 第 6 批需求 8：标准模型选择席位 ──
+	installModelSeat, MODEL_SEAT_SLOT, ModelSeat,
+	// ── 第 6 批「完善技能和智能体的指向」──
+	SKILL_CATALOG, CHAIN_STEPS, CHAIN_TARGETS, auditCatalog, installCatalogApi
 };

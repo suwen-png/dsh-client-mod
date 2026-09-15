@@ -7,16 +7,60 @@
  * 用途：T-PLUG-005 批次 1 的自证脚本。所有数字程序化求和，不手工累加。
  *
  * 用法：node scripts/verify-batch1.mjs
- * 退出码：0 = 全部通过；1 = 有失败项
+ * 退出码：0 = 全部通过；1 = 有失败项；2 = INVALID（被测宿主文件不存在，用量错）
+ *
+ * 负向校准（零改动产品源码）：
+ *   BATCH1_HOST=snapshots/host-b6-20260911-before-patch/client.js node scripts/verify-batch1.mjs
+ *   ⇒ [1] 体积上界 / [2] 声明数归零 / [3] 最长行 三条应**同时 FAIL**
+ *     （b6 是另一份"仍含内联文档索引"的宿主 ⇒ 是这三项的天然反例）
+ *
+ * ══════════════════════════════════════════════════════════════════
+ *  2026-09-14 变更留痕：删掉 3 项**无法判定**的体积对照断言
+ * ══════════════════════════════════════════════════════════════════
+ *  原 3 项（「宿主 client.js 已减体积」/「减幅 ≥ 500 KB」/「资源体积与剥离量相当」）
+ *  都需要「A14 剥离**前**的宿主 client.js」作对照，而该快照
+ *  `snapshots/snapshot-20260908-131412-before-apply/…` **未被 git 跟踪**、已被清理、**不可恢复**。
+ *
+ *  已穷举并**逐条否掉**三个替身（是"找过并排除了"，不是"没找"）：
+ *    · snapshots/host-b6-20260911-before-patch/client.js — 1,479,577 B，**仍含 `const DSH_DOCS_INDEX =`**
+ *      （剥离前应 ≈ 1,631,465 B = 剥离后 565,158 + 被剥资源 1,066,307）⇒ 差 9.3%，会算出一个错的剥离量
+ *    · original/@deepseek-ai/dsh-client-ui-conversation/lib/client.js — 431,010 B / 声明 0 处 / 最长行 6,945
+ *      ⇒ 是**更早**的一份基线，根本不含被剥的内容（拿它比会得到**负减幅**）
+ *    · workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js — 就是被测物本身
+ *
+ *  ⇒ 按纪律 18（"跳过比红更危险"、禁用不可证伪收尾），与其长期挂一个 INVALID，
+ *    不如**删掉断言 + 把替换判据写进脚本**（本段即留痕）。
+ *    ⚠️ 禁止把上面任一替身加回候选来"改绿"—— 那是用替身伪造证据。
+ *
+ *  替换判据（今天**可验证**，且保留原来的护栏意图）：
+ *    [1] 宿主 client.js 体积 **< 1 MB** —— 剥离后不应再含大块内联数据（剥离前 ≈ 1.63 MB）
+ *    [4] `assets/docs-index.json` 体积 **≥ 1 MB** —— 证实内联索引确实被搬到了资源文件
+ *  两条合起来仍抓得住「把索引塞回宿主」与「资源件丢失」这两种回归。
  */
 
 import { readFileSync, statSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const HOST = join(ROOT, "workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js");
-const SNAP = join(ROOT, "snapshots/snapshot-20260908-131412-before-apply/dsh-client-ui-conversation/lib/client.js");
 const PLUGIN = join(ROOT, "dsh-director-plugin");
+
+/* ── 被测宿主文件：由环境发现 / 可被 BATCH1_HOST 覆盖（纪律 29「环境的量由环境读」）──
+ * 覆盖口是**负向校准**用的，不是为了让闸门变绿：
+ *   默认 = 主管道宿主；给 b6 快照则三条体积/结构断言应同时转红。
+ */
+const HOST_DEFAULT = "workspace/@deepseek-ai/dsh-client-ui-conversation/lib/client.js";
+const HOST = process.env.BATCH1_HOST ? resolve(ROOT, process.env.BATCH1_HOST) : join(ROOT, HOST_DEFAULT);
+
+if (!existsSync(HOST)) {
+	console.log("\n=== INVALID：被测宿主 client.js 不存在 ===\n");
+	console.log("  期望路径：" + HOST);
+	console.log("\n正确用法（可复制）：");
+	console.log("  node scripts/verify-batch1.mjs");
+	console.log("  # 负向校准：");
+	console.log("  BATCH1_HOST=snapshots/host-b6-20260911-before-patch/client.js node scripts/verify-batch1.mjs");
+	console.log("（这与「断言失败」是两回事 —— 用错目标 ≠ 目标不合格，故 exit 2 而非 1。）\n");
+	process.exit(2);
+}
 
 const results = [];
 const check = (name, pass, evidence) => {
@@ -29,9 +73,8 @@ console.log("\n=== 插件迁移验证（批次 1 + 批次 2）===\n");
 // ── 1. A14 剥离：宿主体积 ──
 console.log("[1] A14 剥离");
 const hostSize = statSync(HOST).size;
-const snapSize = existsSync(SNAP) ? statSync(SNAP).size : 0;
-check("宿主 client.js 已减体积", hostSize < snapSize, `剥离后 ${hostSize} B < 剥离前快照 ${snapSize} B`);
-check("减幅 ≥ 500 KB", snapSize - hostSize >= 500 * 1024, `实减 ${snapSize - hostSize} B`);
+check("宿主 client.js 体积上界 < 1 MB（剥离后不应再含大块内联数据）", hostSize < 1024 * 1024,
+	`${hostSize} B（剥离前约 1,631,465 B；≥1 MB 说明索引被塞回宿主）`);
 
 // ── 2. A14 剥离：DSH_DOCS_INDEX 声明已移除 ──
 console.log("\n[2] DSH_DOCS_INDEX 声明");
@@ -54,7 +97,8 @@ const assetPath = join(PLUGIN, "assets/docs-index.json");
 check("assets/docs-index.json 存在", existsSync(assetPath), assetPath.replace(ROOT + "\\", ""));
 if (existsSync(assetPath)) {
 	const assetSize = statSync(assetPath).size;
-	check("资源体积与剥离量相当", Math.abs(assetSize - (snapSize - hostSize)) < 100 * 1024, `资产 ${assetSize} B vs 实减 ${snapSize - hostSize} B`);
+	check("资源体积 ≥ 1 MB（内联索引确实被搬到了资源件）", assetSize >= 1024 * 1024,
+		`资产 ${assetSize} B（剥离前内联在宿主里，标称 1,066,307 B）`);
 	const data = JSON.parse(readFileSync(assetPath, "utf8"));
 	check("JSON 结构完整", Boolean(data.tree && data.docs), `tree 目录 ${Object.keys(data.tree || {}).length} / docs ${Object.keys(data.docs || {}).length} 篇 / docCount 声明 ${data.docCount}`);
 	check("docs 篇数与 docCount 一致", Object.keys(data.docs || {}).length === data.docCount, `${Object.keys(data.docs || {}).length} vs ${data.docCount}`);

@@ -1,5 +1,5 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
- * 职责：/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+ * 职责：桌面壳「窗口拖拽带」穿透 —— 把可交互元素从 OS caption area 里救出来
  * 引用：—
  * 上游：client-entry.js
  * 下游：（无）

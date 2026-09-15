@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>V21 · 多智能体编排架构补全设计稿 — dsh-director（七内核 · 四层组织 · 声明式执行图 · 两层验收 · 断点重放）</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --sbg:#101114; --sbg2:#15161a; --sbg3:#1a1b1f; --sbg4:#1c1d21;
+    --panel:#212227; --line:#26282e; --line2:#2e3138; --line3:#34373e; --line4:#3d4148;
+    --fg:#e8eaed; --fg2:#c9ced6; --fg3:#9aa0a6; --fg4:#6b7076;
+    --acc:#2f6feb; --acc2:#8ab4f8; --accbg:#1d2739; --accbd:#2b3f5e;
+    --pur:#8957e5; --pur2:#c9a8ff; --purbg:#1a1524; --purbd:#4c3a6b;
+    --teal:#39c5cf; --teal2:#7fe3e8; --tealbg:#15201f; --tealbd:#2b6b70;
+    --ok:#3fb950; --ok2:#8fd48f; --okbg:#152318; --okbd:#2b6b3a;
+    --warn:#d29922; --warn2:#e3c07a; --warnbg:#241d10; --warnbd:#6b5320;
+    --err:#f85149; --err2:#ff9a92; --errbg:#1e1416; --errbd:#6b2b28;
+    --doc:#0d0e11;
+  }
+  body{background:var(--doc);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;font-size:11.5px;padding:26px 18px 70px}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-size:22px;font-weight:650;letter-spacing:.2px;margin-bottom:6px}
+  h1 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:9px}
+  .sub{font-size:12.5px;color:var(--fg3);margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #24262c}
+  .sub b{color:var(--acc2);font-weight:600}
+  .blk{margin-bottom:30px}
+  .bh{display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:9px;border-bottom:1px solid #24262c}
+  .bh .k{font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 11px;border-radius:6px;background:var(--acc);color:#fff;white-space:nowrap}
+  .bh .k.p{background:var(--pur)}
+  .bh .k.t{background:var(--teal);color:#0d0e11}
+  .bh .k.e{background:var(--err);color:#fff}
+  .bh .k.g{background:var(--ok);color:#0d0e11}
+  .bh h2{font-size:17px;font-weight:650}
+  .bh .r{margin-left:auto;font-size:11.5px;color:var(--fg4);white-space:nowrap}
+  .sec{background:var(--sbg3);border:1px solid #26282e;border-radius:12px;margin-bottom:18px;overflow:hidden}
+  .sec > header{padding:11px 16px;background:var(--sbg2);border-bottom:1px solid #26282e;display:flex;align-items:center;gap:10px}
+  .sec > header .no{font-size:11px;font-weight:700;padding:2px 9px;border-radius:5px;background:#2b2e35;color:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+  .sec > header h3{font-size:14px;font-weight:600}
+  .sec > header .tag{margin-left:auto;font-size:11px;color:var(--fg4);white-space:nowrap}
+  .sec > .bd{padding:16px}
+  .note{font-size:11.5px;color:var(--fg3);background:var(--sbg2);border-left:3px solid var(--acc);padding:8px 12px;border-radius:0 6px 6px 0;margin-bottom:12px}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.p{border-left-color:var(--pur)}
+  .note.t{border-left-color:var(--teal)}
+  .note.e{border-left-color:var(--err)}
+  .note b{color:var(--fg)}
+  .note .src{color:var(--fg4)}
+  .cap{font-size:11px;color:var(--fg4);margin-top:8px;text-align:center}
+  .frame{background:var(--sbg4);border:1px solid #2b2e34;border-radius:10px;overflow:hidden}
+  .fbar{height:28px;background:var(--sbg2);border-bottom:1px solid #232529;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:11px;color:var(--fg4)}
+  .fbar .tl{width:9px;height:9px;border-radius:50%}
+  .fbar .tl.r{background:#ec6a5e}.fbar .tl.y{background:#f4bf4f}.fbar .tl.g{background:#61c554}
+  .fbd{padding:10px}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .ttl{font-size:11px;font-weight:600;margin-bottom:6px}
+  .ttl.bad{color:var(--err2)}
+  .ttl.good{color:var(--ok2)}
+  .mark{border:1.5px dashed var(--err);border-radius:8px;padding:9px;position:relative}
+  .mark .lb{position:absolute;top:-9px;left:8px;background:var(--err);color:#fff;font-size:10.5px;padding:1px 7px;border-radius:4px;white-space:nowrap}
+  .mark.ok{border-color:var(--ok)}
+  .mark.ok .lb{background:var(--ok);color:#0d0e11}
+  .mark.w{border-color:var(--warn)}
+  .mark.w .lb{background:var(--warn);color:#0d0e11}
+  .kbd{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--sbg2);border:1px solid var(--line3);border-radius:4px;padding:1px 5px;color:var(--fg2)}
+  .chip{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line3);background:var(--sbg3);color:var(--fg3);margin:2px 5px 2px 0}
+  .chip.on{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .chip.p{border-color:var(--purbd);background:var(--purbg);color:var(--pur2)}
+  .chip.t{border-color:var(--tealbd);background:var(--tealbg);color:var(--teal2)}
+  .chip.x{border-color:var(--errbd);background:var(--errbg);color:var(--err2)}
+  .chip.g{border-color:var(--okbd);background:var(--okbg);color:var(--ok2)}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;padding:6px 10px;background:var(--sbg2);border-bottom:1px solid var(--line2);color:var(--fg3);font-weight:600}
+  td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(--fg2);vertical-align:top}
+  .ok-t{color:var(--ok2)}
+  .warn-t{color:var(--warn2)}
+  .err-t{color:var(--err2)}
+  .acc-t{color:var(--acc2)}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step{background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;padding:6px 10px;font-size:11px;color:var(--fg2)}
+  .step.hi{border-color:var(--accbd);background:var(--accbg);color:var(--acc2)}
+  .step.x{border-color:var(--errbd);background:var(--errbg);color:var(--err2)}
+  .arrow{color:var(--fg4);font-size:12px}
+  .row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .sp{margin-left:auto}
+  .box{border:1px solid var(--line2);border-radius:7px;padding:7px 9px;background:var(--panel);font-size:11px;color:var(--fg3)}
+  .lbl{font-size:10.5px;color:var(--fg4);letter-spacing:.4px}
+  .val{font-size:11.5px;color:var(--fg2)}
+  .bar{height:3px;border-radius:2px;background:var(--line3);margin-top:4px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--acc)}
+  .side{display:flex;gap:8px;align-items:stretch}
+  .rail{width:26px;background:var(--sbg2);border:1px solid var(--line3);border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--acc2);font-size:12px}
+  .wire{border:1px solid var(--line3);border-radius:8px;background:var(--sbg2);padding:8px}
+  .mline{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start}
+  .mline.me{flex-direction:row-reverse}
+  .mbub{max-width:74%;border-radius:7px;padding:5px 9px;font-size:11px;line-height:1.5}
+  .mbub.ai{background:var(--sbg4);border:1px solid var(--line3);color:var(--fg2)}
+  .mbub.you{background:var(--accbg);border:1px solid var(--accbd);color:var(--acc2)}
+  .mname{font-size:10.5px;color:var(--fg4);padding-top:3px;white-space:nowrap}
+  .tabs{display:flex;gap:0;border:1px solid var(--line3);border-radius:6px;overflow:hidden;margin-bottom:8px}
+  .tab{flex:1;text-align:center;font-size:10.5px;padding:4px 0;color:var(--fg4);background:var(--sbg2)}
+  .tab.on{color:var(--acc2);background:var(--accbg);font-weight:600}
+  .tab.gone{color:var(--fg4);background:transparent;text-decoration:line-through}
+  .pop{border:1px solid var(--accbd);border-radius:8px;background:var(--accbg);padding:8px;font-size:11px;color:var(--acc2)}
+  .fade{opacity:.45}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>多智能体编排架构补全设计稿 <small>V21 · dsh-director 插件</small></h1>
+<div class="sub">
+  依据 <b>开源机制调研</b>（OrganizeAgent 三层 · OrgAgent 公司式层级 · agency-orchestrator 声明式 YAML · CrewAI 角色三要素 · MetaGPT 消息池 · LangGraph 检查点 · A2A 九态 · Anthropic Skills 三层渐进披露 · LLM-as-Judge 偏差研究）落成
+  <b>7 个纯函数内核模块</b> + <b>1 个编排面板</b>。<br>
+  本稿是这 8 处产物的<b>唯一设计真相源</b>；模块头部的「设计稿」指向本文件。
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k">一</span><h2>为什么补 — 四个真实缺口</h2><span class="r">诊断 · 不是加功能</span></div>
+
+  <div class="note warn">
+    补的不是新能力，而是把 <b>隐式约定</b> 显式化为 <b>可断言的数据结构</b>。
+    原先 5 步流程活在 <span class="kbd">director-run.js</span> 的硬编码顺序里 —— 顺序对了，但没有人能"问"它任何问题。
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:148px">缺口</th><th>现状</th><th>后果</th><th style="width:132px">补法</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="err-t">自审同源</td>
+        <td>审核环节审的是<b>总监自己拼装</b>的那段消息</td>
+        <td>生产者 = 审核者；结论恒定偏向自己，且无法被发现</td>
+        <td>新增 <b>compliance 层</b>，规则上不得与产物生产同源</td>
+      </tr>
+      <tr>
+        <td class="err-t">条件缺失</td>
+        <td>步骤只能"全跑"，没有条件表达式</td>
+        <td>不需要的步骤也执行，浪费轮次与 token</td>
+        <td><span class="kbd">evalCondition</span>：支持 exists / contains / equals / 取反</td>
+      </tr>
+      <tr>
+        <td class="err-t">状态无痕</td>
+        <td>任务只有"跑完了"这一种读法</td>
+        <td>区分不出「等用户补信息」与「没权限」，处置动作因此错配</td>
+        <td><b>A2A 九态机</b> + 两种暂停态分开</td>
+      </tr>
+      <tr>
+        <td class="err-t">断点退化</td>
+        <td>一次跑到底，重跑即从头</td>
+        <td>"断点续跑"名存实亡，已完成步骤被重复执行</td>
+        <td><b>检查点链</b> + 重放计划（已完成默认跳过）</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k t">二</span><h2>四层组织模型 — 治理 / 编排 / 执行 / 合规</h2><span class="r">roles.js · 33,814 B</span></div>
+
+  <div class="note t">
+    <b>关键补法</b>：把 OrganizeAgent 的「主控 → 项目经理 → 执行者」三层，扩成四层 —— 多出来的
+    <b>compliance</b> 是独立一层，它的存在就是为了解决缺口①。
+    <span class="src">来源：豆包工作 Harness 蓝皮书 CH-07 · OrgAgent（arXiv 2604.01020，港中文）公司式层级</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:110px">层</th><th style="width:88px">可否委派</th><th style="width:78px">只读</th><th>职责边界</th><th style="width:230px">本层角色（id）</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="chip on">governance</span></td>
+        <td class="ok-t">是</td><td>否</td>
+        <td>持有最终裁决权；决定走哪条流程、批不批准</td>
+        <td><span class="kbd">director</span> <span class="kbd">policy-keeper</span></td>
+      </tr>
+      <tr>
+        <td><span class="chip p">orchestration</span></td>
+        <td class="ok-t">是</td><td>否</td>
+        <td><b>只做规划、委派、整合</b>；不自己产出正文（对标 OrganizeAgent「项目经理」）</td>
+        <td><span class="kbd">organizer</span> <span class="kbd">polisher</span> <span class="kbd">branch-judge</span> <span class="kbd">model-router</span> <span class="kbd">context-picker</span></td>
+      </tr>
+      <tr>
+        <td><span class="chip">execution</span></td>
+        <td>否</td><td>否</td>
+        <td>独立上下文窗口，产出产物后释放</td>
+        <td><span class="kbd">doc-writer</span> <span class="kbd">blueprint-architect</span> <span class="kbd">test-planner</span></td>
+      </tr>
+      <tr>
+        <td><span class="chip t">compliance</span></td>
+        <td>否</td><td class="warn-t">是</td>
+        <td>只读审查；<b>规则上不得与被审产物同源</b></td>
+        <td><span class="kbd">output-reviewer</span> <span class="kbd">assert-runner</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="cap">四层 × 12 角色 · 每层 <span class="kbd">canDelegate</span> / <span class="kbd">readOnly</span> 是数据而非约定</div>
+
+  <div class="g3" style="margin-top:14px">
+    <div class="box">
+      <div class="lbl">路由打分</div>
+      <div class="val">触发词命中 × 3 + 词元重叠 × 1</div>
+      <div class="cap" style="text-align:left">治理层 −1（避免总监抢走所有活）</div>
+    </div>
+    <div class="box">
+      <div class="lbl">不硬派</div>
+      <div class="val">最高分 ≤ 0 ⇒ <span class="kbd">role: null</span></div>
+      <div class="cap" style="text-align:left">宁可说"没人合适"，也不乱指派</div>
+    </div>
+    <div class="box">
+      <div class="lbl">L1 常驻清单预算</div>
+      <div class="val">593 字符</div>
+      <div class="cap" style="text-align:left">对标 Skills 三层渐进披露的 L1 层</div>
+    </div>
+  </div>
+
+  <div class="note ok" style="margin-top:14px">
+    自证：<b>12 角色</b>（id 唯一 · 触发器歧义已查）· L1 预算 <b>593 字符</b> · 路由 <b>5/5</b> 命中 ·
+    离线断言 <b>45/45</b>（<span class="kbd">test-roles.mjs</span>）
+  </div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k p">三</span><h2>声明式执行图 — 把「5 步硬编码」改成「可校验的图」</h2><span class="r">dag.js · 21,394 B</span></div>
+
+  <div class="cmp">
+    <div class="frame">
+      <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span style="margin-left:6px">改造前 · 顺序常量</span></div>
+      <div class="fbd">
+        <div class="ttl bad">硬编码 5 步</div>
+        <div class="flow">
+          <span class="step x">整理语言</span><span class="arrow">→</span>
+          <span class="step x">切换分支</span><span class="arrow">→</span>
+          <span class="step x">调整模型</span><span class="arrow">→</span>
+          <span class="step x">上下文筛选</span><span class="arrow">→</span>
+          <span class="step x">自动审核产物</span>
+        </div>
+        <div class="cap" style="text-align:left">顺序对了，但无法回答：能并行吗？某步能跳吗？依赖谁？错了从哪续？</div>
+      </div>
+    </div>
+    <div class="frame">
+      <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span style="margin-left:6px">改造后 · 声明式图</span></div>
+      <div class="fbd">
+        <div class="ttl good">DIRECTOR_CHAIN（结构化数据）</div>
+        <div class="flow">
+          <span class="step hi">polish</span><span class="arrow">→</span>
+          <span class="step hi">branch</span><span class="arrow">→</span>
+          <span class="step hi">model</span><span class="arrow">→</span>
+          <span class="step hi">ctx</span><span class="arrow">→</span>
+          <span class="step hi">review</span>
+        </div>
+        <div class="cap" style="text-align:left">每步带 <span class="kbd">type</span> / <span class="kbd">depends_on</span> / <span class="kbd">depends_on_mode</span> / <span class="kbd">output</span> / <span class="kbd">condition</span>，可被机器校验</div>
+      </div>
+    </div>
+  </div>
+  <div class="cap">同样 5 步 —— 差别是「能问它问题」</div>
+
+  <div class="sec" style="margin-top:16px">
+    <header><span class="no">3.1</span><h3>四类步骤 · 两种依赖模式</h3><span class="tag">STEP_TYPE / DEP_MODE</span></header>
+    <div class="bd">
+      <table>
+        <thead><tr><th style="width:118px">类型</th><th>语义</th><th style="width:300px">何时用</th></tr></thead>
+        <tbody>
+          <tr><td><span class="kbd">task</span></td><td>交给某个角色去做</td><td>常规步骤</td></tr>
+          <tr><td><span class="kbd">approval</span></td><td>需要人批一下才继续</td><td>破坏性动作前</td></tr>
+          <tr><td><span class="kbd">human_input</span></td><td>等人补信息</td><td>信息不足，且模型猜不出来</td></tr>
+          <tr><td><span class="kbd">assert</span></td><td>纯函数机械校验</td><td>可量化的验收（字节数 / 文件数 / 正则）</td></tr>
+        </tbody>
+      </table>
+      <div class="note t" style="margin-top:12px">
+        依赖模式 <b>all</b>（全等齐）与 <b>any</b>（任一完成即可）。<span class="kbd">any</span> 且有<b>多个</b>上游时给出警告 ——
+        "任一"配上多上游，等于放弃了确定性，通常不是本意。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">3.2</span><h3>校验器：6 类错误 / 4 类警告</h3><span class="tag">validateGraph</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div>
+          <div class="ttl bad">错误（阻断）</div>
+          <table>
+            <tbody>
+              <tr><td>空图</td><td class="fade">没有任何步骤</td></tr>
+              <tr><td>id 重复</td><td class="fade">同一 id 出现两次</td></tr>
+              <tr><td>id 非法</td><td class="fade">不合规标识符</td></tr>
+              <tr><td>悬空依赖</td><td class="fade">依赖了一个不存在的 id</td></tr>
+              <tr><td>自依赖</td><td class="fade">依赖自己</td></tr>
+              <tr><td class="err-t">存在环</td><td class="fade">A→B→A</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div class="ttl warn-t">警告（提示）</div>
+          <table>
+            <tbody>
+              <tr><td>any 多上游</td><td class="fade">确定性丢失</td></tr>
+              <tr><td>门闸无提示语</td><td class="fade">人不知道该批什么</td></tr>
+              <tr><td>被依赖但无产出</td><td class="fade">下游拿不到东西</td></tr>
+              <tr><td>循环无退出条件</td><td class="fade">可能永不结束</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="note e" style="margin-top:12px">
+        <b>环检测的纪律</b>：<span class="kbd">findCycle</span> 用 DFS 三色标记；
+        <span class="kbd">topoSort</span> 遇环返回 <b>null</b>，<b>绝不返回半张图</b> ——
+        返回一半拓扑序是最危险的行为：调用方会以为它是完整的。
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">3.3</span><h3>并行度：波浪分层</h3><span class="tag">planWaves / readySteps</span></header>
+    <div class="bd">
+      <div class="flow">
+        <span class="step hi">wave 1 · polish</span><span class="arrow">→</span>
+        <span class="step">wave 2 · branch / model / ctx</span><span class="arrow">→</span>
+        <span class="step">wave 3 · review</span>
+      </div>
+      <div class="note warn" style="margin-top:12px">
+        <b>诚实说明</b>：波浪分层算的是「<b>允许</b>的并行度」，而当前总监链在运行时仍<b>串行</b>执行。
+        面板上的 <span class="kbd">dp-orch-parallel-note</span> 会把这个差距写在界面上，不假装已经并行。
+        <span class="src">对标 agency-orchestrator 的 DAG 自动并行（concurrency 默认 2）</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">3.4</span><h3>条件与模板：宁可"不做"也不"做错"</h3><span class="tag">evalCondition / fillTemplate</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div class="mark ok">
+          <span class="lb">条件求值</span>
+          <div style="margin-top:6px">不使用 <span class="kbd">eval</span>。只支持四种可判定形式：</div>
+          <div class="row" style="margin-top:6px">
+            <span class="chip g">exists</span><span class="chip g">contains</span><span class="chip g">equals</span><span class="chip g">前缀 取反</span>
+          </div>
+          <div class="cap" style="text-align:left">语法不支持 ⇒ <b>明确报错</b>，不静默当作 True</div>
+        </div>
+        <div class="mark w">
+          <span class="lb">模板填充</span>
+          <div style="margin-top:6px">占位符取不到值时：</div>
+          <div class="flow" style="margin-top:6px">
+            <span class="step">原样保留</span><span class="arrow">+</span><span class="step">记入 missing 清单</span>
+          </div>
+          <div class="cap" style="text-align:left">绝不把空串塞进去 —— 那会让下游以为"本来就没有"</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note ok">
+    自证：离线断言 <b>60/60</b>（<span class="kbd">test-dag.mjs</span>），含
+    <b>环检测正负对照</b>、<b>拓扑序完整性</b>、<b>条件语法拒绝</b>三组关键用例
+  </div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k g">四</span><h2>两层验收 — 机械层与语义层分开，并做去偏</h2><span class="r">verify.js · 20,165 B</span></div>
+
+  <div class="note">
+    来源：agency-orchestrator 的 <b>acceptance</b>（语义，模型判）+ <b>assert</b>（机械，纯函数判）
+    两层设计；偏差部分来自 LLM-as-Judge 研究（位置偏差 10–15 百分位 · 自偏好 10–25% · 冗长偏好 15–30 分）。
+  </div>
+
+  <table>
+    <thead><tr><th style="width:110px">层</th><th style="width:96px">谁来判</th><th>可判定性</th><th style="width:200px">本项目的用法</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="chip on">assert</span></td><td>纯函数</td>
+        <td class="ok-t">完全可判定 · 可复现</td>
+        <td>字节数 / 文件数 / 正则命中 / 必备片段</td>
+      </tr>
+      <tr>
+        <td><span class="chip p">acceptance</span></td><td>模型</td>
+        <td class="warn-t">有主观性 · 需去偏</td>
+        <td>文档是否讲清了原因 / 方案是否可落地</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="g3" style="margin-top:14px">
+    <div class="mark ok">
+      <span class="lb">三态标签</span>
+      <div class="row" style="margin-top:6px">
+        <span class="chip g">PASS</span><span class="chip x">FAIL</span><span class="chip">CANNOT_JUDGE</span>
+      </div>
+      <div class="cap" style="text-align:left">"说不清"是<b>独立的一态</b>，不是 FAIL 的别名</div>
+    </div>
+    <div class="mark w">
+      <span class="lb">FAIL 必须带证据</span>
+      <div style="margin-top:6px">判 FAIL 却没给证据 ⇒ <b>降级为 CANNOT_JUDGE</b></div>
+      <div class="cap" style="text-align:left">防"凭感觉否决"</div>
+    </div>
+    <div class="mark ok">
+      <span class="lb">成对交换</span>
+      <div style="margin-top:6px"><span class="kbd">pairWithSwap</span>：交换两份产物位置重判；结论翻转 ⇒ CANNOT_JUDGE</div>
+      <div class="cap" style="text-align:left">研究结论：这是<b>唯一有效</b>的去偏手段，纯提示词嘱咐≈无效</div>
+    </div>
+  </div>
+
+  <div class="sec" style="margin-top:16px">
+    <header><span class="no">4.1</span><h3>机械证据优先 · 同族即违规</h3><span class="tag">decideVerdict / isCrossFamily</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div class="mark ok">
+          <span class="lb">assert 失败 ⇒ 直接 FAIL</span>
+          <div style="margin-top:6px">不问模型、不进语义层。</div>
+          <div class="cap" style="text-align:left">机械层说不行，就是不行 —— 模型没有翻案权</div>
+        </div>
+        <div class="mark">
+          <span class="lb">同族审查 = 违规</span>
+          <div style="margin-top:6px"><span class="kbd">familyOf</span> 判定家族；<b>同族或未知</b>都算违规。</div>
+          <div class="cap" style="text-align:left">"未知"按最坏情况处理，不按有利情况</div>
+        </div>
+      </div>
+      <div class="note t" style="margin-top:12px">
+        最终裁决四值：<span class="kbd">PASS</span> / <span class="kbd">FAIL</span> / <span class="kbd">NEEDS_HUMAN</span> / <span class="kbd">INVALID_SPEC</span>。
+        最后一值属于「验收标准本身就写得不合法」，与产物无关 —— 必须能被单独区分出来。
+      </div>
+    </div>
+  </div>
+
+  <div class="note ok">自证：离线断言 <b>60/60</b>（<span class="kbd">test-verify.mjs</span>）</div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k p">五</span><h2>委派契约 — 简报四段 · 交接五段 · 上下文裁剪</h2><span class="r">delegate.js · 13,720 B</span></div>
+
+  <div class="cmp">
+    <div class="frame">
+      <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span style="margin-left:6px">派活时 · 四段式简报</span></div>
+      <div class="fbd">
+        <div class="row"><span class="chip on">目标</span><span class="chip on">约束</span><span class="chip on">产出</span><span class="chip on">边界</span></div>
+        <div class="cap" style="text-align:left">缺哪一段，<span class="kbd">validateBriefing</span> 报的是<b>缺它的后果</b>，不是"缺第 2 段"<br>
+        例：缺「边界」⇒ "执行者可能顺手改了不该改的东西"</div>
+      </div>
+    </div>
+    <div class="frame">
+      <div class="fbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span style="margin-left:6px">交货时 · 五段式交接</span></div>
+      <div class="fbd">
+        <div class="row"><span class="chip p">摘要</span><span class="chip p">结构化产物</span><span class="chip p">原文</span><span class="chip p">证据</span><span class="chip p">遗留</span></div>
+        <div class="cap" style="text-align:left">缺<b>摘要</b> ⇒ 校验失败；<b>结构化产物</b>写成字符串 ⇒ 校验失败<br>
+        <span class="kbd">normalizeArtifact</span>：<b>原文默认 null</b>，不默认携带</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" style="margin-top:16px">
+    <header><span class="no">5.1</span><h3>上下文裁剪：只给下游"该看的"</h3><span class="tag">buildContext / contextSaving</span></header>
+    <div class="bd">
+      <table>
+        <thead><tr><th style="width:130px">优先序</th><th>取什么</th><th style="width:250px">条件</th></tr></thead>
+        <tbody>
+          <tr><td class="ok-t">1 结构化</td><td>结构化产物字段</td><td>存在即优先</td></tr>
+          <tr><td>2 摘要</td><td>交接摘要</td><td>无结构化时</td></tr>
+          <tr><td class="warn-t">3 原文</td><td>完整原文</td><td><b>仅当上游显式要求 needRaw</b>；否则一律不给</td></tr>
+        </tbody>
+      </table>
+      <div class="note warn" style="margin-top:12px">
+        只取 <span class="kbd">depends_on</span> <b>命中</b>的上游产物 —— 没被依赖的东西不该出现在上下文里。
+        下游文本里也<b>不含原文</b>。<span class="src">这正是 OrgAgent 报告里 token 降 74.52% 的机制来源</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note ok">自证：离线断言 <b>31/31</b>（<span class="kbd">test-delegate.mjs</span>）</div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k t">六</span><h2>任务状态机 — A2A 九态，两种暂停态分开</h2><span class="r">task-state.js · 14,357 B</span></div>
+
+  <div class="note t">
+    来源：A2A 协议的 9 状态任务生命周期。本项目的关键取舍：
+    <b>INPUT_REQUIRED</b>（信息不足，等用户说话）与 <b>AUTH_REQUIRED</b>（没权限，等授权）<b>必须是两个状态</b> ——
+    它们的处置动作完全不同，合成一个就会把"该问用户"办成"该要权限"。
+  </div>
+
+  <div class="g3">
+    <div class="box">
+      <div class="lbl">待处理</div>
+      <div class="val" style="margin-top:4px"><span class="kbd">SUBMITTED</span> <span class="kbd">WORKING</span></div>
+    </div>
+    <div class="box">
+      <div class="lbl">暂停（可恢复）</div>
+      <div class="val" style="margin-top:4px"><span class="kbd">INPUT_REQUIRED</span> <span class="kbd">AUTH_REQUIRED</span></div>
+    </div>
+    <div class="box">
+      <div class="lbl">终态（无出边）</div>
+      <div class="val" style="margin-top:4px"><span class="kbd">COMPLETED</span> <span class="kbd">FAILED</span> <span class="kbd">CANCELED</span> <span class="kbd">REJECTED</span></div>
+    </div>
+  </div>
+
+  <table style="margin-top:14px">
+    <thead><tr><th style="width:170px">规则</th><th>实现</th><th style="width:290px">为什么这么定</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>终态无出边</td>
+        <td><span class="kbd">isTerminal</span> ⇒ 不可再转移</td>
+        <td>防"完成了又活了"这类幽灵状态</td>
+      </tr>
+      <tr>
+        <td>自转移默认非法</td>
+        <td>唯一例外：<span class="kbd">WORKING → WORKING</span></td>
+        <td>进度心跳是合法自转移；其余自转移是逻辑错</td>
+      </tr>
+      <tr>
+        <td>不改原对象</td>
+        <td><span class="kbd">transition</span> 返回<b>新对象</b>，不做原地修改</td>
+        <td>时间线才可能被回看；原地改会让历史断片</td>
+      </tr>
+      <tr>
+        <td>乐观并发</td>
+        <td>可传 <span class="kbd">expected</span> 校验当前态</td>
+        <td>防"基于过期状态做决策"</td>
+      </tr>
+      <tr>
+        <td>机器自审</td>
+        <td><span class="kbd">auditMachine</span> 4 项检查（含<b>可达性</b>与<b>终态可达性</b>）</td>
+        <td>抓"定义了但永远到不了"的死状态</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note ok" style="margin-top:12px">自证：离线断言 <b>43/43</b>（<span class="kbd">test-task-state.mjs</span>）</div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k p">七</span><h2>检查点链 — 不可变快照 · 分叉 · 断点重放</h2><span class="r">checkpoint.js · 14,944 B</span></div>
+
+  <div class="note p">
+    来源：LangGraph 的 checkpointers 与 time-travel（Fork / Replay）。
+    本项目在纯前端无后端的约束下，把"快照链"实现为<b>不可变链式结构</b>，
+    由面板层决定落 localStorage 还是 IndexedDB。
+  </div>
+
+  <div class="sec">
+    <header><span class="no">7.1</span><h3>三条不可动摇的性质</h3><span class="tag">append / fork / replayPlan</span></header>
+    <div class="bd">
+      <div class="mark ok">
+        <span class="lb">追加返回新链</span>
+        <div style="margin-top:6px"><span class="kbd">append(chain, snap)</span> ⇒ <b>新 chain</b>，原 chain 一个字节都不动。</div>
+        <div class="cap" style="text-align:left">与状态机同一条纪律：<b>不改原对象</b></div>
+      </div>
+
+      <div class="mark ok" style="margin-top:12px">
+        <span class="lb">分叉保留主干</span>
+        <div style="margin-top:6px"><span class="kbd">fork</span>：<b>原链保留</b>，只截断新分支的后缀，并记 <span class="kbd">branchOf</span>。</div>
+        <div class="cap" style="text-align:left">分叉不是"覆盖历史"，是"从某点长出新枝"</div>
+      </div>
+
+      <div class="mark w" style="margin-top:12px">
+        <span class="lb">断点重放：已完成默认跳过</span>
+        <div style="margin-top:6px">
+          <span class="kbd">replayPlan</span> 从某点续跑时，<b>已完成的步骤默认进 skip，不进待跑</b>；
+          只有显式传 <span class="kbd">force</span> / <span class="kbd">forceSteps</span> 才重跑；
+          遇到<b>非幂等</b>的已完成步骤会额外给出警告。
+        </div>
+        <div class="cap" style="text-align:left">
+          这是本轮修掉的<b>真缺陷</b>：旧实现把已完成步骤也塞进 from ⇒ "断点续跑"退化成"从头再来"，且看不出错
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">7.2</span><h3>链自审与差异</h3><span class="tag">auditChain / diff</span></header>
+    <div class="bd">
+      <div class="cmp">
+        <div class="box">
+          <div class="lbl">auditChain</div>
+          <div class="val" style="margin-top:4px">① 序号单调递增<br>② <b>done 集合单调</b>（只增不减）</div>
+          <div class="cap" style="text-align:left">已完成的步骤"退回未完成"= 链被写坏了</div>
+        </div>
+        <div class="box">
+          <div class="lbl">diff</div>
+          <div class="val" style="margin-top:4px">浅比较 + <b>深度标注</b></div>
+          <div class="cap" style="text-align:left">说清楚"变了"还是"看着像没变"</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note ok">自证：离线断言 <b>44/44</b>（<span class="kbd">test-checkpoint.mjs</span>），E 段为重放计划的 10 条专项断言</div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k t">八</span><h2>策略与预算 — 三模式四策略，按依赖结构判轻重</h2><span class="r">policy.js · 20,266 B</span></div>
+
+  <table>
+    <thead><tr><th style="width:96px">模式</th><th style="width:78px">轮次倍率</th><th>适用</th><th style="width:250px">失败时怎么退（failMode）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="chip g">direct</span></td><td>1×</td>
+        <td>「我就想快点看到东西」</td><td>直接产出，不重试</td>
+      </tr>
+      <tr>
+        <td><span class="chip on">light</span></td><td>4×</td>
+        <td>常规整理与改写</td><td>有限重试</td>
+      </tr>
+      <tr>
+        <td><span class="chip p">full</span></td><td>15×</td>
+        <td>「做透」——多角色多轮交叉</td><td>逐层升级到人</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <table style="margin-top:14px">
+    <thead><tr><th style="width:110px">策略</th><th style="width:96px">上限</th><th>特点</th></tr></thead>
+    <tbody>
+      <tr><td><span class="kbd">strict</span></td><td class="warn-t">maxMode = light</td><td>有<b>天花板</b>；被削顶时标 <span class="kbd">capped: true</span>，不假装是自己选的</td></tr>
+      <tr><td><span class="kbd">balanced</span></td><td>full</td><td>默认策略</td></tr>
+      <tr><td><span class="kbd">unlimited</span></td><td>无</td><td>预算 <span class="kbd">rounds: 0</span> 表示不限</td></tr>
+      <tr><td><span class="kbd">auto</span></td><td>按判定</td><td>由结构复杂度决定</td></tr>
+    </tbody>
+  </table>
+
+  <div class="g3" style="margin-top:14px">
+    <div class="box">
+      <div class="lbl">decideMode 判据</div>
+      <div class="val" style="margin-top:4px">按<b>依赖结构</b>，不按角色数量</div>
+      <div class="cap" style="text-align:left">角色多 ≠ 需要重流程；依赖深才是</div>
+    </div>
+    <div class="box">
+      <div class="lbl">升级建议</div>
+      <div class="val" style="margin-top:4px"><span class="kbd">suggestEscalation</span></div>
+      <div class="cap" style="text-align:left"><b>没有证据就不升级</b> —— 不许"感觉不太行"</div>
+    </div>
+    <div class="box">
+      <div class="lbl">可参数化自审</div>
+      <div class="val" style="margin-top:4px"><span class="kbd">auditPolicy(modes, policies)</span></div>
+      <div class="cap" style="text-align:left">可喂入坏样本做<b>正负对照</b>（纪律 32）</div>
+    </div>
+  </div>
+
+  <div class="note ok" style="margin-top:12px">
+    自证：离线断言 <b>49/49</b>（<span class="kbd">test-policy.mjs</span>）。
+    <span class="kbd">auditPolicy</span> 之所以接参数，就是为了让"植入坏样本 ⇒ 必红"可被证明
+  </div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k">九</span><h2>编排面板 — 四页签，数字全部实时算</h2><span class="r">OrchestratorPanel.js</span></div>
+
+  <div class="note">
+    <b>没有写死的数字</b>：页面上每一个计数、每一个字符数、每一条波浪，都来自对上述 7 个模块的
+    真实调用。<span class="kbd">grep</span> 本文件找不到任何魔法常量 —— 这是刻意设计。
+  </div>
+
+  <div class="tabs">
+    <div class="tab on">四层组织</div>
+    <div class="tab">执行图</div>
+    <div class="tab">策略与预算</div>
+    <div class="tab">验收标准</div>
+  </div>
+  <div class="cap">入口：总监页标题行「⧉ 编排」按钮 · 与「⚙ 设置」互斥打开</div>
+
+  <table style="margin-top:14px">
+    <thead><tr><th style="width:190px">锚点</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><span class="kbd">dp-orch-panel</span></td><td>面板根（判"面板在不在"只认它）</td></tr>
+      <tr><td><span class="kbd">dp-orch-tab-&lt;key&gt;</span></td><td>四个页签</td></tr>
+      <tr><td><span class="kbd">dp-orch-layer</span> / <span class="kbd">dp-orch-role</span></td><td>四层卡片与角色卡</td></tr>
+      <tr><td><span class="kbd">dp-orch-rolecard</span></td><td>角色详情（含 L1 清单）</td></tr>
+      <tr><td><span class="kbd">dp-orch-wave</span> / <span class="kbd">dp-orch-node</span></td><td>波浪与图节点</td></tr>
+      <tr><td><span class="kbd">dp-orch-mode</span> / <span class="kbd">dp-orch-decision</span></td><td>模式与判定理由</td></tr>
+      <tr><td><span class="kbd">dp-orch-l1</span></td><td>L1 预算读数</td></tr>
+      <tr><td><span class="kbd">dp-orch-parallel-note</span></td><td><b>并行度差距的公开声明</b></td></tr>
+      <tr><td><span class="kbd">dp-orch-export</span> / <span class="kbd">dp-orch-briefing</span></td><td>两个<b>真按钮</b>：导出 Markdown 计划 / 生成四段式简报</td></tr>
+      <tr><td><span class="kbd">dp-orch-toast</span> / <span class="kbd">dp-orch-close</span></td><td>反馈与关闭</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note ok" style="margin-top:12px">
+    两个按钮不是摆设：<span class="kbd">export</span> 调 <span class="kbd">fillTemplate</span> 生成计划文本进剪贴板；
+    <span class="kbd">briefing</span> 调 <span class="kbd">buildBriefing</span> 出四段式简报。走的是与内核同一条代码路径。
+  </div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k e">十</span><h2>闸门与自证 — 332 条断言，两个真缺陷</h2><span class="r">离线全绿</span></div>
+
+  <table>
+    <thead><tr><th style="width:220px">测试文件</th><th style="width:96px">断言数</th><th style="width:100px">状态</th><th>覆盖重点</th></tr></thead>
+    <tbody>
+      <tr><td><span class="kbd">test-roles.mjs</span></td><td>45</td><td class="ok-t">TRUE</td><td>id 唯一 · 触发歧义 · 路由正负 · L1 预算</td></tr>
+      <tr><td><span class="kbd">test-dag.mjs</span></td><td>60</td><td class="ok-t">TRUE</td><td>6 类错误 · 环检测 · 拓扑完整 · 条件拒绝</td></tr>
+      <tr><td><span class="kbd">test-verify.mjs</span></td><td>60</td><td class="ok-t">TRUE</td><td>两层验收 · 三态 · FAIL 降级 · 成对交换</td></tr>
+      <tr><td><span class="kbd">test-delegate.mjs</span></td><td>31</td><td class="ok-t">TRUE</td><td>四段简报 · 五段交接 · 原文默认不给</td></tr>
+      <tr><td><span class="kbd">test-task-state.mjs</span></td><td>43</td><td class="ok-t">TRUE</td><td>九态 · 终态无出边 · 乐观并发 · 可达性</td></tr>
+      <tr><td><span class="kbd">test-checkpoint.mjs</span></td><td>44</td><td class="ok-t">TRUE</td><td>不可变 · 分叉保主干 · 重放跳过已完成</td></tr>
+      <tr><td><span class="kbd">test-policy.mjs</span></td><td>49</td><td class="ok-t">TRUE</td><td>三模式 · 四策略 · 削顶标注 · 无证据不升级</td></tr>
+      <tr><td colspan="2" style="text-align:right"><b>合计</b></td><td class="ok-t"><b>332</b></td><td>全部 <span class="kbd">IS_PASS: TRUE</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="sec" style="margin-top:16px">
+    <header><span class="no">10.1</span><h3>本轮抓到的两个真缺陷（都是"静默错"）</h3><span class="tag">测试先于结论</span></header>
+    <div class="bd">
+      <div class="mark">
+        <span class="lb">缺陷 1 · 条件求值静默放行</span>
+        <div style="margin-top:6px">
+          <b>现象</b>：条件写成 <span class="kbd">变量 大约等于 5</span>（不支持的语法），求值返回 <b>true</b>。<br>
+          <b>原因</b>：不认识的表达式被当作 <span class="kbd">exists</span> 处理 —— 只要变量存在就算过。<br>
+          <b>修法</b>：把"语法不支持"变成<b>显式失败</b>并返回原因。
+        </div>
+        <div class="cap" style="text-align:left">由 <span class="kbd">DG-9j</span> 捕获。这类错最危险：它<b>永远报绿</b>，直到某天真出问题</div>
+      </div>
+
+      <div class="mark" style="margin-top:12px">
+        <span class="lb">缺陷 2 · 断点重放从头再来</span>
+        <div style="margin-top:6px">
+          <b>现象</b>：从第 5 步续跑，结果 1–5 步全部重跑。<br>
+          <b>原因</b>：已完成步骤被塞进 <span class="kbd">from</span>（待跑集），而不是 <span class="kbd">skip</span>。<br>
+          <b>修法</b>：已完成默认进 skip，<span class="kbd">force</span> 才重跑；非幂等步骤给警告。E 段重写为 10 条断言。
+        </div>
+        <div class="cap" style="text-align:left">由 <span class="kbd">CP-5a</span> / <span class="kbd">CP-5c</span> 捕获</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <header><span class="no">10.2</span><h3>断言总数对账 · 闸门纠错</h3><span class="tag">本项目的既有纪律</span></header>
+    <div class="bd">
+      <div class="note">
+        每个测试文件都声明 <span class="kbd">EXPECTED_TOTAL</span>，跑完与实际条数对账，
+        <b>不等即 exit 2（INVALID）</b>。这不是形式主义 —— 本轮它自己就抓到<b>我写错声明 9 次</b>，
+        每次都被拦下并改正。机制在正常工作。
+      </div>
+
+      <div class="mark w">
+        <span class="lb">顺手修掉的一处闸门盲区</span>
+        <div style="margin-top:6px">
+          <span class="kbd">lint-undefined-symbols.mjs</span> 的 <b>[3] 号检查</b>（判"import 了但没用"）
+          与 [1] / [4] 犯同一个毛病：<b>看不到展开运算符</b>。<br>
+          当新面板写 <span class="kbd">...LAYERS.map(...)</span> 时，闸门误报"LAYERS 导入了没用过"。<br>
+          <b>修法</b>：抽出可导出的 <span class="kbd">countUses()</span>，把 <span class="kbd">...</span> 替换为空白再计数；
+          并给它补上从来没有过的 <b>5 条校准样本</b>。
+        </div>
+        <div class="cap" style="text-align:left">
+          正负对照读数：修正后 = 2（判已使用）· 修正前 = 1（误报未使用）· 自检 34/34 PASS ·
+          正常跑提示级从 18 降到 15（去掉的 3 条全是假阳性）
+        </div>
+      </div>
+
+      <div class="note t" style="margin-top:12px">
+        退出码约定（全项目统一）：<b>0 = 通过</b> · <b>1 = FAIL</b> · <b>2 = INVALID</b>（用法错/判据不适用，
+        与"产品坏了"必须能分开）
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="blk">
+  <div class="bh"><span class="k">附</span><h2>落地清单</h2><span class="r">8 个文件</span></div>
+  <table>
+    <thead><tr><th style="width:300px">文件</th><th style="width:96px">性质</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="kbd">src/logic/roles.js</span></td><td class="ok-t">新增</td><td>四层 + 12 角色 Agent Card</td></tr>
+      <tr><td><span class="kbd">src/logic/dag.js</span></td><td class="ok-t">新增</td><td>声明式执行图与校验</td></tr>
+      <tr><td><span class="kbd">src/logic/verify.js</span></td><td class="ok-t">新增</td><td>两层验收与去偏</td></tr>
+      <tr><td><span class="kbd">src/logic/delegate.js</span></td><td class="ok-t">新增</td><td>简报与交接契约</td></tr>
+      <tr><td><span class="kbd">src/logic/task-state.js</span></td><td class="ok-t">新增</td><td>A2A 九态机</td></tr>
+      <tr><td><span class="kbd">src/logic/checkpoint.js</span></td><td class="ok-t">新增</td><td>不可变快照链</td></tr>
+      <tr><td><span class="kbd">src/logic/policy.js</span></td><td class="ok-t">新增</td><td>模式 / 策略 / 预算</td></tr>
+      <tr><td><span class="kbd">src/components/OrchestratorPanel.js</span></td><td class="ok-t">新增</td><td>四页签编排面板</td></tr>
+      <tr><td><span class="kbd">src/components/DirectorPage.js</span></td><td class="warn-t">改动</td><td>接入面板 + 与设置互斥</td></tr>
+      <tr><td><span class="kbd">src/client-entry.js</span></td><td class="warn-t">改动</td><td>7 个 API 逐模块 try/catch 挂载（一个抛不拖垮其余）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn" style="margin-top:12px">
+    已知遗留（不在本轮范围）：<span class="kbd">tokenize</span> 目前有 3 份实现
+    （<span class="kbd">director-run.js</span> / <span class="kbd">routing.js</span> / <span class="kbd">roles.js</span>），
+    后续应统一到 <span class="kbd">util/text.js</span>。<b>重复即漂移</b>。
+  </div>
+</div>
+
+</div>
+</body>
+</html>

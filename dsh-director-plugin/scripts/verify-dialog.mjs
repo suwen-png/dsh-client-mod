@@ -244,7 +244,7 @@ globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
  *   ⇒ 统一捕获并**打印正确命令 + exit 2**（与本仓库 exit 码约定一致：2 = INVALID）。
  *   ⚠ 导入**顺序保持原样**（`mount.js` 有副作用，不许提前）。
  * ══════════════════════════════════════════════════════════════════ */
-let PDB, LAYOUT, HASH, HIER, IDB, SPLIT, CHAT, NAV, ROUTE, MOUNT, DIALOG;
+let PDB, LAYOUT, HASH, HIER, IDB, SPLIT, CHAT, NAV, ROUTE, MOUNT, DIALOG, ARUNS;
 try {
 	PDB = await import("../src/store/plugin-db.js");
 	LAYOUT = await import("../src/store/layout.js");
@@ -257,6 +257,7 @@ try {
 	ROUTE = await import("../src/logic/routing.js");
 	MOUNT = await import("../src/mount.js");
 	DIALOG = await import("../src/components/DirectorDialog.js");
+	ARUNS = await import("../src/store/agent-runs.js");
 } catch (e) {
 	const m = String((e && e.message) || e);
 	if (/Cannot find package '(react|react-dom|react\/jsx-runtime)'/.test(m) || /ERR_MODULE_NOT_FOUND/.test(m)) {
@@ -271,7 +272,7 @@ try {
 }
 void HASH;
 void PDB; void LAYOUT; void HIER; void IDB; void SPLIT; void CHAT; void NAV;
-void ROUTE; void MOUNT; void DIALOG;
+void ROUTE; void MOUNT; void DIALOG; void ARUNS;
 
 /* ══════════════════════════════════════════════════════════════════
  * A. 数据元独立（要求 1 · docs/10 §3.4）
@@ -508,10 +509,19 @@ ok("D18 observeConversation 安装 MutationObserver 并返回退订函数", (() 
 	const before = MutationObserverStub.instances.length;
 	const off = CHAT.observeConversation(() => { });
 	const mo = MutationObserverStub.instances[MutationObserverStub.instances.length - 1];
-	const installed = MutationObserverStub.instances.length === before + 1 && Boolean(mo.options && mo.options.childList && mo.options.subtree);
+	const hasList = Boolean(CHAT.findMessageList());
+	const installed = MutationObserverStub.instances.length === before + 1 && Boolean(mo.options && mo.options.childList);
+	/* 🔴 2026-09-14 **判据更新**（原判据：无条件要求 `subtree === true`）。
+	 *    原因：`findMessageList()` 新增了"宿主不在【对话】页签 ⇒ 返回 null"的前置判据
+	 *    （页签是**内容互换**不是隐藏，总监页签下消息列表整体不在 DOM —— 实测见
+	 *     `scripts/_probe-tab-mount.mjs`）。若此时仍以 `subtree:true` 观察 `document.body`，
+	 *    就等于**全文档子树观察**，与本文件同族的一起布局抖动事故同源。
+	 *    ⇒ 契约改为：**有消息列表才 subtree，没有就退化为 body 的 childList-only**。
+	 *      新判据把"降级"本身也变成可断言的事实（而不是把降级悄悄放过）。 */
+	const subtreeOk = hasList ? mo.options.subtree === true : mo.options.subtree === false;
 	off();
-	return installed && mo.disconnected === true && typeof off === "function";
-})(), "observer 已连接并成功退订");
+	return installed && subtreeOk && mo.disconnected === true && typeof off === "function";
+})(), "observer 已连接并成功退订；消息列表在场=" + Boolean(CHAT.findMessageList()) + "（不在场 ⇒ 只做 childList，不做全文档子树观察）");
 const chatApi = CHAT.installChatBridgeApi();
 ok("D19 installChatBridgeApi 暴露 window.__dshChatBridge", Boolean(chatApi && window.__dshChatBridge), `keys=${chatApi ? Object.keys(chatApi).length : 0}`);
 ok("D20 契约含 sendToChat / readConversation / setComposerText", ["sendToChat", "readConversation", "setComposerText", "readComposerText", "submitComposer"].every((k) => typeof chatApi[k] === "function"), "五函数齐备");
@@ -702,7 +712,21 @@ eqArr("H19 智能体 key", DIALOG.AGENTS.map((a) => a.key), ["code", "doc", "res
 ok("H20 每个智能体声明调用方式（auto/manual）", DIALOG.AGENTS.every((a) => a.mode === "auto" || a.mode === "manual"), DIALOG.AGENTS.map((a) => a.key + ":" + a.mode).join(" "));
 ok("H21 每个智能体带检查清单（可核验）", DIALOG.AGENTS.every((a) => Array.isArray(a.checks) && a.checks.length > 0), DIALOG.AGENTS.map((a) => a.checks.length).join(","));
 ok("H22 可调用技能清单非空且带 label", DIALOG.SKILLS.length > 0 && DIALOG.SKILLS.every((s) => s.key && s.label), `${DIALOG.SKILLS.length} 项`);
+/* 🆕 第 6 批「完善技能和智能体的指向」：技能必须有**指向**（真实目录）与反触发条件。
+ * 🔴 为什么这条必须存在：改前 SKILLS 只有 key/label —— 而 `mermaid-diagram` 的真实目录
+ *    是 `mermaid-diagram__skillhub`（key ≠ 目录）⇒ 按 key 拼路径必然找不到，
+ *    且**失败无声**。没有这条断言，"指向"就退化回"名字"。 */
+ok("H22b 🔴 每个技能都带真实目录指向（target）与反触发条件（noUse）",
+	DIALOG.SKILLS.every((s) => s.target && s.dir && s.target === s.dir) && DIALOG.SKILLS.every((s) => String(s.noUse || "").trim().length > 0),
+	DIALOG.SKILLS.map((s) => s.key + "→" + s.dir).join(" · "));
+ok("H22c 🔴 每个标准智能体都带可执行指向（target = module#symbol）",
+	DIALOG.AGENTS.every((a) => typeof a.target === "string" && /^[\w./-]+\.js#[\w]+$/.test(a.target)),
+	DIALOG.AGENTS.map((a) => a.key + "→" + a.target).join(" · "));
 ok("H23 调用记录 API 可用（要求 10「查看调用情况」）", typeof DIALOG.recordAgentRun === "function" && typeof DIALOG.listAgentRuns === "function", "recordAgentRun / listAgentRuns");
+/* 🔴 纪律 15：调用记录现在是**持久化**的（store/agent-runs.js）⇒ 本段写盘必须在
+ *    结束后**还原**，否则闸门会把测试记录留在用户的真实历史里（闸门不许成为破坏者）。 */
+const __runsSnap = ARUNS.snapshotRuns();
+const __runsSnapN = (__runsSnap && Array.isArray(__runsSnap.calls)) ? __runsSnap.calls.length : -1;
 DIALOG.recordAgentRun("test", "ok", "离线自检");
 ok("H24 调用记录可回读", DIALOG.listAgentRuns().some((r) => r.key === "test"), JSON.stringify(DIALOG.listAgentRuns()[0]));
 const dlgSrc = src("components/DirectorDialog.js");
@@ -730,12 +754,42 @@ ok("H29 键盘：Escape 关闭", has(dlgSrc, /"Escape"/), "命中 Escape 分支"
 ok("H30 键盘：Alt+1/2/3 三态等价", has(dlgSrc, /altKey/) && has(dlgSrc, /"1"/) && has(dlgSrc, /"2"/) && has(dlgSrc, /"3"/), "命中 Alt+1/2/3");
 ok("H31 要求 11：左面板内嵌设计图逻辑（层级段复用 DirectorHierarchy）", has(dlgSrc, /DirectorHierarchy/) && has(dlgSrc, /compact:\s*true/), "compact 形态复用");
 ok("H32 要求 10：R3 段含「调用情况」分区", has(dlgSrc, /调用情况（最近/) && has(dlgSrc, /d-agent-runs-empty/), "命中");
-ok("H32b 🔴 调用记录渲染截断在面板层（RUNS_SHOWN）且暴露真实总数（data-run-total）",
-	has(dlgSrc, /export const RUNS_SHOWN = 8/) && has(dlgSrc, /"data-run-total": agentRuns\.length/) && has(dlgSrc, /agentRuns\.slice\(0, RUNS_SHOWN\)/),
-	"截断=渲染层 / 总数=属性");
+/* 🔴 H32b / H32c 口径纠错（2026-09-14 · 第 6 批 · 闸门纠错台账第三批）
+ * ──────────────────────────────────────────────────────────────────
+ *  旧写法是**对 `DirectorDialog.js` 源码的字面量断言**：
+ *      /export const RUNS_SHOWN = 8/  ·  /export function listAgentRuns\(limit\)/  ·  /agentRuns\.slice\(\)/
+ *  本轮数据源迁到 `store/agent-runs.js`（可持久化 + 可订阅 + 真实执行链上报）后，
+ *  这三条字面量**从本文件消失** ⇒ 两条断言变红，而**产品没有任何缺陷**。
+ *  这是典型的「闸门自己会过期」（纪律 14）：**尺子钉在了"定义在哪个文件"上**。
+ *
+ *  更根本的问题：**源码正则不是行为判据**。`agentRuns.slice()` 出现在任何地方都会
+ *  让旧断言通过 —— 它在反例上也会绿（纪律 23：要问"它在反例上会不会也通过"）。
+ *  ⇒ 改法：
+ *    · 常量取**运行时导出值**（不认文件）；
+ *    · 「无参不截断」改为**真跑一遍看回落长度**（20 条记录 → 无参/有参/边界各读一次）；
+ *    · 渲染层只保留「引用存在」这一层（那确实是渲染事实，且改名即假红）。 */
+ok("H32b 🔴 调用记录：面板层截断常量 = 8，且面板暴露**真实总数**（data-run-total）",
+	ARUNS.RUNS_SHOWN === 8
+	&& has(dlgSrc, /"data-run-total": agentRuns\.length/)
+	&& has(dlgSrc, /agentRuns\.slice\(0, RUNS_SHOWN\)/),
+	"RUNS_SHOWN=" + ARUNS.RUNS_SHOWN + "（运行时导出值）· 总数属性=命中 · 渲染截断=命中");
+
+/* H32c：行为判据（跑一遍看结果）+ 纪律 15 的 快照→写入→断言→还原→还原断言 */
+const __h32cFull = (() => {
+	ARUNS.clearAgentRuns();
+	for (let i = 0; i < 20; i++) DIALOG.recordAgentRun("calib-" + i, "ok", "H32c 校准");
+	const full = DIALOG.listAgentRuns().length;   // 无参 ⇒ 必须全量
+	const cut3 = DIALOG.listAgentRuns(3).length;  // 有参 ⇒ 截断
+	const cut0 = DIALOG.listAgentRuns(0).length;  // 边界：0 条
+	const neg = DIALOG.listAgentRuns(-1).length;  // 边界：负数 ⇒ 视为"无限制"（同无参）
+	return { full, cut3, cut0, neg };
+})();
+const __restored = ARUNS.restoreRuns(__runsSnap) && DIALOG.listAgentRuns().length === __runsSnapN;
 ok("H32c 🔴 listAgentRuns() 无参返回**全量**（列表 API 不得静默截断 —— D4 假失败根因）",
-	has(dlgSrc, /export function listAgentRuns\(limit\)/) && has(dlgSrc, /agentRuns\.slice\(\)/),
-	"无参=全量 / 有参=截断");
+	__h32cFull.full === 20 && __h32cFull.cut3 === 3 && __h32cFull.cut0 === 0 && __h32cFull.neg === 20,
+	"记 20 条 ⇒ 无参 " + __h32cFull.full + " / (3)=" + __h32cFull.cut3 + " / (0)=" + __h32cFull.cut0 + " / (-1)=" + __h32cFull.neg);
+ok("H32d 🔴 闸门自还原：本段写过的校准记录**全部还回去**（跑完 == 跑前，不留痕）",
+	__restored, "还原后 " + DIALOG.listAgentRuns().length + " 条（跑前 " + __runsSnapN + " 条）");
 ok("H33 要求 8：路由确认卡三条去向按钮 + 取消齐备", ["DESTINATION.TRANSFER", "DESTINATION.DIRECT", "DESTINATION.CREATE"].every((k) => dlgSrc.includes(k)) && has(dlgSrc, /d-route-cancel/), "四按钮齐备");
 ok("H34 面板宽度分档（左侧折叠 → 竖条 RAIL）", has(dlgSrc, /rightCollapsePad/) && has(dlgSrc, /padLeft/), "宽档计算齐备");
 ok("H35 分屏 effect 成对（applySplit + cleanup clearSplit）", has(dlgSrc, /applySplit\(\{/) && has(dlgSrc, /clearSplit\(\);\s*\};/), "成对调用");

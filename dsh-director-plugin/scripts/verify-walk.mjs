@@ -161,7 +161,7 @@ async function walkOverlay(name, openTid, rootSel, opts, closeTid) {
 surfaces.push(await walkSurface("总监页", '[data-testid="dp-root"]', {
   // 会真实发送/删除/导航/改职责链路的：cdp-click(I段)/verify-flow(G段) 已深度覆盖，广度不重复触发
   skip: ["dp-act-del", "dp-send", "dp-act-next", "dp-sync", "dp-focus-native", "dp-register-flow", "dp-route-director", "dp-route-chat"],
-  toggle: ["dp-r2-toggle", "dp-r4-toggle", "dp-r6-toggle"]
+  toggle: ["dp-r2-toggle", "dp-r4-toggle", "dp-r7-toggle"]
 }));
 // ② 设计图工作室（添加/保存/新建/改名/删除/发送会改文档，verify-design-studio 深度覆盖；广度只点纯视图控件）
 await walkOverlay("设计图工作室", "d-open-design", '[data-testid="ds-root"]', {
