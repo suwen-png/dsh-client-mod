@@ -927,17 +927,36 @@ assert("C14.4", "改动后按钮回到「● 保存」（元素 20 → 21）",
 	/保存/.test(top2.save || "") && !/已保存/.test(top2.save || "") && top2.els === 21, { save: top2.save, els: top2.els });
 
 // 回滚（面板此刻仍开着）
-await clickTestId("ds-ver-restore");
-await sleep(800);
-const top3 = await readTop();
-assert("C14.5", "回滚到 v1 ⇒ 元素数恢复 20", top3.els === 20, { before: top2.els, after: top3.els });
+/* 🔴 T-PLUG-037 加固（2026-09-16 本轮 · 台账方向：补点击前几何/命中取证 + 一次有界重试，再断言）
+ *   背景：回滚三连（C14.5 / 5b / 5c）曾**偶发红**（1 红 1 绿）。产品侧已由独立正控
+ *   scripts/_probe-studio-restore.mjs 走用户路径证伪（21 → 20 · 文案「✓ 已保存 v1」· 面板自动收起 三条全中），
+ *   闸门自身 45/45 点击落点也都在目标子树内 ⇒ 归因为**闸门侧**的时序/起点问题，按台账方向加固三点：
+ *   ① 点击前取证：把命中自检（okSelf / 落点 / 几何）写进三条断言读数 —— "打偏"从此显式可核对；
+ *   ② 有界轮询替代固定 sleep(800)：收敛判据 = els=20 且「已保存 v1」且面板已收（一起等），
+ *      窗口 3000ms / 步长 150ms（固定等待在机器变慢时就是假红）；
+ *   ③ 一次有界重试：仅当"命中确认过（hitSelf）+ 按钮仍在 + 尺寸>0"却未收敛时才补点一次，
+ *      且把 retried 写进读数 —— 重试发生过这件事本身必须可见（防"重试到绿"）。 */
+const readRestoreState = () => js("(function(){ var r = document.querySelector('[data-testid=ds-ver-restore]'); var s = document.querySelector('[data-testid=ds-save]'); var rect = null, hitSelf = false; if (r) { var b = r.getBoundingClientRect(); rect = { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) }; if (b.width >= 1 && b.height >= 1) { var t = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); hitSelf = !!t && (t === r || r.contains(t)); } } return { hasBtn: !!r, rect: rect, hitSelf: hitSelf, save: s ? s.textContent : null, els: document.querySelectorAll('[data-testid=ds-el]').length, panel: !!document.querySelector('[data-testid=ds-ver-panel]') }; })()");
+const coreRestored = (st) => !!(st && st.els === 20 && /已保存\s*v1/.test(st.save || ""));
+const fullRestored = (st) => !!(coreRestored(st) && st.panel === false);
+const preRestore = await readRestoreState();
+const restoreHit = await clickTestId("ds-ver-restore");
+let top3 = await readRestoreState();
+let restoreRetried = false;
+for (let t = 0; t < 3000 && !fullRestored(top3); t += 150) { await sleep(150); top3 = await readRestoreState(); }
+if (!coreRestored(top3) && preRestore.hitSelf && top3.hasBtn && top3.rect && top3.rect.w >= 1 && top3.rect.h >= 1) {
+	restoreRetried = true; // 一次有界重试（事实写进断言读数，不许静默）
+	await clickTestId("ds-ver-restore");
+	for (let t = 0; t < 2500 && !fullRestored(top3); t += 150) { await sleep(150); top3 = await readRestoreState(); }
+}
+assert("C14.5", "回滚到 v1 ⇒ 元素数恢复 20", top3.els === 20, { before: top2.els, after: top3.els, retried: restoreRetried, preHit: preRestore.hitSelf, clickOkSelf: !!(restoreHit && restoreHit.hit && restoreHit.hit.okSelf), preRect: preRestore.rect });
 /* 🔴 这条守的是离线测试 C5 抓到的那类缺陷在真机上的表现：
  *    回滚会先把当前内容自动存档 ⇒ 若用"等于最后一版"判脏，界面会显示"有未保存改动"，
  *    用户以为回滚没生效。此处从**真机 DOM 文案**验证提示是正确的。 */
 assert("C14.5b", "回滚后按钮显示「✓ 已保存 v1」而非「● 保存」（提示不骗人）",
-	/已保存\s*v1/.test(top3.save || ""), top3.save);
+	/已保存\s*v1/.test(top3.save || ""), { save: top3.save, retried: restoreRetried });
 assert("C14.5c", "版本面板回滚后自动收起（避免看着旧列表以为没回）",
-	!(await js(`Boolean(document.querySelector('[data-testid=ds-ver-panel]'))`)));
+	top3.panel === false, { panel: top3.panel, retried: restoreRetried });
 
 // 重命名（✎ → 输入 → 失焦提交）
 await clickTestId("ds-rename");
