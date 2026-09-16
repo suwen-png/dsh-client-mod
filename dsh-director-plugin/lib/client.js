@@ -7842,6 +7842,186 @@ window.__ModuleLoader__.load({
 				};
 			}
 			
+			/**
+			 * 宿主 `sessions` 服务能力的**实测探针**（第 17 批「先探前提」· 纪律 53）。
+			 *
+			 * 🔴 为什么必须有：
+			 *   本批要做的「分支处理 + 产出回流」**完全依赖**宿主能力面，而第 16 批我有过一次
+			 *   **没实测就下结论**（把 sessions 说成"无删除契约"）。所以这次先把它列出来再动手：
+			 *     · `svc` 上到底有哪些方法（含原型链）—— 决定"回收产出"能不能**不走 DOM**
+			 *     · `svc.list.getSnapshot().byId[id]` 的**真实字段** —— 决定"分支状态"能否不切页签就读到
+			 *     · `svc.scope(id).get("conversation")` 是否可用、其方法面 —— 决定"读产出"的通道
+			 *
+			 * 纯只读（只取属性、只 `getSnapshot`、只 `scope(id)` 取作用域），不改任何状态；
+			 * 异常全部收进 `errors[]`，**不抛**（调用方是探针 / 诊断路径）。
+			 */
+			function probeSessionApi() {
+				const out = { available: false, members: [], snapshot: null, scope: null, conversation: null, errors: [] };
+				const svc = sessionsService();
+				if (!svc) { out.errors.push("sessions 服务不可用（sessionsService() 返回 null）"); return out; }
+				out.available = true;
+			
+				/* ① 成员枚举（含原型链，最多 6 层）—— 方法名即能力面 */
+				const names = new Set();
+				let o = svc; let depth = 0;
+				while (o && o !== Object.prototype && depth < 6) {
+					try { Object.getOwnPropertyNames(o).forEach((n) => names.add(n)); } catch (e) { /* 忽略 */ }
+					try { o = Object.getPrototypeOf(o); } catch (e) { break; }
+					depth++;
+				}
+				out.members = Array.from(names).sort();
+			
+				/* ② 快照真实形状 —— "状态"能不能不切页签就读到，全看这里有什么字段 */
+				let firstId = null;
+				try {
+					const snap = svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
+					if (snap) {
+						const ids = Array.isArray(snap.ids) ? snap.ids : [];
+						firstId = ids.length ? ids[0] : null;
+						const sample = (firstId && snap.byId) ? snap.byId[firstId] : null;
+						out.snapshot = {
+							idsType: Array.isArray(snap.ids) ? "array" : typeof snap.ids,
+							count: ids.length,
+							ids: ids.slice(0, 20),
+							current: snap.current ? String(snap.current).slice(0, 60) : null,
+							topKeys: Object.keys(snap).sort(),
+							sampleKeys: (sample && typeof sample === "object") ? Object.keys(sample).sort() : null,
+							sample: (sample && typeof sample === "object") ? JSON.stringify(sample).slice(0, 600) : null
+						};
+					} else out.errors.push("list.getSnapshot 不可用");
+				} catch (e) { out.errors.push("snapshot：" + ((e && e.message) || e)); }
+			
+				/* ③ 会话作用域里的 `conversation` 服务 —— 宿主 `scopedConversation()` 走的就是这条 */
+				try {
+					if (typeof svc.scope !== "function") out.errors.push("svc.scope 非函数（无法取会话作用域）");
+					else if (!firstId) out.errors.push("scope：快照为空，无可用 sessionId");
+					else {
+						const sc = svc.scope(firstId);
+						out.scope = { ok: Boolean(sc), hasGet: Boolean(sc && typeof sc.get === "function") };
+						if (sc && typeof sc.get === "function") {
+							const conv = sc.get("conversation");
+							if (conv) {
+								const cn = new Set();
+								let c = conv; let d2 = 0;
+								while (c && c !== Object.prototype && d2 < 6) {
+									try { Object.getOwnPropertyNames(c).forEach((n) => cn.add(n)); } catch (e2) { /* 忽略 */ }
+									try { c = Object.getPrototypeOf(c); } catch (e2) { break; }
+									d2++;
+								}
+								out.conversation = { found: true, members: Array.from(cn).sort() };
+							} else out.conversation = { found: false };
+						}
+					}
+				} catch (e) { out.errors.push("scope：" + ((e && e.message) || e)); }
+				return out;
+			}
+			
+			/**
+			 * 取某会话作用域下的 `conversation` 服务。
+			 *
+			 * 🔴 这是第 17 批的**地基**（真机实测，`_probe-hostapi` 2026-09-16）：
+			 *    `sessions.scope(id).get("conversation")` 返回**真对象**，其成员含
+			 *      · 写：`send` / `sendSession`
+			 *      · 读：`blocks` / `loadOlder` / `input`
+			 *      · 域：`scopeId` / `scopedSession` / `ctx`
+			 *    ⇒ 逐会话的**读写都不必切页签、不必碰 DOM**。
+			 *    这推翻了第 16 批「采集只能逐个切页签」的假设（那条是从"总监页签下宿主消息 DOM 卸载"外推的，
+			 *    结论只对 **DOM 通道**成立，对**服务通道**不成立）。
+			 *
+			 * 宿主同源写法：`dsh-client-ui-conversation/lib/client.js:11572 scopedConversation()`
+			 *    —— 它拿到的就是同一个对象，宿主自己也是用 `.send()` 投递。
+			 *
+			 * ⚠️ 返回的是**活对象**（非快照）⇒ 调用方**只可读 / 只可调其方法**，不得改其属性。
+			 * @param {string} sessionId
+			 * @returns {object|null}
+			 */
+			function scopedConversationOf(sessionId) {
+				if (!sessionId || typeof sessionId !== "string") return null;
+				const svc = sessionsService();
+				if (!svc || typeof svc.scope !== "function") return null;
+				try {
+					const sc = svc.scope(sessionId);
+					if (!sc || typeof sc.get !== "function") return null;
+					return sc.get("conversation") || null;
+				} catch (e) { return null; }
+			}
+			
+			/** 会话 id 列表（宿主 `sessions.list.getSnapshot().ids`） */
+			function sessionIds() {
+				const svc = sessionsService();
+				try {
+					const snap = svc && svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
+					return snap && Array.isArray(snap.ids) ? snap.ids.slice() : [];
+				} catch (e) { return []; }
+			}
+			
+			/**
+			 * 诊断：dump `conversation` 的**成员类型**与 `blocks` 形状（**纯只读**）。
+			 *
+			 * 🔴 为什么先 dump 再写解析器：`blocks` 到底是 Store（`.getSnapshot()`）还是数组、
+			 *    `send` 收几个参数 —— **只能实测**（纪律 53：宿主 API 返回形态只信实测）。
+			 *    本函数**不调用** `send` / `loadOlder`（那会改状态 / 触发加载），只取 `typeof` 与快照形状。
+			 *
+			 * @param {string} sessionId
+			 * @returns {{ok:boolean, reason?:string, memberTypes?:object, blocks?:object, input?:object}}
+			 */
+			function probeConversationShape(sessionId) {
+				if (!sessionId) return { ok: false, reason: "缺 sessionId（先取 probeSessionApi().snapshot.ids）" };
+				const svc = sessionsService();
+				if (!svc) return { ok: false, reason: "sessions 服务不可用" };
+				const conv = scopedConversationOf(sessionId);
+				if (!conv) return { ok: false, reason: "scope(" + sessionId.slice(0, 18) + ").get('conversation') 返回空" };
+			
+				/* ① 成员类型表（含原型链） */
+				const memberTypes = {};
+				let o = conv; let depth = 0;
+				while (o && o !== Object.prototype && depth < 6) {
+					try {
+						Object.getOwnPropertyNames(o).forEach((n) => {
+							if (memberTypes[n]) return;
+							try { memberTypes[n] = typeof o[n]; } catch (e) { memberTypes[n] = "getter-throw"; }
+						});
+					} catch (e) { /* 忽略 */ }
+					try { o = Object.getPrototypeOf(o); } catch (e) { break; }
+					depth++;
+				}
+			
+				/* ② `blocks` 形状 —— 决定"读产出"的写法 */
+				const out = { ok: true, memberTypes, blocks: null, input: null };
+				try {
+					const b = conv.blocks;
+					if (b == null) out.blocks = { type: "null" };
+					else if (Array.isArray(b)) out.blocks = { type: "array", len: b.length, first: JSON.stringify(b[0]).slice(0, 400) };
+					else if (typeof b === "object") {
+						const keys = Object.keys(b);
+						const rec = { type: "object", keys: keys.slice(0, 24) };
+						if (typeof b.getSnapshot === "function") {
+							const s = b.getSnapshot();
+							rec.hasGetSnapshot = true;
+							rec.snapType = Array.isArray(s) ? "array" : typeof s;
+							if (Array.isArray(s)) rec.snapLen = s.length;
+							else if (s && typeof s === "object") rec.snapKeys = Object.keys(s).slice(0, 24);
+							rec.snapSample = JSON.stringify(s).slice(0, 800);
+						}
+						out.blocks = rec;
+					} else out.blocks = { type: typeof b, value: String(b).slice(0, 120) };
+				} catch (e) { out.blocks = { type: "throw", reason: String((e && e.message) || e) }; }
+			
+				/* ③ `input` 形状（草稿输入域，仅供确认投递是否走它） */
+				try {
+					const inp = conv.input;
+					out.input = inp == null ? { type: "null" }
+						: (typeof inp === "object")
+							? { type: "object", keys: Object.keys(inp).slice(0, 16), hasGetSnapshot: typeof inp.getSnapshot === "function" }
+							: { type: typeof inp, value: String(inp).slice(0, 80) };
+				} catch (e) { out.input = { type: "throw", reason: String((e && e.message) || e) }; }
+			
+				/* ④ send 签名（只报 length，不调用） */
+				out.sendArity = typeof conv.send === "function" ? conv.send.length : null;
+				out.loadOlderArity = typeof conv.loadOlder === "function" ? conv.loadOlder.length : null;
+				return out;
+			}
+			
 			/** 打开某分支的原生对话（宿主 sessions.open） */
 			async function openSession(sessionId) {
 				const svc = sessionsService();
@@ -7998,7 +8178,9 @@ window.__ModuleLoader__.load({
 					LAYOUT, buildBranchTree, normalizeSummary, visibleRows, ancestorChain, treeBounds, matchRows,
 					readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,
 					degradationReason, hostCapabilities, openSession, forkBranch, createSession,
-					currentSessionId, watchCurrentSession
+					currentSessionId, watchCurrentSession,
+					// 第 17 批：宿主能力**实测探针**（挂出来供 CDP 诊断；纯只读，不改状态）
+					probeSessionApi, probeConversationShape, scopedConversationOf, sessionIds
 				};
 				if (typeof window !== "undefined") window.__dshBranchTree = api;
 				return api;
@@ -8019,6 +8201,10 @@ window.__ModuleLoader__.load({
 			exports.currentSessionId = currentSessionId;
 			exports.watchCurrentSession = watchCurrentSession;
 			exports.hostCapabilities = hostCapabilities;
+			exports.probeSessionApi = probeSessionApi;
+			exports.scopedConversationOf = scopedConversationOf;
+			exports.sessionIds = sessionIds;
+			exports.probeConversationShape = probeConversationShape;
 			exports.openSession = openSession;
 			exports.forkBranch = forkBranch;
 			exports.createSession = createSession;
@@ -25418,10 +25604,10 @@ window.__ModuleLoader__.load({
 				{ f: "src/bridge/host-director-column.js", bytes: 57890, lines: 1183, duty: "对话页**宿主左栏（总监列）**的几何接管 + 记忆面板时序", up: "client-entry.js", down: "store/layout.js, util/dom-style.js, bridge/host-panel-trim.js" },
 				{ f: "src/components/DirectorDialog.js", bytes: 55704, lines: 844, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
 				{ f: "src/client-entry.js", bytes: 55687, lines: 846, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
+				{ f: "src/logic/branch-tree.js", bytes: 43917, lines: 833, duty: "分支血缘树（导图态的数据源）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js" },
 				{ f: "src/store/layout.js", bytes: 42671, lines: 742, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
 				{ f: "src/logic/roles.js", bytes: 42326, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js", down: "（无）" },
 				{ f: "src/store/design-schema.js", bytes: 42225, lines: 770, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
-				{ f: "src/logic/branch-tree.js", bytes: 35182, lines: 651, duty: "分支血缘树（导图态的数据源）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js" },
 				{ f: "src/bridge/chat-bridge.js", bytes: 33553, lines: 675, duty: "「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, mount.js", down: "bridge/split.js, util/debug.js" },
 				{ f: "src/bridge/host-panel-trim.js", bytes: 33183, lines: 618, duty: "显示层裁剪宿主残留区块", up: "bridge/host-director-column.js, client-entry.js", down: "（无）" },
 				{ f: "src/components/OrchestratorPanel.js", bytes: 29870, lines: 523, duty: "多智能体编排面板", up: "client-entry.js, components/DirectorPage.js", down: "logic/roles.js, logic/dag.js, logic/policy.js, logic/delegate.js, logic/verify.js, logic/orchestrate.js, logic/director-chain.js" },
@@ -25493,7 +25679,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 79, bytes: 1547463, lines: 28778 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 79, bytes: 1556198, lines: 28960 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			

@@ -487,6 +487,186 @@ export function hostCapabilities() {
 	};
 }
 
+/**
+ * 宿主 `sessions` 服务能力的**实测探针**（第 17 批「先探前提」· 纪律 53）。
+ *
+ * 🔴 为什么必须有：
+ *   本批要做的「分支处理 + 产出回流」**完全依赖**宿主能力面，而第 16 批我有过一次
+ *   **没实测就下结论**（把 sessions 说成"无删除契约"）。所以这次先把它列出来再动手：
+ *     · `svc` 上到底有哪些方法（含原型链）—— 决定"回收产出"能不能**不走 DOM**
+ *     · `svc.list.getSnapshot().byId[id]` 的**真实字段** —— 决定"分支状态"能否不切页签就读到
+ *     · `svc.scope(id).get("conversation")` 是否可用、其方法面 —— 决定"读产出"的通道
+ *
+ * 纯只读（只取属性、只 `getSnapshot`、只 `scope(id)` 取作用域），不改任何状态；
+ * 异常全部收进 `errors[]`，**不抛**（调用方是探针 / 诊断路径）。
+ */
+export function probeSessionApi() {
+	const out = { available: false, members: [], snapshot: null, scope: null, conversation: null, errors: [] };
+	const svc = sessionsService();
+	if (!svc) { out.errors.push("sessions 服务不可用（sessionsService() 返回 null）"); return out; }
+	out.available = true;
+
+	/* ① 成员枚举（含原型链，最多 6 层）—— 方法名即能力面 */
+	const names = new Set();
+	let o = svc; let depth = 0;
+	while (o && o !== Object.prototype && depth < 6) {
+		try { Object.getOwnPropertyNames(o).forEach((n) => names.add(n)); } catch (e) { /* 忽略 */ }
+		try { o = Object.getPrototypeOf(o); } catch (e) { break; }
+		depth++;
+	}
+	out.members = Array.from(names).sort();
+
+	/* ② 快照真实形状 —— "状态"能不能不切页签就读到，全看这里有什么字段 */
+	let firstId = null;
+	try {
+		const snap = svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
+		if (snap) {
+			const ids = Array.isArray(snap.ids) ? snap.ids : [];
+			firstId = ids.length ? ids[0] : null;
+			const sample = (firstId && snap.byId) ? snap.byId[firstId] : null;
+			out.snapshot = {
+				idsType: Array.isArray(snap.ids) ? "array" : typeof snap.ids,
+				count: ids.length,
+				ids: ids.slice(0, 20),
+				current: snap.current ? String(snap.current).slice(0, 60) : null,
+				topKeys: Object.keys(snap).sort(),
+				sampleKeys: (sample && typeof sample === "object") ? Object.keys(sample).sort() : null,
+				sample: (sample && typeof sample === "object") ? JSON.stringify(sample).slice(0, 600) : null
+			};
+		} else out.errors.push("list.getSnapshot 不可用");
+	} catch (e) { out.errors.push("snapshot：" + ((e && e.message) || e)); }
+
+	/* ③ 会话作用域里的 `conversation` 服务 —— 宿主 `scopedConversation()` 走的就是这条 */
+	try {
+		if (typeof svc.scope !== "function") out.errors.push("svc.scope 非函数（无法取会话作用域）");
+		else if (!firstId) out.errors.push("scope：快照为空，无可用 sessionId");
+		else {
+			const sc = svc.scope(firstId);
+			out.scope = { ok: Boolean(sc), hasGet: Boolean(sc && typeof sc.get === "function") };
+			if (sc && typeof sc.get === "function") {
+				const conv = sc.get("conversation");
+				if (conv) {
+					const cn = new Set();
+					let c = conv; let d2 = 0;
+					while (c && c !== Object.prototype && d2 < 6) {
+						try { Object.getOwnPropertyNames(c).forEach((n) => cn.add(n)); } catch (e2) { /* 忽略 */ }
+						try { c = Object.getPrototypeOf(c); } catch (e2) { break; }
+						d2++;
+					}
+					out.conversation = { found: true, members: Array.from(cn).sort() };
+				} else out.conversation = { found: false };
+			}
+		}
+	} catch (e) { out.errors.push("scope：" + ((e && e.message) || e)); }
+	return out;
+}
+
+/**
+ * 取某会话作用域下的 `conversation` 服务。
+ *
+ * 🔴 这是第 17 批的**地基**（真机实测，`_probe-hostapi` 2026-09-16）：
+ *    `sessions.scope(id).get("conversation")` 返回**真对象**，其成员含
+ *      · 写：`send` / `sendSession`
+ *      · 读：`blocks` / `loadOlder` / `input`
+ *      · 域：`scopeId` / `scopedSession` / `ctx`
+ *    ⇒ 逐会话的**读写都不必切页签、不必碰 DOM**。
+ *    这推翻了第 16 批「采集只能逐个切页签」的假设（那条是从"总监页签下宿主消息 DOM 卸载"外推的，
+ *    结论只对 **DOM 通道**成立，对**服务通道**不成立）。
+ *
+ * 宿主同源写法：`dsh-client-ui-conversation/lib/client.js:11572 scopedConversation()`
+ *    —— 它拿到的就是同一个对象，宿主自己也是用 `.send()` 投递。
+ *
+ * ⚠️ 返回的是**活对象**（非快照）⇒ 调用方**只可读 / 只可调其方法**，不得改其属性。
+ * @param {string} sessionId
+ * @returns {object|null}
+ */
+export function scopedConversationOf(sessionId) {
+	if (!sessionId || typeof sessionId !== "string") return null;
+	const svc = sessionsService();
+	if (!svc || typeof svc.scope !== "function") return null;
+	try {
+		const sc = svc.scope(sessionId);
+		if (!sc || typeof sc.get !== "function") return null;
+		return sc.get("conversation") || null;
+	} catch (e) { return null; }
+}
+
+/** 会话 id 列表（宿主 `sessions.list.getSnapshot().ids`） */
+export function sessionIds() {
+	const svc = sessionsService();
+	try {
+		const snap = svc && svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
+		return snap && Array.isArray(snap.ids) ? snap.ids.slice() : [];
+	} catch (e) { return []; }
+}
+
+/**
+ * 诊断：dump `conversation` 的**成员类型**与 `blocks` 形状（**纯只读**）。
+ *
+ * 🔴 为什么先 dump 再写解析器：`blocks` 到底是 Store（`.getSnapshot()`）还是数组、
+ *    `send` 收几个参数 —— **只能实测**（纪律 53：宿主 API 返回形态只信实测）。
+ *    本函数**不调用** `send` / `loadOlder`（那会改状态 / 触发加载），只取 `typeof` 与快照形状。
+ *
+ * @param {string} sessionId
+ * @returns {{ok:boolean, reason?:string, memberTypes?:object, blocks?:object, input?:object}}
+ */
+export function probeConversationShape(sessionId) {
+	if (!sessionId) return { ok: false, reason: "缺 sessionId（先取 probeSessionApi().snapshot.ids）" };
+	const svc = sessionsService();
+	if (!svc) return { ok: false, reason: "sessions 服务不可用" };
+	const conv = scopedConversationOf(sessionId);
+	if (!conv) return { ok: false, reason: "scope(" + sessionId.slice(0, 18) + ").get('conversation') 返回空" };
+
+	/* ① 成员类型表（含原型链） */
+	const memberTypes = {};
+	let o = conv; let depth = 0;
+	while (o && o !== Object.prototype && depth < 6) {
+		try {
+			Object.getOwnPropertyNames(o).forEach((n) => {
+				if (memberTypes[n]) return;
+				try { memberTypes[n] = typeof o[n]; } catch (e) { memberTypes[n] = "getter-throw"; }
+			});
+		} catch (e) { /* 忽略 */ }
+		try { o = Object.getPrototypeOf(o); } catch (e) { break; }
+		depth++;
+	}
+
+	/* ② `blocks` 形状 —— 决定"读产出"的写法 */
+	const out = { ok: true, memberTypes, blocks: null, input: null };
+	try {
+		const b = conv.blocks;
+		if (b == null) out.blocks = { type: "null" };
+		else if (Array.isArray(b)) out.blocks = { type: "array", len: b.length, first: JSON.stringify(b[0]).slice(0, 400) };
+		else if (typeof b === "object") {
+			const keys = Object.keys(b);
+			const rec = { type: "object", keys: keys.slice(0, 24) };
+			if (typeof b.getSnapshot === "function") {
+				const s = b.getSnapshot();
+				rec.hasGetSnapshot = true;
+				rec.snapType = Array.isArray(s) ? "array" : typeof s;
+				if (Array.isArray(s)) rec.snapLen = s.length;
+				else if (s && typeof s === "object") rec.snapKeys = Object.keys(s).slice(0, 24);
+				rec.snapSample = JSON.stringify(s).slice(0, 800);
+			}
+			out.blocks = rec;
+		} else out.blocks = { type: typeof b, value: String(b).slice(0, 120) };
+	} catch (e) { out.blocks = { type: "throw", reason: String((e && e.message) || e) }; }
+
+	/* ③ `input` 形状（草稿输入域，仅供确认投递是否走它） */
+	try {
+		const inp = conv.input;
+		out.input = inp == null ? { type: "null" }
+			: (typeof inp === "object")
+				? { type: "object", keys: Object.keys(inp).slice(0, 16), hasGetSnapshot: typeof inp.getSnapshot === "function" }
+				: { type: typeof inp, value: String(inp).slice(0, 80) };
+	} catch (e) { out.input = { type: "throw", reason: String((e && e.message) || e) }; }
+
+	/* ④ send 签名（只报 length，不调用） */
+	out.sendArity = typeof conv.send === "function" ? conv.send.length : null;
+	out.loadOlderArity = typeof conv.loadOlder === "function" ? conv.loadOlder.length : null;
+	return out;
+}
+
 /** 打开某分支的原生对话（宿主 sessions.open） */
 export async function openSession(sessionId) {
 	const svc = sessionsService();
@@ -643,7 +823,9 @@ export function installBranchTreeApi(ctx) {
 		LAYOUT, buildBranchTree, normalizeSummary, visibleRows, ancestorChain, treeBounds, matchRows,
 		readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,
 		degradationReason, hostCapabilities, openSession, forkBranch, createSession,
-		currentSessionId, watchCurrentSession
+		currentSessionId, watchCurrentSession,
+		// 第 17 批：宿主能力**实测探针**（挂出来供 CDP 诊断；纯只读，不改状态）
+		probeSessionApi, probeConversationShape, scopedConversationOf, sessionIds
 	};
 	if (typeof window !== "undefined") window.__dshBranchTree = api;
 	return api;
