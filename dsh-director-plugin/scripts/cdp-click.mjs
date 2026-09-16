@@ -18,16 +18,23 @@
  *   I11 树节点选择            → 面包屑/内容随之切换
  *   I12 同步真实会话          → 覆盖度刷新为 100%
  *
- * 用法：node scripts/cdp-click.mjs
- * 前置：Harness 已启动且带 --remote-debugging-port=9222
+ * 用法：CDP_PORT=<端口> node scripts/cdp-click.mjs
+ * 前置：Harness 已启动且带 `--remote-debugging-port=<端口>`
+ * 退出码：0 通过 / 1 FAIL / 2 INVALID（等待预算不足等"读数不可信"情形，**不等于产品缺陷**）
  */
 
-const PORT = 9222;
+/* 🔴 端口不写死：Harness 每次启动都换端口（纪律 12 配套），写死 9222 会让脚本静默报"连不上" */
+const PORT = Number(process.env.CDP_PORT || 9222);
 
 /* ── CDP 连接 ── */
-const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-const page = targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
-if (!page) { console.error("未找到页面目标（Harness 未启动或未开 9222？）"); process.exit(1); }
+const targets = await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json()).catch(() => null);
+const page = targets && targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
+if (!page) {
+	console.error("未找到页面目标（Harness 未启动，或端口不是 " + PORT + "）。");
+	console.error("  处置：先看实际端口，再 CDP_PORT=<端口> node scripts/cdp-click.mjs");
+	console.error("        netstat -ano | grep -E '92[0-9][0-9]'");
+	process.exit(2);   // INVALID ≠ FAIL（纪律 17）
+}
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let seq = 0;
@@ -96,11 +103,22 @@ async function waitIdle(timeoutMs = 60000) {
 	return false;
 }
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
 const fails = [];
+const skips = [];
+/* 🔴 INVALID（退出码 2）= "读数不可信"，**不是产品缺陷**。
+ *   典型来源：异步任务在等待预算内没跑完 ⇒ 此时读到的任何中间值都不该被当成结论。
+ *   纪律 18 的推论：把"我读早了"报成"产品坏了"，比报红更坏（没人会去查闸门）。 */
+let invalid = false;
 function ok(name, cond, detail = "") {
 	if (cond) { pass++; console.log("  ✅ " + name + (detail ? "  — " + detail : "")); }
 	else { fail++; fails.push(name); console.log("  ❌ " + name + (detail ? "  — " + detail : "")); }
+}
+/* 🔴 SKIP 必须带**可分辨原因**（纪律 18）：禁用「本机数据如此」这类不可证伪收尾。
+ *   与"静默消失"的区别：跳过会被**计数并打印原因**，断言总数不会随环境悄悄变化（纪律 39/46）。 */
+function skip(name, reason) {
+	skipped++; skips.push(name + " ← " + reason);
+	console.log("  ⏭ SKIP " + name + "  — " + reason);
 }
 
 /* ── 页面内辅助函数（注入一次，后续复用）── */
@@ -284,9 +302,23 @@ console.log("\n[I7] 向上提交 → 回读父节点");
 await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
 const i7 = await evalExpr(`(async () => {
 	// 先选一个会话级节点（有父级），再向上提交
-	const t = await window.__dshHierarchy.loadTree();
-	const sess = (t.childNodes||[]).flatMap(p => (p.childNodes||[]))[0];
-	if (!sess) return {found:false, reason:'无会话级节点'};
+	const pick = async () => {
+		const t = await window.__dshHierarchy.loadTree();
+		return (t.childNodes||[]).flatMap(p => (p.childNodes||[]))[0] || null;
+	};
+	let sess = await pick();
+	/* 🔴 前提建立（纪律 23 / 46 / 51）：**本 origin 每次启动都是新的**（纪律 E：只有 cookie 跨启动持久，
+	 *   localStorage / IndexedDB 按含端口的 origin 隔离）⇒ 冷启动时总监树里只有全局根，
+	 *   **还没有任何会话级节点**；而建立它们的「同步真实会话」排在 **I12**，晚于 I7
+	 *   ⇒ I7 会以「产品坏了」的形态红掉。实测取证：本轮报 ❌「找到会话级节点用于向上提交 — 无会话级节点」，
+	 *   而**同一轮 I12 的读数是「会话 121/121 · 文件夹 2/2」** ⇒ 会话明明存在，只是**此刻尚未落成总监节点**。
+	 *   修法：自己建前提 —— 走真实界面路径点一次「同步真实会话」（产品侧幂等），再重新取；取不到才 SKIP。 */
+	if (!sess) {
+		const sy = window.__q('[data-testid="h-sync"]');
+		if (sy && !sy.disabled) sy.click();
+		for (let i = 0; i < 12 && !sess; i++) { await new Promise(r => setTimeout(r, 500)); sess = await pick(); }
+	}
+	if (!sess) return {found:false, reason:'触发「同步真实会话」后仍无会话级节点'};
 	return { found:true, sessId: sess.id, parentId: sess.parentId, name: sess.name };
 })()`);
 if (i7.found) {
@@ -338,7 +370,12 @@ if (i7.found) {
 	ok("🔴 回读：本节点 duties 已清空", i8.dbDuties === 0, "duties 项数=" + i8.dbDuties);
 	ok("🔴 回读：来源回落为继承（非 own）", i8.origin0 !== "own", "origin=" + i8.origin0);
 } else {
-	ok("找到会话级节点用于向上提交", false, i7.reason || "");
+	/* 🔴 前提不成立 ⇒ **逐条 SKIP**（纪律 46：断言静默消失会让"总数"随状态变化，收尾对账随之失去意义） */
+	skip("找到会话级节点用于向上提交（I7/I8 段的前提）",
+		"前提不成立：" + (i7.reason || "") + " —— 本 origin 冷启动且同步未生效，非产品缺陷");
+	["树节点行已点击（data-node-id 精确定位）", "🔴 回读：该行成为选中态（selection 真的变了）", "向上提交按钮可点击",
+		"🔴 回读：父节点被写入职责配置", "恢复继承按钮可点击", "🔴 回读：本节点 duties 已清空",
+		"🔴 回读：来源回落为继承（非 own）"].forEach((n) => skip(n, "同 I7 前提（无会话级节点）"));
 }
 
 /* ── I8r 🔴 环境复原：职责配置逐节点还原（见 I0 快照里的踩坑说明） ──
@@ -652,6 +689,13 @@ if (i15.isRoot) {
 /* ── I16 整树分层总结 ── */
 console.log("\n[I16] 整树分层总结 → 回读多节点 summary");
 await waitIdle();   // 🔴 点击前等空闲：按钮 disabled 时 click() 是静默 no-op
+/* 🔴 点击**之前**先取一次基线：没有这条，"有多少节点带 summary"这个读数就分不清
+ *    "是本次写的"与"历史遗留的"（纪律 42：被测面持久化/累积时判据必须跑程内）。 */
+const i16Before = await evalExpr(`(async () => {
+	const t = await window.__dshHierarchy.loadTree();
+	const rows = []; const walk = (n) => { rows.push(n); (n.childNodes||[]).forEach(walk); }; walk(t);
+	return rows.filter(n => String(n.summary||'').trim().length > 0).length;
+})()`);
 const i16 = await evalExpr(`(async () => {
 	const btn = window.__q('[data-testid="h-sum-tree"]'); if(!btn) return {found:false};
 	btn.click();
@@ -664,18 +708,85 @@ const i16 = await evalExpr(`(async () => {
 	         grades: Array.from(new Set(rows.map(r=>r.grade).filter(Boolean))) };
 })()`);
 ok("整树分层总结按钮可点击", i16.found);
-await waitIdle();
+/* 🔴🔴 等待必须**校验返回值**，且预算必须够（2026-09-16 第十六轮 · 闸门纠错·二）
+ *
+ * 旧写法：`await waitIdle();` —— 默认 60s 上限，**返回值被丢弃**。而本任务实测 **~1.21 s/节点 × 116 节点
+ *   ≈ 140s**（`_probe-sum-tree-timeline.mjs` 逐 500ms 采样实测）⇒ 60s 时只写了 ~51 个，闸门就在那一刻读数
+ *   ⇒ 报出「51/116」+「需汇总父节点 1 个，缺 1 个」。**而那个"缺"的节点正是当时在途的那一个**：
+ *   `summarizeTree()` 是**后序遍历**（先子后父），任何时刻恰好有 1 个节点处于
+ *   「子级已写完、自己尚未写」的状态 ⇒ `parentBad` 在探针里**恒为 1**，写完瞬间归 0。
+ *   ⇒ 这条红读起来像"逐级汇总坏了"，真相是**闸门读早了**（纪律 31：先审口径，再谈修产品）。
+ * 新写法：预算提到 180s + 校验返回值；超预算即 **INVALID（exit 2）**，并打印"已写到第 N 个"以自证是等待不足。 */
+/* 🔴 前提段（纪律 23 / 46 / 51）：逐级汇总的语义判据**只有在树至少两层时才可判定**。
+ *   而本 origin 每次启动都是新的（纪律 E：只有 cookie 跨启动持久，localStorage/IndexedDB 按含端口的 origin 隔离）
+ *   ⇒ 冷启动时树里只有全局根 ⇒ `parentNeed = 0` ⇒ ② 会**平凡真**（"0 个需汇总的父节点、0 个缺"）——
+ *   读起来是绿的，实际什么都没验。⇒ 先**显式测前提**并打出来；前提不成立时逐条 SKIP 且说明原因。
+ *   实测依据：`_probe-sum-tree-timeline.mjs` 在「app 端口 32499」那次读到 116 节点（沿用用户既有实例的数据），
+ *   在「app 端口 20401」这次读到 **1 节点**（新 origin）⇒ 同一份产品、同一套闸门，读数差 116 倍。 */
+const i16pre = await evalExpr(`(async () => {
+	const t = await window.__dshHierarchy.loadTree();
+	const rows = []; const walk = (n) => { rows.push(n); (n.childNodes||[]).forEach(walk); }; if (t) walk(t);
+	return { total: rows.length, rootKids: t ? (t.childNodes||[]).length : 0,
+	         withKids: rows.filter(n => (n.childNodes||[]).length > 0).length };
+})()`);
+const i16PremOk = i16pre.withKids >= 1 && i16pre.total >= 2;
+ok("🔴 前提：树至少两层（存在「有子节点的父节点」）—— 否则「逐级汇总」语义无从判定", i16PremOk,
+	"total=" + i16pre.total + " ｜ rootKids=" + i16pre.rootKids + " ｜ 有子节点的节点 " + i16pre.withKids + " 个");
+const i16Idle = await waitIdle(180000);
+if (!i16Idle) {
+	const still = await evalExpr(`(async () => {
+		const b = window.__q('[data-testid="h-sum-tree"]');
+		const t = await window.__dshHierarchy.loadTree();
+		const rows = []; const walk = (n) => { rows.push(n); (n.childNodes||[]).forEach(walk); }; walk(t);
+		return { disabled: b ? b.disabled : null, total: rows.length,
+		         withSum: rows.filter(n => String(n.summary||'').trim().length > 0).length };
+	})()`);
+	invalid = true;
+	console.log("  ⚠ INVALID：整树分层总结在 180s 预算内**未收敛**（busy=" + still.disabled
+		+ "，已写 " + still.withSum + "/" + still.total + " 个节点）");
+	console.log("    ⇒ 本段读数不可信，按 INVALID（exit 2）收尾，**不计入产品缺陷**；等待预算或产品吞吐需调。");
+}
+/* 🔴 判据改「**语义 + 跑程内**」（2026-09-16 第十六轮 · 闸门纠错）
+ *
+ * 旧判据：`withSum >= total * 0.9` —— 一条**覆盖率经验阈值**。但树是**跨运行累积**的
+ * （真机实测 116 节点 = 113 真实会话 + 2 文件夹 + 1 全局），而且**空白分支天生没有东西可总结**
+ * （`sessions.create` 建出的会话按定义是 blank；本轮按维度分流真机跑了 8 轮 = 65 条空白分支）。
+ * ⇒ 这个读数取决于"用户积了多少从没干过活的分支"，**不是跑程内量** ⇒ 对着一份干净产品也会红
+ *   （实测 51/116），而它红的时候读起来像"整树分层总结坏了"。**闸门不该报它报不了的缺陷**（纪律 31）。
+ * 新判据问的是这件事**本身的语义**：
+ *   ① **根节点必须有 summary** —— 自底向上汇总的最终落点，没有它整件事就没发生；
+ *   ② **每个「有带 summary 的子节点」的父节点，自己必须有 summary** —— 这才是"逐级汇总"的判据，
+ *      与树里堆了多少空白分支**无关**（空白叶子的父节点不在 `parentNeed` 里）；
+ *   ③ **正对照**：本次点击必须让带 summary 的节点数**不减**，且**原本不满时必须净增**
+ *      （否则"什么都没做"也能过 ①②——例如上一轮已经把整树写完的情况由 `i16Before >= total` 显式豁免）。
+ */
 const i16b = await evalExpr(`(async () => {
 	const t = await window.__dshHierarchy.loadTree();
 	const rows = [];
-	const walk = (n) => { rows.push({ lv:n.level, sum:(n.summary||'').length, g:n.summaryGrade||null }); (n.childNodes||[]).forEach(walk); };
-	walk(t);
-	return { total: rows.length, withSum: rows.filter(r=>r.sum>0).length,
-	         grades: Array.from(new Set(rows.map(r=>r.g).filter(Boolean))) };
+	const walk = (n, d) => { rows.push({ n: n, d: d }); (n.childNodes||[]).forEach(c => walk(c, d+1)); };
+	walk(t, 0);
+	const has = (n) => String(n.summary||'').trim().length > 0;
+	const withSumChildren = rows.filter(r => (r.n.childNodes||[]).some(has));
+	const bad = withSumChildren.filter(r => !has(r.n));
+	return { total: rows.length, withSum: rows.filter(r=>has(r.n)).length,
+	         root: has(t), parentNeed: withSumChildren.length, parentBad: bad.length,
+	         grades: Array.from(new Set(rows.map(r => r.n.summaryGrade).filter(Boolean))),
+	         badSample: bad.slice(0,3).map(r => String(r.n.title || r.n.id || '?').slice(0,20)) };
 })()`);
-Object.assign(i16, { total: i16b.total, withSum: i16b.withSum, grades: i16b.grades });
-ok("🔴 回读：整树各层均生成 summary（自底向上逐级汇总）",
-	i16.withSum >= i16.total * 0.9, i16.withSum + "/" + i16.total + " 个节点有 summary");
+Object.assign(i16, { total: i16b.total, withSum: i16b.withSum, root: i16b.root, parentNeed: i16b.parentNeed, parentBad: i16b.parentBad, grades: i16b.grades });
+console.log("  · summary 覆盖：" + i16Before + " → " + i16.withSum + " / " + i16.total
+	+ " ｜ 根有 summary=" + i16.root + " ｜ 需汇总的父节点 " + i16.parentNeed + " 个，其中缺 summary " + i16.parentBad + " 个");
+ok("🔴 回读：根节点已生成 summary（自底向上汇总的最终落点）", i16.root === true, "root=" + i16.root);
+if (i16PremOk) {
+	ok("🔴 回读：每个「子节点已有 summary」的父节点自己也生成了 summary（逐级汇总的语义判据，与空白分支数量无关）",
+		i16.parentBad === 0, "需汇总父节点 " + i16.parentNeed + " 个，缺 " + i16.parentBad + " 个 " + JSON.stringify(i16.badSample));
+} else {
+	skip("🔴 回读：每个「子节点已有 summary」的父节点自己也生成了 summary（逐级汇总的语义判据）",
+		"前提不成立：树只有 " + i16pre.total + " 个节点、其中 " + i16pre.withKids + " 个有子节点 ⇒ 没有任何父-子对可判（本 origin 冷启动，宿主会话列表未落成总监节点）。**不是跳过产品验收，是把本条挂到前提上**");
+}
+ok("🔴 正对照：本次「整树分层总结」确实写了东西（带 summary 的节点数不减，且原本未满时必须有净增）",
+	i16.withSum >= i16Before && (i16.withSum > i16Before || i16Before >= i16.total),
+	i16Before + " → " + i16.withSum + " / " + i16.total);
 ok("🔴 回读：梯度标记存在（§4.3 降级生效）", i16.grades.length > 0, "梯度集合=" + JSON.stringify(i16.grades));
 
 /* ── I17 新建节点 ── */
@@ -850,11 +961,18 @@ ok("根节点名已恢复（不把测试数据留给用户）", i22.renamed === 
 
 /* ── 汇总 ── */
 console.log("\n════════════════════════════════════════");
-console.log(`真机交互验证：PASS ${pass} / FAIL ${fail} / 总计 ${pass + fail}`);
+console.log(`真机交互验证：PASS ${pass} / FAIL ${fail} / SKIP ${skipped} / 总计 ${pass + fail + skipped}`);
 if (fails.length) {
 	console.log("失败项：");
 	fails.forEach((f) => console.log("  ✗ " + f));
 }
-console.log(`IS_PASS: ${fail === 0 ? "TRUE" : "FALSE"}`);
+/* 🔴 跳过必须**显式列出原因**（纪律 18：「跳过」比「红」更危险 —— 红有人看，跳过没人看） */
+if (skips.length) {
+	console.log("跳过项（每条都带可分辨原因，不许当「没问题」读）：");
+	skips.forEach((s) => console.log("  ⏭ " + s));
+}
+console.log(`IS_PASS: ${fail === 0 && !invalid ? "TRUE" : "FALSE"}`);
+if (invalid) console.log("注：本轮存在 INVALID 项（读数不可信），按 exit 2 收尾 —— 先补等待预算，再判产品。");
+if (skipped) console.log("注：本轮有 " + skipped + " 条 SKIP —— IS_PASS 只说明「跑过的都过」，不覆盖未跑到的。");
 ws.close();
-process.exit(fail === 0 ? 0 : 1);
+process.exit(invalid ? 2 : (fail === 0 ? 0 : 1));

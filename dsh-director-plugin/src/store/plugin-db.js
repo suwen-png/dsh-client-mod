@@ -286,6 +286,52 @@ export function resetPluginDb() {
 	return Promise.all(PDB_ALL_STORES.map((s) => pClear(s))).then(() => true);
 }
 
+/**
+ * 清除**总监对话消息**（第 16 批需求 3 —— 用户原话「清除所有的对话消息」）。
+ *
+ * 🔴 为什么不能用 `resetPluginDb()`：
+ *    那会连 `directorNodes`（层级节点）/ `directorTodos` / `directorDecisions` /
+ *    `directorDesigns`（设计图冷备）**一起清掉** —— 用户的待办、决策记录、设计图全没了，
+ *    而这两个动作在界面上看起来一样（都叫"清除"）。⇒ 必须**定向到一张表**。
+ *
+ * 🔴 能力边界（**必须如实上报，不许假装清干净了**）：
+ *    宿主 `sessions` 服务**没有**删除/清空契约（成员表已逐条核对：
+ *    `create` / `fork` / `open` / `openSubagent` / `list` / `search` / `provide` …
+ *    `drop()` 只丢内存实例，注释原文 *"The host session log is the durable truth —
+ *    a later get() lazily rebuilds and open() backfills history"*）。
+ *    ⇒ 本函数**只清插件自己库里的消息**；宿主侧对话消息不在插件权限内。
+ *    返回值里的 `hostBoundary` 供调用方原样展示（**不静默**）。
+ *
+ * @param {string} [nodeId] 省略 ⇒ 清**所有**节点的消息
+ * @returns {Promise<{ok:boolean, removed:number, before:number, scoped:boolean, hostBoundary:string, reason?:string}>}
+ */
+export function clearDirectorMessages(nodeId) {
+	const scoped = nodeId !== undefined && nodeId !== null && nodeId !== "";
+	const want = scoped ? String(nodeId) : "";
+	return pGetAll(PDB.CONVERSATIONS).then(async (rows) => {
+		const list = Array.isArray(rows) ? rows : [];
+		const before = list.length;
+		const hit = scoped ? list.filter((r) => r && String(r.nodeId) === want) : list;
+		let removed = 0;
+		for (const r of hit) {
+			const id = r && r.messageId;
+			if (id === undefined) continue;
+			/* 逐条真实删除并计数 —— `pDelete` 失败会返回 false（不抛），
+			 * 记进 removed 的必须是**真删掉的**，不能按"打算删几条"计。 */
+			if (await pDelete(PDB.CONVERSATIONS, id)) removed += 1;
+		}
+		return {
+			ok: removed === hit.length,
+			removed, before, scoped,
+			hostBoundary: "宿主侧对话消息不在插件权限内（sessions 服务无删除/清空契约）"
+		};
+	}).catch((e) => ({
+		ok: false, removed: 0, before: 0, scoped,
+		hostBoundary: "宿主侧对话消息不在插件权限内（sessions 服务无删除/清空契约）",
+		reason: String((e && e.message) || e)
+	}));
+}
+
 /** 安装全局契约（调试与验证脚本用，不可改名） */
 export function installPluginDbApi() {
 	if (!hasWindow) return null;
@@ -294,7 +340,7 @@ export function installPluginDbApi() {
 		openPluginDB, pluginDbStats, pluginDbState,
 		pPut, pGet, pGetAll, pGetAllByIndex, pDelete, pCount, pClear,
 		saveDirectorNode, getDirectorNode, listDirectorNodes, deleteDirectorNode,
-		appendDirectorMessage, listDirectorMessages,
+		appendDirectorMessage, listDirectorMessages, clearDirectorMessages,
 		saveReview, listReviews, saveDecision, listDecisions, savePlan, listPlans,
 		saveTodo, listTodos, resetPluginDb
 	};

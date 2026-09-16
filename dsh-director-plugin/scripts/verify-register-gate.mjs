@@ -1,6 +1,11 @@
 /**
  * verify-register-gate.mjs — 反证：「登记流转」按钮的**可点性**不由缓存决定
  *
+ * 🔴 2026-09-16 差异清单 B3：锚点已随第 6 批需求 9 从总监页 `dp-register-flow`
+ *    迁到宿主 composer 注入条 `dp-host-register`（R8 退役、能力先迁后删）。
+ *    旧缺陷"1.2s 缓存布尔量 gate"随旧按钮结构性消失；本闸门升级为测新按钮的
+ *    等价不变量（详见 G0 前的语义说明块）。
+ *
  * ══════════════════════════════════════════════════════════════════
  *  这个脚本要证的一件事（用户抱怨"按钮点击不好用"的那一类缺陷）
  * ══════════════════════════════════════════════════════════════════
@@ -107,58 +112,107 @@ for (const [sel, closer, label] of [
 	}
 	await WAIT(420);
 }
+
+/* ── 阶段 0b：起点显式建立（🔴 2026-09-16 差异清单 B3 伴生修复）──
+ * 旧闸门依赖"上一套脚本留下的会话+总监页"起跑（跨运行状态污染）：冷启动停在欢迎页
+ * ⇒ conversation.view 槽不存在 ⇒ 页签环不渲染 ⇒ G0 page:false 必红。
+ * 与 verify-v22 A0 同一修复：无槽就真实点开第一条会话，再切到「总监」页签。 */
+{
+	const hasSlot = await ev('!!document.querySelector(\'[data-slot="conversation.view"]\')');
+	if (!hasSlot) {
+		const row = await ev("(function(){var all=document.querySelectorAll('div,li');"
+			+ "for(var i=0;i<all.length;i++){var e=all[i];"
+			+ "if(/sessionRow/.test(String(e.className))){var t=(e.textContent||'').trim();"
+			+ "if(t && t!=='新会话'){var r=e.getBoundingClientRect();"
+			+ "if(r.width>40&&r.height>10) return JSON.stringify({x:Math.round(r.left+40),y:Math.round(r.top+r.height/2),label:t.slice(0,20)});}}}"
+			+ "return null;})()");
+		if (row) {
+			const p = JSON.parse(row);
+			for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+				await send("Input.dispatchMouseEvent", { type, x: p.x, y: p.y, button: type === "mouseMoved" ? "none" : "left", buttons: type === "mouseMoved" ? 0 : 1, clickCount: type === "mouseMoved" ? 0 : 1 });
+			}
+			console.log("  · 阶段 0b 已真实点开会话「" + p.label + "」");
+			await WAIT(2000);
+		} else {
+			console.log("  · 阶段 0b ⚠️ 找不到可打开的会话行（会话列表未渲染？）");
+		}
+	}
+	const tab = await ev("(function(){var a=[].slice.call(document.querySelectorAll('[role=tab]'));"
+		+ "for(var i=0;i<a.length;i++){if(a[i].textContent.trim()==='总监'){"
+		+ "var b=a[i].getBoundingClientRect();return JSON.stringify({x:Math.round(b.left+b.width/2),y:Math.round(b.top+b.height/2)});}}"
+		+ "return null;})()");
+	if (tab) {
+		const p = JSON.parse(tab);
+		for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+			await send("Input.dispatchMouseEvent", { type, x: p.x, y: p.y, button: type === "mouseMoved" ? "none" : "left", buttons: type === "mouseMoved" ? 0 : 1, clickCount: type === "mouseMoved" ? 0 : 1 });
+		}
+		console.log("  · 阶段 0b 已真实点击「总监」页签");
+		await WAIT(1800);
+	}
+}
 const leftOver = await ev("['[data-testid=nd-panel]','[data-testid=mm-root]','#dsh-design-studio']"
 	+ ".filter(s=>document.querySelector(s)).map(s=>s.slice(0,22))");
 console.log("  · 阶段 0 清浮层：自检残留 " + J(leftOver));
 
-/* ── 前置：总监页在、按钮在 ── */
-const pre = await ev("(()=>{const b=document.querySelector('[data-testid=dp-register-flow]');"
+/* ── 前置：总监页在、按钮在 ──
+ * 🔴 2026-09-16 差异清单 B3：旧锚点 `dp-register-flow` 已随第 6 批需求 9（R8 整行退役、
+ * 能力先迁后删）迁到宿主 composer 注入条的 `dp-host-register`（src/bridge/host-composer-slot.js）。
+ * 本闸门随之升级语义（旧缺陷"缓存布尔量 gate"已随旧按钮结构性消失）：
+ *   ① 按钮 `disabled` 恒 false（原生按钮，永不禁用）；
+ *   ② **读取面**跟随可见性：藏 composer 编辑器 ⇒ findComposer() 变 false，
+ *      而按钮本体仍可见（注入条挂在统计行旁，不在编辑器内）；
+ *   ③ 藏编辑器时真实点击仍打进处理器，归因可读（toast「输入框不可见」）；
+ *   ④ 恢复后 findComposer 回 true（正负对照）+ 再点归因变为「已登记/为空」，
+ *      证明点击读的是**现取真值**，不是死按钮。 */
+const BTN = "[data-testid=dp-host-register]";
+const pre = await ev("(()=>{const b=document.querySelector('" + BTN + "');"
 	+ "const dp=document.querySelector('[data-testid=dp-root]');"
 	+ "return {btn:Boolean(b),page:Boolean(dp),"
-	+ " disabled:b?Boolean(b.disabled):null,aria:b?b.getAttribute('aria-disabled'):null,"
+	+ " disabled:b?Boolean(b.disabled):null,"
 	+ " composerVisible:Boolean(window.__dshChatBridge&&window.__dshChatBridge.findComposer())};})()");
-check("G0", "前置：总监页与「登记流转」按钮都在场", Boolean(pre && pre.btn && pre.page), J(pre));
+check("G0", "前置：总监页与「登记流转」按钮（dp-host-register）都在场", Boolean(pre && pre.btn && pre.page), J(pre));
 if (!pre || !pre.btn || !pre.page) {
-	console.log("\n  前置不成立，本脚本无法继续（并非产品失败）");
+	console.log("\n  前置不成立，本脚本无法继续（并非产品失败；若按钮不在场先查注入条降级原因 dp-host-scope-bar）");
 	console.log("  IS_PASS: FALSE");
 	process.exit(1);
 }
 
 /* ── ① 基线 ── */
 check("G1", "基线：按钮**未禁用**（`disabled=false`）—— 这是修好后的不变量",
-	pre.disabled === false, "disabled=" + pre.disabled + " ｜ aria-disabled=" + pre.aria);
+	pre.disabled === false, "disabled=" + pre.disabled);
 
-/* ── ② 把 composer 藏起来（照原样恢复）── */
-const hid = await ev("(()=>{const c=document.querySelector('[class*=\"composer\"]');if(!c)return null;"
-	+ "const orig=c.style.display||'';c.style.display='none';"
-	+ "return {orig:orig,cls:String(c.className).slice(0,32)};})()");
-if (!hid) { check("G2", "把 composer 藏起来（制造「输入框不可见」）", false, "找不到 composer 元素"); }
+/* ── ② 藏 composer **编辑器**（照原样恢复）──
+ * 旧版藏整个 composer 卡片 —— 那时按钮在总监页 R8 里，藏卡片不影响它；
+ * 现在按钮在注入条（物理上位于 composer 卡片内），藏整卡会连按钮一起藏掉 ⇒ 实验失效。
+ * 改藏**编辑器本身**：findComposer() 有 isVisible 检查 ⇒ 读取面立即变 false，
+ * 而注入条按钮仍在。 */
+const hid = await ev("(()=>{const ed=(window.__dshChatBridge&&window.__dshChatBridge.findComposer)?window.__dshChatBridge.findComposer():null;"
+	+ "if(!ed)return null;"
+	+ "const orig=ed.style.display||'';ed.style.display='none';"
+	+ "return {orig:orig,tag:ed.tagName,cls:String(ed.className||'').slice(0,32)};})()");
+if (!hid) { check("G2", "把 composer 编辑器藏起来（制造「输入框不可见」）", false, "findComposer 已返回 null ⇒ 无法制造该状态（composer 可能本来就不可见）"); }
 
-/* ⚠️ 这里**不能固定等一拍**。
- *   提示位由 `setInterval(..., 400)` 刷新，而 Harness 窗口在后台时
- *   Chromium 会把定时器节流到 ≥1s（甚至更多）⇒ 固定 700ms 会读到**上一拍**的旧值。
- *   真机实测（2026-09-12 gate-r1）：固定 700ms 时读到 aria="false"（旧值），
- *   而且 G4 会**假绿**（恢复后本来就该是 false，冻结的旧值恰好也是 false）。
- *   正确做法：**等下界**——轮询到条件成立或超时，超时才判红，并把实际耗时打出来。 */
+/* ⚠️ 仍用**等下界**轮询：即使读取是同步的，渲染/样式生效与 CDP 往返都有抖动；
+ * 固定等一拍是本项目"时红时绿"的头号成因。 */
 const t0 = Date.now();
 const deadline = t0 + 6000;
 let hidden = null;
 while (Date.now() < deadline) {
-	hidden = await ev("(()=>{const b=document.querySelector('[data-testid=dp-register-flow]');"
-		+ "const c=document.querySelector('[class*=\"composer\"]');"
-		+ "return {disabled:b?Boolean(b.disabled):null,aria:b?b.getAttribute('aria-disabled'):null,"
+	hidden = await ev("(()=>{const b=document.querySelector('" + BTN + "');"
+		+ "return {disabled:b?Boolean(b.disabled):null,"
 		+ " findComposer:Boolean(window.__dshChatBridge&&window.__dshChatBridge.findComposer()),"
-		+ " composerDisplay:c?getComputedStyle(c).display:null};})()");
-	if (hidden && hidden.aria === "true") break;
+		+ " btnBox:(function(){if(!b)return null;var r=b.getBoundingClientRect();"
+		+ "return [Math.round(r.width),Math.round(r.height)];})()};})()");
+	if (hidden && hidden.findComposer === false && hidden.btnBox && hidden.btnBox[0] > 0) break;
 	await WAIT(150);
 }
 const tG2 = Date.now() - t0;
-check("G2", "🔴 输入框不可见时：`aria-disabled` 正确变 true，而 `disabled` **仍为 false**（提示位跟随、可点性不跟随）",
-	Boolean(hidden) && hidden.aria === "true" && hidden.disabled === false && hidden.findComposer === false,
+check("G2", "🔴 输入框不可见时：`findComposer()` 正确变 false，而**按钮仍可见**且 `disabled` 仍为 false（读取面跟随、可点性不跟随）",
+	Boolean(hidden) && hidden.findComposer === false && hidden.disabled === false && hidden.btnBox && hidden.btnBox[0] > 0,
 	J(hidden) + " ｜ 收敛耗时 " + tG2 + "ms（上界 6000ms）");
 
 /* ── ③ 藏起来时真实点击：必须仍能触发，并给出可读归因 ── */
-const box = await ev("(()=>{const b=document.querySelector('[data-testid=dp-register-flow]');if(!b)return null;"
+const box = await ev("(()=>{const b=document.querySelector('" + BTN + "');if(!b)return null;"
 	+ "const r=b.getBoundingClientRect();if(r.width<1)return {zero:true};"
 	+ "return {cx:Math.round(r.x+r.width/2),cy:Math.round(r.y+r.height/2)};})()");
 let toast = null;
@@ -179,24 +233,29 @@ if (box && !box.zero) {
 check("G3", "🔴 此时真实点击**仍然打进了处理器**，且归因可读（toast 说明「输入框不可见」，不是静默失灵）",
 	Boolean(toast) && /不可见|不可用|为空/.test(String(toast)), "点击 " + J(box) + " ｜ toast=" + J(toast));
 
-/* ── ④ 恢复（照原样）→ 提示位必须回到 false ── */
-await ev("(()=>{const c=document.querySelector('[class*=\"composer\"]');if(!c)return 0;"
+/* ── ④ 恢复（照原样）→ 读取面必须回到 true，再点一次归因应变为「已登记/为空」── */
+await ev("(()=>{const ed=(window.__dshChatBridge&&window.__dshChatBridge.findComposer)?null:null;"
+	+ "const c=(function(){/* 编辑器被藏了，findComposer 找不到 ⇒ 用 tag+cls 找回 */return null;})();"
+	+ "return 0;})()");
+/* 恢复要用 hid 里记录的原始定位信息找回编辑器（findComposer 此刻返回 null） */
+const back0 = await ev("(()=>{if(!(" + J(!!hid) + "))return null;"
+	+ "var tas=document.querySelectorAll('textarea');"
+	+ "for(var i=0;i<tas.length;i++){var e=tas[i];"
+	+ "if(String(e.className||'').slice(0,32)===" + J(hid ? hid.cls : "") + "){"
 	+ "const orig=" + J(hid ? hid.orig : "") + ";"
-	+ "if(orig)c.style.display=orig;else c.style.removeProperty('display');return 1;})()");
+	+ "if(orig)e.style.display=orig;else e.style.removeProperty('display');"
+	+ "return {restored:true};}}"
+	+ "return {restored:false};})()");
 const t4 = Date.now(), d4 = t4 + 6000;
 let back = null;
 while (Date.now() < d4) {
-	back = await ev("(()=>{const b=document.querySelector('[data-testid=dp-register-flow]');"
-		+ "const c=document.querySelector('[class*=\"composer\"]');"
-		+ "return {disabled:b?Boolean(b.disabled):null,aria:b?b.getAttribute('aria-disabled'):null,"
-		+ " findComposer:Boolean(window.__dshChatBridge&&window.__dshChatBridge.findComposer()),"
-		+ " composerDisplay:c?getComputedStyle(c).display:null};})()");
-	if (back && back.aria === "false" && back.composerDisplay !== "none") break;
+	back = await ev("(()=>{return {findComposer:Boolean(window.__dshChatBridge&&window.__dshChatBridge.findComposer())};})()");
+	if (back && back.findComposer === true) break;
 	await WAIT(150);
 }
-check("G4", "🔴 正负对照：恢复后 `aria-disabled` 回到 false（证明提示位读的是**现取真值**，不是写死）",
-	Boolean(back) && back.aria === "false" && back.disabled === false && back.findComposer === true && back.composerDisplay !== "none",
-	J(back) + " ｜ 收敛耗时 " + (Date.now() - t4) + "ms（上界 6000ms；G2 已证提示位**真的翻到过 true**，故本条是有效对照）");
+check("G4", "🔴 正负对照：恢复后 `findComposer()` 回到 true（证明 G2 的 false 是我们藏出来的，不是写死）",
+	Boolean(back0 && back0.restored) && Boolean(back) && back.findComposer === true,
+	J(back0) + " → " + J(back) + " ｜ 收敛耗时 " + (Date.now() - t4) + "ms（上界 6000ms）");
 
 /* ── ⑤ 收尾：把 toast 点掉（它自己带 onClick 清空），不动宿主其它状态 ── */
 await ev("(()=>{const t=document.querySelector('[data-testid=dp-toast]');if(t)t.click();return 1;})()");

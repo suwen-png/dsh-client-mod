@@ -255,25 +255,64 @@ export async function deleteStoreFile() {
 /**
  * 追加一行到 OPFS `debug.log`（宿主 6056-6065 / 6072-6081 的文件日志语义）。
  * ⚠️ 与宿主不同：这里是**异步**的；调用方不该 await（日志失败不影响主流程）。
+ *
+ * 🔴 2026-09-16 重写（渲染进程被钉死的第二处根因）：
+ *   旧实现是**读全文 → 拼一行 → 重写全文**（`existing + line`）⇒ 每行 O(n)，
+ *   而它在 `bridgeDebugLogToFile` 里挂在 `dshLog` 上，调用点又落在 React **渲染体**上
+ *   ⇒ 单次渲染的成本随 `debug.log` 体积线性增长（日志越长越卡），并伴随
+ *   **并发丢行**（两次调用都读到同一份 `existing`，后写覆盖先写）。
+ *   新实现三条：① 只取文件 **size 元数据**（不读全文）+ `createWritable({keepExistingData:true})`
+ *   + `seek(size)` ⇒ 单行 **O(1)**；② 250ms 合批 ⇒ 与渲染频率解耦；
+ *   ③ Promise 链**串行化** ⇒ 不再互相覆盖。对调用方接口与返回语义保持不变。
+ *   ⚠️ 本函数的失败处理**不许调 `dshLog`**（会经 `bridgeDebugLogToFile` 递归回来）—— 只走 console 一次。
  * @param {string} line 已格式化的整行（含换行）
  */
+const LOG_FLUSH_MS = 250;
+let logPending = [];
+let logTimer = null;
+let logChain = Promise.resolve();
+let logDegraded = null;
+
 export function appendLogLine(line) {
 	if (!isOpfsAvailable()) return Promise.resolve(false);
-	return (async () => {
-		try {
-			const dir = await getDirectorDir(true);
-			if (!dir) return false;
-			const fh = await dir.getFileHandle(DIRECTOR_LOG_FILENAME, { create: true });
-			const existing = await (await fh.getFile()).text();
-			const w = await fh.createWritable();
-			await w.write(existing + line);
-			await w.close();
-			return true;
-		} catch {
-			return false;
-		}
-	})();
+	logPending.push(String(line));
+	if (logTimer === null) logTimer = setTimeout(flushLogLines, LOG_FLUSH_MS);
+	return Promise.resolve(true);
 }
+
+/** 合批落盘（内部用；导出仅为诊断/收尾对齐） */
+export function flushLogLines() {
+	if (logTimer !== null) { clearTimeout(logTimer); logTimer = null; }
+	const text = logPending.join("");
+	logPending = [];
+	if (!text) return logChain;
+	logChain = logChain.then(() => writeLogTail(text)).catch(() => false);
+	return logChain;
+}
+
+async function writeLogTail(text) {
+	try {
+		const dir = await getDirectorDir(true);
+		if (!dir) return false;
+		const fh = await dir.getFileHandle(DIRECTOR_LOG_FILENAME, { create: true });
+		const size = (await fh.getFile()).size;               // 元数据，不读全文
+		const w = await fh.createWritable({ keepExistingData: true });
+		await w.seek(size);
+		await w.write(text);
+		await w.close();
+		return true;
+	} catch (e) {
+		/* 降级必须有声（不许静默丢日志）——但不能走 dshLog（递归），故只走 console 一次 */
+		if (!logDegraded) {
+			logDegraded = String((e && e.message) || e);
+			try { console.warn("[DSH:persist] OPFS 日志追加降级（keepExistingData/seek 不可用）：" + logDegraded); } catch { /* ignore */ }
+		}
+		return false;
+	}
+}
+
+/** 日志通道的降级原因（诊断用；无降级时为 null） */
+export function getLogDegradeReason() { return logDegraded; }
 
 /** 读取 OPFS `debug.log` 全文（诊断导用） */
 export async function readLogFile() {

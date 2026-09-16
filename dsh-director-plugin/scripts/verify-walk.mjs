@@ -160,7 +160,11 @@ async function walkOverlay(name, openTid, rootSel, opts, closeTid) {
 // ① 总监页（已尝试切到总监 tab）
 surfaces.push(await walkSurface("总监页", '[data-testid="dp-root"]', {
   // 会真实发送/删除/导航/改职责链路的：cdp-click(I段)/verify-flow(G段) 已深度覆盖，广度不重复触发
-  skip: ["dp-act-del", "dp-send", "dp-act-next", "dp-sync", "dp-focus-native", "dp-register-flow", "dp-route-director", "dp-route-chat"],
+  // 第 16 批新增两项同样必须排除（**闸门不许成为产品的破坏者**）：
+  //   · dp-act-split   —— 点一下会**真建 8 个会话 + 各投一份简报**（宿主 sessions.create，不可逆）
+  //   · dp-maint-clear —— 点一下会进入"清除消息"待确认态；本套件只点一次（不会执行），
+  //                       但会把按钮留在 armed 状态最多 3 秒，污染其后同排按钮的读数 ⇒ 一律排除
+  skip: ["dp-act-del", "dp-send", "dp-act-next", "dp-sync", "dp-focus-native", "dp-register-flow", "dp-route-director", "dp-route-chat", "dp-act-split", "dp-maint-clear"],
   toggle: ["dp-r2-toggle", "dp-r4-toggle", "dp-r7-toggle"]
 }));
 // ② 设计图工作室（添加/保存/新建/改名/删除/发送会改文档，verify-design-studio 深度覆盖；广度只点纯视图控件）

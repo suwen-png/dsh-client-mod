@@ -106,6 +106,115 @@ export function clampPanelWidth(w) {
 	return { width: Math.min(Math.round(n), maxPanelWidth()), collapse: false };
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 执行状态窗口的**几何纯函数**（第 16 批 · 用户原话：
+ *   「执行状态的窗口需要可以移动最小化,靠边缩进」）
+ *
+ * 🔴 全部是**纯函数**（不碰 DOM、不写 store、无副作用）⇒ 可离线单测，
+ *    并且是 UI 与闸门**共用的同一份判据**（各写一份必然漂移）。
+ * 🔴 视口与安全区由**调用方传入**，不在这里读 `window` —— 纪律 29：
+ *    环境的量必须由环境读；纯函数自己去摸环境，单测就变成"测的是桩"。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** 窗口三态（互斥）。`collapsed` 的语义与既有 `dialogCollapsed` 对齐：只剩标题条。 */
+export const RUNNING_WIN_MODE = Object.freeze({
+	EXPANDED: "expanded",
+	COLLAPSED: "collapsed",
+	DOCKED: "docked"
+});
+
+/** 贴边判定阈值（px）：拖动松手时距任一视口边**小于**它 ⇒ 吸附该边并缩进 */
+export const RUNNING_WIN_SNAP_PX = 24;
+
+/** 四边白名单（顺序即优先级：左右优先于上下 —— 竖条更省横向空间） */
+export const RUNNING_WIN_DOCKS = Object.freeze(["left", "right", "top", "bottom"]);
+
+/** 夹紧时的最小可见尺寸：保证"拖不出视口"且"头部仍抓得住" */
+export const RUNNING_WIN_MIN_W = 180;
+export const RUNNING_WIN_MIN_H = 26;
+
+/** 视口可用区（含安全区 inset）—— 左右/上下四边收敛成矩形，供下面两个函数共用 */
+function usableBox(view) {
+	const vw = Number(view && view.vw) || 0;
+	const vh = Number(view && view.vh) || 0;
+	const l = Math.max(0, Number(view && view.insetLeft) || 0);
+	const r = Math.max(0, Number(view && view.insetRight) || 0);
+	const t = Math.max(0, Number(view && view.insetTop) || 0);
+	const b = Math.max(0, Number(view && view.insetBottom) || 0);
+	/* 极窄视口下 right 可能小于 left（inset 之和超过视口）⇒ 收敛成空区间而不是反向区间，
+	 * 否则 max/min 会给出"左边比右边大"的坐标（表现为窗口跳到屏幕外）。 */
+	return { L: l, T: t, R: Math.max(l, vw - r), B: Math.max(t, vh - b) };
+}
+
+/**
+ * 把窗口左上角夹紧到视口可用区内。
+ * @param {{x:number,y:number}} pos 期望左上角
+ * @param {{w:number,h:number}} box 窗口自身尺寸
+ * @param {{vw:number,vh:number,insetLeft?:number,insetRight?:number,insetTop?:number,insetBottom?:number}} view
+ * @returns {{x:number,y:number,clampedX:boolean,clampedY:boolean}}
+ *   `clamped*` 是给 UI 与断言用的：**"没动"与"被夹住"读数一样**，必须能区分（纪律 23）。
+ */
+export function clampWinPos(pos, box, view) {
+	const { L, T, R, B } = usableBox(view);
+	const w = Math.max(RUNNING_WIN_MIN_W, Number(box && box.w) || RUNNING_WIN_MIN_W);
+	const h = Math.max(RUNNING_WIN_MIN_H, Number(box && box.h) || RUNNING_WIN_MIN_H);
+	let x = Number(pos && pos.x);
+	let y = Number(pos && pos.y);
+	if (!Number.isFinite(x)) x = L;
+	if (!Number.isFinite(y)) y = T;
+	const maxX = Math.max(L, R - w);
+	const maxY = Math.max(T, B - h);
+	const cx = Math.min(Math.max(x, L), maxX);
+	const cy = Math.min(Math.max(y, T), maxY);
+	return { x: Math.round(cx), y: Math.round(cy), clampedX: cx !== x, clampedY: cy !== y };
+}
+
+/**
+ * 贴边判定：窗口（pos 左上角 + box 尺寸）距某条视口边 < snapPx ⇒ 返回该边与吸附后坐标。
+ * @returns {{dock:string,x:number,y:number}|null} 未贴边 ⇒ `null`（调用方据此**不做**任何吸附）
+ */
+export function snapWinEdge(pos, box, view, snapPx) {
+	const { L, T, R, B } = usableBox(view);
+	const snap = Number.isFinite(Number(snapPx)) ? Math.max(0, Number(snapPx)) : RUNNING_WIN_SNAP_PX;
+	const w = Math.max(RUNNING_WIN_MIN_W, Number(box && box.w) || RUNNING_WIN_MIN_W);
+	const h = Math.max(RUNNING_WIN_MIN_H, Number(box && box.h) || RUNNING_WIN_MIN_H);
+	const x = Number(pos && pos.x);
+	const y = Number(pos && pos.y);
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+	/* 距离按"最近的那条边"算；并列时按 RUNNING_WIN_DOCKS 的顺序（左右优先）。 */
+	const cand = [
+		{ dock: "left", d: Math.abs(x - L), x: L, y: y },
+		{ dock: "right", d: Math.abs((x + w) - R), x: R - w, y: y },
+		{ dock: "top", d: Math.abs(y - T), x: x, y: T },
+		{ dock: "bottom", d: Math.abs((y + h) - B), x: x, y: B - h }
+	];
+	cand.sort((a, b) => (a.d - b.d) || (RUNNING_WIN_DOCKS.indexOf(a.dock) - RUNNING_WIN_DOCKS.indexOf(b.dock)));
+	const best = cand[0];
+	if (!best || best.d >= snap) return null;
+	/* 吸附后的坐标仍要过一遍夹紧：贴右边时 `R - w` 可能小于 L（窗口比可用区还宽） */
+	const fixed = clampWinPos({ x: best.x, y: best.y }, { w, h }, view);
+	return { dock: best.dock, x: fixed.x, y: fixed.y };
+}
+
+/**
+ * 三态状态机（纯）。**未知 action 一律原样返回**（不猜、不默认成某个态）。
+ * @param {string} mode 当前态
+ * @param {string} action "drag"（开始拖动 ⇒ 展开）| "min"（最小化）| "toggle"（点条体）| "snap"（松手贴边）
+ * @returns {string} 新态
+ */
+export function nextWinMode(mode, action) {
+	const cur = Object.values(RUNNING_WIN_MODE).indexOf(String(mode)) >= 0 ? String(mode) : RUNNING_WIN_MODE.COLLAPSED;
+	const a = String(action || "");
+	if (a === "drag") return RUNNING_WIN_MODE.EXPANDED;
+	if (a === "min") return RUNNING_WIN_MODE.COLLAPSED;
+	if (a === "snap") return RUNNING_WIN_MODE.DOCKED;
+	if (a === "toggle") {
+		return (cur === RUNNING_WIN_MODE.COLLAPSED || cur === RUNNING_WIN_MODE.DOCKED)
+			? RUNNING_WIN_MODE.EXPANDED : RUNNING_WIN_MODE.COLLAPSED;
+	}
+	return cur;
+}
+
 const DEFAULTS = Object.freeze({
 	// ── 05 号文既有字段（语义不变）──
 	directorPanelWidth: PANEL_DEFAULT_WIDTH,
@@ -199,7 +308,20 @@ const DEFAULTS = Object.freeze({
 	 *   🔴 宿主原实现（client.js:7367）的锁定点击是 `__dshMemoryLocked = !locked;
 	 *      toggleBottomPanel();` —— 锁定时**仍翻转面板** ⇒ 「点锁定反而收起」。
 	 *      本字段 + bridge 接管点击后，语义改为：加锁 = 保持展开；解锁 = 收起（不再翻转）。 */
-	memoryLocked: false
+	memoryLocked: false,
+	/* ── 第 16 批（2026-09-16）：**执行状态窗口**的摆放与折叠（用户原话：
+	 *    「执行状态的窗口需要可以移动最小化,靠边缩进」）────────────────────────
+	 *  🔴 为什么进本 store：与 `mmPos` 同一个理由 —— 本 store 的语义就是"窗口/面板在哪、
+	 *     什么状态"，窗口坐标同属"在哪"；另开一个 localStorage key 只会让"复位"变成半复位。
+	 *  🔴 **只新增键，不动既有键**（R5 冻结契约：改名禁止、新增允许）。
+	 *  形态：`{ x:number|null, y:number|null, mode:"expanded"|"collapsed"|"docked", dock:""|"left"|"right"|"top"|"bottom" }`
+	 *   · `x/y === null` ⇒ **用默认位**（由组件按 dockReserve + 安全区实算），不写死坐标
+	 *     —— 写死坐标会与浮动按钮组/窗口控件打架（浮组预留宽度是环境量，纪律 29）。
+	 *   · `mode` 默认 **"collapsed"**：这是对上一轮 **A1 缺陷的根治**。A1 当时用
+	 *     `pointer-events:none` 让点击穿透（治标，且使 title tooltip 失效）；
+	 *     本批恢复交互能力（要能拖、能点最小化），改用**默认不展开**来保证
+	 *     "不压在 R2.5 动作行上"——信息仍可见（collapsed 只收内容区，徽标与计数保留）。 */
+	runningWin: { x: null, y: null, mode: "collapsed", dock: "" }
 });
 
 export function createDirectorLayoutStore() {
@@ -226,6 +348,17 @@ export function createDirectorLayoutStore() {
 	state.activeTasks = (state.activeTasks && typeof state.activeTasks === "object" && !Array.isArray(state.activeTasks))
 		? { ...state.activeTasks } : {};
 	state.railWidth = { ...DEFAULTS.railWidth, ...(state.railWidth || {}) };
+	/* 第 16 批：执行状态窗口的摆放 —— 与 `railWidth` 同策略（合并已知子键 + 类型兜底），
+	 * 但多两步**值域**兜底：老数据里的 `mode` 若是未知字符串，直接塞给 UI 会渲染出
+	 * "既不是展开也不是折叠"的第三形态，而且**不报错**（正是纪律 19 说的"无声降级"）。
+	 * ⇒ 未知态回落默认态；`dock` 不在四边白名单里则清空。 */
+	state.runningWin = { ...DEFAULTS.runningWin, ...(state.runningWin || {}) };
+	if (Object.values(RUNNING_WIN_MODE).indexOf(String(state.runningWin.mode)) < 0) {
+		state.runningWin = { ...state.runningWin, mode: DEFAULTS.runningWin.mode };
+	}
+	if (state.runningWin.dock && RUNNING_WIN_DOCKS.indexOf(String(state.runningWin.dock)) < 0) {
+		state.runningWin = { ...state.runningWin, dock: "" };
+	}
 	const listeners = new Set();
 	function notify() {
 		try { if (typeof localStorage !== "undefined") localStorage.setItem(DIRECTOR_LAYOUT_KEY, JSON.stringify(state)); } catch (e) { /* 隐私模式 */ }
@@ -449,6 +582,62 @@ export function createDirectorLayoutStore() {
 			return b;
 		},
 		getMemoryLocked: () => Boolean(state.memoryLocked),
+
+		/* ── 第 16 批：执行状态窗口的摆放 / 三态（用户：「可以移动最小化,靠边缩进」）──────
+		 * 🔴 三态与坐标**同一个写入端**：分开写会出现"坐标换了但 mode 没换"的中间态，
+		 *    UI 上表现为"窗口跳到新位置却还缩着"，而且不报错。
+		 * 🔴 相等短路（同 `setRailWidth` 的口径）：拖动是高频的，值没变就**不 notify**
+		 *    —— 否则每个 mousemove 都触发一次订阅者重渲染（本项目踩过"每渲染一次重写日志"
+		 *    的同型坑，见纪律 48）。 */
+		/** 设窗口坐标（拖动中调用）。传 `null` = 回到默认位。返回是否真的变了 */
+		setRunningWinPos: (pos) => {
+			const cur = state.runningWin || DEFAULTS.runningWin;
+			if (pos === null) {
+				if (cur.x === null && cur.y === null) return false;
+				state = { ...state, runningWin: { ...cur, x: null, y: null } };
+				notify();
+				return true;
+			}
+			const x = Number(pos && pos.x);
+			const y = Number(pos && pos.y);
+			if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+			const nx = Math.round(x);
+			const ny = Math.round(y);
+			if (cur.x === nx && cur.y === ny) return false;
+			state = { ...state, runningWin: { ...cur, x: nx, y: ny } };
+			notify();
+			return true;
+		},
+		/** 设三态。`dock` **只在** `mode=docked` 时按四边白名单接受，其余情况一律清空 */
+		setRunningWinMode: (mode, dock) => {
+			const cur = state.runningWin || DEFAULTS.runningWin;
+			const m = Object.values(RUNNING_WIN_MODE).indexOf(String(mode)) >= 0
+				? String(mode) : RUNNING_WIN_MODE.COLLAPSED;
+			const d = (m === RUNNING_WIN_MODE.DOCKED && RUNNING_WIN_DOCKS.indexOf(String(dock)) >= 0) ? String(dock) : "";
+			if (cur.mode === m && String(cur.dock || "") === d) return false;
+			state = { ...state, runningWin: { ...cur, mode: m, dock: d } };
+			notify();
+			return true;
+		},
+		/** 三态迁移的**唯一入口**（状态机走纯函数 `nextWinMode`，不在 UI 里各写一份 if） */
+		applyRunningWinAction: (action) => {
+			const cur = state.runningWin || DEFAULTS.runningWin;
+			const m = nextWinMode(cur.mode, action);
+			/* 离开 docked ⇒ 清掉 dock：不留"展开态却还标着贴左边"的矛盾数据 */
+			const d = m === RUNNING_WIN_MODE.DOCKED ? String(cur.dock || "") : "";
+			if (cur.mode === m && String(cur.dock || "") === d) return false;
+			state = { ...state, runningWin: { ...cur, mode: m, dock: d } };
+			notify();
+			return true;
+		},
+		/** 读（返回副本，防调用方改到 store 内部对象） */
+		getRunningWin: () => ({ ...(state.runningWin || DEFAULTS.runningWin) }),
+		/** 复位：坐标回默认位 + 三态回 collapsed（双击头部"归位"与测试用） */
+		resetRunningWin: () => {
+			state = { ...state, runningWin: { ...DEFAULTS.runningWin } };
+			notify();
+			return true;
+		},
 
 		/* ── 未完成项补充说明（V20 需求 3）────────────────────────────────
 		 * 🔴 三个方法都走 `todoNoteKey()`（**唯一真相源**）——

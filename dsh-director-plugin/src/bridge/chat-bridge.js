@@ -647,6 +647,18 @@ export function observeConversation(cb) {
 /** 安装全局契约（调试与验证脚本用） */
 export function installChatBridgeApi() {
 	if (!hasDom()) return null;
+	/* 🔴 2026-09-16 渲染进程被钉死的根因修复：**真幂等** —— 已装过就直接返回同一对象。
+	 * 本函数被 `components/DirectorDialog.js` 的**渲染体**调用（`installChatBridgeApi(); // 幂等`），
+	 * 而那个"幂等"只保证了 `window.__dshChatBridge` 被重复赋值，**没有拦住日志**：
+	 * 每渲染一次就 `dshLog` 一次 ⇒ `bridgeDebugLogToFile` 把它桥到 `appendLogLine()`
+	 * （读全文 → 拼一行 → 重写全文的 O(n) 写）⇒ 变成"每渲染一次重写整份日志"的 I/O 风暴。
+	 * 宿主流式生成期间组件高频重渲染，代价随日志长度线性增长 ⇒ 渲染进程数分钟无响应。
+	 * 真机抓栈（logs/pause-on-hang.log，由 `scripts/_probe-pause-on-hang.mjs` 用
+	 * `Debugger.pause` 中断 V8 取得）：
+	 *   format ← dbg.<computed> ← dshLog ← installChatBridgeApi ← DirectorDialog ← React
+	 * 复现是**偶发**的（取决于日志体积与重渲染频率），所以只靠重跑验不出来 —— 必须结构性切断。
+	 * 语义不变：`window.__dshChatBridge` 仍是同一形状的对象（宿主 / 闸门只读它的字段）。 */
+	if (window.__dshChatBridge) return window.__dshChatBridge;
 	const api = {
 		SEND_ARIA, COMPOSER_PLACEHOLDER,
 		findComposer, findSendButton, findMessageList, hostTabName,

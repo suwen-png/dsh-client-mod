@@ -148,6 +148,51 @@ async function clickWhenReady(sel, tries = 12) {
 }
 
 /* ══════════ 页面状态工具 ══════════ */
+/* 🔴 2026-09-16 差异清单 B1：冷启动停在欢迎页 ⇒ 宿主页签环根本不渲染
+ * （实测：欢迎页 [role=tab]=0，会话打开后=3 个「总监/对话/轨迹」）。
+ * 旧闸门依赖上一轮残留的打开态起跑（跨运行状态污染），冷启动必 INVALID。
+ * ⇒ 起点显式建立：无 conversation.view 槽就真实点开第一条会话行（探针判据 /sessionRow/）。 */
+/** 当前会话在宿主侧的消息条数。
+ *  ⚠️ 必须用 `readConversationItems()`（读宿主消息列表的可见子节点）—— 它**要求当前在「对话」页签**
+ *     （页签是"内容互换"：切到总监时消息滚动容器整体卸载）。这也是起点必须先切页签的原因。 */
+async function hostMsgCount() {
+	return await ev("(function(){try{var b=window.__dshChatBridge;if(!b||!b.readConversationItems)return -1;"
+		+ "var r=b.readConversationItems(40);return r&&r.ok?r.total:-1;}catch(e){return -1;}})()");
+}
+
+async function ensureSessionOpen() {
+	/* 🔴 2026-09-16：起点不只要"会话打开"，还要**满足 F9 的前提**（宿主消息 ≥ 2 条）。
+	 *   旧写法"已开着就直接返回" ⇒ 会话列表是真实的、跨运行累积的，
+	 *   恰好停在只有 1 条消息的会话上时，F9 会报「宿主总数=1」——
+	 *   读起来像"历史信息没搬"，实际是**前提没建立**（本项目已登记两次的同型缺陷）。
+	 *   要点①：**先在「对话」页签**（否则消息列表未挂载，读数为 0/1，换会话也白换）；
+	 *   要点②：逐个候选会话试开，取第一个达标的；一个都不达标就报错（不静默跳过）。 */
+	const NEED = 2;
+	await ensureTab("对话");
+	const slotOpen = await ev('!!document.querySelector(\'[data-slot="conversation.view"]\')');
+	if (slotOpen) {
+		const n0 = await hostMsgCount();
+		if (n0 >= NEED) return { opened: false, note: "已有打开的会话（宿主消息 " + n0 + " 条，满足 F9 前提）", count: n0 };
+	}
+	const rows = await evJSON("(function(){var out=[];var all=document.querySelectorAll('div,li');"
+		+ "for(var i=0;i<all.length;i++){var e=all[i];"
+		+ "if(/sessionRow/.test(String(e.className))){var t=(e.textContent||'').trim();"
+		+ "if(t && t!=='新会话'){var r=e.getBoundingClientRect();"
+		+ "if(r.width>40&&r.height>10) out.push({x:Math.round(r.left+40),y:Math.round(r.top+r.height/2),label:t.slice(0,18)});"
+		+ "if(out.length>=8) break;}}}"
+		+ "return JSON.stringify(out);})()");
+	if (!rows || !rows.length) return { opened: false, err: "找不到可打开的会话行（会话列表未渲染？）" };
+	const tried = [];
+	for (const row of rows) {
+		await realClick(row.x, row.y);
+		for (let i = 0; i < 8; i++) { await sleep(350); if (await ev('!!document.querySelector(\'[data-slot="conversation.view"]\')')) break; }
+		const n = await hostMsgCount();
+		tried.push(row.label + "=" + n);
+		if (n >= NEED) return { opened: true, note: "已真实点击打开会话「" + row.label + "」（宿主消息 " + n + " 条 ≥ " + NEED + "）", count: n };
+	}
+	return { opened: false, err: "试开 " + rows.length + " 个会话都拿不到 ≥" + NEED + " 条宿主消息（F9 前提无法建立）：" + tried.join(" ／ ") };
+}
+
 async function ensureTab(name) {
 	const cur = await ev("(function(){var t=document.querySelector('[role=tab][aria-selected=true]');return t?t.textContent.trim():null})()");
 	if (cur === name) return { changed: false, cur };
@@ -218,6 +263,14 @@ function die(why) {
  *  A 段 · 起点与前提
  * ══════════════════════════════════════════════════════════════════ */
 sect("A 段 · 起点与前提（先证前提，再断结果）");
+/* 🔴 B1 起点：先建立"会话已打开"，否则页签环不存在（欢迎页 [role=tab]=0） */
+const ses = await ensureSessionOpen();
+ok("A0 会话已打开（起点显式建立，不依赖跨运行残留）", ses.opened || !ses.err,
+	(ses.note || ses.err) + " · 槽=" + JSON.stringify(await ev('!!document.querySelector(\'[data-slot="conversation.view"]\')')));
+if (ses.err) die("A0 起点建立失败：" + ses.err);
+/* 起点不只要"开着"，还要**满足后面断言的前提**（F9 需要宿主消息 ≥ 2）——
+ * 前提单独成条并带数值，避免"F9 红了却以为功能坏"（本项目已登记两次的同型误判）。 */
+ok("A0b 起点前提：所选会话宿主消息 ≥ 2 条（不足则逐个换会话）", Number(ses.count) >= 2, "宿主消息 = " + ses.count);
 const tab0 = await ev("(function(){var t=document.querySelector('[role=tab][aria-selected=true]');return t?t.textContent.trim():null})()");
 if (tab0 === GONE) die("页面不可达（连 CDP 但求值全失败）");
 const tset = await ensureTab("对话");
@@ -227,8 +280,20 @@ ok("A1 起点页签=对话（宿主左栏只在该页签存在）", tabA === "�
 const apiOk = await ev("typeof (window.__dshHostDirectorColumn||{}).applyHostColumnGeometry");
 if (apiOk !== "function") die("宿主左栏接管模块未装载（window.__dshHostDirectorColumn 缺失）——插件未生效或未重启");
 
-const before = await evJSON(GEO);
-if (!before) die("A2 找不到宿主左栏（[data-dsh-host-col] 不在 DOM）—— 对话页未挂载或选择器失效");
+/* 🔴 2026-09-16：**切页签会重挂对话区** ⇒ 宿主左栏元素被换掉、我方标记随之丢失，
+ *   而重新标记是**异步**的（靠 MutationObserver / heal）。旧写法切完页签立刻读 ⇒ 间歇 INVALID
+ *   （读起来像"宿主左栏找不到"，实际是"标记还没回补"）。
+ *   建立方式：先调模块自己的 `applyHostColumnGeometry()`（幂等）催一次，再有界等待标记出现；
+ *   等不到才判 INVALID 并带上读数。 */
+let before = await evJSON(GEO);
+if (!before) {
+	for (let i = 0; i < 24 && !before; i++) {
+		await ev("(function(){try{window.__dshHostDirectorColumn.applyHostColumnGeometry();}catch(e){}return 1;})()");
+		await sleep(250);
+		before = await evJSON(GEO);
+	}
+}
+if (!before) die("A2 找不到宿主左栏（[data-dsh-host-col] 不在 DOM，已催标记 + 等 6s）—— 对话页未挂载或选择器失效");
 ok("A2 宿主左栏已接管（打了 data-dsh-host-col 标记）", !!before.col, "col=" + JSON.stringify(before.col));
 /* 🔴 我方控件是**异步**就绪的（`scheduleSync` 有 120ms 限流 + 靠 MutationObserver 触发），
  *   而本闸门紧接着 `_tmp-open-session` 的点击就跑 ⇒ 无等待地读 4 个 id 会**间歇红**。
@@ -277,8 +342,16 @@ ok("B2 这两条**真的贴上了**（applied 里出现，不是「调用过」�
 	!!trimInfo && trimInfo.applied.indexOf("host-director-panel-title") >= 0 && trimInfo.applied.indexOf("host-director-chat-title") >= 0,
 	trimInfo ? JSON.stringify(trimInfo.applied) : "");
 
-/* 直接量 DOM：面板内可见的「总监」标题条 / 「总监对话」行必须**都不存在** */
-const twoRows = await evJSON(`(function(){
+/* 直接量 DOM：面板内可见的「总监」标题条 / 「总监对话」行必须**都不存在**。
+ * 🔴 2026-09-16 补（时红时绿根治）：A 段刚点开会话/切页签 ⇒ 宿主可能**重建左栏节点**，
+ *    trim 的观察器有 120ms 限流 ⇒ 重建后的节点要过一小会才重新贴上裁剪。
+ *    固定读一拍就会"上一跑绿、这一跑红"。⇒ 有界轮询等 trim 稳定（≤3s），
+ *    超时仍不收敛才判红（那是真失效，不是时序）。 */
+let twoRows = null;
+{
+	const tT0 = Date.now();
+	for (;;) {
+		twoRows = await evJSON(`(function(){
 	function vis(e){ if(!e) return false; if(e.style && e.style.display==='none') return false;
 		var r=e.getBoundingClientRect(); return r.width>0 && r.height>0; }
 	var col=document.querySelector('[data-dsh-host-col]');
@@ -287,9 +360,18 @@ const twoRows = await evJSON(`(function(){
 	for(var i=0;i<col.children.length;i++){ var k=col.children[i];
 		var t=String(k.textContent||'').replace(/\\s+/g,'').trim();
 		if(vis(k) && t==='总监') a.push(i);
-		if(vis(k) && /^总监对话/.test(t)) b.push(i); }
+		/* 🔴 2026-09-16 收紧（语义撞车）：/^总监对话/ 会撞上**空状态占位行**
+		 * 「总监对话流为空，输入消息开始」（真机实测 kids[3]，vis:true、非裁剪目标）
+		 * ⇒ 假红。目标只是「总监对话 —」标题行 ⇒ 必须带折叠符号（— / -）。 */
+		if(vis(k) && /^总监对话[—-]/.test(t)) b.push(i); }
 	return JSON.stringify({visibleDirectorTitle:a, visibleChatTitle:b, kidCount:col.children.length});
 })()`);
+		if (twoRows === GONE) die("B 段求值失败（页面消失）");
+		if (twoRows && twoRows.visibleDirectorTitle.length === 0 && twoRows.visibleChatTitle.length === 0) break;
+		if (Date.now() - tT0 > 3000) break;
+		await sleep(200);
+	}
+}
 ok("B3 面板内**没有可见的**「总监」标题条（按可见性量，不按存在性）", !!twoRows && twoRows.visibleDirectorTitle.length === 0, JSON.stringify(twoRows && twoRows.visibleDirectorTitle));
 ok("B4 面板内**没有可见的**「总监对话…」行", !!twoRows && twoRows.visibleChatTitle.length === 0, JSON.stringify(twoRows && twoRows.visibleChatTitle));
 ok("B5 反例对照：那两条节点仍**在 DOM**（只隐不删 ⇒ 宿主逻辑不受损）",

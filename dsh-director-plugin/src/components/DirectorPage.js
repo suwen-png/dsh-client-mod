@@ -2,7 +2,7 @@
  * 职责：总监页（宿主原生 tab 环里的第一个视图）
  * 引用：—
  * 上游：client-entry.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, store/split-index.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 九（编排入口按钮 + 与个性化设定互斥）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -59,12 +59,18 @@
  */
 
 import * as react from "react";
-import { directorLayoutStore, TODO_NOTE_MAX_CHARS, todoNoteKey } from "../store/layout.js";
-import { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel, SCOPE_KIND, scopeKindOf, scopeKeyOf, scopeHasConversation, findNodeBySessionId, findNodeById } from "../store/hierarchy.js";
+import {
+	directorLayoutStore, TODO_NOTE_MAX_CHARS, todoNoteKey,
+	/* 第 16 批：执行状态窗口的几何纯函数（与 `test-running-window.mjs` 单测、闸门**同一份判据**） */
+	clampWinPos, snapWinEdge
+} from "../store/layout.js";
+import { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel, SCOPE_KIND, scopeKindOf, scopeKeyOf, scopeHasConversation, findNodeBySessionId, findNodeById, attachSession } from "../store/hierarchy.js";
 import { onHierarchyChange } from "../util/bus.js";
-import { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos, listReviews } from "../store/plugin-db.js";
+import { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos, listReviews, clearDirectorMessages } from "../store/plugin-db.js";
 import { route, DESTINATION, DESTINATION_LABEL, review6 } from "../logic/routing.js";
-import { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession } from "../logic/branch-tree.js";
+import { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession, createSession, hostCapabilities } from "../logic/branch-tree.js";
+import { plan as planSplit, branchTitle, briefOf } from "../logic/split-dimensions.js";
+import { recordSplits } from "../store/split-index.js";
 import { dshLog } from "../util/debug.js";
 import { runDirector } from "../logic/director-run.js";
 import { loadDirectorConfig } from "../config/model.js";
@@ -327,6 +333,27 @@ export function DirectorPage() {
 	const [chatSnap, setChatSnap] = react.useState(null);
 	const [routeResult, setRouteResult] = react.useState(null);
 	const [review, setReview] = react.useState(null);
+	/* 分流结果读数（第 16 批需求 2）：**必须留一个可回读的落点** ——
+	 * 只说一句 toast 的"分流完成"是**不可证伪**的收尾（纪律 18）：
+	 * 闸门与用户都无从判断"建成几条 / 失败几条 / 分别是哪些维度"。
+	 * 故落到这块读数上（`dp-flow-split` 的 data-*），导图另有一份 `mm-node[data-split]`。 */
+	const [splitInfo, setSplitInfo] = react.useState(null);
+	/* 清除对话消息的**二次确认**（第 16 批需求 3）：
+	 * 🔴 不用 `window.confirm` —— 它会阻塞主线程，且本项目所有真机闸门都靠
+	 *    `Runtime.evaluate` + 真实鼠标，原生模态框一弹就**卡住整条链路**（读数还会
+	 *    伪装成"页面没反应"）。改用"点一次 → 进入待确认 → 再点一次才执行"，
+	 *    并且**必须自动撤防**（超时/执行完/切页签都要复位），
+	 *    否则「开合型控件被自动化点到必须当场还原」这条纪律会被违反。 */
+	const [clearArm, setClearArm] = react.useState(0);
+	const [clearInfo, setClearInfo] = react.useState(null);
+	/* 待确认**自动撤防**：超时未确认就复位。
+	 * 🔴 没有这条，按钮会**永久停在**"再点一次就删"的状态 —— 用户过一会儿回来点一下
+	 *    就真的把消息删了（而他以为那是第一次点）。 */
+	react.useEffect(() => {
+		if (!clearArm) return undefined;
+		const timer = setTimeout(() => { setClearArm(0); say("已取消清除（" + Math.round(CLEAR_ARM_MS / 1000) + " 秒内未确认）"); }, CLEAR_ARM_MS);
+		return () => clearTimeout(timer);
+	}, [clearArm]);
 	const [toast, setToast] = react.useState("");
 	const [pOpen, setPOpen] = react.useState(false);
 	/* 编排面板（2026-09-14 架构补全）：与个性化面板**互斥**，避免两个浮层叠在一起。
@@ -650,12 +677,106 @@ export function DirectorPage() {
 		const t = setInterval(read, 3000);
 		return () => clearInterval(t);
 	}, [r5view]);
+	/* 🔴 2026-09-16 差异清单 F10（verify-v22 真机抓出）：切换 R5 视图后必须**在状态提交后**
+	 * 再同步注入条按钮 —— toggle 点击 handler 里的 `syncHostComposerSlot()` 跑在
+	 * `setR5view` 的同一拍，此刻 `liveRef.current.view` 还是旧值（React 状态未提交）
+	 * ⇒ 按钮文案 / data-view 永远慢一拍（真机实测 F7 视图已切、F10 按钮仍写「总监」）。
+	 * 在这个 useEffect 里同步：此时 liveRef 已随重渲染更新（586 行），读到的是真值。 */
+	react.useEffect(() => {
+		try { syncHostComposerSlot(); } catch (e) { /* 注入条未就绪时静默 —— 下一轮宿主 DOM 变化会再触发 */ }
+	}, [r5view]);
 	const todoDone = todos.filter((t) => t.done === true || t.status === "done").length;
 	const todoRate = todos.length ? Math.round((todoDone / todos.length) * 100) : 0;
 	/* 问题记录（R5）：未通过的审核 + 节点风险 —— 两个源都是真实库，不编数 */
 	const problems = reviews.filter((r) => r && r.pass === false).length
 		+ ((node && node.risks) ? node.risks.length : 0);
 	const inset = readInset();
+	/* ── 第 16 批：执行状态窗口「可移动 / 最小化 / 靠边缩进」────────────────────
+	 * 用户原话：「执行状态的窗口需要可以移动最小化,靠边缩进」
+	 * 🔴 三态与坐标都在 store `runningWin`；本组件已用 useSyncExternalStore 订阅整个
+	 *    layout store（上方 `st`）⇒ **不需要新增订阅**，改 store 即自动重渲染。
+	 * 🔴 拖动：起点存 ref，副作用**只在 pointer 回调里**（纪律 47 —— 写进 setState
+	 *    更新函数里会在**渲染期**执行，与"订阅同一 store"叠加成渲染循环；`MindMap.js`
+	 *    的拖动卡死正是这个成因，本批不再重犯）。
+	 * ⚠️ 这段必须放在 `inset` **之后**：窗口默认位与夹紧都要用安全区（TDZ 顺序）。
+	 * ⚠️ 拖动阈值 3px：头部单击 = 展开/收起，**不能**把"点一下"误判成拖动。 */
+	const winState = st.runningWin || { x: null, y: null, mode: "collapsed", dock: "" };
+	const winMode = (winState.mode === "expanded" || winState.mode === "docked") ? winState.mode : "collapsed";
+	const winExpanded = winMode === "expanded";
+	const winDocked = winMode === "docked";
+	const winDockSide = winDocked && (winState.dock === "left" || winState.dock === "right");
+	const winFloating = winDockSide
+		|| (Number.isFinite(winState.x) && Number.isFinite(winState.y) && winState.x !== null && winState.y !== null);
+	const winPos = { x: Number.isFinite(winState.x) ? winState.x : 0, y: Number.isFinite(winState.y) ? winState.y : 0 };
+	const winDragRef = react.useRef(null);
+	const winJustDraggedRef = react.useRef(false);
+	/** 视口 + 安全区（环境量由环境读 —— 纪律 29；离线桩无 window 时给 1440×900 兜底） */
+	function winView() {
+		return {
+			vw: (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1440,
+			vh: (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 900,
+			insetRight: inset
+		};
+	}
+	/** 展开 ⇄ 最小化（贴边态点一下也回展开 —— 迁移规则由纯函数 `nextWinMode` 决定，此处不写 if） */
+	function winToggle() { directorLayoutStore.applyRunningWinAction("toggle"); }
+	/** 双击头部归位（回默认位 + collapsed） */
+	function winResetPos() { directorLayoutStore.resetRunningWin(); }
+	/** 拖动开始：记起点 + 切 expanded（拖动中要看得见自己在拖什么） */
+	function winDragStart(ev) {
+		if (ev.button !== undefined && ev.button !== 0) return;   // 只认左键
+		const host = ev.currentTarget;
+		const rect = (host && host.getBoundingClientRect) ? host.getBoundingClientRect() : null;
+		winDragRef.current = {
+			sx: ev.clientX, sy: ev.clientY,
+			ox: rect ? rect.left : 0, oy: rect ? rect.top : 0,
+			w: rect ? Math.round(rect.width) : 300, h: rect ? Math.round(rect.height) : 120,
+			moved: false
+		};
+		if (winMode !== "expanded") directorLayoutStore.applyRunningWinAction("drag");
+		try {
+			if (host.setPointerCapture && ev.pointerId !== undefined) host.setPointerCapture(ev.pointerId);
+		} catch (e) { /* 不支持指针捕获 ⇒ 退化为普通拖动，不阻断 */ }
+	}
+	/** 拖动中：夹到视口可用区内（夹紧走纯函数 —— 与单测/闸门同一份判据，不在 UI 里另写一套） */
+	function winDragMove(ev) {
+		const d = winDragRef.current;
+		if (!d) return;
+		if (!d.moved && Math.abs(ev.clientX - d.sx) + Math.abs(ev.clientY - d.sy) < 3) return;  // 抖动阈值
+		d.moved = true;
+		const p = clampWinPos(
+			{ x: d.ox + (ev.clientX - d.sx), y: d.oy + (ev.clientY - d.sy) },
+			{ w: d.w, h: d.h }, winView()
+		);
+		directorLayoutStore.setRunningWinPos({ x: p.x, y: p.y });
+	}
+	/** 拖动结束：贴边 ⇒ 吸附 + 进 docked；否则保持 expanded（用户拖到哪就是哪） */
+	function winDragEnd(ev) {
+		const d = winDragRef.current;
+		winDragRef.current = null;
+		if (!d) return;
+		const host = ev && ev.currentTarget;
+		try {
+			if (host && host.releasePointerCapture && ev.pointerId !== undefined) host.releasePointerCapture(ev.pointerId);
+		} catch (e) { /* 忽略 */ }
+		if (!d.moved) return;          // 没真拖 ⇒ 交给 onClick（toggle）
+		winJustDraggedRef.current = true;
+		setTimeout(() => { winJustDraggedRef.current = false; }, 0);
+		const cur = directorLayoutStore.getRunningWin();
+		if (!Number.isFinite(cur.x) || !Number.isFinite(cur.y)) return;
+		const snapped = snapWinEdge({ x: cur.x, y: cur.y }, { w: d.w, h: d.h }, winView());
+		if (snapped) {
+			directorLayoutStore.setRunningWinPos({ x: snapped.x, y: snapped.y });
+			directorLayoutStore.setRunningWinMode("docked", snapped.dock);
+		} else {
+			directorLayoutStore.setRunningWinMode("expanded");
+		}
+	}
+	/** 头部单击：展开/收起。**拖动收尾那一下要吞掉**，否则"拖到边"会立刻被 toggle 弹回展开 */
+	function winHeadClick() {
+		if (winJustDraggedRef.current) return;
+		winToggle();
+	}
 
 	/* 浮动按钮组（FloatDock）是 `position:fixed` 贴在页面右下角的，横跨右侧
 	 * `FLOAT_DOCK_RESERVE` px。它虽然浮在上层，但会**压住页面自己的右端内容** ——
@@ -954,6 +1075,170 @@ export function DirectorPage() {
 		}
 	}
 
+	/* ══════════════════════════════════════════════════════════════════
+	 * 🌿 按维度分流（第 16 批需求 2 —— 用户原话）
+	 *   「然后按照世界观剧情等应该自动分到不同的对话分支 然后思维导图应该能看出来」
+	 *
+	 * 🔴 三条口径（都是"不做就会假成功"的地方）：
+	 *   ① 用 `sessions.create()` 建**独立**空白会话，**不用 `fork`**：
+	 *      fork 会把 A3 剧情挂成 A1 世界观的下游 ⇒ 导图读成"剧情从世界观分叉而来"（错信息）。
+	 *   ② **逐条落、逐条记因**：第 4 条失败不许把前 3 条一起回滚，也不许"当成全成功"；
+	 *      收尾必须能读成 `建成 N / 失败 M（各自原因）`。
+	 *   ③ 维度表与简报文本只来自 `logic/split-dimensions.js`（纯函数 · 45 条离线断言），
+	 *      这里**不另写一份**（重复即漂移）。
+	 *
+	 * 🔴 需求文本的取值顺序（两段都要写清楚，否则"点了没反应"无从判断）：
+	 *      ① 宿主原生输入框当前内容；② 兜底用本节点总监消息的最后一条。
+	 *      两处都空 ⇒ 如实报"没有需求文本"，**不猜、不用默认词**。
+	 * ══════════════════════════════════════════════════════════════════ */
+	async function splitBranches() {
+		const caps = hostCapabilities();
+		if (!caps.create) {
+			say("无法分流：宿主未提供 sessions.create（能力探测为假 —— 不做假动作）");
+			setSplitInfo({ at: Date.now(), made: 0, failed: 0, dims: [], note: "宿主未提供 sessions.create", error: "no-create" });
+			return;
+		}
+		/* 🔴 整段包 try/catch —— **这是本轮真机实测逼出来的**：
+		 *    第一次真机跑，8 条会话**真的建出来了**（分支树净增恰为 8），
+		 *    但 `dp-flow-split` 读数**从未出现**、分流索引也没写进去 ⇒
+		 *    说明在"建完 8 条之后、写读数之前"抛了异常，而**异常没有任何出口**：
+		 *    界面上什么都没变、日志里没有一行、用户只看到"点了没反应"。
+		 *    （`onClick: () => consoleAct(key)` 是 async，抛错只会变成**未处理的 Promise 拒绝**。）
+		 *    ⇒ 任何"分多步落真实数据"的动作都必须把失败**落到可读的读数 + 状态行**上，
+		 *      否则一次成功/失败在界面上长得一模一样。 */
+		try {
+			await splitBranchesInner();
+		} catch (e) {
+			const why = String((e && e.message) || e);
+			setSplitInfo({ at: Date.now(), made: 0, failed: 0, dims: [], note: "抛出异常：" + why, error: why });
+			dshLog("split-error", why);
+			say("分流中断：" + why + "（已建出的分支会留在导图上，未建完的不会）");
+		}
+	}
+
+	/** 分流的实际执行体（由 `splitBranches` 包一层异常出口） */
+	async function splitBranchesInner() {
+		let idea = String(readComposerText() || "").trim();
+		let from = "原生输入框";
+		if (!idea) {
+			const rows = await listDirectorMessages(nodeId);
+			const last = rows.length ? rows[rows.length - 1] : null;
+			idea = String((last && last.text) || "").trim();
+			from = "总监消息最后一条";
+		}
+		const p = planSplit(idea);
+		if (p.kind === "none" || !p.dims.length) {
+			setSplitInfo({ at: Date.now(), made: 0, failed: 0, dims: [], note: String(p.reason || "没有可用维度") });
+			say("未分流：" + String(p.reason || "没有可用的维度"));
+			return;
+		}
+		const made = [];
+		const failed = [];
+		for (const dim of p.dims) {
+			const label = branchTitle(dim, p.name);
+			const brief = briefOf(dim, idea, p.name);
+			const cs = await createSession({});
+			if (!cs.ok || !cs.sessionId) {
+				failed.push({ label, why: "建会话失败：" + String((cs && cs.reason) || "未知") + (cs && cs.raw ? " ｜ 宿主原始返回 " + cs.raw : "") });
+				continue;
+			}
+			/* 先投简报再挂节点：投递决定"这一支能不能自己干起来"，
+			 * 挂节点只影响插件侧层级视图 —— 前者失败才是真失败。 */
+			const d = await deliverToChat(brief, { sessionId: cs.sessionId, autoSend: true });
+			let nodeErr = "";
+			try {
+				await attachSession(nodeId, {
+					sessionId: cs.sessionId, title: label,
+					messageCount: d.ok ? 1 : 0, lastMessage: brief
+				});
+			} catch (e) { nodeErr = String((e && e.message) || e); }
+			made.push({
+				sessionId: cs.sessionId, dim: dim.key, label, name: p.name,
+				delivered: Boolean(d.ok), mode: d.mode, why: d.reason, nodeErr,
+				/* 会话建出但**没挂到工作区**（宿主 code=workspace-attach-failed）：
+				 * 分支是真的、简报也照投，但要**如实标注**，不能悄悄当完全成功。 */
+				attachFail: cs.attached === false, attachWhy: cs.reason || "", via: cs.via || ""
+			});
+		}
+		const sent = made.filter((m) => m.delivered).length;
+		const nodeFail = made.filter((m) => m.nodeErr).length;
+		const attachFail = made.filter((m) => m.attachFail).length;
+		/* 🔴 读数**先落地**，再做后面一切可能抛错的事。
+		 *    本轮真机实测的形态：8 条会话**真的建出来了**（分支树净增恰为 8），
+		 *    但读数与索引都没写出来 ⇒ 界面上"什么都没发生"，而宿主里已经多了 8 条会话。
+		 *    ⇒ 顺序必须是「先报账，再善后」；善后出错也要**追加**到同一个读数上（`error`）。 */
+		setSplitInfo({
+			at: Date.now(), made: made.length, failed: failed.length,
+			dims: made.map((m) => m.dim), sent, nodeFail, attachFail, recorded: 0,
+			kind: p.kind, name: p.name, from,
+			via: made.length ? made[0].via : "",
+			/* 🔴 「一条都没建成」必须把**原因**写进读数：否则界面上只剩 `made=0 / failed=8`，
+			 *    与"没有可用维度""宿主没这能力"长得**一模一样**，判不出真因（纪律 18）。 */
+			error: made.length === 0 && failed.length ? "全部建会话失败：" + failed[0].why : "",
+			note: (attachFail ? attachFail + " 条分支已建出但未挂到工作区" : "")
+				+ (made.length && failed.length ? (attachFail ? "；" : "") + failed.length + " 条建会话失败" : "")
+		});
+		const problems = [];
+		try {
+			const n = recordSplits(made.map((m) => ({ sessionId: m.sessionId, dim: m.dim, label: m.label, name: m.name })));
+			setSplitInfo((v) => (v ? { ...v, recorded: n } : v));
+		} catch (e) { problems.push("分流索引写入失败：" + String((e && e.message) || e)); }
+		try { await refreshBranchTree(); }
+		catch (e) { problems.push("血缘刷新失败：" + String((e && e.message) || e)); }
+		try { await refresh(); }
+		catch (e) { problems.push("面板刷新失败：" + String((e && e.message) || e)); }
+		const lines = made.map((m) => "· " + m.label + (m.delivered ? "" : "（简报未送达：" + String(m.why || "未知") + "）")).join("\n");
+		try {
+			await appendDirectorMessage(nodeId, {
+				role: "assistant",
+				text: "【按维度分流】来源：" + from + " · 场景：" + (p.kind === "novel" ? "小说（A1–A8 分工）" : "通用三段")
+					+ "\n" + lines
+					+ (failed.length ? "\n未建成：" + failed.map((f) => f.label + "（" + f.why + "）").join("；") : "")
+				+ (attachFail ? "\n其中 " + attachFail + " 条已建出但未挂到工作区（宿主 workspace-attach-failed，分支仍可用）" : ""),
+				parsed: { kind: "split-branches", made: made.length, failed: failed.length, dims: made.map((m) => m.dim) }
+			});
+		} catch (e) { problems.push("落审计消息失败：" + String((e && e.message) || e)); }
+		if (problems.length) {
+			setSplitInfo((v) => (v ? { ...v, error: problems.join("；") } : v));
+			dshLog("split-partial", problems.join("；"));
+		}
+		dshLog("split", { made: made.length, failed: failed.length, sent, nodeFail, attachFail, via: made.length ? made[0].via : "", dims: made.map((m) => m.dim) });
+		say("已分流 " + made.length + "/" + p.dims.length + " 条"
+			+ (sent !== made.length ? "（简报送达 " + sent + " 条）" : "")
+			+ (nodeFail ? "（层级挂载失败 " + nodeFail + " 条）" : "")
+			+ (attachFail ? "（未挂到工作区 " + attachFail + " 条，分支已建出）" : "")
+			+ (failed.length ? " · 失败 " + failed.length + " 条：" + failed[0].why : "")
+			+ (problems.length ? " · ⚠ " + problems[0] : "")
+			+ " —— 打开分支导图可看到这 " + made.length + " 条分支");
+	}
+
+	/* ══════════════════════════════════════════════════════════════════
+	 * 🧹 清除对话消息（第 16 批需求 3 —— 用户原话「清除所有的对话消息」）
+	 *
+	 * 🔴 三处必须说清楚：
+	 *   ① **只清插件自己库里的总监对话消息**（`directorConversations` 一张表）。
+	 *      不能用 `resetPluginDb()`：那会把层级节点 / 待办 / 决策 / 设计图冷备一起清掉。
+	 *   ② **宿主侧对话消息清不了**（`sessions` 服务无删除契约，已逐条核对成员表）
+	 *      ⇒ 收尾必须**原样说明这条边界**，不许用"已清除"一句话盖过去。
+	 *   ③ 二次确认（点一次待确认、再点一次执行、超时自动撤防）——
+	 *      不用原生 `confirm`（阻塞主线程，会把所有真机闸门一起卡死）。
+	 * ══════════════════════════════════════════════════════════════════ */
+	async function purgeMessages() {
+		if (!clearArm) {
+			setClearArm(Date.now());
+			say("再点一次「确认清除」以删除全部总监对话消息（" + Math.round(CLEAR_ARM_MS / 1000) + " 秒内有效）");
+			return;
+		}
+		setClearArm(0);
+		const r = await clearDirectorMessages();
+		await refresh();
+		setClearInfo({ at: Date.now(), before: r.before, removed: r.removed, ok: r.ok, hostBoundary: r.hostBoundary, reason: r.reason });
+		dshLog("purge-messages", { before: r.before, removed: r.removed, ok: r.ok });
+		say((r.ok ? "已清除总监对话消息 " + r.removed + " 条（原有 " + r.before + " 条）"
+			: "清除未完全成功：删除 " + r.removed + "/" + r.before + " 条" + (r.reason ? "（" + r.reason + "）" : ""))
+			+ " · " + r.hostBoundary);
+	}
+
 	/** 控制台动作：有真接口的做真事，没有的**写明缺什么**（不做假按钮） */
 	async function consoleAct(key) {
 		/* 🧭 统筹：输入想法 → 生成 6 阶段计划 + 打分标准自审（用户核心目标：总监控制一切）
@@ -1017,6 +1302,7 @@ export function DirectorPage() {
 			say("已把最新流转送到「对话」维度继续");
 			return;
 		}
+		if (key === "split") { await splitBranches(); return; }
 		say("未知动作：" + key);
 	}
 
@@ -1620,6 +1906,45 @@ export function DirectorPage() {
 					h("span", { key: "n", style: { ...S.muted, marginLeft: "auto" }, "data-testid": "dp-console-counts" },
 						"待办 " + todos.length + " · 活跃分支 " + activeBranches + " · 流转 " + fStats.total +
 						(fStats.multiDim ? "（跨维 " + fStats.multiDim + "）" : "")),
+					/* 分流结果读数（第 16 批）：**可回读**，闸门与用户都能据此判断
+					 * "建成几条 / 失败几条 / 哪些维度"，不依赖一句会消失的 toast。
+					 * 未分流时**不渲染**（不摆一个 data-made="0" 的假读数占位）。 */
+					splitInfo ? h("span", {
+						key: "sp", style: { ...S.muted }, "data-testid": "dp-flow-split",
+						"data-made": splitInfo.made, "data-failed": splitInfo.failed,
+						"data-sent": splitInfo.sent == null ? "" : splitInfo.sent,
+						"data-dims": (splitInfo.dims || []).join(","),
+						"data-kind": splitInfo.kind || "",
+						/* 会话建出但未挂到工作区的条数（宿主 `workspace-attach-failed`）——
+						 * 它不是"失败"（分支确实存在、简报照投），但必须**可断言**，
+						 * 否则"完全成功"与"建出但没挂工作区"在界面上长得一样。 */
+						"data-attachfail": splitInfo.attachFail == null ? "" : splitInfo.attachFail,
+						"data-via": splitInfo.via || "",
+						/* 失败必须**可读**：本轮真机第一次跑就是"建了 8 条但读数没出现"，
+						 * 界面上与"什么都没发生"完全一样。`data-error` 让这种状态可断言。 */
+						"data-error": splitInfo.error || "",
+						title: "最近一次分流：" + (splitInfo.error ? "⚠ " + splitInfo.error
+							: (splitInfo.note || ((splitInfo.dims || []).join(" / ") || "（无维度）")))
+					}, splitInfo.error ? "🌿 分流中断" : ("🌿 分流 " + splitInfo.made + (splitInfo.failed ? " · 失败 " + splitInfo.failed : ""))) : null,
+					/* 清除对话消息（第 16 批需求 3）：二次确认 + 结果读数。
+					 * `data-armed` 让闸门能**断言撤防真的发生了**（纪律：开合型控件必须当场还原）。 */
+					h("button", {
+						key: "cl",
+						style: {
+							...S.btn, height: 18, padding: "0 7px", fontSize: "calc(10.5px * var(--dp-font,1))",
+							borderColor: clearArm ? "rgba(229,83,75,.85)" : "rgba(229,83,75,.45)",
+							color: "#e5534b", fontWeight: clearArm ? 700 : undefined
+						},
+						"data-testid": "dp-maint-clear", "data-armed": clearArm ? "1" : "0",
+						title: "清除全部总监对话消息（**仅插件库内**）：点一次进入待确认、再点一次执行，"
+							+ Math.round(CLEAR_ARM_MS / 1000) + " 秒未确认自动撤防。宿主侧对话消息不在插件权限内（sessions 无删除契约）。",
+						onClick: purgeMessages
+					}, clearArm ? "⚠ 确认清除？" : "🧹 清除消息"),
+					clearInfo ? h("span", {
+						key: "cr", style: { ...S.muted }, "data-testid": "dp-maint-result",
+						"data-before": clearInfo.before, "data-removed": clearInfo.removed,
+						"data-ok": clearInfo.ok ? "1" : "0", title: clearInfo.hostBoundary
+					}, "已清 " + clearInfo.removed + "/" + clearInfo.before) : null,
 					h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.toggleOverlay("mindmap") }, "🧠 打开分支导图"),
 					h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.toggleOverlay("design") }, "🖌 打开设计图"),
 					h("button", { key: "s", style: S.btn, "data-testid": "dp-sync", onClick: () => { refresh(); refreshBranchTree(); say("已刷新数据"); } }, "↻ 同步")
@@ -1874,6 +2199,20 @@ export function DirectorPage() {
 		 * 右端避让浮动按钮组与窗口 inset（环境量由环境读，纪律 29）。
 		 * ⚠️ `data-*` 是闸门锚点，**改名即假红**：dp-running / dp-running-item /
 		 *    dp-chain / dp-chain-step / dp-chain-empty。 */
+		/* ══ 执行状态窗口（第 6 批需求 6 建立 · **第 16 批**加「可移动 / 最小化 / 靠边缩进」）══
+		 * 第 16 批用户原话：「执行状态的窗口需要可以移动最小化,靠边缩进」
+		 * 三态（单一真相源 = store `runningWin`，见 store/layout.js DEFAULTS 注释）：
+		 *   · `collapsed`（**默认**）—— 只剩头部一行
+		 *   · `expanded`  —— 头部 + 明细（原来的全文）
+		 *   · `docked`    —— 贴边缩进成细条，点一下回展开
+		 * 🔴 为什么默认 collapsed：上一轮 **A1** 的处置是 `pointer-events:none` 让点击穿透
+		 *    （治标，且 tooltip 一并失效）。本批**恢复交互**（要能拖、能点最小化）⇒ 换成
+		 *    "默认不展开 + 位置避让"来保证不压住 R2.5 动作行 —— **从根上**不再吃下层点击，
+		 *    同时窗口本身可被用户搬走。
+		 * ⚠️ `data-*` 是闸门锚点：`dp-running` / `dp-running-item` / `dp-chain` /
+		 *    `dp-chain-step` / `dp-chain-empty` **全部未改名**；本批**新增**
+		 *    `dp-running-head` / `dp-running-min` / `dp-running-body` / `dp-running-strip`
+		 *    与 `data-mode` / `data-dock` / `data-floating`（R5：新增允许、改名禁止）。 */
 		h("div", {
 			key: "running", "data-testid": "dp-running",
 			"data-count": running.length,
@@ -1882,23 +2221,94 @@ export function DirectorPage() {
 			"data-chain-steps": chainShow && Array.isArray(chainShow.steps) ? chainShow.steps.length : 0,
 			"data-generating": generating ? "1" : "0",
 			"data-runs-persisted": runsState.persisted ? "1" : "0",
+			/* 第 16 批：窗口处在哪一态 / 贴哪条边 / 是否已被用户搬动过（闸门读这三个属性） */
+			"data-mode": winMode,
+			"data-dock": winDocked ? String(winState.dock || "") : "",
+			"data-floating": winFloating ? "1" : "0",
 			title: "执行状态：真实执行链五步（数据源 store/agent-runs.js）· 「正在使用」＝最近 "
-				+ (RUNNING_WINDOW_MS / 60000) + " 分钟内有调用记录的智能体 / 技能",
+				+ (RUNNING_WINDOW_MS / 60000) + " 分钟内有调用记录的智能体 / 技能"
+				+ "｜拖动头部可移动 · 点「—」最小化 · 拖到屏幕边缘自动贴边缩进 · 双击头部归位",
+			onPointerDown: winDragStart,
+			onPointerMove: winDragMove,
+			onPointerUp: winDragEnd,
+			onPointerCancel: winDragEnd,
+			onDoubleClick: winResetPos,
 			style: {
-				position: "absolute", top: 6, right: Math.max(9, inset + 9 + dockReserve), zIndex: 15, maxWidth: 316,
+				/* 被搬动过（或在贴边态）⇒ `fixed`：坐标是**视口坐标**，跨容器拖动才不会漂 */
+				position: winFloating ? "fixed" : "absolute",
+				...(winFloating
+					? { left: winPos.x, top: winPos.y }
+					: { top: 6, right: Math.max(9, inset + 9 + dockReserve) }),
+				zIndex: 15,
+				/* 贴边缩进：左右 ⇒ 窄竖条；上下 ⇒ 扁横条（宽度/高度按贴的那条边决定） */
+				...(winDocked
+					? (winDockSide ? { width: 30, maxWidth: 30 } : { height: 26, maxWidth: 316 })
+					: { maxWidth: 316 }),
+				/* 🔴 A1 的 `pointer-events:none` 在本批**撤除** —— 窗口要能拖、能点最小化。
+				 *    取而代之的是"默认 collapsed + 位置避让"（见上方三态说明与 T2 验收 ④）。 */
+				pointerEvents: "auto",
+				cursor: winExpanded ? "move" : "pointer",
+				userSelect: "none",
 				background: "var(--dp-bg-2, #212429)", border: "1px solid var(--dp-ac2-line, rgba(57,197,207,.4))",
-				borderRadius: "var(--dp-radius, 8px)", padding: "5px 7px", boxShadow: "0 10px 28px rgba(0,0,0,.45)"
+				borderRadius: "var(--dp-radius, 8px)",
+				padding: winDocked ? "3px 4px" : "5px 7px",
+				boxShadow: "0 10px 28px rgba(0,0,0,.45)"
 			}
-		}, [
+		}, winDocked ? [
+			/* ── 贴边缩进态：只留一个可点的细条（图标 + 计数）──
+			 * 计数仍要可见：窗口"缩"的是**面积**，不是**信息**（否则用户会以为它坏了）。 */
 			h("div", {
-				key: "t", style: { ...S.muted, fontWeight: 600, marginBottom: 4, display: "flex", gap: 6, alignItems: "center" }
+				key: "strip", "data-testid": "dp-running-strip",
+				title: "执行状态窗口已贴边缩进（" + String(winState.dock || "") + "）—— 点击展开",
+				onClick: winToggle,
+				style: {
+					display: "flex", flexDirection: winDockSide ? "column" : "row",
+					gap: 3, alignItems: "center", justifyContent: "center", cursor: "pointer",
+					fontSize: "calc(11px * var(--dp-font,1))", color: "var(--dp-ac, #79a8ff)"
+				}
+			}, [
+				h("span", { key: "i" }, "▤"),
+				h("span", { key: "n", "data-testid": "dp-running-strip-count" }, String(running.length))
+			])
+		] : [
+			/* ── 头部（第 16 批）：**唯一的拖动区** + 标题 + 状态徽标 + 最小化 ──
+			 * 🔴 为什么只有头部可拖：窗口内部有 `ModelSeat`（模型下拉）等交互元素，
+			 *    整窗可拖会与它们抢指针 —— 点下拉会变成拖窗口（"点不动"的经典成因）。 */
+			h("div", {
+				key: "head", "data-testid": "dp-running-head",
+				title: "拖动移动 · 单击展开/收起 · 双击归位",
+				onClick: winHeadClick,
+				style: {
+					...S.muted, fontWeight: 600, marginBottom: winExpanded ? 4 : 0,
+					display: "flex", gap: 6, alignItems: "center", cursor: "move"
+				}
 			}, [
 				h("span", { key: "h" }, "执行状态 · 技能 / 智能体"),
 				chainShow ? h("span", {
 					key: "b", "data-testid": "dp-chain-badge",
 					style: { marginLeft: "auto", color: chainBadge(chainShow.status).c, fontWeight: 600 }
-				}, chainBadge(chainShow.status).t + " · " + relTime(chainShow.at)) : null
+				}, chainBadge(chainShow.status).t + " · " + relTime(chainShow.at)) : null,
+				h("button", {
+					key: "min", "data-testid": "dp-running-min", type: "button",
+					"aria-label": winExpanded ? "最小化执行状态窗口" : "展开执行状态窗口",
+					title: winExpanded ? "最小化（只留标题条）" : "展开",
+					/* 🔴 按钮上必须 `stopPropagation`：否则它的 pointerdown 会冒泡到头部 ⇒
+					 *    按下拉把窗口拖走（同时触发 toggle，表现为"点最小化没反应还乱跳"）。 */
+					onPointerDown: (e) => { if (e.stopPropagation) e.stopPropagation(); },
+					onClick: (e) => { if (e.stopPropagation) e.stopPropagation(); winToggle(); },
+					style: {
+						marginLeft: chainShow ? 6 : "auto", width: 16, height: 16, lineHeight: "14px", padding: 0,
+						background: "transparent", color: "var(--dp-t3, #8b9199)",
+						border: "1px solid var(--dp-ac2-line, rgba(57,197,207,.4))", borderRadius: 4,
+						cursor: "pointer", fontSize: "calc(11px * var(--dp-font,1))", flex: "0 0 16px"
+					}
+				}, winExpanded ? "—" : "▣")
 			]),
+			/* ── 明细区：**只有展开态才渲染**（最小化 = 真的收起来，不是视觉藏起来）── */
+			winExpanded ? h("div", {
+				key: "body", "data-testid": "dp-running-body",
+				style: { display: "flex", flexDirection: "column" }
+			}, [
 
 			/* 兼容旧锚点：单次调用视图（有内容才出现这一行，不影响窗口本身是否挂载） */
 			running.length ? h("div", {
@@ -1979,6 +2389,7 @@ export function DirectorPage() {
 				key: "z", "data-testid": "dp-chain-empty",
 				style: { ...S.muted, fontSize: "calc(11px * var(--dp-font,1))" }
 			}, "还没有执行记录。在下方输入框写一句并点「执行」，这里会显示五步的真实状态与调用指向。") : null
+			]) : null
 		]),
 
 		/* 个性化面板（右上角；四处共用同一组件与同一份设定） */
@@ -1989,7 +2400,10 @@ export function DirectorPage() {
 	]);
 }
 
-/** R2.5 控制台的七个动作（按钮顺序即此数组顺序；`key` 同时是 `data-testid` 后缀 `dp-act-<key>`）。
+/** 清除对话消息的二次确认有效窗口（毫秒）—— 超时自动撤防（防"以为自己是第一次点"） */
+const CLEAR_ARM_MS = 3000;
+
+/** R2.5 控制台的八个动作（按钮顺序即此数组顺序；`key` 同时是 `data-testid` 后缀 `dp-act-<key>`）。
  * 🔴 2026-09-14 事故：我对本文件做整体重写时**删掉了这个定义**，但保留了下方第 1023 行的
  *    `...CONSOLE_ACTIONS.map(...)` 引用 ⇒ 真机 `ReferenceError: CONSOLE_ACTIONS is not defined`
  *    ⇒ 宿主错误边界兜底成 `<div data-slot-error="conversation.view">` ⇒ **总监页整页空白**，
@@ -2004,10 +2418,11 @@ const CONSOLE_ACTIONS = Object.freeze([
 	{ key: "grab", icon: "📥", label: "抓取", tone: "" },
 	{ key: "close", icon: "🔚", label: "回结", tone: "warn" },
 	{ key: "review", icon: "🎯", label: "审核", tone: "accent2" },
-	{ key: "next", icon: "⏭", label: "继续", tone: "" }
+	{ key: "next", icon: "⏭", label: "继续", tone: "" },
+	{ key: "split", icon: "🌿", label: "分流", tone: "accent2" }
 ]);
 
-/** R2.5 七动作的说明（title 用；写明"能做什么 / 不能做时缺什么"） */
+/** R2.5 八动作的说明（title 用；写明"能做什么 / 不能做时缺什么"） */
 const CONSOLE_HINT = Object.freeze({
 	plan: "统筹：读原生输入框里的想法 → 生成 6 阶段计划 + 打分标准自审（空想法会如实报错）",
 	new: "新建分支：走导图的「＋ 新建分支」（宿主 sessions.fork）；纯新建会话由宿主左栏负责",
@@ -2015,7 +2430,8 @@ const CONSOLE_HINT = Object.freeze({
 	grab: "抓取：读宿主原生输入框当前内容（语义锚点，不猜类名）",
 	close: "回结：把该会话最新流转标记为「已收口」",
 	review: "审核：对抓到的真实文本跑六维规则引擎（空文本会如实报 ❌）",
-	next: "继续：把该会话最新流转送回「对话」维度继续执行"
+	next: "继续：把该会话最新流转送回「对话」维度继续执行",
+	split: "分流：读需求（原生输入框 → 兜底总监消息末条）→ 按维度各建一条**独立**分支并投简报（小说走 A1–A8；建成条数与失败原因都会如实显示）"
 });
 
 function buildOptions(tree) {

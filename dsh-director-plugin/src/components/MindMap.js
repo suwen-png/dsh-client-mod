@@ -226,6 +226,9 @@ export function MindMap({ open, onClose }) {
 	const fittedRef = react.useRef(false);
 	const toastTimer = react.useRef(null);
 	const dragRef = react.useRef(null);
+	/** 🔴 拖动中的实时位置（与 `dragPos` 同步写）—— 松手时要**在 React 更新函数之外**
+	 * 读到它，见 `onUp` 里的"渲染期副作用"事故说明。 */
+	const dragPosRef = react.useRef(null);
 	/** 「刚拖过」标记：拖动结束时置位一拍，避免拖完又被当成点击而弹出右侧面板 */
 	const justDraggedRef = react.useRef(false);
 
@@ -333,19 +336,32 @@ export function MindMap({ open, onClose }) {
 			const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
 			if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_SLOP) return;
 			d.moved = true;
-			setDragPos({ id: d.id, x: Math.max(0, d.ox + dx / (k || 1)), y: Math.max(0, d.oy + dy / (k || 1)) });
+			const p = { id: d.id, x: Math.max(0, d.ox + dx / (k || 1)), y: Math.max(0, d.oy + dy / (k || 1)) };
+			dragPosRef.current = p;                 // 松手时在 React 之外读它（见 onUp）
+			setDragPos(p);
 		};
 		const onUp = () => {
 			const d = dragRef.current;
 			dragRef.current = null;
 			if (!d) return;
-			setDragPos((cur) => {
-				if (cur && cur.id === d.id) {
-					directorLayoutStore.setNodePos(d.id, { x: cur.x, y: cur.y });
-					say("已移动「" + String(d.title || "").slice(0, 12) + "」—— 位置已记住（「自动布局」可归位）");
-				}
-				return null;
-			});
+			/* 🔴 2026-09-16 渲染进程被钉死的**真正**根因（真机逐事件计时取证）：
+			 *   旧写法把"写 store + 弹 toast"放在了 `setDragPos((cur) => {...})` 的**更新函数里**。
+			 *   更新函数是在 React 的**渲染期**被调用的，于是 `setNodePos()` 也在渲染期执行 ⇒
+			 *   本组件用 `useSyncExternalStore` 订阅了同一个 store ⇒ 渲染期收到新快照 ⇒
+			 *   再渲染、再进更新函数、再写 store …… **渲染循环**。
+			 *   实测（logs/drag-cost-streaming.log，`scripts/_probe-drag-cost.mjs`）：
+			 *     悬停 6 次鼠标移动合计 75ms、拖动中 6 次合计 91ms（**都正常**），
+			 *     而 `mouseReleased` **超时 30,000ms**，此后 Runtime.evaluate 也再也读不到页面
+			 *     —— 与"拖动过程"无关，**松手那一下**就是卡死点。
+			 *   用 Debugger.pause 中断 V8 取到的栈也印证：整栈都是 React 自身的工作循环。
+			 *   ⇒ 纪律：**状态更新函数必须是纯的**，副作用一律移到外面（这里改用 ref 读实时位置）。 */
+			const cur = dragPosRef.current;
+			dragPosRef.current = null;
+			if (cur && cur.id === d.id) {
+				directorLayoutStore.setNodePos(d.id, { x: cur.x, y: cur.y });
+				say("已移动「" + String(d.title || "").slice(0, 12) + "」—— 位置已记住（「自动布局」可归位）");
+			}
+			setDragPos(null);
 			/* 拖过就不算点击（否则每次拖完都会弹出右侧面板） */
 			if (d.moved) {
 				justDraggedRef.current = true;
@@ -815,6 +831,10 @@ export function MindMap({ open, onClose }) {
 								},
 								"data-testid": "mm-node", "data-session-id": r.sessionId, "data-state": st,
 								"data-kind": r.kind, "data-depth": r.depth, "data-state-source": r.stateSource,
+								/* 第 16 批：分流维度与标题来源 —— 用户原话「思维导图应该能看出来」。
+								 * `data-split` 空串 = 这一支不是分流出来的（**空串不等于缺失**，
+								 * 闸门按 `[data-split]` 非空计数即可，不必另设布尔位）。 */
+								"data-split": r.splitDim || "", "data-title-origin": r.titleOrigin || "",
 								"data-collapsed": collapsed.has(r.sessionId) ? "1" : "0",
 								"data-current": r.isCurrent ? "1" : "0",
 								"data-moved": r.moved ? "1" : "0",
@@ -862,7 +882,7 @@ export function MindMap({ open, onClose }) {
 								h("div", {
 									key: "r2", style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 									"data-testid": "mm-node-meta"
-								}, metaLineOf(r) + (r.moved ? " · 已移动" : "")),
+								}, metaLineOf(r) + (r.splitDim ? " · 分流 " + r.splitDim : "") + (r.moved ? " · 已移动" : "")),
 								/* 第 3 行：**单框控件**（用户：「单个框没有展开和折叠的选项」）
 								 * 每个框都有这一行；不可用的项**显示出来并写明原因**，不悄悄消失 */
 								h("div", {

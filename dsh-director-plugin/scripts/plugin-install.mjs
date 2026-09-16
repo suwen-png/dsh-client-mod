@@ -157,7 +157,12 @@ else warn("③ 不存在（--apply 会创建；注意 profile 目录需已存在
 
 /* ── 综合判定 ── */
 const allReady = hostState === "current" && profileState === "link" && patchState === "has-entry";
-log(`\n  ⇒ 总判定：${allReady ? "✅ 已完整就绪" : "⚠️ 未就绪（见上）"}`);
+/* 🔴 这一行在 `--apply` **写入之前** 打印 ⇒ 它描述的是**写入前快照**。
+ *    不标注会被读成"apply 失败了"（2026-09-16 第十六轮实测踩到：apply 报「未就绪」，
+ *    紧接着 verify 却报「已完整就绪」—— 同一份代码两种结论，纯属输出时点问题）。
+ *    apply 模式下的**最终**判定见 [4] 收尾处的复判。 */
+log(`\n  ⇒ 总判定：${allReady ? "✅ 已完整就绪" : "⚠️ 未就绪（见上）"}` +
+	(MODE !== "verify" && !allReady ? "  ← ⚠️ **写入前**快照，不是安装结果（见 [4] 复判）" : ""));
 
 if (MODE === "verify") {
 	log("\n（verify 模式：零写入。要安装请加 --apply）");
@@ -321,6 +326,13 @@ if (patchState === "has-entry") {
 }
 
 log("\n[4] 收尾");
+/* 🔴 apply 模式**必须复判**：上面 [2] 的"总判定"是写入前快照，不能代表安装结果。
+ *    复判方式 = 重读实体包与仓库产物**逐字节比对**（比"再看一眼状态"更强）。 */
+try {
+	const same = existsSync(hostClient) && existsSync(srcClient) && readFileSync(hostClient).equals(readFileSync(srcClient));
+	if (same) ok("④ 安装后复判：实体包 `lib/client.js` 与仓库产物**逐字节一致**");
+	else bad("④ 安装后复判：实体包与仓库产物**不一致**（安装未生效，先别重启 Harness）");
+} catch (e) { bad("④ 安装后复判异常：" + e.message); }
 log("  安装完成。**必须重启 Harness 才生效**（插件在 boot 时装载）：");
 log(`    cd "${HARNESS_ROOT}"`);
 log(`    env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./DeepSeek Harness.exe" --remote-debugging-port=9222`);

@@ -774,8 +774,10 @@ const d14 = await evalExpr(`(async () => {
 			 *   **既有键不得改名/删除**（下一行 forbidden 专测改名变体），
 			 *   **新增是允许的**；本判据的正确形态是「无越界命名空间」，
 			 *   故把已登记的新键纳入白名单，而不是把「新增」当违规。
+			 * 🔴 白名单补登（2026-09-16 差异清单 B4）：第 6 批需求 6（执行状态窗口通电，
+			 *   store/agent-runs.js）新增 dsh.director.agentRuns.v1 —— 落地时漏登记 ⇒ 假红。
 			 * ⚠ 本块在模板字符串内，注释禁止反引号（K1 离线断言会拦）。 */
-			.filter(k => !/^dsh\.director\.(store\..+|layout|config|design|personalize|flow|mm\.hint\.shown)$|^dsh-v9-theme$/.test(k)),
+			.filter(k => !/^dsh\.director\.(store\..+|layout|config|design|personalize|flow|mm\.hint\.shown|agentRuns\.v1)$|^dsh-v9-theme$/.test(k)),
 		allDshKeys: keys.filter(k => /^(dsh\.director|dsh_director_|dsh-v9-theme)/.test(k)),
 		forbidden: keys.filter(k => /dsh\\.director\\.layout\\.v\\d|dsh\\.director\\.store\\..*\\.v\\d|director-main-v\\d|dsh-director-db-v\\d/.test(k)) };
 })()`);

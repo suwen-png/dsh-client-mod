@@ -2,7 +2,7 @@
  * 职责：分支血缘树（导图态的数据源）
  * 引用：—
  * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/mindmap-render.js
- * 下游：logic/discover.js, store/mindmap-schema.js
+ * 下游：logic/discover.js, store/mindmap-schema.js, store/split-index.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C2（分支生命周期状态机）· F1 / F5（导图行模型与宿主真值透传）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -61,6 +61,8 @@
 
 import { discover, sessionLabel } from "./discover.js";
 import { kindOfNode, stateOfRow, hasHostState } from "../store/mindmap-schema.js";
+/* 分流标签索引（第 16 批）：宿主不给 rename ⇒ 显示名由插件侧补，且**只有一处真相源** */
+import { readSplitIndex, applySplitLabels } from "../store/split-index.js";
 
 /** 节点在导图画布上的布局常量（与 MindMap.js 共用，勿各自写死）
  * 🔴 2026-09-12 第三轮放大：节点从 200×56 调到 224×72 —— 用户要求"单个框要有展开
@@ -375,15 +377,27 @@ export function degradationReason() {
  */
 export async function refreshBranchTree() {
 	const diag = {};
+	let tree = null;
+	let source = "none";
+	let lineage = false;
 	const fromCtx = readSessionsFromCtx(ctxRef, diag);
 	if (fromCtx && fromCtx.length) {
-		const tree = buildBranchTree(fromCtx, { currentId: diag.currentId });
-		cache = { tree, source: "ctx.sessions", lineage: tree.lineage, at: Date.now(), diag };
+		tree = buildBranchTree(fromCtx, { currentId: diag.currentId });
+		source = "ctx.sessions";
+		lineage = tree.lineage;
 	} else {
 		const fb = await fallbackFromDiscover();
-		const tree = buildBranchTree(fb.summaries);
-		cache = { tree, source: fb.source, lineage: false, at: Date.now(), diag };
+		tree = buildBranchTree(fb.summaries);
+		source = fb.source;
 	}
+	/* 🔴 分流标签覆盖**必须在这里做**（唯一摄取点）：
+	 *    血缘每一份都从宿主重新读，标题每一份都由宿主决定；插件侧给分流分支起的名字
+	 *    若不在这一处补上，导图 / 右侧详情 / 总监页就会**各显示一套**（重复即漂移）。
+	 *    `diag.splitApplied` 如实上报覆盖条数 —— 0 条也要能看出来（例如索引被清空）。 */
+	const split = applySplitLabels(tree, readSplitIndex());
+	diag.splitApplied = split.applied;
+	diag.splitDims = split.dims;
+	cache = { tree, source, lineage, at: Date.now(), diag };
 	notify();
 	return cache;
 }
@@ -496,6 +510,128 @@ export async function forkBranch(sessionId) {
 	} catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
 }
 
+/**
+ * 新建一个**空白会话**（宿主 `sessions.create`）—— 第 16 批「自动分到不同对话分支」的落地口。
+ *
+ * 🔴 与 `forkBranch` 的分工（**别混用**，两者语义不同）：
+ *    · `forkBranch(id)` —— 从某条会话**分叉**：新会话带 `parentId` 血缘 ⇒ 导图上挂在父节点之下
+ *    · `createSession()` —— 建**独立**空白会话：无父 ⇒ 导图上是一条新根
+ *    「按世界观 / 剧情分到不同对话分支」要的是**后者**：A1 世界观 与 A3 剧情 是**并列**的
+ *    分工，不是"从某条消息分叉出来"。若用 fork，血缘会把它们串成一条链，
+ *    读图的人会以为"剧情是从世界观分叉来的" —— **那是错的信息**。
+ *
+ * 🔴 宿主契约（`original/@deepseek-ai/dsh-client-runtime/lib/client.js:8144-8185`）：
+ *    `create(opts = {})`，`opts` 支持三种形态 —— `{ workspaceId }` / `{ cwd }` / `{ cwd, sessionId? }`；
+ *    注释原文：*"on success merge into summaries immediately (no wait for the next refresh).
+ *    A created session is blank by definition"* ⇒ 返回即可读到，不必等刷新。
+ *    🔴 **`opts` 一律不猜**：不传 `workspaceId` / `cwd` 时直接给 `{}`（宿主自行决定）。
+ *      曾用 `workspaces.list` 快照去猜当前工作区 ⇒ 实测 `ok:false` 且拿不到 id（见下方注释）。
+ *    🔴 **返回形态以实测为准**，不照抄注释 —— 本机实测是**裸字符串**会话 id，
+ *      取值统一走 `resolveCreateId()`（注释里的 `{ok:true,value:{sessionId}}` 也要能认）。
+ *
+ * @param {{workspaceId?:string, cwd?:string, sessionId?:string}} [opts] 目标工作区 / 工作目录
+ * @returns {Promise<{ok:boolean, sessionId?:string, attached?:boolean|null, reason?:string, via?:string, raw?:string}>}
+ */
+export async function createSession(opts = {}) {
+	const svc = sessionsService();
+	if (!svc || typeof svc.create !== "function") {
+		return { ok: false, reason: "宿主未提供 sessions.create（能力探测见 hostCapabilities().create）" };
+	}
+	/* 入参分层（**不猜**）：
+	 *   ① 调用方显式给了 `workspaceId` / `cwd` ⇒ 用它；
+	 *   ② 否则一律传 `{}`，**由宿主自行决定**落到哪个工作区。
+	 * 🔴 这里曾用 `currentWorkspaceId()` 去"猜"当前工作区并塞进 `workspaceId`。
+	 *    真机实测（`_probe-create-raw.mjs`）：`via=current-workspace` 时
+	 *    `sessions.create` 返回 `ok:false`、**且连 error.message / error.code 都没有**
+	 *    （我们的 reason 只能退化成"宿主未返回新会话 id"），
+	 *    而**会话照样被建出来**（分支树净增恰为 8）⇒ 8 条分支全被记成"失败"。
+	 *    `workspaces.list` 快照里的 "current" 不保证是 `create` RPC 认可的 `workspaceId`；
+	 *    猜错的入参会让宿主失败/建到别处，**比不传更难查**。 */
+	const payload = {};
+	let via = "host-decides";
+	if (opts && opts.workspaceId) { payload.workspaceId = opts.workspaceId; via = "workspaceId"; }
+	else if (opts && opts.cwd) { payload.cwd = opts.cwd; via = "cwd"; }
+	if (opts && opts.sessionId) payload.sessionId = opts.sessionId;
+	try {
+		const res = await svc.create(payload);
+		await refreshBranchTree();
+		/* 🔴🔴 宿主 `create` 到底返回什么 —— **只信实测，不信注释**。
+		 *    源码 `original/@deepseek-ai/dsh-client-runtime/lib/client.js:8159-8185` 的
+		 *    注释与实现都写着"成功 ⇒ `{ ok:true, value:{ sessionId } }`"，
+		 *    但**真机实测拿到的是裸字符串**：
+		 *      `_probe-create-raw.mjs` ⇒ `{"ok":false,"reason":"宿主未返回新会话 id","via":"current-workspace"}`
+		 *      `_probe-split-trace.mjs` ⇒ `宿主原始返回 "session-08b83f34-53ab-4faa-8bbc-3031036afa8b"`
+		 *    后果：8 条会话**真的建出来了**（分支树净增恰为 8），却因为"形状不符"被逐条记成
+		 *    「宿主未返回新会话 id」⇒ 读数 `made=0 / failed=8`、索引不写、导图无标记，
+		 *    界面上与"什么都没发生"完全一样，而且**页面零异常**（最坏的一类：静默半成功）。
+		 *    ⇒ 取值一律走 `resolveCreateId()`：**已知形态全收**，形状不明才如实报失败。 */
+		const id = resolveCreateId(res);
+		if (id) {
+			/* `attached` 三态（true 挂上了 / false 宿主明说没挂上 / null 裸 id 无从判断）。
+			 * 🔴 未知不许当成功也不许当失败 —— 写成 null，由调用侧决定要不要报（纪律 19）。 */
+			const attached = typeof res === "string"
+				? null
+				: (res && res.ok ? true
+					: (res && res.error && res.error.code === "workspace-attach-failed" ? false : null));
+			return {
+				ok: true, sessionId: id, via, attached,
+				reason: attached === false ? "宿主 code=workspace-attach-failed：会话已建出，未挂到工作区" : ""
+			};
+		}
+		const why = (res && res.error && (res.error.message || res.error.code))
+			|| (res && res.reason) || "宿主未返回新会话 id";
+		/* 🔴 失败原因必须**可证伪**（纪律 18）：曾出现"宿主返回 ok:false 但 message/code 全空"，
+		 *    界面上只剩一句"建会话失败"，查不到任何线索。⇒ 把**原始返回**一并带出来。 */
+		return { ok: false, reason: String(why), via, raw: safeJson(res) };
+	} catch (e) {
+		return { ok: false, reason: String((e && e.message) || e), via };
+	}
+}
+
+/**
+ * 从宿主 `sessions.create` / `sessions.fork` 的返回里取出**新会话 id**。
+ *
+ * 🔴 为什么不能只判一种形状：宿主实现在不同链路（Host 契约 / client 工程）下返回不同形态，
+ *    而**注释与实现都可能不是调用端真正拿到的那个**。本轮真机实测（2026-09-16）：
+ *      · `_probe-create-raw.mjs`      ⇒ `createSession({})` 拿到 `ok:false` + 「宿主未返回新会话 id」
+ *      · `_probe-split-trace.mjs`     ⇒ 宿主**原始返回**是**裸字符串** `"session-08b83f34-…"`
+ *    只认注释里的 `{ok:true,value:{sessionId}}` ⇒ 8 条会话建出来了却被记成失败。
+ *    ⇒ 已知形态**全收**；全不匹配才返回空串（**不猜**，也不伪造 id）。
+ *
+ * 收下的形态（按实测出现频率排序）：
+ *   ① 裸字符串 `"session-…"`（**本机实际形态**）
+ *   ② `{ ok:true, value:"session-…" }`
+ *   ③ `{ ok:true, value:{ sessionId } }`（源码注释所写形态）
+ *   ④ `{ ok:false, error:{ code:"workspace-attach-failed", details:{ sessionId } } }`
+ *      —— 会话已建出、未挂到工作区（宿主自己就把它当成功并入列表，见 `client.js:8631`）
+ *   ⑤ `{ sessionId }` / `{ id }`
+ *
+ * @param {*} res 宿主原始返回
+ * @returns {string} 新会话 id；取不到返回 `""`
+ */
+function resolveCreateId(res) {
+	if (typeof res === "string") return res.trim();
+	if (!res || typeof res !== "object") return "";
+	if (res.ok && typeof res.value === "string") return res.value.trim();
+	if (res.ok && res.value && res.value.sessionId) return String(res.value.sessionId);
+	if (res.ok && res.sessionId) return String(res.sessionId);
+	if (res.error && res.error.code === "workspace-attach-failed" && res.error.details && res.error.details.sessionId) {
+		return String(res.error.details.sessionId);
+	}
+	if (res.sessionId) return String(res.sessionId);
+	if (res.id) return String(res.id);
+	return "";
+}
+
+/** 安全 JSON 化：循环引用 / 不可序列化时退化为 `String()` —— **绝不为了记日志再抛一次**。 */
+function safeJson(v) {
+	try {
+		const s = JSON.stringify(v);
+		if (s === undefined) return String(v);
+		return s.length > 400 ? s.slice(0, 400) + "…" : s;
+	} catch (e) { return String(v); }
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * 五、全局契约
  * ══════════════════════════════════════════════════════════════════ */
@@ -506,7 +642,7 @@ export function installBranchTreeApi(ctx) {
 	const api = {
 		LAYOUT, buildBranchTree, normalizeSummary, visibleRows, ancestorChain, treeBounds, matchRows,
 		readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,
-		degradationReason, hostCapabilities, openSession, forkBranch,
+		degradationReason, hostCapabilities, openSession, forkBranch, createSession,
 		currentSessionId, watchCurrentSession
 	};
 	if (typeof window !== "undefined") window.__dshBranchTree = api;

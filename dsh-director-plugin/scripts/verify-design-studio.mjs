@@ -288,6 +288,43 @@ async function ensureSelected() {
 	return await selectedId();
 }
 
+/* 🔴 2026-09-16 差异清单 C1：「移动 <目标> 左 30」这类断言必须先证前提 ——
+ * **目标要有左移空间**（模型 x ≥ minRoom）。实测 C8.4 选中 el-4-sid（「侧栏 · 会话树」）
+ * 模型 x=0 已贴画布左边界，moveElement 的边界钳制（"不允许拖出画布外丢失"）正确生效
+ * ⇒ 实际位移 0 被断成"产品缺陷"。改为：已选中元素无空间时，从模型里挑一个
+ * 有空间且可被真实点击的元素点选（点击另一元素会自动切换选中，无需先取消）。 */
+async function ensureSelectedWithRoom(minRoom) {
+	const room = (minRoom == null) ? 40 : minRoom;
+	const cur = await selectedId();
+	if (cur) {
+		const p = await modelPos(cur);
+		if (p && p.x >= room) return cur;
+	}
+	const cand = await js(`(function(){
+		var o=JSON.parse(localStorage.getItem('dsh.director.design')||'{}');
+		var d=(o.docs||[]).filter(function(x){return x.docId===o.activeDocId;})[0]||(o.docs||[])[0];
+		if(!d) return null;
+		var ids=(d.elements||[]).filter(function(e){return !e.hidden && !e.locked && e.x>=${room};})
+			.map(function(e){return e.id;});
+		if(!ids.length) return null;
+		var els=[].slice.call(document.querySelectorAll('[data-testid=ds-el]'));
+		for (var i=0;i<els.length;i++){
+			var el=els[i], eid=el.getAttribute('data-el-id');
+			if (ids.indexOf(eid)<0) continue;
+			var r=el.getBoundingClientRect();
+			if (r.width<12||r.height<12) continue;
+			var cx=r.x+r.width/2, cy=r.y+r.height/2;
+			var top=document.elementFromPoint(cx,cy);
+			if (top===el || (top && el.contains(top))) return {x:cx,y:cy,id:eid};
+		}
+		return null;
+	})()`);
+	if (!cand) return null;
+	await clickAt(cand.x, cand.y);
+	await sleep(500);
+	return await selectedId();
+}
+
 let pass = 0, fail = 0, skipped = 0; const rows = [];
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -569,8 +606,10 @@ assert("C8.2", "明示「只处理本图 / 三向隔离」", th.isolation, "isol
 // 发送一条本地可解析指令（ds-input 是 <input>，须用 HTMLInputElement 的 setter）
 // 🔴 目标必须**确实存在**：早先版本沿用了已被 Delete 掉的 id，导致解析出 0 项操作、
 //    待确认区不出现（pending.ops.length === 0 时该区块本就不渲染）⇒ 误判为产品缺陷。
-const tgt = await ensureSelected();
+const tgt = await ensureSelectedWithRoom(40);
 assert("C8.0", "存在可被指令指称的目标元素", !!tgt, "target = " + tgt);
+assert("C8.0c", "🔴 目标有左移空间（模型 x ≥ 40 —— 先证前提，防边界钳制把「左 30」吞成 0）",
+	!!tgt && (await modelPos(tgt)).x >= 40, tgt ? "x=" + (await modelPos(tgt)).x : "无目标");
 // 🔴 用**多词 label** 指称（而不是 id）—— 这才是用户真实写法，
 //    同时回归「label 含空格就指称不到」的缺陷（离线测试 C12 同源）
 const tgtLabel = await js(`(function(){

@@ -150,17 +150,28 @@ export async function summarizeNode(node, childNodes = [], opts = {}) {
  * 每一级把结果写回节点（summary / summaryGrade / summaryAt）并落盘。
  *
  * @param {object} root loadTree() 返回的根（含 childNodes）
+ * ⚠ 模型不可用时本轮**自动跳过模型调用**（03号文 §4.3「提示并跳过」）：失败一次即锁定，其后节点走 G0。
  * @param {object} [opts] { forceGrade }
- * @returns {Promise<{count:number, grades:Record<string,number>, degraded:number}>}
+ * @returns {Promise<{count:number, grades:Record<string,number>, degraded:number, modelSkipped:number, modelSkipReason:string}>}
  */
 export async function summarizeTree(root, opts = {}) {
-	const stats = { count: 0, grades: { G0: 0, G1: 0, G2: 0 }, degraded: 0 };
+	const stats = { count: 0, grades: { G0: 0, G1: 0, G2: 0 }, degraded: 0, modelSkipped: 0, modelSkipReason: "" };
 	if (!root) return stats;
+
+	/* 🔴 03 号文 §4.3「Ollama 未启动 → 提示并跳过」落到实处（2026-09-16 第十六轮）
+	 *   真机实测：本机无 Ollama 时 fetch("http://localhost:11434/api/tags") 失败要 **2371 ms**
+	 *   （_probe-sum-node-cost.mjs：saveNode 1ms / dshLog 0ms），而 summarizeNode 会对**每个**节点试一次模型
+	 *   ⇒ 116 节点整树实测 **140.3 s**（_probe-sum-tree-timeline.mjs 逐 500ms 采样，收敛于 t=140264ms）。
+	 *   ⇒ 本轮第一次失败即**锁定**「模型不可用」，其后节点直接 forceGrade=G0：
+	 *     仍是文档规定的降级链，只是把「每个节点重试」改成「每轮跳过一次」，**结论完全一致**（grades 仍全 G0）。
+	 *   不设全局状态、不改 endpoint 配置 —— 锁定只属于本次 summarizeTree 调用。 */
+	let modelLocked = null;
 
 	// 后序遍历：先子后父，保证父级能拿到子级最新 summary
 	const walk = async (node) => {
 		for (const c of node.childNodes || []) await walk(c);
-		const res = await summarizeNode(node, node.childNodes || [], opts);
+		const nodeOpts = modelLocked ? { ...opts, forceGrade: GRADE.RULE } : opts;
+		const res = await summarizeNode(node, node.childNodes || [], nodeOpts);
 		node.summary = res.text;
 		node.summaryGrade = res.grade;
 		node.summaryAt = res.at;
@@ -168,9 +179,14 @@ export async function summarizeTree(root, opts = {}) {
 		await saveNode(flat);
 		stats.count++;
 		stats.grades[res.grade] = (stats.grades[res.grade] || 0) + 1;
-		if (res.degraded) stats.degraded++;
+		if (res.degraded) {
+			stats.degraded++;
+			if (!modelLocked) modelLocked = res.reason || "本地模型不可用";
+		}
+		if (modelLocked && res.grade === GRADE.RULE) stats.modelSkipped++;
 	};
 	await walk(root);
+	if (modelLocked) stats.modelSkipReason = modelLocked;
 	emitHierarchyChange();
 	return stats;
 }

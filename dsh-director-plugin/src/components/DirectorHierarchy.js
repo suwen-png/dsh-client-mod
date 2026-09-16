@@ -187,7 +187,10 @@ export function DirectorHierarchy(props = {}) {
 
 	const doSummarizeTree = guard(async () => {
 		const stats = await summarizeTree(await refresh(), {});
-		setMsg("整树总结完成：" + stats.count + " 个节点，G0=" + stats.grades.G0 + " / G1=" + stats.grades.G1 + " / G2=" + stats.grades.G2 + "，降级 " + stats.degraded + " 个");
+		/* 🔴 降级必须**说出来**（纪律 19「降级可以，无声不行」）：模型不可用时按 03号文 §4.3 整轮跳过，
+		 *   否则用户只看到「降级 N 个」而不知道后面 100+ 个节点根本没试过模型。 */
+		setMsg("整树总结完成：" + stats.count + " 个节点，G0=" + stats.grades.G0 + " / G1=" + stats.grades.G1 + " / G2=" + stats.grades.G2 + "，降级 " + stats.degraded + " 个"
+			+ (stats.modelSkipped ? "；本地模型不可用已按 03号文 §4.3 跳过模型调用 " + stats.modelSkipped + " 个（" + (stats.modelSkipReason || "未知原因") + "）" : ""));
 	});
 
 	const doPropagate = guard(async () => {

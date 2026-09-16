@@ -210,22 +210,31 @@ export function syncHostComposerSlot() {
 	try {
 		const view = String((handlers.getView && handlers.getView()) || "director");
 		composerSlotState.view = view;
+		/* 🔴 2026-09-16：**幂等写入** —— 只在值真的不同时才写 DOM。
+		 * 旧写法无条件赋值（textContent / style 每轮都写）⇒ 每次 sync 都制造 mutation
+		 * ⇒ MutationObserver → scheduleSync → sync → 再 mutation …… 自激反馈环。
+		 * 真机表现（verify-flow）：渲染进程 8s 内不响应（CDP_TIMEOUT）、整轮 19 分钟，
+		 * 而同一版代码在环被切断前是 1m15s / 80/80。写入前先比对是切断这个环的最小改动。 */
+		const setIfDiff = (el, attr, val) => { if (el.getAttribute(attr) !== val) el.setAttribute(attr, val); };
+		const cssIfDiff = (el, prop, val) => { if (el.style[prop] !== val) el.style[prop] = val; };
 		const tg = bar.querySelector("#" + SCOPE_TOGGLE_ID);
 		if (tg) {
 			const isDirector = view !== "chat";
-			tg.textContent = isDirector ? "总监" : "对话";
-			tg.setAttribute("data-view", isDirector ? "director" : "chat");
-			tg.title = isDirector
+			const wantTxt = isDirector ? "总监" : "对话";
+			if (tg.textContent !== wantTxt) tg.textContent = wantTxt;
+			setIfDiff(tg, "data-view", isDirector ? "director" : "chat");
+			const wantTitle = isDirector
 				? "当前 R5 显示【总监】五步消息 —— 点击切到【对话】消息（含历史）"
 				: "当前 R5 显示【对话】消息 —— 点击切回【总监】五步消息";
-			tg.style.color = isDirector ? "var(--dp-ac, #b794f6)" : "#79a8ff";
-			tg.style.borderColor = isDirector ? "var(--dp-ac-line, rgba(137,87,229,.45))" : "rgba(47,111,235,.5)";
+			if (tg.title !== wantTitle) tg.title = wantTitle;
+			cssIfDiff(tg, "color", isDirector ? "var(--dp-ac, #b794f6)" : "#79a8ff");
+			cssIfDiff(tg, "borderColor", isDirector ? "var(--dp-ac-line, rgba(137,87,229,.45))" : "rgba(47,111,235,.5)");
 		}
 		const dv = bar.querySelector("#" + HOST_DELIVER_ID);
 		if (dv) {
 			const ok = Boolean(handlers.canDeliver && handlers.canDeliver());
-			dv.setAttribute("aria-disabled", ok ? "false" : "true");
-			dv.style.opacity = ok ? 1 : 0.6;
+			setIfDiff(dv, "aria-disabled", ok ? "false" : "true");
+			cssIfDiff(dv, "opacity", ok ? "1" : "0.6");
 		}
 		heal();
 	} catch (e) { degrade("刷新文案失败：" + ((e && e.message) || e)); }
