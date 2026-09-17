@@ -1,0 +1,103 @@
+﻿=== ~/.dsh 近 8 小时改动文件 ===
+
+LastWriteTime      Length FullName                                                                                     
+-------------      ------ --------                                                                                     
+2026/9/17 16:25:32    173 C:\Users\15142\.dsh\profiles\web\cordis.patch.yml                                            
+2026/9/17 16:24:52    223 C:\Users\15142\.dsh\profiles\web\cordis.yml                                                  
+2026/9/17 16:24:50    173 C:\Users\15142\.dsh\profiles\web\cordis.patch.yml.bak-r24                                    
+2026/9/17 16:15:31    217 C:\Users\15142\.dsh\.credentials.yaml                                                        
+2026/9/17 16:15:31    207 C:\Users\15142\.dsh\settings.yaml                                                            
+2026/9/17 16:07:55    381 C:\Users\15142\.dsh\sessions\--D-workspace--\session-c07ee190-3294-4f7f-9328-f03934ad9f49\...
+2026/9/17 16:07:33    620 C:\Users\15142\.dsh\storages\workspace.json                                                  
+2026/9/17 16:06:45   3229 C:\Users\15142\.dsh\storages\session_projcache.json                                          
+2026/9/17 16:06:45  70176 C:\Users\15142\.dsh\sessions\--D-workspace--\session-f47f5e90-b9be-4aab-acc6-4f1c9a8036ac\...
+2026/9/17 9:28:55    7860 C:\Users\15142\.dsh\storages\workspace.json.bak-2026-09-17T0734                              
+
+
+=== userData 近 24 小时改动 ===
+
+LastWriteTime       Length FullName                                                                                    
+-------------       ------ --------                                                                                    
+2026/9/17 16:25:35   36864 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\DIPS                                
+2026/9/17 16:25:35  532480 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\data_1             
+2026/9/17 16:25:35  270336 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\DawnGraphiteCache\data_1            
+2026/9/17 16:25:35   18163 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Session Storage\000004.log          
+2026/9/17 16:25:35  270336 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\DawnWebGPUCache\data_1              
+2026/9/17 16:25:35  270336 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\GPUCache\data_1                     
+2026/9/17 16:25:24       0 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Network\Cookies-journal             
+2026/9/17 16:25:24   49152 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Network\Cookies                     
+2026/9/17 16:25:19  345768 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\index-dir\the-real-...
+2026/9/17 16:25:09   54799 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Preferences                         
+2026/9/17 16:24:59     384 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\c8dcdf4d9011ec60_0    
+2026/9/17 16:24:59     282 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\c7d5956f8fc9598d_0    
+2026/9/17 16:24:59     298 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\8ea051273654c34c_0    
+2026/9/17 16:24:59     420 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\bb114bd3e6e9ce85_0    
+2026/9/17 16:24:59     303 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\bc79a99c51d24f18_0    
+2026/9/17 16:24:59     298 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\75ea0d98c473c9e4_0    
+2026/9/17 16:24:59     430 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\db37d4e54f577eb2_0    
+2026/9/17 16:24:59     275 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\d6c702cfd384a08e_0    
+2026/9/17 16:24:59     280 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\7bb213bfe68b23a0_0    
+2026/9/17 16:24:59     292 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\8e7d4074e9e481c9_0    
+2026/9/17 16:24:59     284 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\885808dddbaf5bbb_0    
+2026/9/17 16:24:59     403 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\014a67004a018849_0    
+2026/9/17 16:24:59     300 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\bd52caf736a5b27f_0    
+2026/9/17 16:24:59     414 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\ea776e6c5b2a7a20_0    
+2026/9/17 16:24:59     280 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\8e338cb32a99a8db_0    
+2026/9/17 16:24:59     268 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\92454811632a8752_0    
+2026/9/17 16:24:59     392 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\31373708f19b21c5_0    
+2026/9/17 16:24:59     621 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\830dcb493bb5b111_0    
+2026/9/17 16:24:59     357 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\f1c259216ff868a3_0    
+2026/9/17 16:24:59     353 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\847938857a7cf3d2_0    
+2026/9/17 16:24:59     280 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\743066e388390e82_0    
+2026/9/17 16:24:59     301 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\111f4f59a30f9a8b_0    
+2026/9/17 16:24:59     289 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\a89bdc0cae9b42fe_0    
+2026/9/17 16:24:59     324 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\083712fce5dddca2_0    
+2026/9/17 16:24:59    1228 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\f0f2c3f6e1507773_0    
+2026/9/17 16:24:59     344 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\40b6a8360c19a510_0    
+2026/9/17 16:24:59     423 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\d61586f52b7e0bfd_0    
+2026/9/17 16:24:59     417 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\e331c0a9df97c3fb_0    
+2026/9/17 16:24:59     441 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\d8cd5fa64a6a8976_0    
+2026/9/17 16:24:59     375 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\f93606aea6ccc294_0    
+2026/9/17 16:24:59     280 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\2e1770b037b742c9_0    
+2026/9/17 16:24:59     416 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\08b4c615161b6882_0    
+2026/9/17 16:24:59     402 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\134fab89416c7e24_0    
+2026/9/17 16:24:59     785 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\6e6c2862b41b46ba_0    
+2026/9/17 16:24:59     366 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\42ea3329dd765370_0    
+2026/9/17 16:24:59     377 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\5013e1228d3b55cd_0    
+2026/9/17 16:24:59     268 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\6f11217f102d51da_0    
+2026/9/17 16:24:59     295 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\7cec5342b32c2259_0    
+2026/9/17 16:24:59     381 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\e76b9d7fe28c7a94_0    
+2026/9/17 16:24:59    1363 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\d30ead69eb817ad9_0    
+2026/9/17 16:24:59    1796 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Code Cache\js\99152af5745cb33d_0    
+2026/9/17 16:24:59   17273 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Local Storage\leveldb\000976.log    
+2026/9/17 16:24:54   45056 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\data_0             
+2026/9/17 16:24:54   17497 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000332           
+2026/9/17 16:24:54  216534 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000331           
+2026/9/17 16:24:54   47186 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000330           
+2026/9/17 16:24:54  299187 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00032f           
+2026/9/17 16:24:54  358794 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00032e           
+2026/9/17 16:24:54 1056768 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\data_2             
+2026/9/17 16:24:54 4202496 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\data_3             
+2026/9/17 16:24:54   34361 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00032d           
+2026/9/17 16:24:54   73554 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00032c           
+2026/9/17 16:24:54   49597 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00032b           
+2026/9/17 16:24:54   21004 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00032a           
+2026/9/17 16:24:54   42129 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000329           
+2026/9/17 16:24:54   23029 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000328           
+2026/9/17 16:24:54   34370 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000327           
+2026/9/17 16:24:54   18810 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000326           
+2026/9/17 16:24:54 1479909 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000322           
+2026/9/17 16:24:54  112394 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000325           
+2026/9/17 16:24:54   44133 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000324           
+2026/9/17 16:24:54   34386 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000323           
+2026/9/17 16:24:54  405797 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000321           
+2026/9/17 16:24:54   73581 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_000320           
+2026/9/17 16:24:54   21759 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00031f           
+2026/9/17 16:24:54   75603 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00031e           
+2026/9/17 16:24:54   17253 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00031d           
+2026/9/17 16:24:54  129993 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00031c           
+2026/9/17 16:24:54   27109 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00031b           
+2026/9/17 16:24:54   17754 C:\Users\15142\AppData\Roaming\@deepseek-ai\dsh-desktop\Cache\Cache_Data\f_00031a           
+
+
+=== DONE ===

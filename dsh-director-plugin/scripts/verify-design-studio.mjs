@@ -97,6 +97,28 @@ const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
 
+/* 🔴 真实鼠标的**可见性前提**（第二十四轮统一加装 · 纪律 29/54）
+ *    CDP 的 `mousePressed/Released` 在 `document.visibilityState !== "visible"`
+ *    （Electron 窗口被遮挡/最小化/停在后台）时会被**整条吞掉**，而 `mouseMoved` 照常送达
+ *    ⇒ 表现是「拖不动 / 点了没反应」，读起来完全是**产品坏了**。
+ *    🔴 `document.hasFocus()` 在 hidden 时**仍为 true** ⇒ 不能拿它当判据，只认 `visibilityState`。
+ *    实测对照：hidden ⇒ 只送达 pointermove；visible ⇒ pointerdown/mousedown/pointerup/click 全到。
+ *    不成立 ⇒ 后续鼠标断言**不可信**，应判 INVALID（纪律 24），不判产品红。 */
+const FOCUS_PRE = await (async () => {
+	const { ensurePageFocus } = await import("./_cdp-focus.mjs");
+	const ev = async (e) => {
+		const r = await send("Runtime.evaluate", { expression: e, returnByValue: true });
+		return r && r.result ? r.result.value : undefined;
+	};
+	const fp = await ensurePageFocus({ send, ev, log: (s) => console.log(s) });
+	console.log("  [鼠标前提] visibility=" + JSON.stringify(fp.visibility)
+		+ " ｜ hasFocus=" + JSON.stringify(fp.hasFocus)
+		+ " ｜ bringToFront=" + fp.broughtToFront + " ｜ focusEmulated=" + fp.focusEmulated
+		+ (fp.reasons.length ? " ｜ 降级：" + fp.reasons.join(" / ") : ""));
+	return fp;
+})();
+
+
 async function js(expr) {
 	let r;
 	try {
@@ -390,6 +412,28 @@ if (btn) { await clickAt(btn.cx, btn.cy); await sleep(1000); }
 
 /* ══ C2 铺满全屏 ══ */
 console.log("\n【C2】点击后铺满全屏");
+/* 🔴 开启动画**必须等它真的播完**再量几何（第二十四轮实测）
+ *    产品挂在 `.dp-overlay-in`（`animation: dp-overlay-in .14s`，from `scale(.985)`）。
+ *    duration 只有 140ms，但本环境存在**帧节流**：实测 t=1.2s / 2.7s 时
+ *    `transform` 仍是 `matrix(0.985,...)`（rect 11,6,1420,804 —— 四边各差 11/6px），
+ *    到 t=5.7s 才归位成 `none`（0,0,1442,816 完全贴合）。
+ *    ⇒ 「固定 sleep(1000) 后量几何」会把**动画没播完**读成「工作室没铺满」（产品缺陷的形态），
+ *      而且是**时绿时红** —— 取决于量的时候动画走到哪，这正是最难查的一类假红。
+ *    处置：**有界轮询**等到动画归位（transform 归位 且 四边贴合），预算 15s，并把等待时长打出来。
+ *    （同族：本环境 CDP 输入派发实测 ~1s 送达延迟 —— verify-mindmap 已用同一条处置修掉 3 红。） */
+let animWaited = 0;
+for (let i = 0; i < 100; i++) {
+	const animDone = await js(`(function(){
+		var s=document.getElementById('dsh-design-studio'); if(!s) return false;
+		var r=s.getBoundingClientRect(), cs=getComputedStyle(s);
+		var flush = Math.abs(r.x)<2 && Math.abs(r.y)<2 && Math.abs(r.width-innerWidth)<6 && Math.abs(r.height-innerHeight)<6;
+		return (cs.transform === 'none' || cs.transform === 'matrix(1, 0, 0, 1, 0, 0)') && flush;
+	})()`);
+	animWaited = i * 150;
+	if (animDone) break;
+	await sleep(150);
+}
+console.log("  · 开启动画归位等待：" + animWaited + "ms（预算 15000ms）");
 const full = await js(`(function(){
 	var s=document.getElementById('dsh-design-studio'); if(!s) return {mounted:false};
 	var r=s.getBoundingClientRect(), cs=getComputedStyle(s);

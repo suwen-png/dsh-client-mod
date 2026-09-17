@@ -140,14 +140,28 @@ export function loadDirectorStore(sessionId) {
 		if (cached) {
 			try {
 				const parsed = JSON.parse(cached);
-				plog("V9.3 load from file(OPFS): msgs=" + (parsed.messages?.length || 0)
-					+ " bytes=" + cached.length + " file=OPFS:" + DIRECTOR_DIR_NAME + "/" + DIRECTOR_STORE_FILENAME);
-				if (st) {
-					st.loadCount++;
-					st.lastLoadTime = Date.now();
-					st.savedMessages = parsed.messages?.length || 0;
+				/* 🔴 第 22 批 D5：OPFS 是**单文件**（`director-store.json`），**不含桶名**。
+				 *    不校验归属的话，任意作用域都会读到"最后一次保存"的那份 store
+				 *    ⇒ 多会话互相覆盖 / **串桶**（A1 的消息出现在 A2、A2 保存后 A1 读回 A2 的内容）。
+				 *    ⇒ 写入时在 payload 里记 `sid`；读时**不符即视为未命中**，
+				 *      继续走 cookie / localStorage（那两层是按 `safeDirectorKey` 分键的，天然分桶）。
+				 *    ⚠️ 旧格式（无 `sid`）**一律视为未命中** —— 宁可降级到按桶的层，
+				 *      也不许把"不知道属于谁"的数据塞给当前会话。 */
+				const want = safeDirectorKey(sessionId);
+				if (parsed.sid !== want) {
+					plog("V9.3 load from file(OPFS) SKIP：缓存属于 "
+						+ String(parsed.sid || "(旧格式无 sid)") + "，本次请求 " + want
+						+ " ⇒ 不串桶，继续走 cookie/localStorage");
+				} else {
+					plog("V9.3 load from file(OPFS): msgs=" + (parsed.messages?.length || 0)
+						+ " bytes=" + cached.length + " file=OPFS:" + DIRECTOR_DIR_NAME + "/" + DIRECTOR_STORE_FILENAME);
+					if (st) {
+						st.loadCount++;
+						st.lastLoadTime = Date.now();
+						st.savedMessages = parsed.messages?.length || 0;
+					}
+					return { messages: parsed.messages || [], config: mergeConfig(parsed.config) };
 				}
-				return { messages: parsed.messages || [], config: mergeConfig(parsed.config) };
 			} catch (e) {
 				pwarn("V9.3 load from file(OPFS) failed: " + e.message + ", fallback to cookie/localStorage");
 			}
@@ -228,7 +242,9 @@ export async function saveDirectorStore(sessionId, state) {
 	const st = getPersistState();
 	try {
 		const key = directorStorageKey(sessionId);
-		const payload = JSON.stringify({ messages: state.messages, config: state.config });
+		/* 🔴 第 22 批 D5：`sid` 是 OPFS 单文件的**归属标记**（见 `loadDirectorStore` 里的校验）。
+		 *    localStorage 那一层按 key 分桶，多这个字段不影响读（读侧只看 messages/config）。 */
+		const payload = JSON.stringify({ sid: safeDirectorKey(sessionId), messages: state.messages, config: state.config });
 
 		// ① OPFS（含写后读回校验，替代宿主 6280-6288）
 		let fileOk = false;

@@ -12,11 +12,14 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "dsh-mod-lib.ps1")
 
-# D-03: 生成 docs-index 并注入 workspace client.js（在快照前，保证快照与施加内容一致）
-$genScript = Join-Path $PSScriptRoot "gen-docs-index.ps1"
-if (Test-Path $genScript) {
-    try { & $genScript } catch { Write-Log "gen-docs-index 失败（继续apply，索引降级为null）: $_" "WARN" }
-}
+# D-03: 【2026-09-17 退役】原「生成 docs-index 并注入 workspace client.js」。
+#   `gen-docs-index.ps1` 已删除 —— 它把 `const DSH_DOCS_INDEX` 用 IndexOf 手术**注入宿主**
+#   `workspace/.../client.js`，既改不到宿主（workspace/** 不可回滚）也不该改；
+#   A14 剥离后运行时真相源是**外部资源** `dsh-director-plugin/assets/docs-index.json`，
+#   由 `dsh-director-plugin/scripts/gen-docs-index.mjs` 产出（支持 --check）。
+#   🔴 此处**故意保留一条显式 WARN**：旧写法 `if (Test-Path $genScript)` 在文件缺失时
+#      **静默跳过** —— 属于"无声降级"（纪律 19/18：降级可以，无声不行）。索引未生成必须看得见。
+Write-Log "gen-docs-index.ps1 已退役（索引改由 dsh-director-plugin/scripts/gen-docs-index.mjs 产出 assets/docs-index.json）；apply 不再注入文档索引" "WARN"
 
 # V10: 生成 assets.json（项目资产统计，client.js只读）
 try {

@@ -1,0 +1,3 @@
+﻿=== Application log (last 6h) ===
+=== WER (Windows Error Reporting) DeepSeek ===
+no WER archive

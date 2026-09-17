@@ -1,0 +1,14 @@
+﻿=== 进程（DeepSeek / node / dsh / Harness） ===
+
+
+ProcessId       : 13452
+ParentProcessId : 6272
+Name            : node.exe
+CommandLine     : C:\Users\15142\.workbuddy\binaries\node\versions\22.22.2-3\node.EXE C:\Users\15142\.workbuddy\plugins
+                  \cache\workbuddy-builtin\sheetagent\5.5.6-wb.38337834.g5f969292.h4918b5ced607/mcp/start.mjs
+
+
+
+=== 关键端口 ===
+=== 用户会话 ===
+=== DONE ===

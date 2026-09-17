@@ -21,7 +21,12 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(HERE, "..", "src");
-const PORT = Number(process.env.DSH_CDP_PORT || 9222);
+/* 🔴 端口读两个名字（纪律 126 · 第 35 轮就地更正）：本仓存在两个端口环境变量名 ——
+ *   `CDP_PORT`（47 处，主流，**启动器真正用的那个**）与 `DSH_CDP_PORT`（26 处）。
+ *   原写法只认后者 ⇒ 用 `CDP_PORT=9333` 跑时，启动器把 Harness 拉在 9333、
+ *   本套件却仍去连 9222 ⇒ 报「连不上 CDP」，看起来像环境坏了，其实是两个名字没对齐。
+ *   ⚠️ 顺序必须是 `CDP_PORT` 优先。 */
+const PORT = Number(process.env.CDP_PORT || process.env.DSH_CDP_PORT || 9222);
 
 /* ── 源码常量：**从源码读**，不写死（纪律 29）───────────────────────── */
 const layoutSrc = fs.readFileSync(path.join(SRC, "store", "layout.js"), "utf8");
@@ -82,6 +87,28 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 const emit = (m, p = {}) => ws.send(JSON.stringify({ id: ++seq, method: m, params: p }));
 await new Promise((r) => ws.addEventListener("open", r));
 try { await send("Runtime.enable"); } catch (e) { console.log("      [CDP 诊断] Runtime.enable 未确认（不影响断言）"); }
+
+/* 🔴 真实鼠标的**可见性前提**（第二十四轮统一加装 · 纪律 29/54）
+ *    CDP 的 `mousePressed/Released` 在 `document.visibilityState !== "visible"`
+ *    （Electron 窗口被遮挡/最小化/停在后台）时会被**整条吞掉**，而 `mouseMoved` 照常送达
+ *    ⇒ 表现是「拖不动 / 点了没反应」，读起来完全是**产品坏了**。
+ *    🔴 `document.hasFocus()` 在 hidden 时**仍为 true** ⇒ 不能拿它当判据，只认 `visibilityState`。
+ *    实测对照：hidden ⇒ 只送达 pointermove；visible ⇒ pointerdown/mousedown/pointerup/click 全到。
+ *    不成立 ⇒ 后续鼠标断言**不可信**，应判 INVALID（纪律 24），不判产品红。 */
+const FOCUS_PRE = await (async () => {
+	const { ensurePageFocus } = await import("./_cdp-focus.mjs");
+	const ev = async (e) => {
+		const r = await send("Runtime.evaluate", { expression: e, returnByValue: true });
+		return r && r.result ? r.result.value : undefined;
+	};
+	const fp = await ensurePageFocus({ send, ev, log: (s) => console.log(s) });
+	console.log("  [鼠标前提] visibility=" + JSON.stringify(fp.visibility)
+		+ " ｜ hasFocus=" + JSON.stringify(fp.hasFocus)
+		+ " ｜ bringToFront=" + fp.broughtToFront + " ｜ focusEmulated=" + fp.focusEmulated
+		+ (fp.reasons.length ? " ｜ 降级：" + fp.reasons.join(" / ") : ""));
+	return fp;
+})();
+
 
 async function pageAlive() {
 	try {

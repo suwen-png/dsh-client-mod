@@ -2,7 +2,7 @@
  * 职责：总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
  * 引用：03 号文 §1.2
  * 上游：client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js
- * 下游：logic/duties.js, config/model.js, util/debug.js
+ * 下游：logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -30,10 +30,19 @@
 
 import { cloneDefaultDuties, normalizeDuties } from "./duties.js";
 import { callLocalModel, polishLanguage, classifyTask } from "../config/model.js";
+/* 🔴 19 号文 N9/F9：五步链的**唯一真相源** —— 顺序由图经 `topoSort()` 现算，
+ *    本模块不再自建 1..5（收敛前正是"两份真相源"）。两个依赖都是纯模块（零 side-effect）。 */
+import { DIRECTOR_CHAIN } from "./director-chain.js";
+import { topoSort } from "./dag.js";
 import { dshLog } from "../util/debug.js";
 
-/** 任务类型 → 模型建议（文档 §1.2 第 3 步 / §3.1「调整模型」模板语义） */
-const TASK_MODEL = {
+/** 任务类型 → 模型建议（文档 §1.2 第 3 步 / §3.1「调整模型」模板语义）
+ * 🔴 19 号文 **P7 N7**：导出这两张表 —— 职能矩阵的"开启时按 tier 选择"判据
+ *    必须能拿**期望值**比对，而不是只看"模型名是个字符串"。
+ *    ⚠️ 只看字符串会在 `research`/`writing` 上**空真**：那两类本来就映射到
+ *    `deepseek-chat`，与"开关关掉后的回落值"**完全同形** ⇒ 判据必须落在
+ *    `code`（coder）/ `design`（reasoner）这两类**可分辨**的输入上。 */
+export const TASK_MODEL = {
 	code: "deepseek-coder",
 	design: "deepseek-reasoner",
 	research: "deepseek-chat",
@@ -41,7 +50,7 @@ const TASK_MODEL = {
 	chat: "deepseek-chat"
 };
 
-const TASK_NAME = { code: "代码开发", design: "系统设计", research: "资料调研", writing: "文本整理", chat: "日常对话" };
+export const TASK_NAME = { code: "代码开发", design: "系统设计", research: "资料调研", writing: "文本整理", chat: "日常对话" };
 
 /** 并发保护：同一 store 同时只允许一次处理（沿用 process.js V9.4-P1 语义） */
 const running = new WeakSet();
@@ -67,6 +76,27 @@ const running = new WeakSet();
  *                    reasoning: string, taskNote: object|null,
  *                    forward: {done:boolean, at?:number}}>}
  */
+/**
+ * 由图**现算**执行计划（纯函数 · 19 号文 N9/F9 的收敛支点）。
+ *
+ * 抽成导出函数是为了**可测**：套件要能注入"图上多一步而本版本未实现"或
+ * "图顺序与默认不同"的情形，验证
+ *   ① 顺序**随图变**（而不是写死的）；
+ *   ② 缺失实现时**可分辨地降级**、**不抛穿**（执行链上的模块抛穿会让整条链失效）。
+ *
+ * @param {Array} chain 步骤声明（如 `DIRECTOR_CHAIN`）
+ * @param {string[]} implIds 本版本**已实现**的步骤 id（调用方传 `Object.keys(IMPL)`，
+ *        这样"实现了哪些"只有一处真相源，不会出现第三份清单）
+ * @returns {Array<{id:string, n:number, implemented:boolean}>}
+ *          顺序 = `topoSort()` 拓扑序；图上成环（`null`）⇒ **降级为声明顺序**，不抛。
+ */
+export function chainPlan(chain, implIds) {
+	const list = Array.isArray(chain) ? chain : [];
+	const order = topoSort(list) || list.map((s) => String(s ? s.id : ""));
+	const have = Array.isArray(implIds) ? implIds.map(String) : [];
+	return order.map((id, i) => ({ id: id, n: i + 1, implemented: have.indexOf(String(id)) >= 0 }));
+}
+
 export async function runDirector({
 	sessionId, userText, store, duties, config,
 	autoForward = false, onForward, taskNote = null
@@ -74,7 +104,18 @@ export async function runDirector({
 	const d = normalizeDuties(duties || cloneDefaultDuties());
 	const cfg = config || { localModel: { enabled: false } };
 	const steps = [];
-	const push = (n, name, enabled, grade, text) => steps.push({ n, name, enabled, grade, text });
+	/* 🔴 19 号文 **N9 / F9**：五步链收敛为**单一真相源** —— 执行顺序由图经
+	 *    `chainPlan()`（内部 `dag.js#topoSort()`）**现算**，见下方实现表之后的循环。
+	 *    ⚠️ 收敛前这里是自建的 `push(1..5)`：既**无 id**、顺序又**硬编码**；
+	 *      而面板与闸门按 `DIRECTOR_CHAIN` 展示 ⇒ **两份真相源**（F9 缺口）。 */
+	/* 各步的中间结果（实现表读写它；**顺序**由图算，不在实现表里） */
+	const ctx = {
+		polished: String(userText == null ? "" : userText),
+		branch: "沿用当前分支",
+		model: "deepseek-chat",
+		context: "",
+		review: ""
+	};
 
 	if (store && running.has(store)) {
 		throw new Error("总监正在处理上一条指令，请稍候");
@@ -116,93 +157,136 @@ export async function runDirector({
 			store.setStatus("running");
 		}
 
-		/* ── 步骤 1：整理语言（§1.2 ①） ── */
-		let polished = userText;
-		let g1 = "G0";
-		if (d.languagePolish.enabled) {
-			polished = polishLanguage(userText);
-			if (cfg.localModel?.enabled) {
-				const out = await callLocalModel(
-					d.languagePolish.prompt + "\n\n## 用户输入\n" + userText + noteBlock
-					+ "\n\n请只输出整理后的指令本身，不要解释。",
-					cfg
-				);
-				if (out && out.trim()) { polished = out.trim().split("\n")[0]; g1 = "G1"; }
-			}
-		}
-		push(1, "整理语言", d.languagePolish.enabled, g1, polished);
-
-		/* ── 步骤 2：判断是否需要切新分支（§1.2 ②） ── */
-		let branch = "沿用当前分支";
-		let g2 = "G0";
-		if (d.branchSwitch.enabled) {
-			const prev = (state.messages || []).filter((m) => m.role === "user").slice(-1)[0];
-			branch = prev ? judgeBranch(prev.content, userText) : "新会话首条 → 沿用当前分支";
-			// 分支判断属语义连续性判定，规则不足以覆盖时交本地模型
-			if (cfg.localModel?.enabled) {
-				const out = await callLocalModel(
-					d.branchSwitch.prompt + "\n\n## 上一条用户消息\n" + (prev ? prev.content : "(无)")
-					+ "\n\n## 当前用户消息\n" + userText + noteBlock
-					+ "\n\n只回答：连续 或 不连续，并给一句理由。",
-					cfg
-				);
-				if (out) {
-					g2 = "G1";
-					branch = /不连续/.test(out) ? "建议开新分支（" + out.trim().slice(0, 40) + "）" : "沿用当前分支";
+		/* ══════════════════════════════════════════════════════════════════
+		 * 五步链的**实现表**（key = `DIRECTOR_CHAIN` 的 id）
+		 *   🔴 **顺序不在这里** —— 一旦写在这里，就又是一份硬编码顺序（N9 的病因）。
+		 *   每张实现返回 `{name, enabled, grade, text}`，并把中间结果写进 `ctx` 供后续步骤读。
+		 * ══════════════════════════════════════════════════════════════════ */
+		const IMPL = {
+			/* ── ① 整理语言（§1.2 ①） ── */
+			polish: async () => {
+				let polished = ctx.polished;
+				let g = "G0";
+				if (d.languagePolish.enabled) {
+					polished = polishLanguage(userText);
+					if (cfg.localModel?.enabled) {
+						const out = await callLocalModel(
+							d.languagePolish.prompt + "\n\n## 用户输入\n" + userText + noteBlock
+							+ "\n\n请只输出整理后的指令本身，不要解释。",
+							cfg
+						);
+						if (out && out.trim()) { polished = out.trim().split("\n")[0]; g = "G1"; }
+					}
 				}
-			}
-		}
-		push(2, "切换分支", d.branchSwitch.enabled, g2, branch);
+				ctx.polished = polished;
+				return { name: "整理语言", enabled: d.languagePolish.enabled, grade: g, text: polished };
+			},
 
-		/* ── 步骤 3：判断是否需要切模型（§1.2 ③） ── */
-		let model = "deepseek-chat";
-		let g3 = "G0";
-		if (d.modelRouting.enabled) {
-			model = TASK_MODEL[taskType] || "deepseek-chat";
-			if (cfg.localModel?.enabled) {
-				const out = await callLocalModel(
-					d.modelRouting.prompt + "\n\n## 用户输入\n" + userText + noteBlock
-					+ "\n\n## 规则初判\n任务类型=" + (TASK_NAME[taskType] || taskType) + "，建议=" + model,
-					cfg
-				);
-				if (out) {
-					g3 = "G1";
-					const m = out.match(/(deepseek-[a-z]+)/);
-					if (m) model = m[1];
+			/* ── ② 判断是否需要切新分支（§1.2 ②） ── */
+			branch: async () => {
+				let branch = "沿用当前分支";
+				let g = "G0";
+				if (d.branchSwitch.enabled) {
+					const prev = (state.messages || []).filter((m) => m.role === "user").slice(-1)[0];
+					branch = prev ? judgeBranch(prev.content, userText) : "新会话首条 → 沿用当前分支";
+					// 分支判断属语义连续性判定，规则不足以覆盖时交本地模型
+					if (cfg.localModel?.enabled) {
+						const out = await callLocalModel(
+							d.branchSwitch.prompt + "\n\n## 上一条用户消息\n" + (prev ? prev.content : "(无)")
+							+ "\n\n## 当前用户消息\n" + userText + noteBlock
+							+ "\n\n只回答：连续 或 不连续，并给一句理由。",
+							cfg
+						);
+						if (out) {
+							g = "G1";
+							branch = /不连续/.test(out) ? "建议开新分支（" + out.trim().slice(0, 40) + "）" : "沿用当前分支";
+						}
+					}
 				}
-			}
-		}
-		push(3, "调整模型", d.modelRouting.enabled, g3, "任务类型=" + (TASK_NAME[taskType] || taskType) + " → " + model);
+				ctx.branch = branch;
+				return { name: "切换分支", enabled: d.branchSwitch.enabled, grade: g, text: branch };
+			},
 
-		/* ── 步骤 4：上下文筛选（§1.2 ④） ── */
-		let context = "";
-		let g4 = "G0";
-		if (d.contextFilter.enabled) {
-			const needSwitch = /新分支/.test(branch) || model !== "deepseek-chat";
-			if (needSwitch) {
-				context = pickContext(state.messages || [], userText, 5);
-				g4 = "G0";
-			} else {
-				context = "无需切换 → 传递完整上下文";
-			}
-		} else {
-			context = "职责未启用 → 不筛选";
-		}
-		push(4, "上下文筛选", d.contextFilter.enabled, g4, context);
+			/* ── ③ 判断是否需要切模型（§1.2 ③） ── */
+			model: async () => {
+				let model = "deepseek-chat";
+				let g = "G0";
+				if (d.modelRouting.enabled) {
+					model = TASK_MODEL[taskType] || "deepseek-chat";
+					if (cfg.localModel?.enabled) {
+						const out = await callLocalModel(
+							d.modelRouting.prompt + "\n\n## 用户输入\n" + userText + noteBlock
+							+ "\n\n## 规则初判\n任务类型=" + (TASK_NAME[taskType] || taskType) + "，建议=" + model,
+							cfg
+						);
+						if (out) {
+							g = "G1";
+							const m = out.match(/(deepseek-[a-z]+)/);
+							if (m) model = m[1];
+						}
+					}
+				}
+				ctx.model = model;
+				return { name: "调整模型", enabled: d.modelRouting.enabled, grade: g,
+					text: "任务类型=" + (TASK_NAME[taskType] || taskType) + " → " + model };
+			},
 
-		/* ── 步骤 5：自动审核产出（§1.2 ⑤ / §2.3 ⑤） ── */
-		// 注意：本步审核的是「总监组装出的待提交报文」是否符合原始需求（§3.1 模板语义：
-		// "大模型返回结果后，自动审核文档/代码是否符合原始需求"）。
-		// 真实的大模型产出在转发之后才产生，故此处先产出**审核结论占位 + 规则自检**，
-		// 由 `reviewOutput()` 在拿到产出后调用；本步负责登记开关与规则自检结果。
-		let review = "职责未启用 → 跳过审核";
-		let g5 = "G0";
-		if (d.outputReview.enabled) {
-			const r0 = reviewOutput(userText, polished, d);
-			review = r0.passed ? "自检通过" : "发现 " + r0.issues.length + " 项问题：" + r0.issues.join("；");
-			g5 = "G0";
+			/* ── ④ 上下文筛选（§1.2 ④） ── */
+			context: async () => {
+				let context = "";
+				let g = "G0";
+				if (d.contextFilter.enabled) {
+					const needSwitch = /新分支/.test(ctx.branch) || ctx.model !== "deepseek-chat";
+					if (needSwitch) {
+						context = pickContext(state.messages || [], userText, 5);
+						g = "G0";
+					} else {
+						context = "无需切换 → 传递完整上下文";
+					}
+				} else {
+					context = "职责未启用 → 不筛选";
+				}
+				ctx.context = context;
+				return { name: "上下文筛选", enabled: d.contextFilter.enabled, grade: g, text: context };
+			},
+
+			/* ── ⑤ 自动审核产出（§1.2 ⑤ / §2.3 ⑤） ──
+			 * 注意：本步审核的是「总监组装出的待提交报文」是否符合原始需求（§3.1 模板语义：
+			 * "大模型返回结果后，自动审核文档/代码是否符合原始需求"）。
+			 * 真实的大模型产出在转发之后才产生，故此处先产出**审核结论占位 + 规则自检**，
+			 * 由 `reviewOutput()` 在拿到产出后调用；本步负责登记开关与规则自检结果。 */
+			review: async () => {
+				let review = "职责未启用 → 跳过审核";
+				const g = "G0";
+				if (d.outputReview.enabled) {
+					const r0 = reviewOutput(userText, ctx.polished, d);
+					review = r0.passed ? "自检通过" : "发现 " + r0.issues.length + " 项问题：" + r0.issues.join("；");
+				}
+				ctx.review = review;
+				return { name: "自动审核产出", enabled: d.outputReview.enabled, grade: g, text: review };
+			}
+		};
+
+		/* 🔴 **执行 = 按图算出的顺序遍历实现表**。`chainPlan` 的同时给出
+		 *    「本版本实现了哪些」—— 图上新增步骤而这里未实现时
+		 *    **可分辨地降级**（记一条 `enabled:false` + 明文原因），**不静默少跑** —— 纪律 19。 */
+		for (const st of chainPlan(DIRECTOR_CHAIN, Object.keys(IMPL))) {
+			const impl = IMPL[st.id];
+			if (!impl) {
+				steps.push({ id: st.id, n: st.n, name: st.id, enabled: false, grade: "G0",
+					text: "本版本未实现该步骤（声明图已含它）⇒ 降级为跳过（**不静默**）" });
+				continue;
+			}
+			const r = await impl();
+			steps.push({ id: st.id, n: st.n, name: r.name, enabled: r.enabled, grade: r.grade, text: r.text });
 		}
-		push(5, "自动审核产出", d.outputReview.enabled, g5, review);
+
+		/* 回填：后续报文组装沿用既有局部名（**新增 `id` 字段、不改既有字段** —— 冻结契约只增） */
+		const polished = ctx.polished;
+		const branch = ctx.branch;
+		const model = ctx.model;
+		const context = ctx.context;
+		const review = ctx.review;
 
 		/* ── 组装报文 + 写入总监对话流（§2.3 ③） ── */
 		const reasoning = steps
@@ -239,7 +323,9 @@ export async function runDirector({
 		}
 
 		dshLog("director", "runDirector done: session=" + sessionId + " taskType=" + taskType
-			+ " grade=" + [g1, g2, g3, g4, g5].join("/") + " forward=" + forward.done);
+			/* 🔴 N9 收敛后 grade 串**由实际执行的步骤派生**（顺序/条数随图走）。
+			 *    收敛前这里是手写的 `[g1..g5]` —— 图上一加步，日志就开始"少报一步"却没人发现。 */
+			+ " grade=" + steps.map((s) => s.grade).join("/") + " forward=" + forward.done);
 
 		return { steps, instruction: polished, model, branch, taskType, reasoning, forward, payload,
 			noteInjected: payload.taskNote ? payload.taskNote : null };

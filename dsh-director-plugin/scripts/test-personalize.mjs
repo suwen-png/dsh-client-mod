@@ -49,9 +49,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-	P_DEFAULTS, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE,
+	P_DEFAULTS, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DIALOG_BG, P_IMG_MAX,
 	PERSONALIZE_KEY, PERSONALIZE_STYLE_ID,
-	pHexSoft, normalizePersonalize, pVarsFor, pCssText, loadPersonalize, personalizeStore
+	pHexSoft, normalizePersonalize, pVarsFor, pCssText, loadPersonalize, personalizeStore,
+	hexToRgb, relLuma, isLightHex, mixHex, contrastRatio, clampToContrast, dialogSkinFor, dialogVarsFor, DIALOG_VAR_KEYS
 } from "../src/store/personalize.js";
 import {
 	DIM, DIM_ORDER, DIM_LABEL, FLOW_STATUS, FLOW_STATUS_LABEL, PENDING_LABEL,
@@ -292,7 +293,11 @@ section("【C】四个界面 · 「同一个面板」的源码级一致性");
 /** [文件, 该界面的 scope 文案, 质感所在**样式块**的 key, 该块必须用的背景长写] */
 const PAGES = [
 	["src/components/DirectorPage.js", "总监页", "root", 'backgroundColor: "var(--dsw-alias-bg-base, var(--dp-bg-0, #0b0c0e))"'],
-	["src/components/DirectorDialog.js", "总监弹窗", "panel", 'backgroundColor: "var(--dsw-alias-bg-base, #16171a)"'],
+	/* 🔴 弹窗面板的宿主兜底令牌 2026-09-17 由 `bg-base` 改为 **`bg-overlay`**：
+	 *   实测宿主是"深色页面(`rgb(7,17,29)`) + 浅色玻璃层"设计，`bg-base` 是 `rgba(246,250,255,0.40)`
+	 *   的最外层玻璃 —— 单独当浮层底会合成出中灰 `rgb(103,110,119)`，正文字对比度只有 3.06:1。
+	 *   浮层应当用宿主**专为浮层准备**的 `bg-overlay`（实测 0.96）。详见 D25。 */
+	["src/components/DirectorDialog.js", "总监弹窗", "panel", 'backgroundColor: "var(--dp-dlg-bg, var(--dsw-alias-bg-overlay, #16171a))"'],
 	["src/components/MindMap.js", "分支导图", "root", 'backgroundColor: "var(--dp-bg-0, #0b0c0e)"'],
 	["src/components/DesignStudio.js", "设计图", "root", 'backgroundColor: "var(--dsw-alias-bg-base, #0f1013)"']
 ];
@@ -429,6 +434,217 @@ t("C17", "🔴 四个表面令牌的映射方向正确（bg-0→bg-base / bg-1�
 t("C18", "纹理色已变量化且总监页覆写（浅色底下白纹理**等于不可见** ⇒ 选了网格像没选）",
 	/--dp-tex:\S/.test(cssRule(CSS, ":root")) && BRIDGE.indexOf("--dp-tex:") >= 0
 	&& CSS.indexOf("background-image:linear-gradient(var(--dp-tex)") >= 0, null);
+
+/* ══════════════════════════════════════════════════════════════════
+ * D. 总监弹窗背景（2026-09-17 新增）
+ *
+ *   需求原文（用户）：「左侧点击总监按钮，总监的弹窗，背景是黑色的。调整下，按照人眼最舒服
+ *     温馨的风格调整背景和文字的颜色；同时增加自定义背景颜色的选项，可以上传图片作为背景；
+ *     默认的话可以跟随软件的背景主题」
+ *
+ *   ✗ 失败形态（这一档的四种，前三种都**不会报错**）：
+ *     ① 把 follow 档的宿主令牌写进 `:root` ⇒ 求值失败静默落 fallback ⇒「跟随主题」其实是假跟随
+ *        （与 C15/C16 同一个坑，所以 D 段自己再钉一遍 —— 新皮肤是新代码，不会自动继承旧断言）；
+ *     ② 自定义底色按 "浅底/深底" 二分挑文字色 ⇒ 中间灰上选反边，白字比黑字对比度还低；
+ *     ③ 有图片时卡片仍不透明 ⇒ 照片只在缝隙里露几条纹（"上传了但看不出效果"）；
+ *     ④ 切回 follow 不清理 `--dp-dlg-*` ⇒ 残留上一档的米色，而界面上"跟随主题"是选中的。
+ *   ⇒ 四条各配一条断言，且每条都有**正负对照**（不只报绿）。
+ * ══════════════════════════════════════════════════════════════════ */
+section("【D】总监弹窗背景 · 四档 / 可读性 / 图片 / 跟随主题");
+
+t("D1", "四档齐全（跟随主题 / 暖白 / 暖夜 / 自定义）且每档都有 desc",
+	P_DIALOG_BG.length === 4
+	&& ["follow", "warm", "dim", "custom"].every((k) => P_DIALOG_BG.some((o) => o.key === k && String(o.desc || "").length > 8)),
+	P_DIALOG_BG.map((o) => o.key));
+
+t("D2", "🔴 默认档 = warm 而**不是** follow（宿主当前是深色 ⇒ follow 出来还是黑底 = 用户抱怨什么就保持什么）",
+	P_DEFAULTS.dialogBg === "warm" && P_DIALOG_BG.some((o) => o.key === "follow"), P_DEFAULTS.dialogBg);
+
+t("D3", "🔴 内置两档的正文对比度 ≥ 4.5（WCAG AA）—— 把「人眼舒服」变成可断言的数",
+	["warm", "dim"].every((m) => { const k = dialogSkinFor({ dialogBg: m }); return contrastRatio(k.bg, k.t1) >= 4.5; }),
+	["warm", "dim"].map((m) => { const k = dialogSkinFor({ dialogBg: m }); return m + "=" + contrastRatio(k.bg, k.t1).toFixed(2); }));
+
+t("D4", "暖白底真的是浅底、暖夜底真的是深底，且两者不同（否则「暖白」是名字而已）",
+	(() => { const w = dialogSkinFor({ dialogBg: "warm" }), d = dialogSkinFor({ dialogBg: "dim" });
+		return isLightHex(w.bg) && !isLightHex(d.bg) && w.bg !== d.bg; })(),
+	[dialogSkinFor({ dialogBg: "warm" }).bg, dialogSkinFor({ dialogBg: "dim" }).bg]);
+
+t("D5", "🔴 暖夜底**不是纯黑**（相对亮度 > 0.004）—— #000 上的白字有光晕感，正是用户抱怨的那种观感",
+	relLuma(dialogSkinFor({ dialogBg: "dim" }).bg) > 0.004,
+	relLuma(dialogSkinFor({ dialogBg: "dim" }).bg).toFixed(4));
+
+t("D6", "自定义底色按亮度自动配文字（正负对照：亮底给深字、暗底给浅字）",
+	(() => { const a = dialogSkinFor({ dialogBg: "custom", dialogBgColor: "#ffeecc" });
+		const b = dialogSkinFor({ dialogBg: "custom", dialogBgColor: "#112233" });
+		return relLuma(a.t1) < 0.15 && relLuma(b.t1) > 0.6; })(),
+	[dialogSkinFor({ dialogBg: "custom", dialogBgColor: "#ffeecc" }).t1, dialogSkinFor({ dialogBg: "custom", dialogBgColor: "#112233" }).t1]);
+
+t("D7", "🔴 中间灰也必须选对边（#808080 / #7a7262）—— 按 luma 二分会在这两个色上选反边，故实现走对比度择优",
+	["#808080", "#7a7262", "#87817a", "#6f6f78"].every((c) => {
+		const k = dialogSkinFor({ dialogBg: "custom", dialogBgColor: c });
+		return contrastRatio(k.bg, k.t1) >= contrastRatio(k.bg, "#000000") * 0.85
+			&& contrastRatio(k.bg, k.t1) >= contrastRatio(k.bg, "#ffffff") * 0.85;
+	}), ["#808080", "#7a7262"].map((c) => contrastRatio(c, dialogSkinFor({ dialogBg: "custom", dialogBgColor: c }).t1).toFixed(2)));
+
+t("D8", "自定义底色扫 12 色，正文对比度 ≥ 4.0（中间灰背景的物理上限约 4.5）",
+	["#ffeecc", "#f7f2e8", "#ffffff", "#112233", "#000000", "#7a7262", "#808080", "#d0c8b8",
+		"#3a3228", "#e8d9c0", "#2f6bdd", "#9a8f7f"].every((c) => {
+		const k = dialogSkinFor({ dialogBg: "custom", dialogBgColor: c });
+		return contrastRatio(k.bg, k.t1) >= 4;
+	}), null);
+
+t("D9", "层次方向正确：bg1 永远比 bg 亮（浅底浅、深底也浅一点 = 卡片抬起来），两张底都成立",
+	["warm", "dim"].every((m) => { const k = dialogSkinFor({ dialogBg: m }); return relLuma(k.bg1) > relLuma(k.bg); }), null);
+
+t("D10", "🔴 follow 档**一个皮肤变量都不产出**（产出了就等于把宿主令牌固化进 :root ⇒ 静默假跟随）",
+	Object.keys(dialogVarsFor({ dialogBg: "follow" })).length === 0,
+	Object.keys(dialogVarsFor({ dialogBg: "follow" })));
+
+t("D11", "follow + 图片 ⇒ 只产出遮罩、不产出色值（文字仍走宿主令牌，宿主换主题即时生效）",
+	(() => { const v = dialogVarsFor({ dialogBg: "follow", dialogBgImage: "data:image/png;base64,AAAA" });
+		const keys = Object.keys(v);
+		return keys.length === 2 && keys.indexOf("--dp-dlg-scrim") >= 0 && keys.indexOf("--dp-dlg-t1") < 0; })(), null);
+
+t("D12", "🔴 图片过滤（负对照）：http 外链 / file 路径 / javascript: / 超长 base64 一律丢弃；合法 dataURL 保留",
+	(() => {
+		const bad = ["https://a.example/x.png", "file:///c:/x.png", "./x.png", "javascript:alert(1)",
+			"data:text/html;base64,AAAA", "data:image/png;base64," + "A".repeat(P_IMG_MAX + 10)];
+		const good = normalizePersonalize({ dialogBgImage: "data:image/png;base64,AAAA" }).dialogBgImage;
+		return bad.every((b) => normalizePersonalize({ dialogBgImage: b }).dialogBgImage === "") && good === "data:image/png;base64,AAAA";
+	})(), null);
+
+t("D13", "有图片时卡片色变**半透明**（rgba）且产出 --dp-dlg-img（否则照片被不透明卡片盖死，等于没上传）",
+	(() => {
+		const img = "data:image/png;base64,AAAA";
+		const k = dialogSkinFor({ dialogBg: "warm", dialogBgImage: img });
+		const v = dialogVarsFor({ dialogBg: "warm", dialogBgImage: img });
+		return /^rgba\(/.test(k.bg1) && /^rgba\(/.test(k.bg2) && String(v["--dp-dlg-img"] || "").indexOf("url(") === 0;
+	})(), null);
+
+t("D14", "遮罩浓度：脏值（NaN / 字符串 / 负数 / 超界）一律夹紧回落，绝不产出 NaN 或 > 1",
+	(() => {
+		const dims = [NaN, "x", -5, 99, undefined, 0.5];
+		return dims.every((d) => { const n = normalizePersonalize({ dialogBgDim: d }).dialogBgDim;
+			return Number.isFinite(n) && n >= 0 && n <= 0.95; })
+			&& normalizePersonalize({ dialogBgDim: 0.5 }).dialogBgDim === 0.5;
+	})(), null);
+
+t("D15", "变量名全表覆盖产出的每个键（漏一个 ⇒ 切档时那一项残留 = 界面与设定不一致）",
+	(() => {
+		const img = "data:image/png;base64,AAAA";
+		const keys = new Set(DIALOG_VAR_KEYS);
+		const produced = ["warm", "dim", "custom", "follow"].flatMap((m) => Object.keys(dialogVarsFor({
+			dialogBg: m, dialogBgImage: m === "follow" ? "" : img
+		})));
+		return produced.every((k) => keys.has(k));
+	})(), DIALOG_VAR_KEYS.length);
+
+t("D16", "🔴 反证：全表本身有内容且含图片两键（否则 D15 可能是「两边都空」的空真）",
+	DIALOG_VAR_KEYS.length >= 15 && DIALOG_VAR_KEYS.indexOf("--dp-dlg-img") >= 0 && DIALOG_VAR_KEYS.indexOf("--dp-dlg-scrim") >= 0, DIALOG_VAR_KEYS.length);
+
+t("D17", "CSS 图片规则的选择器只覆盖弹窗自己的壳（不得出现裸 `html[data-dp-dlgimg]` 通配 ⇒ 会污染整棵 DOM）",
+	(() => {
+		const m = CSS.match(/html\[data-dp-dlgimg="1"\][^{]*\{/);
+		if (!m) return false;
+		return m[0].split(",").every((sel) => /data-testid="d-/.test(sel));
+	})(), (CSS.match(/html\[data-dp-dlgimg="1"\][^{]*\{/) || [""])[0].slice(0, 90));
+
+t("D18", "🔴 新皮肤**不许**把自己的默认值写进 :root（写进去就取不到 body 上的宿主令牌 —— 与 C16 同源）",
+	!/:root\{[^}]*--dp-dlg-/.test(CSS), null);
+
+t("D19", "CSS 里图片两层都在（遮罩 gradient + --dp-dlg-img），且遮罩浓度走变量（用户可调）",
+	/linear-gradient\(var\(--dp-dlg-scrim/.test(CSS) && /var\(--dp-dlg-img/.test(CSS), null);
+
+t("D20", "组件真的消费了皮肤变量，且**保留宿主令牌 fallback**（没有 fallback ⇒ 「跟随主题」档直接失效）",
+	(() => { const blk = styleBlock(SRC("src/components/DirectorDialog.js"), "panel");
+		/* 判据只要求"有宿主令牌兜底"，**不锁具体是哪一个** ——
+		 * 锁死会造成"换了更合适的令牌反而报红"的过期判据（本文件刚踩过，见 C5 注释）。
+		 * 具体用哪个令牌由 D25 单独钉。 */
+		return blk.indexOf("var(--dp-dlg-bg,") >= 0 && /var\(--dsw-alias-[a-z0-9-]+,/.test(blk); })(), null);
+
+t("D21", "🔴 反证（D20 非空真）：把皮肤变量抠掉 ⇒ 同一条判据必须为假",
+	(() => { const blk = styleBlock(SRC("src/components/DirectorDialog.js"), "panel");
+		return blk.replace(/var\(--dp-dlg-[a-z0-9-]+,\s*/g, "").indexOf("var(--dp-dlg-bg,") < 0; })(), null);
+
+t("D22", "弹窗面板壳必须同时带 `dp-textured`（纹理档在这块上才有效）且不残留 background 简写",
+	(() => { const s = SRC("src/components/DirectorDialog.js");
+		const blk = styleBlock(s, "panel");
+		return /className:[^,]*dp-textured/.test(s) && stripComments(blk).indexOf("background:") < 0; })(), null);
+
+t("D23", "面板壳（PersonalizePanel）真的渲染了新档（import 了不渲染 = 死代码）",
+	(() => { const s = SRC("src/components/PersonalizePanel.js");
+		return /import\s*\{[^}]*P_DIALOG_BG[^}]*\}\s*from\s*"\.\.\/store\/personalize\.js"/.test(s)
+			&& /optionRow\(P_DIALOG_BG/.test(s) && /readImageAsDataUrl/.test(s); })(), null);
+
+t("D24", "上传链路的三个读点齐全（选图 / 改遮罩 / 移除），e2e 才点得到",
+	(() => { const s = SRC("src/components/PersonalizePanel.js");
+		return ["pp-dlgbg-file", "pp-dlgbg-dimrange", "pp-dlgbg-clear", "pp-dlgbg-color", "pp-dlgbg-msg"]
+			.every((k) => s.indexOf('"' + k + '"') >= 0 || s.indexOf(k) >= 0); })(), null);
+
+/* ── D25–D28（2026-09-17 真机实测驱动）─────────────────────────────────
+ * 这一组全部来自**真机量出的缺陷**，不是纸上推演：
+ *   follow 档正文 3.06:1、自定义中间灰正文 3.34:1。 */
+
+t("D25", "🔴 浮层底色必须走宿主 **overlay 族**令牌（`bg-overlay`），不得用最外层玻璃 `bg-base`、也不得用深色 `bg-sunken`",
+	(() => { const blk = styleBlock(SRC("src/components/DirectorDialog.js"), "panel");
+		return blk.indexOf("var(--dsw-alias-bg-overlay,") >= 0
+			&& blk.indexOf("var(--dsw-alias-bg-base,") < 0; })(), null);
+
+t("D25b", "🔴 弹窗内其它位置也不得再把 `bg-sunken` 当**表面**（实测它是深色 `rgb(29,39,57)` —— 落进浅色主题会翻黑）",
+	(() => { const s = stripComments(SRC("src/components/DirectorDialog.js"));
+		return s.indexOf("--dsw-alias-bg-sunken") < 0; })(), null);
+
+t("D26", "🔴 **通用拦截**：源码里出现的每个 `--dp-dlg-*` 引用都必须在 DIALOG_VAR_KEYS 表内（拼写错会变成永不生效的死兜底）",
+	(() => {
+		const s = stripComments(SRC("src/components/DirectorDialog.js"));
+		const used = new Set();
+		const re = /--dp-dlg-[a-z0-9-]+/g;
+		let m; while ((m = re.exec(s))) used.add(m[0]);
+		const bad = [...used].filter((k) => DIALOG_VAR_KEYS.indexOf(k) < 0);
+		if (bad.length) console.log("     未登记变量：" + bad.join(", "));
+		return bad.length === 0 && used.size >= 8;
+	})(), null);
+
+t("D26b", "🔴 反证（D26 非空真）：故意造一个拼写错必须被判出来（缺陷校准）",
+	(() => {
+		const s = stripComments(SRC("src/components/DirectorDialog.js"));
+		const injected = s.replace(/(--dp-dlg-)t2\b/, "--dp-dlg-typo");
+		const used = new Set();
+		const re = /--dp-dlg-[a-z0-9-]+/g;
+		let m; while ((m = re.exec(injected))) used.add(m[0]);
+		return [...used].some((k) => DIALOG_VAR_KEYS.indexOf(k) < 0);
+	})(), null);
+
+t("D27", "🔴 **自定义底色全色域**：t1/t2 ≥4.5、t3 ≥3.0、强调与状态色 ≥3.0（含中间灰这种「两个极端都不远」的恶劣底）",
+	(() => {
+		const bases = ["#7a7262", "#888888", "#808080", "#2f6bdd", "#c8a2c8", "#4b6b3a", "#ffd700", "#1a1a2e", "#ffffff", "#000000"];
+		const bad = [];
+		for (const b of bases) {
+			const s = dialogSkinFor({ dialogBg: "custom", dialogBgColor: b });
+			if (contrastRatio(s.t1, b) < 4.5) bad.push(b + " t1=" + contrastRatio(s.t1, b).toFixed(2));
+			if (contrastRatio(s.t2, b) < 4.5) bad.push(b + " t2=" + contrastRatio(s.t2, b).toFixed(2));
+			if (contrastRatio(s.t3, b) < 3.0) bad.push(b + " t3=" + contrastRatio(s.t3, b).toFixed(2));
+			for (const k of ["ac", "ac2", "ok", "warn", "bad"]) {
+				if (contrastRatio(s[k], b) < 3.0) bad.push(b + " " + k + "=" + contrastRatio(s[k], b).toFixed(2));
+			}
+		}
+		if (bad.length) console.log("     低于门槛：" + bad.slice(0, 6).join(" / "));
+		return bad.length === 0;
+	})(), null);
+
+t("D27b", "🔴 反证（D27 非空真）：把钳制关掉 ⇒ 同一条判据必须为假（证明它真的在拦东西）",
+	(() => {
+		/* 用"固定比例混色"复现旧算法（正是 D27 要拦的那个版本） */
+		const base = "#7a7262";
+		const naive = mixHex(base, "#ffffff", 0.72);
+		return contrastRatio(naive, base) < 4.5;
+	})(), null);
+
+t("D28", "🔴 `clampToContrast` 边界：连极点都达不到目标时返回极点（不产 NaN / 不死循环）",
+	(() => {
+		const c = clampToContrast("#000000", "#000000", "#000000", 4.5);
+		return typeof c === "string" && /^#[0-9a-f]{6}$/.test(c) && !/NaN/.test(c);
+	})(), null);
 
 /* ══ 汇总 ══ */
 console.log("\n───────────────────────────────────────────────");

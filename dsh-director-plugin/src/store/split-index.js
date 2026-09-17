@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：分流标签索引
  * 引用：—
- * 上游：components/DirectorPage.js, logic/branch-tree.js
+ * 上游：components/DirectorDialog.js, components/DirectorPage.js, logic/branch-tree.js, logic/director-dispatch.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -13,10 +13,18 @@
  * 🔴 为什么必须有这个模块（不这样做就**看不见**分流）
  * ───────────────────────────────────────────────────────────────────
  *  分流落地是「宿主 `sessions.create()` 建空白会话」。空白会话的标题由**宿主**决定
- *  （`normalizeSummary` 读 `raw.title || raw.displayTitle || sessionLabel(id)`），
- *  而宿主公开的 `sessions` 服务**没有 rename**（只有 `create` / `fork` / `open` /
- *  `list` / `search` —— 已逐条核对 `dsh-client-runtime/lib/client.js:8960-9010`，
- *  `rename` 只存在于**会话实体** `Session#rename`（:7351），插件拿不到那个实体）。
+ *  （`normalizeSummary` 读 `raw.title || raw.displayTitle || sessionLabel(id)`）。
+ *
+ *  🔴 **第十九轮实测更正**（原文写的是"宿主没有 rename，rename 只存在于会话实体、插件拿不到"）：
+ *     · 事实①：`sessions.rename({sessionId,title})` 这个 **RPC 确实存在**
+ *       （宿主 `api.sessions` 成员表：`attachment/cancel/create/fork/history/list/models/prompt/rename/search/selectModel/updateQueue`）。
+ *     · 事实②：**插件拿得到会话实体** —— `scopedConversationOf(id).scopedSession()` 就是它，
+ *       `probeSessionIo` 正是靠这个实体读 `history()` 的。所以"拿不到那个实体"**不成立**。
+ *     ⇒ 原文的结论（"只能插件侧覆盖"）**在能力判断上是错的**。
+ *     ⇒ 但**当前实现仍走插件侧覆盖**，这是**已知的待改项**，不是"宿主做不到"：
+ *       应改为**优先调 `rename`**（宿主侧生效，用户在宿主自己的列表/搜索里也能认出），
+ *       失败再回落插件侧覆盖且降级可见。见 `docs/00-统筹入口/14-…20260916.md` §八 8.2。
+ *       🔴 未完成前**不许**把这一段读成"已按宿主能力做过了"。
  *
  *  ⇒ 后果（若不补偿）：一次分出 8 条线，导图上 8 个节点**标题一模一样**，
  *     用户说的「思维导图应该能看出来」**完全落空** —— 而且因为是"建成功了"，

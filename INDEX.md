@@ -1,232 +1,119 @@
-# dsh-client-mod — 项目入口索引
+# dsh-client-mod — 项目入口
 
-> 项目名称：dsh-client-mod（DeepSeek Harness 客户端修改工具）
-> 项目定位：DeepSeek 客户端的模块化修改工具，支持备份、工作区初始化、补丁应用、复原、状态检查等功能
-> 创建日期：2026-08-24
-> 最后更新：2026-09-11（项目认知初始化报告 07 号 + V11/V12 设计稿纳管 + 台账漂移整改：deploy.py 引用清理）
-> 项目状态：V12 多分支流水线协作系统设计稿定型；V9.4/V9.5 修复代码已 apply，待重启人工验证
-
----
-
-## 一、项目概述
-
-### 1.1 项目目标
-
-dsh-client-mod 是一个用于修改 DeepSeek 客户端的工具集，核心目标：
-1. **安全修改**：修改前自动备份，支持一键复原
-2. **模块化管理**：通过 Junction 链接管理客户端模块，支持独立修改
-3. **版本控制**：git（2026-09-06 初始化）+ 快照 + 补丁 + 差异对比
-4. **功能扩展**：为 DeepSeek 客户端添加自定义功能（总监驾驶舱/三tab/V10 控制台）
-
-### 1.2 核心功能
-
-| 功能 | 脚本 | 说明 |
-|------|------|------|
-| 备份 | scripts/backup.ps1 | 备份客户端原始文件 |
-| 工作区初始化 | scripts/init-workspace.ps1 | 从 original 复制到 workspace，创建 Junction |
-| 应用补丁 | scripts/apply.ps1 | 应用修改到客户端 |
-| 复原 | scripts/restore.ps1 | 从备份复原客户端 |
-| 状态检查 | scripts/status.ps1 | 检查当前修改状态 |
-| 差异对比 | scripts/diff.ps1 | 对比 workspace 和 original 的差异 |
-| 快照 | scripts/snapshot.ps1 | 创建当前状态快照 |
-| 文档索引 | scripts/gen-docs-index.ps1 | 生成 dsh_docs_index.txt |
-| 缓存清除 | scripts/clear-cache.ps1 | 清 Harness 5 类缓存 |
-| 部署 | scripts/deploy.ps1 | 一键部署（snapshot+diff+apply；deploy.py 已于 V10 整改期删除） |
-
-### 1.3 技术栈
-
-- **语言**：JavaScript（修改对象）+ PowerShell（自动化）+ Python（GUI/审计辅助）
-- **目标平台**：Windows
-- **客户端**：DeepSeek Harness 0.1.0-rc.11（Electron）
-- **修改方式**：文件级替换 + Junction 链接
-- **本地模型**：qwen2:7b via Ollama（http://localhost:11434）
-- **版本控制**：git（2026-09-06 初始化）+ snapshots/ + patches/
+> **这是什么**：DeepSeek Harness 桌面客户端的**插件化改造工程**。
+> 不改宿主安装包（`original/` 只读），以独立插件 `dsh-director-plugin` 向宿主注入「总监」能力
+> —— 原生 tab 环、弹窗驾驶舱、多智能体编排、会话血缘与派发回收。
+>
+> 创建 2026-08-24 ｜ 最后更新 2026-09-17
 
 ---
 
-## 二、目录结构索引
+## 一、30 秒上手
+
+```bash
+# ① 接手第一步：看代码有没有漂移（唯一入口）
+cd dsh-director-plugin && node scripts/baseline-check.mjs
+#    必须得到 IS_PASS: TRUE（漂移=0）；FALSE 先 --write 重封，漂移态下不得引用锚点
+
+# ② 索引对不对账（三份自动索引）
+node scripts/refresh-index.mjs --check
+
+# ③ 改完代码的闭环（详见 §四 命令链）
+node scripts/gen-key-files.mjs && node build/build.mjs && node scripts/plugin-install.mjs --apply
+```
+
+> 🔴 **Harness 是 Electron 应用**：`plugin-install --apply` 之后**必须重启**才生效（缓存不重启不刷新）。
+
+---
+
+## 二、仓库地图
 
 ```
 dsh-client-mod/
-├── AGENTS.md                 ← 项目最高优先级执行约束（AI必读）
-├── INDEX.md                  ← 本文件（项目入口索引）
-├── README.md                 ← 项目说明文档
-├── config.json               ← 项目配置（8个目标包+路径+规则）
-├── .idea/                    ← IDE 配置（JetBrains）
-├── config/                   ← 配置文件目录
-├── docs/                     ← 项目文档
-│   ├── 00-统筹入口/          ← 核心文档（必读集合）
-│   ├── 10-架构设计/          ← 架构设计文档
-│   ├── 20-任务文档/          ← 任务详细文档
-│   ├── 30-开发链路/          ← 开发规范、操作手册
-│   ├── 40-测试质量/          ← 测试计划、测试用例
-│   ├── 50-信息中心/          ← 知识库、FAQ
-│   ├── 90-历史归档/          ← 已归档文档
-│   └── 99-个人沟通/          ← 个人笔记、沟通记录
-├── logs/                     ← 操作日志
-├── original/                 ← 原始客户端文件备份（只读）
-├── patches/                  ← 补丁文件
-├── scripts/                  ← 自动化脚本
-│   ├── dsh-mod-lib.ps1       ← 核心库（Junction操作/store/日志/状态检查）
-│   ├── backup.ps1            ← 备份脚本
-│   ├── init-workspace.ps1    ← 工作区初始化脚本
-│   ├── apply.ps1             ← 应用补丁脚本
-│   ├── restore.ps1           ← 复原脚本
-│   ├── status.ps1            ← 状态检查脚本
-│   ├── diff.ps1              ← 差异对比脚本
-│   └── snapshot.ps1          ← 快照脚本
-├── snapshots/                ← 状态快照
-├── workspace/                ← 工作区（修改在此进行，通过Junction链接到客户端）
-└── _memory/                  ← 项目记忆（ADR、风险、踩坑记录）
+├── AGENTS.md               ★ 项目最高约束（纪律全表 + 闸门纠错台账 + 坑索引）
+├── INDEX.md                ← 本文件（人的入口）
+├── dsh-director-plugin/    ★ 主管道：插件本体（唯一在维护的代码）
+│   ├── src/**              源码（全部业务逻辑）
+│   ├── build/build.mjs     构建器 → lib/client.js
+│   ├── lib/client.js       构建产物（装机用）
+│   ├── scripts/**          工具与闸门（构建 / lint / verify / 真机 e2e）
+│   ├── docs/**             插件侧设计文档与索引
+│   └── assets/             运行时资源（docs-index.json 等）
+├── docs/                   项目文档（8 个分类目录）
+├── scripts/                根级工具链（PowerShell 为主）+ 索引生成器
+├── original/               🔴 原始备份（只读，不可删）
+├── workspace/              早期修改工作区（已退坡，保留）
+└── snapshots/              🔴 唯一回滚点在 host-b6-20260911-before-patch/
 ```
 
 ---
 
-## 三、核心文档索引
+## 三、去哪看细节（先看这两份，再按需展开）
 
-### 3.1 必读集合（AI 启动项目会话必须加载）
-
-| 顺序 | 文档 | 路径 | 说明 |
-|:----:|------|------|------|
-| 1 | 总统筹入口文档 | `docs/00-统筹入口/00-总统筹入口文档.md` | 项目总览和导航 |
-| 2 | AI对话执行约束规范 | `docs/00-统筹入口/AI对话执行约束规范.md` | AI执行的核心约束（V1.5） |
-| 3 | AI规范执行保障机制 | `docs/00-统筹入口/AI规范执行保障机制.md` | 四层保障机制（V1.1） |
-| 4 | AI任务审核标准通用模板 | `docs/00-统筹入口/AI任务审核标准通用模板.md` | 任务审核标准 |
-| 5 | AI需求驱动读取范围与最小权限规范 | `docs/00-统筹入口/AI需求驱动读取范围与最小权限规范.md` | 读取范围规范 |
-| 6 | 项目大索引 | `docs/00-统筹入口/05-项目大索引.md` | 项目完整索引 |
-| 7 | 项目共同记忆 | `docs/00-统筹入口/01-项目共同记忆.md` | 项目共同记忆 |
-| 8 | 项目记忆(MEMORY) | `_memory/MEMORY.md` | 项目详细记忆（ADR等） |
-
-### 3.2 第一阶段新建规范文档
-
-| 文档 | 版本 | 说明 |
-|------|:----:|------|
-| 项目风险管理规范 | V1.0 | 风险识别/评估/应对/监控完整规范 |
-| 09-风险登记册 | V1.0 | 集中管理所有项目风险 |
-| 应急与回滚规范 | V1.0 | 操作分级R1-R4+应急预案+回滚机制+灾难恢复 |
-| 人机协作规范 | V1.0 | 任务分级L1-L4+协作边界+信任等级T1-T3 |
-| 文档审核标准与生命周期管理 | V1.0 | 文档创建/审核/生命周期完整标准 |
-| 项目逻辑思维迭代记录-V1 | V1.0 | 10个遗漏领域+6个新增机制+三阶段路线图 |
-
-### 3.3 项目管理文档
-
-| 文档 | 说明 |
-|------|------|
-| 02-项目总需求清单.md | 项目总需求 |
-| 03-待完成任务清单.md | 待完成任务 |
-| 04-已完成任务清单.md | 已完成任务记录 |
-| 06-工作快照.md | 当前工作状态快照 |
-
-### 3.4 架构与开发文档
-
-| 文档 | 路径 | 说明 |
-|------|------|------|
-| 架构说明 | `docs/10-架构设计/00-架构说明.md` | 系统架构设计 |
-| 修改记录模板 | `docs/30-开发链路/01-修改记录模板.md` | 修改记录模板 |
-| 复原手册 | `docs/30-开发链路/02-复原手册.md` | 复原操作手册 |
-| 总监对话模式开发文档 | `docs/20-任务文档/03-总监对话模式开发文档.md` | 总监对话模式总方案 |
-| 阶段1详细开发文档 | `docs/20-任务文档/04-阶段1详细开发文档.md` | 阶段1详细开发（M1-M5） |
+| 你要什么 | 去哪 |
+|:---------|:-----|
+| **项目现状的唯一权威描述** | `docs/00-统筹入口/10-当前基线-落死锚点-V16.md` 🔴 |
+| **所有索引的导航** | `docs/00-统筹入口/05-项目大索引.md` |
+| 全资源零遗漏清单（源码/脚本/文档逐条） | `docs/00-统筹入口/项目全资源确定索引.md`（自动生成） |
+| 改代码前必读：踩坑与快速定位 | `docs/50-信息中心/01-Harness客户端修改-踩坑记录与快速定位索引.md` 🔴 |
+| 测试该跑哪些（增量判据） | `docs/40-测试质量/22-测试流程与增量测试矩阵-20260917.md` 🔴 |
+| 业务不变量（总监/对话架构） | `dsh-director-plugin/docs/10-总监与对话架构总纲.md` 🔴 |
+| 待办 / 归档 / **断点恢复** | `docs/00-统筹入口/03-待完成任务清单.md` · `04-…` · `06-工作快照.md` |
+| 需求与决策台账 | `02-项目总需求清单.md` · `01-项目共同记忆.md` |
 
 ---
 
-## 四、快速开始
+## 四、改一处功能的闭环命令链
 
-### 4.1 环境要求
+```bash
+# 索引先对账（漂移时人工索引会误导你）
+node dsh-director-plugin/scripts/refresh-index.mjs --check
 
-- Windows 10/11
-- PowerShell 5.1+
-- DeepSeek 客户端已安装
-- 管理员权限（创建 Junction 需要）
+# 改 src/**（界面改动先改设计稿）→ 生成源码映射注入
+cd dsh-director-plugin
+node scripts/gen-key-files.mjs          # 改 src 必跑；它会改 src/logic/key-files.js
+node scripts/gen-source-map.mjs         # 可选：刷新 @map 血缘块（会改 src）
+node scripts/refresh-index.mjs --safe   # 重建索引（不碰 src）
 
-### 4.2 首次使用流程
+# 静态闸门（四把 lint）
+node scripts/lint-syntax.mjs && node scripts/lint-undefined-symbols.mjs \
+  && node scripts/lint-cdp-templates.mjs && node scripts/lint-platform-stub.mjs
 
-1. **配置**：修改 `config.json`，设置客户端路径和目标包
-2. **备份**：运行 `scripts/backup.ps1`，备份原始客户端文件
-3. **初始化工作区**：运行 `scripts/init-workspace.ps1`，创建工作区和 Junction
-4. **修改**：在 `workspace/` 目录中修改文件
-5. **检查差异**：运行 `scripts/diff.ps1`，查看修改内容
-6. **应用**：运行 `scripts/apply.ps1`，应用修改到客户端
-7. **验证**：启动 DeepSeek 客户端，验证修改效果
-8. **复原（如需）**：运行 `scripts/restore.ps1`，复原到原始状态
+# 测试：先规划、再批量（不要一律全量跑）
+node scripts/test-plan.mjs --explain     # 只读：该跑哪些 / 为什么
+node scripts/test-plan.mjs --run --record # 离线批：一条命令跑完
 
-### 4.3 重要注意事项
-
-⚠️ **Harness 客户端修改铁律**（项目特殊性）：
-1. 不直接修改客户端原目录，所有修改在 workspace 进行
-2. apply 前必须创建快照，确保可回滚
-3. original/ 目录只读，绝不修改
-4. 每次修改后必须清缓存重启客户端验证
-5. 所有操作有日志，可追溯
+# 构建与装机（看对账两行：语法自检 + import 对账 N = N）
+node build/build.mjs && node scripts/check-stale-build.mjs
+node scripts/plugin-install.mjs --apply
+# → 重启 Harness（确认端口号变化）→ 真机套件整批只冷启动一次：
+node scripts/run-live.mjs <真机套件…>
+```
 
 ---
 
-## 五、当前状态（2026-09-06）
+## 五、五条最容易踩的铁律
 
-### 5.1 项目进度
+| # | 铁律 |
+|:-:|:-----|
+| 1 | **冻结契约只许新增，不可改名**（`ROUTE` / `DESTINATION` 等跨版本契约） |
+| 2 | **先证前提再断结果** —— 报红先问"前提成立吗"（页面在不在 / 产物新不新 / 起点建没建） |
+| 3 | **跳过比红更危险** —— 判据宁可写宽（假红有人看），不许写窄（假绿没人看） |
+| 4 | **清缓存不删 `Network`** —— 它是 cookie 存储，删它等于清掉总监全部状态 |
+| 5 | **改 `src/**` 一律 LF**；模板串内**禁反引号与 `${`**（会提前终止 / 开启插值） |
 
-| 模块 | 状态 | 完成度 | 备注 |
-|------|:----:|:------:|------|
-| 基础框架（备份/初始化/应用/复原/状态/差异/快照） | ✅ 完成 | 100% | 2026-09-01 修复 apply.ps1/restore.ps1 相对路径bug |
-| 总监对话模式（V1-V8） | ✅ 完成 | 100% | 三tab共存+小窗分屏布局 |
-| 本地模型集成（qwen2:7b） | ✅ 完成 | 100% | Ollama http://localhost:11434 |
-| 标准规范体系 | ✅ 完成 | 100% | AGENTS.md+MEMORY.md+规范V1.3+行为逻辑V1.2+保障机制V1.1 |
-| V9 总监驾驶舱 | ✅ 完成 | 100% | D1-D3 设计冻结，见 18号文 V2.0 定稿 |
-| V10 总监控制台 V3 | ✅ 完成 | 100% | 2026-09-06 三轮审核修复 6 个真实缺陷，lib/client.js V0.2.0 |
-| V10 全量交互测试 | ✅ 完成 | 46/46 | Playwright CDP，46/46 通过，见 V10 V3 测试报告 |
-| 项目整改 V1.2（本次） | 🔄 进行中 | 60% | 文档/配置/版本同步+git 初始化 |
-| 测试与质量门禁 | 🟡 进行中 | 70% | 测试总清单已建立，需补充自动化 |
-
-### 5.2 当前任务
-
-详见 `docs/00-统筹入口/06-工作快照.md`
-
-### 5.3 文档统计（2026-09-06）
-
-| 类别 | 数量 | 说明 |
-|------|:----:|------|
-| 00-统筹入口 | 12 | 核心规范文档 + AI 规范文档 |
-| 10-架构设计 | 7 | 架构说明 + 5 个管理规范 |
-| 20-任务文档 | 27 | 开发文档+诊断+方案+审核+整改 |
-| 30-开发链路 | 13 | 修改记录+复原手册+V10 详细设计 |
-| 40-测试质量 | 8 | 总清单+风险登记+改进项+审计+测试报告 |
-| 50-信息中心 | 8 | 踩坑+代码索引+V10 设计图（HTML） |
-| 90-历史归档 | (动态) | 仅保留确认无用的废弃文档 |
-| 99-个人沟通 | (动态) | 个人笔记 |
-| **合计** | **75 份 + 9 份 HTML** | 含最新版 V10 设计图 |
-
-### 5.4 资产与代码统计
-
-| 维度 | 值 |
-|:-----|:---|
-| workspace 核心文件 | lib/client.js（dsh-client-ui-conversation, 1423779 bytes） |
-| original（只读） | lib/client.js（rc.5 baseline, 431010 bytes） |
-| 差异 | 仅 1 个文件改动（dsh-client-ui-conversation） |
-| 操作日志 | logs/dsh-mod-YYYYMMDD.log（按天） |
-| 差异报告 | patches/diff-report-*.txt（7 份） |
-| 应用快照 | snapshots/snapshot-YYYYMMDD-HHMMSS-before-apply/（多份） |
+> 完整纪律见 `AGENTS.md`（编号 1–102，跨日志交叉引用，勿重排）。
 
 ---
 
-## 六、重要链接
+## 六、变更记录
 
-| 资源 | 链接/路径 |
-|------|----------|
-| 规范母本 | `D:\hermes-data\hermes-data\docs\00-统筹入口\` |
-| Workspace全局约束 | `D:\workspace\AGENTS.md` |
-| 关联项目 cube-sailor | `D:\workspace\cube-sailor\` |
-| 关联项目 ns-workspace | `D:\WebstormProjects\主工作数据\src\FileCabinet\SuiteApps\ns-workspace` |
+| 日期 | 变更 |
+|:----:|:-----|
+| 2026-08-24 | 项目创建，基础框架完成（备份 / 初始化 / 应用 / 复原 / 状态 / 差异 / 快照） |
+| 2026-09-06 | V10 总监控制台整改完工；git 仓库初始化；`INDEX.md` 建立 |
+| 2026-09-11 | 项目认知初始化报告（07 号）；V11/V12 设计稿纳管；台账漂移整改 |
+| 2026-09-12 | A14 剥离：改走**插件通道**，不再改宿主安装包；基线锚点机制落地（`baseline-check`） |
+| 2026-09-17 | **索引体系重构**：手工索引瘦身为入口（从根上消除"手工清单必然过期"）；新增 `refresh-index` / `verify-index`；全资源索引补 `--check` 并排除自指；测试流程与增量测试矩阵落地（40-22） |
 
----
-
-## 七、变更记录
-
-| 日期 | 变更内容 |
-|:----:|---------|
-| 2026-08-24 | 项目创建，基础框架完成 |
-| 2026-08-24 | 总监对话模式开发完成（V1-V6） |
-| 2026-08-27 | 标准整改完成（AGENTS.md+MEMORY.md+规范文档同步） |
-| 2026-08-27 | 创建 INDEX.md，清理临时文件 |
-| 2026-09-01 | V9 总监驾驶舱设计冻结，V10 智能体差距分析报告（50-06） |
-| 2026-09-01 | 修复 apply.ps1/restore.ps1 相对路径 bug（BOM/编码修复） |
-| 2026-09-06 | V10 总监控制台 V3 全量整改完工，46/46 测试通过 |
-| 2026-09-06 | **整改 V1.2**：config.json+README.md+INDEX.md 版本同步至 rc.11；MEMORY.md 快照补全；git 仓库初始化；脚本/快照审核报告输出 |
+*更细的过程记录见 `docs/00-统筹入口/06-工作快照.md` 与 `.workbuddy/memory/` 下的日志。*

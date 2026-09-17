@@ -25,7 +25,14 @@
  * 用法：node scripts/verify-v22.mjs
  * 退出码：0 全通过 / 1 FAIL / 2 INVALID（环境不满足，不是产品缺陷）
  */
-const PORT = Number(process.env.DSH_CDP_PORT || 9222);
+/* 🔴 端口取自环境量，且**两个名字都认**（2026-09-17 第 35 轮实测缺陷）：
+ *   本仓存在**两个**端口环境变量名 —— `CDP_PORT`（46 处，主流）与 `DSH_CDP_PORT`（24 处）。
+ *   `run-live.mjs` 与 `_cdp-startup.mjs` 用的是 `CDP_PORT`，而本文件原先只认 `DSH_CDP_PORT`
+ *   ⇒ 带 `CDP_PORT=9333` 跑时，启动器把 Harness 拉在 9333，本套件却仍去连 9222
+ *   ⇒ 读数 `INVALID：连不上 CDP 9222`（**看起来像产品/环境坏，其实是两个名字没对齐**）。
+ *   ⚠️ 顺序必须是 `CDP_PORT` 优先：它是启动器真正用的那个。
+ *   完整排查见 §八 纪律 126（同一语义两个标识符 = 隐式断链）。 */
+const PORT = Number(process.env.CDP_PORT || process.env.DSH_CDP_PORT || 9222);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ══════════ 结果记账 ══════════ */
@@ -76,6 +83,28 @@ process.on("uncaughtException", (e) => { fatal = e; });
 process.on("unhandledRejection", (e) => { fatal = e; });
 
 async function enable() { try { await send("Runtime.enable"); return true; } catch (e) { return false; } }
+
+/* 🔴 真实鼠标的**可见性前提**（第二十四轮统一加装 · 纪律 29/54）
+ *    CDP 的 `mousePressed/Released` 在 `document.visibilityState !== "visible"`
+ *    （Electron 窗口被遮挡/最小化/停在后台）时会被**整条吞掉**，而 `mouseMoved` 照常送达
+ *    ⇒ 表现是「拖不动 / 点了没反应」，读起来完全是**产品坏了**。
+ *    🔴 `document.hasFocus()` 在 hidden 时**仍为 true** ⇒ 不能拿它当判据，只认 `visibilityState`。
+ *    实测对照：hidden ⇒ 只送达 pointermove；visible ⇒ pointerdown/mousedown/pointerup/click 全到。
+ *    不成立 ⇒ 后续鼠标断言**不可信**，应判 INVALID（纪律 24），不判产品红。 */
+const FOCUS_PRE = await (async () => {
+	const { ensurePageFocus } = await import("./_cdp-focus.mjs");
+	const ev = async (e) => {
+		const r = await send("Runtime.evaluate", { expression: e, returnByValue: true });
+		return r && r.result ? r.result.value : undefined;
+	};
+	const fp = await ensurePageFocus({ send, ev, log: (s) => console.log(s) });
+	console.log("  [鼠标前提] visibility=" + JSON.stringify(fp.visibility)
+		+ " ｜ hasFocus=" + JSON.stringify(fp.hasFocus)
+		+ " ｜ bringToFront=" + fp.broughtToFront + " ｜ focusEmulated=" + fp.focusEmulated
+		+ (fp.reasons.length ? " ｜ 降级：" + fp.reasons.join(" / ") : ""));
+	return fp;
+})();
+
 if (!(await enable())) { console.log("IS_PASS: FALSE（INVALID：Runtime.enable 超时 —— 渲染进程无响应）"); process.exit(2); }
 
 /** 页面是否还活着（用极廉价的表达式探，不复用业务选择器） */
@@ -240,10 +269,14 @@ const MEM = `(function(){
 		expanded: !!(block && block.children.length > 1),
 		maxHeight: wrap ? (wrap.style.maxHeight || '') : null,
 		computedMax: wrap ? getComputedStyle(wrap).maxHeight : null,
-		bar: !!document.getElementById('dsh-mem-bar'),
-		delayInput: (function(){ var i=document.getElementById('dsh-mem-delay'); return i? i.value : null; })(),
-		lockBtn: (function(){ var i=document.getElementById('dsh-mem-lock'); return i? i.getAttribute('data-locked') : null; })(),
 		heightHandle: !!document.getElementById('dsh-mem-height'),
+		/* 🔴 第 35 轮：用户「对话 tap 的总监页面下面有一个延迟 5 秒的横向的控制延迟的元素 去掉」
+		 *    ⇒ 记忆工具条（dp-mem-bar + dp-mem-delay + dp-mem-lock）**已整条删除**。
+		 *    这里留作**负断言**：三者必须**都不在 DOM**（否则 = 删除不干净，或宿主把它画回来了）。
+		 * ⚠️ 本段是 CDP 模板串 —— 上面两行注释里**不许出现反引号**（纪律 101）。 */
+		bar: !!document.getElementById('dsh-mem-bar'),
+		delayInput: !!document.getElementById('dsh-mem-delay'),
+		lockBtn: !!document.getElementById('dsh-mem-lock'),
 		flag: (typeof window.__dshMemoryLocked === 'undefined') ? 'undef' : window.__dshMemoryLocked,
 		store: (function(){ var s=window.__directorLayoutStore; if(!s) return null; var g=s.getState();
 			return { delay: s.getMemoryHoverDelay(), h: s.getMemoryPanelHeight(), locked: s.getMemoryLocked() }; })(),
@@ -313,9 +346,14 @@ async function waitIds(ids, timeoutMs) {
 	}
 	return { missing: missing, waited: Date.now() - t0 };
 }
-const ctrl = await waitIds(["dsh-host-col-min", "dsh-host-col-resizer", "dsh-mem-bar"], 3000);
-ok("A3 常驻控件齐备（最小化 / 宽度拖拽条 / 记忆工具条）", ctrl.missing.length === 0,
-	ctrl.missing.length ? ("缺 " + ctrl.missing.join(",") + "（等了 " + ctrl.waited + "ms）") : ("3/3 就绪 · 等待 " + ctrl.waited + "ms"));
+/* ⚠️ 第 35 轮：`dsh-mem-bar`（记忆工具条）已从常驻控件清单移除 —— 它**已不存在**，
+ *   继续等它 ⇒ 恒超时 3000ms 且 A3 恒红（典型的"尺子量了个不存在的东西"）。 */
+const ctrl = await waitIds(["dsh-host-col-min", "dsh-host-col-resizer"], 3000);
+ok("A3 常驻控件齐备（最小化 / 宽度拖拽条）", ctrl.missing.length === 0,
+	ctrl.missing.length ? ("缺 " + ctrl.missing.join(",") + "（等了 " + ctrl.waited + "ms）") : ("2/2 就绪 · 等待 " + ctrl.waited + "ms"));
+/* 同段补一条**负断言**：常驻控件里不该再有工具条（否则"齐备"的口径与第 35 轮的删除自相矛盾） */
+ok("A3b 记忆工具条**不在**常驻控件里（`dsh-mem-bar` 已删，等它 = 等一个不存在的东西）",
+	!(await ev("!!document.getElementById('dsh-mem-bar')")));
 /* 🔴 高度手柄**不是常驻控件**：它贴在记忆内容区上沿，而内容区只在**展开态**渲染
  *   （`findMemoryContentWrap()` 找不到 `#dsh-memory-content` 就返回 null ⇒ 不建手柄）。
  *   旧写法把它和另外三个并列成"齐备"，于是：收起态恒红、展开态恒绿 —— 两种结果都不说明问题，
@@ -460,15 +498,32 @@ if (rzc) {
 sect("E 段 · 需求 2：记忆面板延迟展开 / 锁定语义修正 / 高度可拖");
 const mem0 = await evJSON(MEM);
 if (!mem0 || !mem0.found) die("E 段前提不成立：找不到宿主「总监记忆」块（左栏未挂载或文案变了）");
-ok("E1 记忆工具条存在且延迟值可读", mem0.bar === true && mem0.store && Number.isFinite(mem0.store.delay), JSON.stringify(mem0.store));
-ok("E2 默认延迟 > 0（用户要求「增加一个秒数，目前太灵敏了」）", mem0.store.delay > 0, "delay=" + mem0.store.delay + "ms");
+/* ── 第 35 轮：工具条已删（负断言，双向）───────────────────────────────
+ *  用户原话：「对话 tap 的总监页面下面有一个延迟 5 秒的 一个横向的控制延迟的元素 去掉」。
+ *  🔴 判据必须**双向**：
+ *     ① 负向 —— 三个元素（工具条 / 秒数输入 / 锁定按钮）**都不在 DOM**；
+ *     ② 正向 —— 被删掉的**能力**必须还在（`memoryHoverDelayMs` 仍是"唯一真相源"且可读，
+ *        锁定语义仍在 store 上）。否则"删干净了"与"顺手把能力也砍了"**长得一模一样**
+ *        —— 本项目反复踩过的「静默砍功能」（纪律 54）。
+ *  ⚠️ 不再断言"默认延迟 > 0"的**具体来源**：默认值仍在 `store/layout.js` 的 `memoryHoverDelayMs: 500`，
+ *     但界面不再暴露入口 ⇒ 断言只应钉"读得出来且非负"，不该钉死数值（那会变成第二真相源）。 */
+ok("E1 记忆工具条已从 DOM 删除（`dp-mem-bar` 不存在 —— 用户要求去掉的那个横向延迟控件）",
+	mem0.bar === false, "bar=" + mem0.bar);
+ok("E1b 工具条的两个子控件也已删除（`dp-mem-delay` 秒数输入 / `dp-mem-lock` 锁定按钮）",
+	mem0.delayInput === false && mem0.lockBtn === false,
+	"delayInput=" + mem0.delayInput + " lockBtn=" + mem0.lockBtn);
+ok("E2 删除后**能力仍在**：悬停延迟仍是 store 上的可读量（不是把功能一起砍了）",
+	mem0.store && Number.isFinite(mem0.store.delay) && mem0.store.delay >= 0,
+	JSON.stringify(mem0.store));
+ok("E2b 删除后**锁定语义仍在**：`memoryLocked` 可读且为布尔（收合语义未被连带移除）",
+	mem0.store && typeof mem0.store.locked === "boolean", "locked=" + (mem0.store && mem0.store.locked));
 
-/* E3 延迟输入框可写（派发 input 事件，走产品自己的监听） */
-const setDelay = await ev(`(function(){ var i=document.getElementById('dsh-mem-delay'); if(!i) return 'missing';
-	i.value = '0.9'; i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()`);
+/* E3 延迟仍由 store 驱动（**驱动源不再是输入框**，改为直接写 store —— 输入框已不存在） */
+await ev("(function(){var s=window.__directorLayoutStore;s.setMemoryHoverDelay(900);return true})()");
 await sleep(260);
 const dAfter = await ev("(function(){var s=window.__directorLayoutStore;return s?s.getMemoryHoverDelay():null})()");
-ok("E3 输入框写秒数 → store 生效（0.9s → 900ms）", setDelay === "ok" && dAfter === 900, "setDelay=" + setDelay + " store=" + dAfter);
+ok("E3 直接写 store 的延迟 → 立即生效（900ms），且**删掉输入框不影响这条链路**",
+	dAfter === 900, "store=" + dAfter);
 
 /* E4/E5 延迟的**正负对照**：同一事件，早读必须"还没展开"，晚读必须"已展开" */
 /** 记忆表头中心点（真实鼠标要打到它才触发我们拦下的 mouseover）
@@ -505,10 +560,12 @@ async function outsideMemoryPoint() {
 		if(!h) return null;
 		var hr=h.getBoundingClientRect();
 		var y=Math.round(hr.top+hr.height/2);
-		/* 记忆区 = 宿主块 ∪ 我方工具条 ∪ 高度手柄（与产品侧 memoryZoneContains 同口径） */
+		/* 记忆区 = 宿主块 ∪ 高度手柄（与产品侧 memoryZoneContains 同口径）
+		 * ⚠️ 第 35 轮：dsh-mem-bar 已删 ⇒ 从并集里去掉（留着只会是个恒 null 的项）。
+		 * 🔴 CDP 模板串内禁反引号（纪律 101）。 */
 		var zone=function(el){ if(!el) return null;
 			if(block.contains(el)) return 'block';
-			var ids=['dsh-mem-bar','dsh-mem-height'];
+			var ids=['dsh-mem-height'];
 			for(var k=0;k<ids.length;k++){ var n=document.getElementById(ids[k]); if(n&&n.contains(el)) return 'ours'; }
 			return null; };
 		/* 以块中心为基准，先量"块内"这一侧，再向左/向右找一个 zone 为 null 的点 */
@@ -543,7 +600,10 @@ async function hoverInMemoryZone() {
 		if(!block) return JSON.stringify({inside:null,reason:'no-block'});
 		var zone=function(el){ if(!el) return false;
 			if(block.contains(el)) return true;
-			var ids=['dsh-mem-bar','dsh-mem-height'];
+			/* ⚠️ 第 35 轮：dsh-mem-bar 已删 ⇒ 这里只剩高度手柄。
+			 *   若继续把已删的 id 列进来，getElementById 恒 null ⇒ 判据**空真**（纪律 93）。
+			 * 🔴 本段是 CDP 模板串 —— 注释里**不许出现反引号**（纪律 101）。 */
+			var ids=['dsh-mem-height'];
 			for(var k=0;k<ids.length;k++){ var n=document.getElementById(ids[k]); if(n&&n.contains(el)) return true; }
 			return false; };
 		var hov=document.querySelectorAll(':hover'), inside=false, who=null;
@@ -597,28 +657,37 @@ if (memHead && memAway) {
 } else { sk("E4/E5 悬停延迟对照", "记忆表头中心点取不到（列被折叠 / 视口外 / 被遮挡）"); }
 
 /* E6 锁定语义：加锁时**不得收起**（宿主原实现是 toggleBottomPanel ⇒ 会翻转 = 缺陷）
- * 🔴 起点显式建立：先**收起**再点锁定 —— 否则"点锁定后仍展开"可能只是"本来就展开着"（平凡真）。 */
+ * 🔴 起点显式建立：先**收起**再上锁 —— 否则"上锁后仍展开"可能只是"本来就展开着"（平凡真）。
+ * ⚠️ 第 35 轮起**工具条上的锁定按钮已删** ⇒ 改走 `toggleMemoryLock()`（**同一真相源**：
+ *    删除前按钮的 click 也是调它，所以这不是"换了一条路"，而是"去掉了一层点击壳"）。
+ *    🔴 断言里**必须**同时钉"按钮真的不在了"—— 否则这条测试会在"按钮被删"与"按钮还在"两种
+ *    世界里都绿，等于对本次改动零分辨力。 */
 await ev("(function(){var s=window.__directorLayoutStore;s.setMemoryLocked(false);return true})()");
 await ev("window.__dshHostDirectorColumn.collapseMemoryNow()");
 await sleep(400);
 const beforeLock = await evJSON(MEM);
-ok("E6-前置 起点成立：点锁定之前面板是**收起**的（这样「仍展开」才不是平凡真）",
-	!!beforeLock && beforeLock.expanded === false && beforeLock.store.locked === false,
-	JSON.stringify(beforeLock && { expanded: beforeLock.expanded, locked: beforeLock.store.locked }));
+ok("E6-前置 起点成立：上锁之前面板是**收起**的（这样「仍展开」才不是平凡真）",
+	!!beforeLock && beforeLock.expanded === false && beforeLock.store.locked === false
+	&& beforeLock.lockBtn === false,
+	JSON.stringify(beforeLock && { expanded: beforeLock.expanded, locked: beforeLock.store.locked, lockBtn: beforeLock.lockBtn }));
 const lockRes = await ev(`(function(){
-	var b=document.getElementById('dsh-mem-lock'); if(!b) return 'missing';
-	b.click(); return 'clicked';
+	if (document.getElementById('dsh-mem-lock')) return 'btn-still-present';
+	var a = window.__dshHostDirectorColumn; if (!a || !a.toggleMemoryLock) return 'missing-api';
+	a.toggleMemoryLock(); return 'called';
 })()`);
 await sleep(420);
 const memLocked = await evJSON(MEM);
-ok("E6 点锁定 → locked=true 且**面板展开**（修正了宿主「点锁定反而收起」）",
-	lockRes === "clicked" && !!memLocked && memLocked.store && memLocked.store.locked === true && memLocked.expanded === true,
-	"locked=" + (memLocked && memLocked.store && memLocked.store.locked) + " expanded=" + (memLocked && memLocked.expanded));
-const unlocked = await ev("(function(){var b=document.getElementById('dsh-mem-lock');if(!b)return 'missing';b.click();return 'clicked'})()");
+ok("E6 上锁 → locked=true 且**面板展开**（修正了宿主「点锁定反而收起」）",
+	lockRes === "called" && !!memLocked && memLocked.store && memLocked.store.locked === true && memLocked.expanded === true,
+	"via=" + lockRes + " locked=" + (memLocked && memLocked.store && memLocked.store.locked) + " expanded=" + (memLocked && memLocked.expanded));
+const unlocked = await ev(`(function(){
+	var a = window.__dshHostDirectorColumn; if (!a || !a.toggleMemoryLock) return 'missing-api';
+	a.toggleMemoryLock(); return 'called';
+})()`);
 await sleep(420);
 const memUnlocked = await evJSON(MEM);
-ok("E7 再点锁定 → 解锁并收起（语义闭环，不是翻转）",
-	unlocked === "clicked" && !!memUnlocked && memUnlocked.store && memUnlocked.store.locked === false && memUnlocked.expanded === false,
+ok("E7 再上锁一次 → 解锁并收起（语义闭环，不是翻转）",
+	unlocked === "called" && !!memUnlocked && memUnlocked.store && memUnlocked.store.locked === false && memUnlocked.expanded === false,
 	"locked=" + (memUnlocked && memUnlocked.store && memUnlocked.store.locked) + " expanded=" + (memUnlocked && memUnlocked.expanded));
 
 /* E8/E9 高度可拖 */

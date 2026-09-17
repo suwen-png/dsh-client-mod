@@ -2,7 +2,7 @@
  * 职责：插件浏览器侧入口（批次 1 已落地）
  * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
  * 上游：（无：插件入口层）
- * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
+ * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 十（7 个内核 API 逐模块 try/catch 挂载）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -117,6 +117,9 @@ import { installSyncApi, syncFromSource, auditCoverage } from "./logic/sync.js";
 // ── 批次 8 总监逻辑完善：§3.1 五项职责 + §3.2 继承制 + §1.2 五步执行 ──
 import { installDutyApi, resolveDuties, submitUp } from "./store/duty-config.js";
 import { installDirectorRunApi } from "./logic/director-run.js";
+import { installDispatchApi } from "./logic/director-dispatch.js";
+/* 第 19 批：「每个会话都有自己的总监 + 自己的会话总结文档」⇒ 逐会话档案 */
+import { installDossierApi } from "./store/session-dossier.js";
 import { DirectorWorkbench } from "./components/DirectorWorkbench.js";
 // ── 批次 9 弹窗式总监架构（T-PLUG-015）──
 import { installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME } from "./store/plugin-db.js";
@@ -126,7 +129,7 @@ import { installChatBridgeApi, sendToChat, readConversation, startConversationMi
 import { installNavHook, installNavHookApi } from "./bridge/nav-hook.js";
 // 宿主残留区块的显示层裁剪（2026-09-14 第 4 批 · 需求 ⑤「只在页面上不显示就行」）
 import { installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, trimState } from "./bridge/host-panel-trim.js";
-import { installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID } from "./bridge/host-director-column.js";
+import { installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID } from "./bridge/host-director-column.js";
 import { installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID } from "./bridge/host-composer-slot.js";
 import { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } from "./components/DirectorDialog.js";
 /* 第 6 批需求 6：执行状态（技能 / 智能体调用）—— **唯一真相源**。
@@ -156,6 +159,8 @@ import { installPersonalizeApi, personalizeStore } from "./store/personalize.js"
 import { PersonalizePanel, PERSONALIZE_PANEL_ID } from "./components/PersonalizePanel.js";
 import { installFlowApi, flowStore, DIM, DIM_LABEL } from "./logic/flow.js";
 import { installBranchFocusApi } from "./logic/branch-focus.js";
+import { installLineageApi } from "./logic/lineage.js";
+import { installDimBranchApi } from "./logic/dim-branch.js";
 import { installOverviewApi } from "./logic/overview.js";
 import { installOrchestrateApi } from "./logic/orchestrate.js";
 import { NodeDetailPanel, NODE_DETAIL_ID } from "./components/NodeDetailPanel.js";
@@ -293,6 +298,19 @@ export function installBatch1(options = {}) {
 		window.__dshDuties = installDutyApi();
 		window.__dshDirectorRun = installDirectorRunApi();
 
+		// ── 第 17 批「总监枢纽闭环」──
+		//    window.__dshDispatchLog 派发台账（派给谁 / 走哪条通道 / 现在什么状态 / 产出了什么）
+		//    🔴 闸门要断言"台账 8 条且每条都有 sessionId"，就需要一个**活对象**出口；
+		//       只靠 DOM 读数间接推断正是第 16 批漏掉的视角（made=8 ≠ 真建了 8 条）。
+		installDispatchApi();
+
+		// ── 第 19 批「会话复用 + 每会话档案」──
+		//    window.__dshDossier 逐会话档案（自己的总监 + 自己的总结文档）
+		//    🔴 与 split-index 分工：split 管**显示标签**（覆盖导图标题），
+		//       dossier 管**会话自己的档案**（角色 + 总结）。两者以 sessionId 关联，
+		//       档案不重复存 label（同一事实只留一份真相源）。
+		window.__dshDossier = installDossierApi();
+
 		// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
 		//    要求 1 数据元独立  window.__dshPluginDb   → dsh-director-plugin-db@v1（6 store）
 		//    要求 8 智能路由    window.__dshRouter     → route / confirmRoute（五步，不静默分发）
@@ -339,6 +357,12 @@ export function installBatch1(options = {}) {
 		//    需求原文：「我点击对话那么只默认显示这个分支的链路」「思维导图最上面加一个弹窗，
 		//              分为左右列」「打分起码三轮多方位评估」「打分标准也需要进行审核」
 		window.__dshBranchFocus = installBranchFocusApi();
+		/* 🔴 19 号文 N2/N3（2026-09-17）：真机对账用的两个契约 —— 让闸门**直接读**映射与血缘，
+		 *    不必从界面上反推（反推得到的不是判据，是猜测）。
+		 *      `__dshLineage`   消息信封 / 血缘分组 / 上下游摘要（纯函数）
+		 *      `__dshDimBranch` 维度 ↔ 分支节点的翻译（唯一实现，总监页与弹窗共用） */
+		window.__dshLineage = installLineageApi();
+		window.__dshDimBranch = installDimBranchApi();
 		window.__dshOverview = installOverviewApi();
 		window.__dshOrchestrate = installOrchestrateApi();
 		// ── 批次 16 多智能体编排内核（2026-09-14 架构补全）──
@@ -831,7 +855,7 @@ export {
 	installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, // 宿主残留区块显示层裁剪
 	// ── 批次 12 · 第 6 批界面调整（2026-09-14）──
 	installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState,
-	MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序
+	MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序
 	// ── 第 6 批需求 7/9：宿主底部注入条（单按钮视图切换 + 执行/登记流转搬迁）──
 	installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState,
 	SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID,

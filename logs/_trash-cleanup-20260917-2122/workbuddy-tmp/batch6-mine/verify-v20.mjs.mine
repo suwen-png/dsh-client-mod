@@ -1,0 +1,396 @@
+/**
+ * verify-v20.mjs —— 第 6 批界面调整（V20 方案）真机逐交互验证 · **A 组：R4 / R7 交互打磨**
+ *
+ * 覆盖（全部真实坐标事件：真实 hover / 真实按下-移动-抬起拖动，不用 DOM.click 假点）：
+ *   A. 悬停闸门时长（用户原话「r4和r7的鼠标移动不好用」）
+ *   B. R4 / R7 展开宽度：默认值 · store/DOM 同源 · 拖动对账 · 上下限 clamp · 双击复位 · R7 反向语义
+ *   C. R4 / R5 / R7 无缝拼接（`columnGap = 0` 且相邻栏边界相接）
+ *   D. R4 条目「两行 + 编号靠右」（用户样张 `T-INIT-0032026-08-24` 靠右）
+ *   E. R7 关键文件「三行：描述 / 名称 / 路径」+ 点击名称/路径的**降级**可观测
+ *   F. 收尾复原（宽度 / 钉住态归位 + 回读自证）
+ *
+ * ── 为什么单独开一个闸门而不是塞进 `verify-v17-sync` ──────────────────────────
+ *   `verify-v17-sync` 的 A 段锁的是 V18 板块 E「缩回栏三态」（V17 整改项），
+ *   本轮改的是**宽度可拖**与**缝宽**，属 V20 新增能力。混在一起会让"哪一版的判据过期"
+ *   再也分不清（纪律：同一个锚点只留一处真相源）。
+ *
+ * ── 判据纪律（本文件逐条遵守）──────────────────────────────────────────────
+ *   ① **上下限/默认值从源码读**（`src/store/layout.js`），不写死 ⇒ 产品改了闸门自动跟随；
+ *      读不到 ⇒ **INVALID exit 2** + 可复制命令（不是 FAIL）。
+ *   ② 拖动是**跑程内对账**：拖前读 → 拖 → 拖后读，**三个面**同时比
+ *      （`store.railWidth` / `dp-cols[data-w-*]` / `getBoundingClientRect().width`）——
+ *      "看起来相等 ≠ 同源"，只读一个面就可能把"改了 but 没渲染"读成通过。
+ *   ③ 几何类断言**先证前提**（元素存在、宽度下限），再断结果 —— 防平凡真。
+ *   ④ 收尾**必须还原**并回读自证（纪律 15/26：闸门不许成为产品的破坏者）。
+ *
+ * 退出码：0 全绿 / 1 真失败 / 2 INVALID（CDP 连不上 · 源码常量读不到 · 页面未挂载）
+ * 用法：node scripts/verify-v20.mjs
+ */
+import fs from "node:fs";
+
+/* ── ① 源码常量（不写死）───────────────────────────────────────────────────── */
+const SRC_URL = new URL("../src/store/layout.js", import.meta.url);
+let SRC_TEXT = "";
+try { SRC_TEXT = fs.readFileSync(SRC_URL, "utf8"); } catch (e) { /* 下面统一判 INVALID */ }
+const num = (re) => { const m = SRC_TEXT.match(re); return m ? Number(m[1]) : NaN; };
+const RAIL_MIN = num(/RAIL_WIDTH_MIN\s*=\s*(\d+)/);
+const RAIL_MAX = num(/RAIL_WIDTH_MAX\s*=\s*(\d+)/);
+const DEF_M4 = num(/RAIL_WIDTH_DEFAULT\s*=\s*Object\.freeze\(\{\s*r4:\s*(\d+)/);
+const DEF_M7 = num(/RAIL_WIDTH_DEFAULT\s*=\s*Object\.freeze\(\{\s*r4:\s*\d+,\s*r7:\s*(\d+)/);
+if (![RAIL_MIN, RAIL_MAX, DEF_M4, DEF_M7].every((n) => Number.isFinite(n) && n > 0)) {
+	console.error("IS_PASS: FALSE（INVALID：读不到 src/store/layout.js 的 RAIL_WIDTH_* 常量）");
+	console.error("  期望形如：export const RAIL_WIDTH_MIN = 140; / RAIL_WIDTH_MAX = 420;");
+	console.error("  RAIL_WIDTH_DEFAULT = Object.freeze({ r4: 200, r7: 210 });");
+	console.error("  可复制命令：node scripts/verify-v20.mjs");
+	process.exit(2);
+}
+console.log("开场：源码常量 RAIL MIN=" + RAIL_MIN + " MAX=" + RAIL_MAX + " 默认 r4=" + DEF_M4 + " r7=" + DEF_M7);
+
+/* ── ② CDP 骨架（与 verify-v17-sync 同套路）──────────────────────────────── */
+const PORT = 9222;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let pass = 0, fail = 0, skip = 0; const failures = [];
+function t(id, name, cond, detail) {
+	if (cond) { pass++; console.log(`  ✅ ${id} ${name}`); }
+	else { fail++; failures.push(`${id} ${name}`); console.log(`  ❌ ${id} ${name}${detail !== undefined ? "\n      " + JSON.stringify(detail) : ""}`); }
+}
+function sk(id, name) { skip++; console.log(`  ⊘ ${id} ${name}（不满足前置，跳过）`); }
+
+let targets;
+try { targets = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json(); }
+catch (e) { console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）\n  可复制命令：node scripts/verify-v20.mjs"); process.exit(2); }
+const page = targets.filter((x) => x.type === "page").find((x) => !/devtools/.test(x.url));
+if (!page) { console.error("IS_PASS: FALSE（INVALID：无 page）"); process.exit(2); }
+const ws = new WebSocket(page.webSocketDebuggerUrl);
+let seq = 0; const pending = new Map();
+ws.addEventListener("message", (e) => { const m = JSON.parse(e.data); if (m.id !== undefined && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result); } });
+const send = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; const timer = setTimeout(() => { pending.delete(id); rej(new Error("EVAL_TIMEOUT")); }, 8000); pending.set(id, { res: (v) => { clearTimeout(timer); res(v); }, rej: (x) => { clearTimeout(timer); rej(x); } }); ws.send(JSON.stringify({ id, method, params })); });
+const emit = (m, p = {}) => ws.send(JSON.stringify({ id: ++seq, method: m, params: p }));
+await new Promise((r) => ws.addEventListener("open", r));
+await send("Runtime.enable");
+async function ev(expr) { const o = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }); if (o.exceptionDetails) return { __exc: o.exceptionDetails.text }; return o.result?.value; }
+function mouse(type, x, y, b, cc) { emit("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: b || 0, clickCount: type === "mouseMoved" ? 0 : (cc || 1) }); }
+async function clickXY(x, y) { mouse("mouseMoved", x, y, 0); await sleep(20); mouse("mousePressed", x, y, 1); await sleep(35); mouse("mouseReleased", x, y, 0); await sleep(220); }
+function keyEsc() { emit("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }); emit("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }); }
+async function waitFor(fnOrSel, ms = 4000) {
+	const fn = typeof fnOrSel === "function" ? fnOrSel : (() => !!document.querySelector(fnOrSel));
+	const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await ev("(" + fn.toString() + ")()")) return true; await sleep(120); } return false;
+}
+const exists = (sel) => ev(`!!document.querySelector(${JSON.stringify(sel)})`);
+const textOf = (sel) => ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});return e?e.textContent.trim():null;})()`);
+
+/* 带命中诊断的真实点击（坐标必须命中选择器自身，否则读数是"事件打空"而非"功能坏了"） */
+async function clickSelProbe(sel) {
+	await ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(e&&e.scrollIntoView)e.scrollIntoView({block:"center"});return 1;})()`);
+	await sleep(140);
+	const c = await ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;var r=e.getBoundingClientRect();if(r.width<3)return null;var x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),hit=document.elementFromPoint(x,y);return {x:x,y:y,hitTid:hit?(hit.getAttribute&&hit.getAttribute('data-testid'))||hit.tagName:null,inside:!!(hit&&(hit===e||(hit.closest&&hit.closest(${JSON.stringify(sel)}))))};})()`);
+	if (!c) return { ok: false, why: "no-geo" };
+	await clickXY(c.x, c.y); await sleep(240);
+	return { ok: true, hit: c.hitTid, inside: c.inside };
+}
+
+/**
+ * 真实拖动：按下 → **分步**移动（每步 18ms，项目的标准步间隔）→ 抬起。
+ * 🔴 不用 DOM 事件合成：`setRailWidth` 挂在 `window` 的**捕获阶段** mousemove 上，
+ *    CDP 派发的真实事件才能走完整链路；`dispatchEvent(new MouseEvent(...))` 会绕过
+ *    Chromium 的命中测试，把"坐标算错"读成"功能坏了"（纪律 22）。
+ */
+async function dragBy(sel, dx, dy, steps = 6) {
+	const c = await ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;var r=e.getBoundingClientRect();var x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);var hit=document.elementFromPoint(x,y);return {x:x,y:y,vw:window.innerWidth,vh:window.innerHeight,hitTid:hit?(hit.getAttribute&&hit.getAttribute('data-testid'))||hit.tagName:null,inside:!!(hit&&(hit===e||(hit.closest&&hit.closest(${JSON.stringify(sel)}))))};})()`);
+	if (!c) return { ok: false, why: "no-geo" };
+	/* 🔴 落点必须**钳在视口内**：本段故意"超量拖动"（如 -1200px）来验证 clamp，
+	 *    而超量后的坐标会跑到视口外 ⇒ Chromium 会丢弃该次派发，
+	 *    于是"没 clamp"与"事件根本没送到"读数完全一样（空真）⇒ 先钳位再派发。 */
+	const tx = Math.max(2, Math.min(c.x + dx, (c.vw || 1400) - 3));
+	const ty = Math.max(2, Math.min(c.y + dy, (c.vh || 900) - 3));
+	const rdx = tx - c.x, rdy = ty - c.y;
+	mouse("mouseMoved", c.x, c.y, 0); await sleep(30);
+	mouse("mousePressed", c.x, c.y, 1); await sleep(45);
+	for (let i = 1; i <= steps; i++) {
+		mouse("mouseMoved", c.x + Math.round(rdx * i / steps), c.y + Math.round(rdy * i / steps), 1);
+		await sleep(18);
+	}
+	mouse("mouseReleased", tx, ty, 0); await sleep(220);
+	return { ok: true, hit: c.hitTid, inside: c.inside, from: { x: c.x, y: c.y }, to: { x: tx, y: ty }, dxWant: dx, dxApplied: rdx };
+}
+
+/* 三面对账读数：store / DOM 属性 / 真实盒宽 */
+const readRails = () => ev(`(function(){
+	var st=window.__directorLayoutStore.getState();
+	var p=document.querySelector('[data-testid=dp-cols]');
+	var e4=document.querySelector('[data-testid=dp-r4]');
+	var e7=document.querySelector('[data-testid=dp-r7]');
+	return {
+		store:(st.railWidth||{}), attr4:p?Number(p.getAttribute('data-w-r4')):null, attr7:p?Number(p.getAttribute('data-w-r7')):null,
+		box4:e4?Math.round(e4.getBoundingClientRect().width*100)/100:null,
+		box7:e7?Math.round(e7.getBoundingClientRect().width*100)/100:null,
+		open4:!!e4, open7:!!e7, pin:(st.railPinned||{}),
+		gap:p?getComputedStyle(p).columnGap:null,
+		hoverMs:p?Number(p.getAttribute('data-rail-hover-ms')):null,
+		retractMs:p?Number(p.getAttribute('data-rail-retract-ms')):null
+	};})()`);
+
+/* ── ③ 开场：唤醒会话 → 点总监 tab → 等页面**真的可用** ──────────────────── */
+async function wake() {
+	await ev(`(function(){var e=[...document.querySelectorAll('[role=treeitem]')].find(x=>/分钟|小时|天|刚刚/.test(x.textContent));if(e)e.click();return 1;})()`);
+	for (let i = 0; i < 24; i++) {
+		const ok = await ev(`(function(){var t=[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent.trim()==='总监');if(!t)return false;var r=t.getBoundingClientRect();return r.width>4&&r.height>4;})()`);
+		if (ok) break; await sleep(200);
+	}
+	const c = await ev(`(function(){var t=[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent.trim()==='总监');if(!t)return null;var r=t.getBoundingClientRect();return r.width>4?{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}:null;})()`);
+	if (c) await clickXY(c.x, c.y); else await ev(`(function(){var t=[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent.trim()==='总监');if(t)t.click();return 1;})()`);
+}
+keyEsc(); await sleep(260);
+await wake();
+const dpReady = await waitFor("(function(){var p=document.querySelector('[data-testid=dp-root]');return !!(p&&p.getAttribute('data-rail-hover-ms')&&p.getAttribute('data-rail-r4'));})", 9000);
+console.log("开场：总监页挂载=" + dpReady);
+if (!dpReady) {
+	console.error("IS_PASS: FALSE（INVALID：总监页未挂载 / dp-root 缺 data-rail-hover-ms，A-F 段全部无法判定）");
+	console.error("  排查：node scripts/probe-render-errors.mjs（渲染期异常的取法）");
+	process.exit(2);
+}
+
+/* ── ④ 起点建立 + 快照（收尾要按这个还原）───────────────────────────────── */
+const snap = await readRails();
+const SNAP = { r4: (snap && snap.store && snap.store.r4) || DEF_M4, r7: (snap && snap.store && snap.store.r7) || DEF_M7, pin: (snap && snap.pin) || { r4: false, r7: false } };
+console.log("起点快照：" + JSON.stringify(SNAP));
+const restore = async () => {
+	await ev(`(function(){var s=window.__directorLayoutStore;
+		s.setRailWidth('r4',${SNAP.r4});s.setRailWidth('r7',${SNAP.r7});
+		s.setRailPinned('r4',${SNAP.pin.r4 ? "true" : "false"});s.setRailPinned('r7',${SNAP.pin.r7 ? "true" : "false"});return 1;})()`);
+	await sleep(200);
+	await ev(`(function(){var p=document.querySelector('[data-testid=dp-root]');if(p){p.setAttribute('data-rail-r4','in');}return 1;})()`);
+	await sleep(120);
+};
+
+/* ══ A. 悬停闸门时长（「鼠标移过去没反应」的验收）══ */
+console.log("\n══ A. 悬停闸门时长（用户：r4和r7的鼠标移动不好用）══");
+const hv = await readRails();
+t("V-A1", "dp-root 自报悬停时长（`data-rail-hover-ms`）为**人类可感知**量级（>0 且 <=1000ms）—— 改前是 5000ms",
+	Number.isFinite(hv.hoverMs) && hv.hoverMs > 0 && hv.hoverMs <= 1000, { hoverMs: hv.hoverMs });
+t("V-A2", "dp-root 自报缩回时长（`data-rail-retract-ms`）>0 且 <=1000ms",
+	Number.isFinite(hv.retractMs) && hv.retractMs > 0 && hv.retractMs <= 1000, { retractMs: hv.retractMs });
+/* 🔴 反例保护：光看"两个数很小"不够 —— 必须**实测一次**"停这么久真的开了"，
+ *    否则把两个常量都改成 1ms 而 hover 链路整条断掉，上面两条照样绿。 */
+const railBox = await ev(`(function(){var e=document.querySelector('[data-testid=dp-rail-r4]');if(!e)return null;var r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+26)};})()`);
+if (railBox && Number.isFinite(hv.hoverMs)) {
+	mouse("mouseMoved", railBox.x, railBox.y, 0);
+	await sleep(hv.hoverMs + 400);
+	const after = await exists("[data-testid=dp-r4]");
+	t("V-A3", "🔴 实测：鼠标停靠 " + hv.hoverMs + "ms 后 R4 **真的展开**（防「只改常量、链路已断」的假绿）", after === true, { after });
+	keyEsc();
+	await ev(`(function(){var s=window.__directorLayoutStore;s.setRailPinned('r4',false);return 1;})()`);
+	await sleep(120);
+	const away = await ev(`(function(){var e=document.querySelector('[data-testid=dp-root]');if(!e)return null;var r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height-8)};})()`);
+	if (away) { mouse("mouseMoved", away.x, away.y, 0); await sleep((hv.retractMs || 300) + 420); }
+	t("V-A4", "实测：移开后 R4 自动缩回（收尾复原，不把展开态留给 B 段）", (await exists("[data-testid=dp-r4]")) === false);
+} else {
+	sk("V-A3", "缩回栏取不到几何");
+	sk("V-A4", "缩回栏取不到几何");
+}
+
+/* ══ B. 宽度：默认值 / 拖动对账 / clamp / 复位 / 反向语义 ══ */
+console.log("\n══ B. R4/R7 展开宽度（用户：宽度都要允许自由拖拽）══");
+const p1 = await clickSelProbe("[data-testid=dp-rail-r4]");
+if (!p1.ok || !p1.inside) console.log("      [B 诊断] R4 缩回栏点击：" + JSON.stringify(p1));
+const p2 = await clickSelProbe("[data-testid=dp-rail-r7]");
+if (!p2.ok || !p2.inside) console.log("      [B 诊断] R7 缩回栏点击：" + JSON.stringify(p2));
+const mid = await readRails();
+const bOpen = !!(mid && mid.open4 && mid.open7);
+t("V-B0", "前置：R4 与 R7 均已展开（两栏真实在 DOM）", bOpen, mid && { open4: mid.open4, open7: mid.open7 });
+if (bOpen) {
+	t("V-B1", "展开宽度 = 源码默认值（r4=" + DEF_M4 + " r7=" + DEF_M7 + "）且 **store / DOM 属性 / 真实盒宽 三面同源**",
+		mid.store.r4 === DEF_M4 && mid.attr4 === DEF_M4 && Math.abs(mid.box4 - DEF_M4) <= 1
+			&& mid.store.r7 === DEF_M7 && mid.attr7 === DEF_M7 && Math.abs(mid.box7 - DEF_M7) <= 1,
+		{ store: mid.store, attr4: mid.attr4, box4: mid.box4, attr7: mid.attr7, box7: mid.box7 });
+	/* ① R4 右拖 +40 ⇒ 变宽 40 */
+	const dg1 = await dragBy("[data-testid=dp-r4-resizer]", 40, 0);
+	if (!dg1.ok || !dg1.inside) console.log("      [B 诊断] R4 拖拽条命中：" + JSON.stringify(dg1));
+	const w1 = await readRails();
+	const want1 = Math.min(RAIL_MAX, DEF_M4 + 40);
+	t("V-B2", "🔴 真拖 R4 拖拽条 +40px ⇒ store 与真实盒宽**同时**变为 " + want1 + "（跑程内对账，拖前 " + DEF_M4 + "）",
+		!!w1 && w1.store.r4 === want1 && Math.abs(w1.box4 - want1) <= 1 && w1.attr4 === want1,
+		w1 && { store: w1.store.r4, attr: w1.attr4, box: w1.box4, want: want1, hit: dg1.hit, dxApplied: dg1.dxApplied });
+	/* ② 超上限拖动 ⇒ clamp 到 RAIL_MAX（不是"随便多宽"） */
+	const dg2 = await dragBy("[data-testid=dp-r4-resizer]", 900, 0);
+	const w2 = await readRails();
+	t("V-B3", "🔴 一次性右拖 900px ⇒ 被 clamp 到上限 " + RAIL_MAX + "（上下限是真的，不是装饰）",
+		!!w2 && w2.store.r4 === RAIL_MAX && Math.abs(w2.box4 - RAIL_MAX) <= 1, w2 && { store: w2.store.r4, box: w2.box4, max: RAIL_MAX, dxWant: dg2.dxWant, dxApplied: dg2.dxApplied });
+	/* ③ 超下限拖动 ⇒ clamp 到 RAIL_MIN */
+	const dg3 = await dragBy("[data-testid=dp-r4-resizer]", -1200, 0);
+	const w3 = await readRails();
+	t("V-B4", "🔴 一次性左拖 1200px ⇒ 被 clamp 到下限 " + RAIL_MIN + "（下限同样是真的）",
+		!!w3 && w3.store.r4 === RAIL_MIN && Math.abs(w3.box4 - RAIL_MIN) <= 1, w3 && { store: w3.store.r4, box: w3.box4, min: RAIL_MIN, dxWant: dg3.dxWant, dxApplied: dg3.dxApplied });
+	/* ④ R7 方向语义：在右 ⇒ 左移变宽 */
+	const dg4 = await dragBy("[data-testid=dp-r7-resizer]", -50, 0);
+	const w4 = await readRails();
+	const want4 = Math.max(RAIL_MIN, DEF_M7 + 50);
+	t("V-B5", "🔴 R7 在右侧 ⇒ **左拖 50px 变宽**到 " + want4 + "（方向语义与 R4 相反，不是同向复制）",
+		!!w4 && w4.store.r7 === want4 && Math.abs(w4.box7 - want4) <= 1, w4 && { store: w4.store.r7, box: w4.box7, want: want4, hit: dg4.hit, dxApplied: dg4.dxApplied });
+	/* ⑤ 双击复位（🔴 第二次点击必须带 `clickCount:2` —— 只发两对 clickCount:1
+	 *     的 press/release 在 Chromium 里**不会**合成 `dblclick`，
+	 *     会让"双击没接上"与"复位没实现"读数一样） */
+	const rs = await ev(`(function(){var e=document.querySelector('[data-testid=dp-r4-resizer]');if(!e)return null;var r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);
+	if (rs) {
+		mouse("mouseMoved", rs.x, rs.y, 0); await sleep(30);
+		mouse("mousePressed", rs.x, rs.y, 1, 1); mouse("mouseReleased", rs.x, rs.y, 0, 1); await sleep(40);
+		mouse("mousePressed", rs.x, rs.y, 1, 2); mouse("mouseReleased", rs.x, rs.y, 0, 2); await sleep(320);
+		const w5 = await readRails();
+		t("V-B6", "双击拖拽条 ⇒ R4 宽度复位为默认 " + DEF_M4 + "（「拖歪了想回默认值」的确定场景）",
+			!!w5 && w5.store.r4 === DEF_M4 && Math.abs(w5.box4 - DEF_M4) <= 1, w5 && { store: w5.store.r4, box: w5.box4 });
+	} else { sk("V-B6", "拖拽条取不到几何"); }
+} else {
+	["V-B1", "V-B2", "V-B3", "V-B4", "V-B5", "V-B6"].forEach((k) => sk(k, "R4/R7 未同时展开，宽度段"));
+}
+
+/* ══ C. 无缝拼接 ══ */
+console.log("\n══ C. R4/R5/R7 无缝（用户：中间拼接改成无缝的，靠在一起就行）══");
+const seam = await ev(`(function(){
+	var p=document.querySelector('[data-testid=dp-cols]');
+	var a=document.querySelector('[data-testid=dp-r4]'), b=document.querySelector('[data-testid=dp-r5]'), c=document.querySelector('[data-testid=dp-r7]');
+	if(!p||!a||!b||!c)return null;
+	var ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect(), rc=c.getBoundingClientRect();
+	var cs=getComputedStyle(p);
+	return {gap:cs.columnGap, padL:cs.paddingLeft, padR:cs.paddingRight,
+		raRight:Math.round(ra.right*100)/100, rbLeft:Math.round(rb.left*100)/100, rbRight:Math.round(rb.right*100)/100, rcLeft:Math.round(rc.left*100)/100,
+		w4:Math.round(ra.width), w5:Math.round(rb.width), w7:Math.round(rc.width)};})()`);
+if (seam) {
+	t("V-C1", "`dp-cols` 的 `columnGap` 为 0（改前 7px）", seam.gap === "0px", { gap: seam.gap });
+	t("V-C2", "🔴 相邻边界真的相接：|R4.right − R5.left| <= 1 且 |R5.right − R7.left| <= 1（含三栏宽度下限，防「某栏没渲染」的平凡真）",
+		seam.w4 >= RAIL_MIN && seam.w5 > 100 && seam.w7 >= RAIL_MIN
+			&& Math.abs(seam.raRight - seam.rbLeft) <= 1 && Math.abs(seam.rbRight - seam.rcLeft) <= 1,
+		{ 缝1: Math.round((seam.raRight - seam.rbLeft) * 100) / 100, 缝2: Math.round((seam.rbRight - seam.rcLeft) * 100) / 100, w4: seam.w4, w5: seam.w5, w7: seam.w7 });
+	t("V-C3", "整组外缘仍保留左右内边距（无缝只针对「栏之间」，不是把整组贴边）",
+		parseFloat(seam.padL) > 0 && parseFloat(seam.padR) > 0, { padL: seam.padL, padR: seam.padR });
+} else { ["V-C1", "V-C2", "V-C3"].forEach((k) => sk(k, "三栏未同时渲染，无缝段")); }
+
+/* ══ D. R4 条目「两行 + 编号靠右」══ */
+console.log("\n══ D. R4 条目两行 + 编号靠右（用户样张 T-INIT-0032026-08-24 靠右）══");
+await ev(`(function(){var b=document.querySelector('[data-testid=dp-r4-roadmap]');if(b)b.click();return 1;})()`);
+await sleep(260);
+const r4row = await ev(`(function(){
+	var body=document.querySelector('[data-testid=dp-r4-body-roadmap]');
+	if(!body)return null;
+	var it=body.querySelector('[data-testid=dp-r4-item]');
+	if(!it)return null;
+	var task=it.querySelector('[data-testid=dp-r4-item-task]');
+	var meta=it.querySelector('[data-testid=dp-r4-item-meta]');
+	var id=it.querySelector('[data-testid=dp-r4-item-id]');
+	if(!task||!meta||!id)return {missing:true, hasTask:!!task, hasMeta:!!meta, hasId:!!id, dirs:[...it.children].map(function(c){return c.getAttribute('data-testid');})};
+	var ri=it.getBoundingClientRect(), rt=task.getBoundingClientRect(), rm=meta.getBoundingClientRect(), rd=id.getBoundingClientRect();
+	return {count:body.getAttribute('data-count'), idText:(id.textContent||'').trim(),
+		rows:it.children.length,
+		taskY:Math.round(rt.top), metaY:Math.round(rm.top), idY:Math.round(rd.top),
+		itemRight:Math.round(ri.right*100)/100, idRight:Math.round(rd.right*100)/100,
+		taskW:Math.round(rt.width), itemW:Math.round(ri.width), metaJustify:getComputedStyle(meta).justifyContent};})()`);
+if (r4row && !r4row.missing) {
+	t("V-D1", "一条待办 = **恰好两行**（描述行 + 元信息行）—— 改前是单行 flex（窄栏下描述被压成逐字竖排）",
+		r4row.rows === 2, r4row);
+	t("V-D2", "🔴 编号在**第二行**（`编号.y > 描述.y`），且两行**不重叠**",
+		r4row.idY > r4row.taskY && r4row.metaY > r4row.taskY, { taskY: r4row.taskY, metaY: r4row.metaY, idY: r4row.idY });
+	t("V-D3", "🔴 编号**靠右对齐**：|编号.right − 条目.right| <= 2（用户样张的「靠右」）",
+		Math.abs(r4row.idRight - r4row.itemRight) <= 2, { idRight: r4row.idRight, itemRight: r4row.itemRight });
+	t("V-D4", "🔴 描述行**占满整行**（宽度接近条目宽度，防「描述被挤到窄条」）",
+		r4row.itemW > 100 && r4row.taskW >= r4row.itemW - 6, { taskW: r4row.taskW, itemW: r4row.itemW });
+	t("V-D5", "编号取自台账真实条目（形如 `T-*`，非空占位）", /^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+/.test(r4row.idText), { idText: r4row.idText });
+	const dn = await ev(`(function(){var b=document.querySelector('[data-testid=dp-r4-done]');if(b)b.click();return 1;})()`);
+	await sleep(280);
+	const doneRow = await ev(`(function(){
+		var body=document.querySelector('[data-testid=dp-r4-body-done]');if(!body)return null;
+		var it=body.querySelector('[data-testid=dp-r4-item]');if(!it)return null;
+		var id=it.querySelector('[data-testid=dp-r4-item-id]'), dt=it.querySelector('[data-testid=dp-r4-item-date]');
+		if(!id||!dt)return {missing:true,hasId:!!id,hasDate:!!dt,dirs:[...it.children].map(function(c){return c.getAttribute('data-testid');})};
+		var task=it.querySelector('[data-testid=dp-r4-item-task]');
+		var ri=it.getBoundingClientRect(), rid=id.getBoundingClientRect(), rdt=dt.getBoundingClientRect(), rt=task?task.getBoundingClientRect():null;
+		return {count:body.getAttribute('data-count'), rows:it.children.length,
+			idText:(id.textContent||'').trim(), dateText:(dt.textContent||'').trim(),
+			itemRight:Math.round(ri.right*100)/100, dateRight:Math.round(rdt.right*100)/100, idRight:Math.round(rid.right*100)/100,
+			idY:Math.round(rid.top), dateY:Math.round(rdt.top), taskY:rt?Math.round(rt.top):null};})()`);
+	if (doneRow && !doneRow.missing) {
+		/* 🔴 **判据修正：这是本闸门自己的缺陷，第 1 次跑被它自己抓了出来。**
+		 *    「已完成」行的靠右顺序是 **编号 → 日期** ⇒ 贴着右边缘的是**日期**，不是编号。
+		 *    第一版断言 `|编号.right − 条目.right| <= 26` 把"整组靠右"误读成"编号在最右"
+		 *    ⇒ 实测 idRight=411 / itemRight=471（差 60px，正好是日期宽度）直接假红。
+		 *    正确判据：**整组靠右** = 最右元素（日期）贴边；且编号与日期**同一行**、编号在左。
+		 *    （路线图那侧没有日期，最右元素就是编号 ⇒ V-D3 判 "编号贴边" 是对的。） */
+		t("V-D6", "「已完成任务」用**同一套两行 + 靠右**逻辑（用户：代办使用一样逻辑）—— 日期贴右边缘、编号在其左同排、描述在上一行",
+			doneRow.rows === 2 && Math.abs(doneRow.dateRight - doneRow.itemRight) <= 2
+				&& doneRow.idY === doneRow.dateY && doneRow.idRight <= doneRow.dateRight
+				&& doneRow.taskY !== null && doneRow.idY > doneRow.taskY
+				&& /^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+/.test(doneRow.idText),
+			doneRow);
+	} else { sk("V-D6", "已完成列表取不到条目" + (doneRow && doneRow.missing ? "（诊断：" + JSON.stringify(doneRow) + "）" : "")); }
+	await ev(`(function(){var b=document.querySelector('[data-testid=dp-r4-roadmap]');if(b)b.click();return 1;})()`);
+	await sleep(220);
+} else {
+	["V-D1", "V-D2", "V-D3", "V-D4", "V-D5"].forEach((k) => sk(k, "路线图条目取不到（或本机台账为空）"));
+	if (r4row && r4row.missing) console.log("      [D 诊断] 行内结构：" + JSON.stringify(r4row));
+}
+
+/* ══ E. R7 关键文件「三行」+ 点击降级可观测 ══ */
+console.log("\n══ E. R7 关键文件三行（描述 / 名称 / 路径）+ 点击降级 ══");
+await ev(`(function(){var b=document.querySelector('[data-testid=dp-r7-files]');if(b)b.click();return 1;})()`);
+await sleep(300);
+const r7row = await ev(`(function(){
+	var body=document.querySelector('[data-testid=dp-r7-body-files]');if(!body)return null;
+	var it=body.querySelector('[data-testid=dp-keyfile]');if(!it)return null;
+	var nm=it.querySelector('[data-testid=dp-keyfile-name]'), pt=it.querySelector('[data-testid=dp-keyfile-path]');
+	var kids=[...it.children].map(function(c){return c.getAttribute('data-testid')||c.tagName;});
+	var ri=it.getBoundingClientRect();
+	var desc=it.children[0];
+	return {count:body.getAttribute('data-count'), root:body.getAttribute('data-root'), rootSrc:body.getAttribute('data-root-src'),
+		kids:kids, hasName:!!nm, hasPath:!!pt,
+		descY:Math.round(desc.getBoundingClientRect().top), nameY:nm?Math.round(nm.getBoundingClientRect().top):null, pathY:pt?Math.round(pt.getBoundingClientRect().top):null,
+		file:it.getAttribute('data-file'), abs:it.getAttribute('data-abs'), dir:it.getAttribute('data-dir'),
+		nameText:nm?(nm.textContent||'').trim():null, pathText:pt?(pt.textContent||'').trim():null,
+		nameInside:nm?nm.getBoundingClientRect().width<=ri.width+1:null, itemW:Math.round(ri.width)};})()`);
+if (r7row && r7row.count !== "0") {
+	t("V-E1", "一个关键文件 = **恰好三行**：描述(div) / 名称(button) / 路径(button)，顺序即用户要求",
+		r7row.kids.length === 3 && r7row.hasName && r7row.hasPath, { kids: r7row.kids });
+	t("V-E2", "🔴 三行纵向**依次排列**：描述.y < 名称.y < 路径.y（真换行，不是挤在一行）",
+		r7row.descY < r7row.nameY && r7row.nameY < r7row.pathY, { descY: r7row.descY, nameY: r7row.nameY, pathY: r7row.pathY });
+	t("V-E3", "第二行是**名称**（= 仓库相对路径 `src/...`），不是绝对路径",
+		/^src\//.test(r7row.nameText || "") && r7row.nameText === r7row.file, { name: r7row.nameText, file: r7row.file });
+	t("V-E4", "🔴 第三行是**绝对路径**且与 `data-abs` 同源（「看起来相等 ≠ 同源」：两处都由同一次计算得出）",
+		r7row.pathText === r7row.abs && /^[A-Za-z]:\\/.test(r7row.pathText || "") && r7row.pathText.endsWith((r7row.file || "").replace(/\//g, "\\")),
+		{ path: r7row.pathText, abs: r7row.abs });
+	t("V-E5", "项目根来源被如实标注（`data-root-src` ∈ {env, fallback}）—— 降级来源不隐藏（纪律 19）",
+		r7row.rootSrc === "env" || r7row.rootSrc === "fallback", { rootSrc: r7row.rootSrc, root: r7row.root });
+	/* 点击名称 ⇒ 真实发生的动作 = 复制路径 + 必然出现的 toast（成功/失败两种文案之一） */
+	const beforeToast = await textOf("[data-testid=dp-toast]");
+	const c1 = await clickSelProbe("[data-testid=dp-keyfile-name]");
+	await sleep(160);
+	const toast1 = await textOf("[data-testid=dp-toast]");
+	t("V-E6", "🔴 点「名称」⇒ 真的触发了动作（命中自身）且**给出可读反馈**：文案必须含「已复制」或「复制失败」，不许两者皆无（降级可以，无声不行）",
+		!!c1.inside && typeof toast1 === "string" && /已复制|复制失败/.test(toast1) && /路径/.test(toast1),
+		{ inside: c1.inside, hit: c1.hit, beforeToast: beforeToast, toast: toast1 });
+	const c2 = await clickSelProbe("[data-testid=dp-keyfile-path]");
+	await sleep(160);
+	const toast2 = await textOf("[data-testid=dp-toast]");
+	t("V-E7", "🔴 点「路径」⇒ 反馈文案指向**文件夹**（与点名称的文案可区分）",
+		!!c2.inside && typeof toast2 === "string" && /文件夹路径/.test(toast2), { inside: c2.inside, toast: toast2 });
+	await ev(`(function(){var e=document.querySelector('[data-testid=dp-toast]');if(e)e.click();return 1;})()`);
+	await sleep(200);
+} else {
+	["V-E1", "V-E2", "V-E3", "V-E4", "V-E5", "V-E6", "V-E7"].forEach((k) => sk(k, "R7 关键文件列表取不到（或生成式清单为空）"));
+}
+
+/* ══ F. 收尾复原 ══ */
+console.log("\n══ F. 收尾复原（闸门不许成为产品的破坏者）══");
+await restore();
+const fin = await readRails();
+t("V-F1", "🔴 收尾：宽度已按**起点快照**还原，且回读自证（store 与真实盒宽两面一致）",
+	!!fin && fin.store.r4 === SNAP.r4 && fin.store.r7 === SNAP.r7
+		&& Math.abs(fin.box4 - SNAP.r4) <= 1 && Math.abs(fin.box7 - SNAP.r7) <= 1,
+	fin && { store: fin.store, box4: fin.box4, box7: fin.box7, snap: { r4: SNAP.r4, r7: SNAP.r7 } });
+t("V-F2", "🔴 收尾：钉住态已还原（`railPinned` 与快照一致），不把「两栏都钉住」留给下一套闸门",
+	!!fin && fin.pin.r4 === SNAP.pin.r4 && fin.pin.r7 === SNAP.pin.r7,
+	fin && { pin: fin.pin, snap: SNAP.pin });
+
+/* ── 汇总 ── */
+console.log("\n───────────────────────────────────────────────");
+console.log(" 通过 " + pass + " / 失败 " + fail + " / 跳过 " + skip);
+if (failures.length) { console.log(" 失败项："); failures.forEach((f) => console.log("   - " + f)); }
+console.log(" IS_PASS: " + (fail === 0 ? "TRUE" : "FALSE"));
+console.log("───────────────────────────────────────────────");
+process.exit(fail === 0 ? 0 : 1);

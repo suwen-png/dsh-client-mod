@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：多层级总监结构（对话级 / 文件夹级 / 全局级）
  * 引用：要求 1 · 17 号文 §2.1 · T-PLUG-009
- * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/summarize.js, logic/sync.js, store/duty-config.js
+ * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js
  * 下游：store/idb.js, store/plugin-db.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md

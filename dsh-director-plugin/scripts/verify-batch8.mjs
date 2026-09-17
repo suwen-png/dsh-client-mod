@@ -107,23 +107,31 @@ ok("未改宿主持久化 key（R5 兼容）", !has(S.dutyConfig, /dsh\.director
 /* ══ [3] 五步执行逻辑（§1.2）════════════════════════ */
 console.log("\n[3] 五步执行逻辑（03号文 §1.2）");
 ok("src/logic/director-run.js 存在", existsSync(P.run), size(P.run) + " B");
-ok("步骤1 整理语言", has(S.run, /步骤 1：整理语言/));
-ok("步骤2 判断是否需要切新分支", has(S.run, /步骤 2：判断是否需要切新分支/));
-ok("步骤3 判断是否需要切模型", has(S.run, /步骤 3：判断是否需要切模型/));
-ok("步骤4 上下文筛选", has(S.run, /步骤 4：上下文筛选/));
-ok("步骤5 自动审核产出", has(S.run, /步骤 5：自动审核产出/));
+/* 🔴 19 号文 **N9 判据升级（2026-09-17）**：
+ *    五步链已收敛为**图驱动**（`chainPlan()` ← `DIRECTOR_CHAIN` 现算顺序），
+ *    实现表里的**键** = 图上的 `id` ⇒ 判据改查**实现表键**。
+ *    原先匹配的是源码**注释文本**「步骤 1：整理语言」—— 顺序既已由图算，
+ *    注释里再写死步号就是**第二份顺序声明**（正是 N9 要消除的东西），
+ *    故收敛时把注释改成「① 整理语言」⇒ 旧判据**假红**（代码照常执行，五步一条不少）。 */
+ok("五步实现表含 polish（整理语言）", has(S.run, /polish:\s*async/));
+ok("五步实现表含 branch（判断是否需要切新分支）", has(S.run, /branch:\s*async/));
+ok("五步实现表含 model（判断是否需要切模型）", has(S.run, /model:\s*async/));
+ok("五步实现表含 context（上下文筛选）", has(S.run, /context:\s*async/));
+ok("五步实现表含 review（自动审核产出）", has(S.run, /review:\s*async/));
 ok("每步受对应职责开关控制", (S.run.match(/d\.\w+\.enabled/g) || []).length >= 5,
 	"命中 " + (S.run.match(/d\.\w+\.enabled/g) || []).length + " 处");
 ok("自动转发沿用宿主 300ms 延迟（勿改）", has(S.run, /setTimeout\(r, 300\)/));
 ok("并发锁（沿用 V9.4-P1 语义）", has(S.run, /running\.has\(store\)/));
 ok("🔴 try/finally 保证锁必须释放", has(S.run, /finally \{[\s\S]{0,80}running\.delete/));
 
-/* 真机实测缺陷修复（2026-09-12）：用户消息必须在 5 步之前上屏 */
+/* 真机实测缺陷修复（2026-09-12）：用户消息必须在 5 步之前上屏
+ * 🔴 19 号文 N9（2026-09-17）：锚点由注释文本「步骤 1：整理语言」改为**实现表起点**
+ *    `const IMPL = {` —— 那才是"步骤开始执行"的结构位置。原锚点在收敛后返回 -1 ⇒ 假红。 */
 const iUserMsg = S.run.indexOf('store.addMessage({ role: "user"');
-const iStep1 = S.run.indexOf("步骤 1：整理语言");
-ok("🔴 用户消息在「步骤 1」之前写入（§2.3 消息流：立即上屏）",
-	iUserMsg > -1 && iStep1 > -1 && iUserMsg < iStep1,
-	"user 写入偏移 " + iUserMsg + " < 步骤1 偏移 " + iStep1);
+const iSteps = S.run.indexOf("const IMPL = {");
+ok("🔴 用户消息在**五步执行之前**写入（§2.3 消息流：立即上屏）",
+	iUserMsg > -1 && iSteps > -1 && iUserMsg < iSteps,
+	"user 写入偏移 " + iUserMsg + " < 实现表偏移 " + iSteps);
 ok("🔴 不再在末尾重复写 user 消息（只有 1 处 addMessage user）",
 	(S.run.match(/store\.addMessage\(\{ role: "user"/g) || []).length === 1);
 ok("🔴 执行期状态置为 running", has(S.run, /store\.setStatus\("running"\)/));

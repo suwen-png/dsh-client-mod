@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：分支血缘树（导图态的数据源）
  * 引用：—
- * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/mindmap-render.js
- * 下游：logic/discover.js, store/mindmap-schema.js, store/split-index.js
+ * 上游：bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js
+ * 下游：logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C2（分支生命周期状态机）· F1 / F5（导图行模型与宿主真值透传）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -63,6 +63,9 @@ import { discover, sessionLabel } from "./discover.js";
 import { kindOfNode, stateOfRow, hasHostState } from "../store/mindmap-schema.js";
 /* 分流标签索引（第 16 批）：宿主不给 rename ⇒ 显示名由插件侧补，且**只有一处真相源** */
 import { readSplitIndex, applySplitLabels } from "../store/split-index.js";
+import { applyDispatchLabels } from "../store/dispatch-log.js";
+/* 会话档案（第 19 批建、第 21 批**接进唯一摄取点**）：每会话自己的总监与总结 */
+import { applyDossiers } from "../store/session-dossier.js";
 
 /** 节点在导图画布上的布局常量（与 MindMap.js 共用，勿各自写死）
  * 🔴 2026-09-12 第三轮放大：节点从 200×56 调到 224×72 —— 用户要求"单个框要有展开
@@ -382,7 +385,30 @@ export async function refreshBranchTree() {
 	let lineage = false;
 	const fromCtx = readSessionsFromCtx(ctxRef, diag);
 	if (fromCtx && fromCtx.length) {
-		tree = buildBranchTree(fromCtx, { currentId: diag.currentId });
+		/* 🔴 第 21 批 D1 —— 用户原话「重复创建了一百多个会话」的**真因**：
+		 *    宿主快照的 `ids` **包含已归档会话**。实测 126 条里 125 条是用户早已下架、
+		 *    侧栏看不见的幽灵；旧版把它们**全画进导图** ⇒ 用户看到 126 个框。
+		 *    归档集与派发复用**同一判据**（`archivedSessionIds()`），杜绝两套口径。
+		 *    🔴 `[]` 与 `null` 处置**相反**（同 `director-dispatch.js`）：
+		 *      `[]`   ⇒ 放心过滤（真的没有归档）；
+		 *      `null` ⇒ **不许过滤** —— 把"读不到"当"全归档"会一次清空导图。 */
+		let arch = null;
+		try { arch = await archivedSessionIds(); } catch (e) { arch = null; }
+		diag.archivedKnown = Array.isArray(arch);
+		diag.archivedN = Array.isArray(arch) ? arch.length : -1;
+		let live = fromCtx;
+		if (Array.isArray(arch) && arch.length) {
+			const set = new Set(arch);
+			live = fromCtx.filter((s) => {
+				const id = s && s.sessionId !== undefined ? s.sessionId : (s ? s.id : null);
+				return !(id && set.has(String(id)));
+			});
+		}
+		diag.archivedExcluded = fromCtx.length - live.length;
+		/* 🔴 快照非空 ⇒ **一律**走 buildBranchTree（过滤后为 0 就是空树）。
+		 *    绝不回退 `fallbackFromDiscover()` —— 那会用一份**伪造的平铺树**
+		 *    盖住"用户确实没有活会话"这个事实（降级可以，无声不行：纪律 19）。 */
+		tree = buildBranchTree(live, { currentId: diag.currentId });
 		source = "ctx.sessions";
 		lineage = tree.lineage;
 	} else {
@@ -397,6 +423,22 @@ export async function refreshBranchTree() {
 	const split = applySplitLabels(tree, readSplitIndex());
 	diag.splitApplied = split.applied;
 	diag.splitDims = split.dims;
+	/* 🔴 第 17 批：派发状态覆盖（同一摄取点，**只新增字段**不改既有字段）。
+	 *    放在 `applySplitLabels` **之后**：两者写的字段集不相交（`splitDim`/`titleOrigin`
+	 *    vs `dispatchState`/`dispatchSay`…），顺序不影响结果，但放后面读起来更清楚
+	 *    "分流标签是基础，派发状态是叠加层"。 */
+	const disp = applyDispatchLabels(tree);
+	diag.dispatchApplied = disp.applied;
+	diag.dispatchStates = disp.states;
+	/* 🔴 第 21 批 D2：会话档案接进**唯一摄取点**。
+	 *    第 19 批只造了 `store/session-dossier.js`（单测 17/17 绿），但 `applyDossiers`
+	 *    **全仓零调用** ⇒ 档案写了却从不显示，用户原话「（每个会话）都有自己的总监，
+	 *    存在自己的会话总结文档」**完全看不见**（"注册成功 ≠ 渲染成功"，纪律 30）。
+	 *    与 `applySplitLabels` / `applyDispatchLabels` 同范式：就地**只新增**字段。 */
+	const dos = applyDossiers(tree);
+	diag.dossierApplied = dos.applied;
+	diag.dossierWithSummary = dos.withSummary;
+	diag.dossierRoles = dos.roles.length;
 	cache = { tree, source, lineage, at: Date.now(), diag };
 	notify();
 	return cache;
@@ -468,6 +510,24 @@ function sessionsService() {
 		if (typeof ctxRef.get === "function") return ctxRef.get("sessions") || null;
 	} catch (e) { /* 两级都不可用 */ }
 	return null;
+}
+
+/**
+ * sessions 服务**是否可用**（第 19 批新增）。
+ *
+ * 🔴 为什么必须有这个判据：`rawSessionSummaries()` 返回 `[]` 有**两种含义** ——
+ *    ① 宿主里真的没有会话；② `sessions` 服务根本拿不到（读取失败）。
+ *    第 19 批的"派发前先复用"要拿存活集去判"索引条目是不是孤儿"，
+ *    这两种含义的处置**完全相反**：
+ *      · 真没有会话 ⇒ 全部新建（正确）
+ *      · 读不到服务 ⇒ 也全部新建，但必须**报降级**（否则就是无声失败，
+ *        而这恰恰是「重复创建一百多个会话」这条需求要治的病）
+ *    ⇒ 用本函数把两者分开；`[] + available:true` 才算"真的是空"。
+ *
+ * @returns {boolean}
+ */
+export function sessionsAvailable() {
+	return Boolean(sessionsService());
 }
 
 /**
@@ -598,6 +658,75 @@ export function sessionIds() {
 		const snap = svc && svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
 		return snap && Array.isArray(snap.ids) ? snap.ids.slice() : [];
 	} catch (e) { return []; }
+}
+
+/**
+ * 宿主会话摘要的**原始数组**（第 17 批「分支状态」的数据源）。
+ *
+ * 🔴 为什么不用 `currentSessionId()` / DOM：分支状态要**同时**看 8 条会话，
+ *    而"切页签才能读"的方案做不到"同时"，且会改宿主当前会话（纪律 26 要还回去）。
+ *    `sessions.list.getSnapshot()` 是**一次拿到全部**，零副作用。
+ *
+ * ⚠️ 字段**只信实测**（纪律 53）：实测本机每条含
+ *    `{ id, displayTitle, running, blank, updatedAt, agentPreset, cwd, projectionValues }`，
+ *    其中 `projectionValues` 含 `title / goal / permissions / sessionStats{turns,steps,outputTokens,…} / tokenUsage`。
+ *    调用方**不得假设**某字段一定存在 —— 缺了就如实标"未知"（纪律 19）。
+ *
+ * @returns {Array<object>} 原始摘要；失败返回 `[]`（不抛）
+ */
+export function rawSessionSummaries() {
+	const svc = sessionsService();
+	try {
+		const snap = svc && svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
+		if (!snap) return [];
+		const ids = Array.isArray(snap.ids) ? snap.ids : [];
+		const out = [];
+		for (let i = 0; i < ids.length; i++) {
+			const s = snap.byId ? snap.byId[ids[i]] : null;
+			if (s && typeof s === "object") out.push(s);
+		}
+		return out;
+	} catch (e) { return []; }
+}
+
+/**
+ * 宿主「已归档会话」集（第 19 批新增 · **修真实缺陷**）。
+ *
+ * 🔴 为什么必须有它（2026-09-16 实测）：
+ *    用户在宿主里**归档/清理**了会话之后，`sessions.list.getSnapshot()` 的 `ids`
+ *    **仍然包含它们** —— 实测：磁盘 `~/.dsh/sessions/**` 已清 0、`workspace.json` 的
+ *    `archivedSessionIds` 已清空、侧栏只剩 1 行，而 `snap.ids` 仍是 **116 条**
+ *    （其中 115 条是已经下架的旧会话）。
+ *    ⇒ 派发前的「先复用已有会话」会把这些**用户已经看不见的会话**当成存活去复用，
+ *      新内容落进幽灵会话、用户在侧栏找不到 —— 正是本批要治的那个病。
+ *    归档集**只能**从宿主 `api.workspace.list({})` 读：快照项里没有 `archived` 字段
+ *    （实测字段仅 `id/displayTitle/running/blank/updatedAt/projectionValues/title/cwd/agentPreset`）。
+ *    宿主侧 schema（`@deepseek-ai/dsh-host-apiproxy/.../api/workspace.schema.js`）：
+ *      request `{}` ⇒ value `{ items: WorkspaceView[], archivedSessionIds: string[] }`
+ *
+ * @returns {Promise<string[]|null>} 数组 = 读到了（可能是空数组）；`null` = **读不到**
+ *   🔴 `[]` 与 `null` 处置**相反**，调用方必须分开：
+ *      `[]`   ⇒ 可以放心使用全部存活集（真的没有归档）；
+ *      `null` ⇒ **不许过滤** —— 把"读不到"当成"全被归档"会一次建出双倍会话。
+ */
+export async function archivedSessionIds() {
+	const svc = sessionsService();
+	if (!svc) return null;
+	let api = null;
+	try { api = svc.manager && svc.manager.api ? svc.manager.api : null; } catch (e) { api = null; }
+	if (!api || !api.workspace || typeof api.workspace.list !== "function") return null;
+	let r = null;
+	try { r = await api.workspace.list({}); } catch (e) { return null; }
+	/* 返回形态**只信实测、全形态归一**（纪律 53）：实测为 `{rpcId, result:{ok,value}}`，
+	 * 换版可能给 `{value}` 或裸 value ⇒ 三种都认，认不出才算读不到。 */
+	let v = null;
+	try {
+		if (r && r.result && r.result.value) v = r.result.value;
+		else if (r && r.value) v = r.value;
+		else if (r && Array.isArray(r.archivedSessionIds)) v = r;
+	} catch (e) { v = null; }
+	if (!v || !Array.isArray(v.archivedSessionIds)) return null;
+	return v.archivedSessionIds.map((x) => String(x));
 }
 
 /**
@@ -824,8 +953,13 @@ export function installBranchTreeApi(ctx) {
 		readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,
 		degradationReason, hostCapabilities, openSession, forkBranch, createSession,
 		currentSessionId, watchCurrentSession,
+		// 第 19 批：存活集是否可信（`[]` 的两种含义必须可分）
+		sessionsAvailable,
 		// 第 17 批：宿主能力**实测探针**（挂出来供 CDP 诊断；纯只读，不改状态）
-		probeSessionApi, probeConversationShape, scopedConversationOf, sessionIds
+		probeSessionApi, probeConversationShape, scopedConversationOf, sessionIds, rawSessionSummaries,
+		/* 第 21 批：归档集**挂出来**（闸门与 CDP 诊断要能独立复算"树为什么少了 N 条"，
+		 * 否则只能靠 `rows` 一个数反推，违反纪律 60「数出 0 ≠ 没有」） */
+		archivedSessionIds
 	};
 	if (typeof window !== "undefined") window.__dshBranchTree = api;
 	return api;

@@ -10,6 +10,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { needsPlatformStub } from "./_test-ledger.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const scriptsDir = path.join(root, "scripts");
@@ -32,16 +33,17 @@ const results = [];
 for (const f of files) {
 	const fp = path.join(scriptsDir, f);
 	if (isRealMachine(fp)) { results.push({ name: f, status: "SKIP-RM" }); continue; }
-	const args = [fp];
-	if (f === "verify-dialog.mjs") args.push("--import", "./scripts/_platform-stub.mjs");
-	// 注意：--import 必须放 node 参数位，重排
-	let cmd, cmdArgs;
-	if (f === "verify-dialog.mjs") {
-		cmd = process.execPath; cmdArgs = ["--import", "./scripts/_platform-stub.mjs", fp];
-	} else { cmd = process.execPath; cmdArgs = [fp]; }
+	/* 桩判据走 `_test-ledger.needsPlatformStub()`（**唯一真相源**）。
+	 * 旧版在这里写死了 `if (f === "verify-dialog.mjs")` —— 一条手工特例。
+	 * 判据必须是**推导**的：任何一个 import 到 `src/**` 的套件都需要桩
+	 * （src 模块 import react，本仓按 ADR-001 不装 node_modules）。 */
+	let cmdArgs = [fp];
+	if (needsPlatformStub({ name: f, text: fs.readFileSync(fp, "utf8") })) {
+		cmdArgs = ["--import", "./scripts/_platform-stub.mjs", fp];
+	}
 	let r;
 	try {
-		r = spawnSync(cmd, cmdArgs, { cwd: root, encoding: "utf8", timeout: 240000, maxBuffer: 64 * 1024 * 1024 });
+		r = spawnSync(process.execPath, cmdArgs, { cwd: root, encoding: "utf8", timeout: 240000, maxBuffer: 64 * 1024 * 1024 });
 	} catch (e) {
 		results.push({ name: f, status: "ERROR", tail: String(e && e.message) });
 		continue;

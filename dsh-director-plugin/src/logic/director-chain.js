@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：总监五步链的声明式依赖图（纯数据，零依赖）
  * 引用：03 号文 §1.2
- * 上游：components/OrchestratorPanel.js
+ * 上游：components/OrchestratorPanel.js, logic/director-run.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 三（五步链的声明式依赖图：纯数据，视图与闸门共用同一份）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md

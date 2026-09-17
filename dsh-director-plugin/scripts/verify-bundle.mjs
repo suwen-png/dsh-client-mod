@@ -101,8 +101,23 @@ const documentStub = {
 	}),
 	querySelector: () => null,
 	documentElement: {
-		style: { setProperty: (k, v) => { rootStyleVars[k] = v; } },
-		setAttribute: (k, v) => { rootAttrs[k] = v; }
+		/* 🔴 桩必须实现**整套** CSSStyleDeclaration 面（2026-09-17 第 2 次被咬）。
+		 * 只写 `setProperty` 的后果：产品 `applyPersonalize()` 的「先清场」循环
+		 * （`DIALOG_VAR_KEYS.forEach(k => root.style.removeProperty(k))`）会抛
+		 * `TypeError: root.style.removeProperty is not a function`，被函数末尾的
+		 * `catch (e) { return false }` **静默吞掉** ⇒ 该行之后的**全部**写入（弹窗皮肤
+		 * 变量、`data-dp-dlgbg` / `data-dp-dlgimg` / `data-dp-texture` / `data-dp-motion`）
+		 * 集体消失。症状是「纹理断言红了」，真因却在**桩少了一个方法**。
+		 * ⇒ 凡产品会调的 style 方法，桩必须齐；新写入点落地时同步补桩。 */
+		style: {
+			setProperty: (k, v) => { rootStyleVars[k] = v; },
+			removeProperty: (k) => { delete rootStyleVars[k]; },
+			getPropertyValue: (k) => (k in rootStyleVars ? String(rootStyleVars[k]) : ""),
+			cssText: ""
+		},
+		setAttribute: (k, v) => { rootAttrs[k] = v; },
+		removeAttribute: (k) => { delete rootAttrs[k]; },
+		getAttribute: (k) => (k in rootAttrs ? String(rootAttrs[k]) : null),
 	},
 };
 
@@ -388,6 +403,31 @@ check("🔴 apply() 真的把 --dp-* 变量写到 :root（个性化能生效的�
 	"--dp-ac=" + rootStyleVars["--dp-ac"] + " / --dp-font=" + rootStyleVars["--dp-font"] + " / --dp-radius=" + rootStyleVars["--dp-radius"]);
 check("🔴 apply() 真的写了 html[data-dp-texture]（纹理选择器要靠它命中）",
 	rootAttrs["data-dp-texture"] === "grid" && rootAttrs["data-dp-motion"] === "1", JSON.stringify(rootAttrs));
+/* ── 6f-2（2026-09-17）：总监弹窗背景改造的产物层证据 + 「静默吞掉」直捕 ──
+ *
+ * 为什么单列一段：本轮 `verify-bundle` 曾红在**上面那条 texture 断言**上，真因却是
+ * 桩缺 `removeProperty`（见桩处注释）。红的那条只说明"结果没了"，没说"为什么没"。
+ * 所以这里补一条**直接**断言 `applyPersonalize()` 的返回值 —— 它一旦不为 true，
+ * 就精确指出「写入过程被 catch 吞了」，而不必再从别的断言倒推。 */
+check("🔴 applyPersonalize() 返回 true（非 true = 写入被末尾 catch 静默吞掉，不是功能坏）",
+	windowStub.__dshPersonalize?.applyPersonalize?.(windowStub.__dshPersonalize?.P_DEFAULTS) === true,
+	String(windowStub.__dshPersonalize?.applyPersonalize?.(windowStub.__dshPersonalize?.P_DEFAULTS)));
+check("🔴 默认档（warm）真的把 --dp-dlg-bg 写到 :root，且值为暖白而不是宿主黑底",
+	rootStyleVars["--dp-dlg-bg"] === "#f7f2e8" && rootStyleVars["--dp-dlg-bg"] !== "#16171a",
+	"--dp-dlg-bg=" + rootStyleVars["--dp-dlg-bg"]);
+check("🔴 默认档真的写了 html[data-dp-dlgbg]=warm / [data-dp-dlgimg]=0",
+	rootAttrs["data-dp-dlgbg"] === "warm" && rootAttrs["data-dp-dlgimg"] === "0",
+	"dlgbg=" + rootAttrs["data-dp-dlgbg"] + " img=" + rootAttrs["data-dp-dlgimg"]);
+check("🔴 反证：「跟随主题」档必须**零变量产出**（16 个 --dp-dlg-* 全部清空 ⇒ 组件内联 fallback 才能落到宿主令牌）",
+	(() => {
+		const A = windowStub.__dshPersonalize, K = A.DIALOG_VAR_KEYS;
+		A.applyPersonalize({ ...A.P_DEFAULTS, dialogBg: "follow" });
+		const hit = K.filter((k) => rootStyleVars[k] !== undefined);
+		A.applyPersonalize(A.P_DEFAULTS);            // 复原默认档
+		const back = K.filter((k) => rootStyleVars[k] !== undefined);
+		return hit.length === 0 && back.length > 0;  // 正反都要有：空了，且能再写回来
+	})(),
+	"follow 档应残留 0 个 --dp-dlg-*（且切回 warm 后能重新写满）");
 check("🔴 反证：改主色 ⇒ :root 的 --dp-ac 立刻变（证明 set 真的重写到 DOM，不是只改内存）",
 	(() => { const before = rootStyleVars["--dp-ac"];
 		windowStub.__dshPersonalize.store.set("accent", "#39c5cf");

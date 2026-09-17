@@ -1,0 +1,11 @@
+tag=TIMEOUT-ALIVE-45s
+exit=n/a sig=n/a ms=45063
+== STDOUT (125 B) ==
+
+Checking for update
+Update for version 0.1.0-rc.11 is not available (latest version: 0.1.0-rc.5, downgrade is disallowed).
+
+== STDERR (130 B) ==
+
+DevTools listening on ws://127.0.0.1:9333/devtools/browser/2d35681a-5fcb-4783-8249-bd63f8debc18
+dsh web: http://127.0.0.1:7463

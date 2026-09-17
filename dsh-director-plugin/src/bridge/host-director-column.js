@@ -99,7 +99,15 @@ const MEM_BOUND = "data-dsh-mem-bound";
 
 export const MIN_BTN_ID = "dsh-host-col-min";
 export const COL_RESIZER_ID = "dsh-host-col-resizer";
-export const MEM_BAR_ID = "dsh-mem-bar";
+/* 🔴 `MEM_BAR_ID` / `dp-mem-bar`（「延迟 __ s」横向工具条）**已整条删除**
+ *    （2026-09-17 第 35 轮 · 用户原话：「对话 tap 的总监页面下面有一个延迟 5 秒的
+ *     一个横向的控制延迟的元素 去掉」）。
+ *    该工具条贴在记忆表头正上方，含「延迟」标签 + 秒数输入框 + 锁定按钮。
+ *    ⇒ 只删**工具条**：延迟能力本身由 store 的 `memoryHoverDelayMs` 承载（默认 500ms），
+ *      锁定能力本身由 store 的 `memoryLocked` 承载，两者**都还在被使用**
+ *      （`onDocMouseOverCapture` / `onDocMouseOutCapture` 的闸门 + `toggleMemoryLock`）。
+ *      ⚠️ 原布局为 `[延迟][输入][s][锁定]`，三者**去掉后表头正上方不再有我们注入的节点** ——
+ *      记忆块自身（`findHostMemoryBlock`）与高度手柄（`MEM_HEIGHT_HANDLE_ID`）不受影响。 */
 export const MEM_HEIGHT_HANDLE_ID = "dsh-mem-height";
 
 /** 我们托管的 CSS 属性清单（备份/还原**严格按这张表**走，不多不少） */
@@ -122,8 +130,9 @@ export const hostColumnState = {
 	minimized: false,
 	/** 几何落地次数 / 还原次数（幂等性判据：无变化不该累加） */
 	geomApplied: 0, geomRestored: 0,
-	/** 最小化按钮 / 拖拽条 / 记忆工具条 / 高度手柄 是否已注入 */
-	minBtn: false, resizer: false, memBar: false, memHeight: false,
+	/** 最小化按钮 / 拖拽条 / 高度手柄 是否已注入
+	 *  （记忆工具条已于第 35 轮整条删除 ⇒ `memBar` 字段随之移除） */
+	minBtn: false, resizer: false, memHeight: false,
 	/** 宿主自带拖拽手柄是否被我们藏起来（缺口："藏"必须能还） */
 	hostHandleHidden: false,
 	/** 记忆面板：延迟开关次数 / 被拦下的 mouseover、mouseout 次数 / 锁定语义修正次数 */
@@ -503,8 +512,7 @@ export function syncHostColumnChrome() {
 		hostColumnState.hostHandleHidden = true;
 	}
 
-	/* ④ 记忆面板工具条（延迟秒数 + 锁定）—— 贴在记忆表头正上方 */
-	syncMemoryBar(col, row);
+	/* ④ 记忆面板：工具条已删（第 35 轮）。高度手柄保留 —— 贴在记忆内容区上沿 */
 	syncMemoryHeightHandle(col, row);
 	return true;
 }
@@ -594,7 +602,7 @@ function memoryZoneContains(node) {
 	try {
 		const block = findHostMemoryBlock(findHostDirectorColumn());
 		if (block && block.contains(node)) return true;
-		for (const id of [MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID]) {
+		for (const id of [MEM_HEIGHT_HANDLE_ID]) {
 			const el = document.getElementById(id);
 			if (el && el.contains(node)) return true;
 		}
@@ -796,87 +804,6 @@ function onDocClickCapture(e) {
 	} catch (err) { /* ignore */ }
 }
 
-/** 记忆工具条：延迟秒数输入 + 锁定指示（贴在记忆表头正上方，随表头走） */
-function syncMemoryBar(col, row) {
-	const block = findHostMemoryBlock(col);
-	const header = findMemoryHeader(block);
-	if (!block || !header) return false;
-	const bar = ensureNode(row, MEM_BAR_ID, "dp-mem-bar", "div");
-	if (!bar) return false;
-	let top = 0, left = 0;
-	try {
-		const rr = row.getBoundingClientRect();
-		const hr = header.getBoundingClientRect();
-		top = Math.max(0, Math.round(hr.top - rr.top) - 21);
-		left = Math.max(2, Math.round(hr.left - rr.left));
-	} catch (e) { /* ignore */ }
-	try {
-		Object.assign(bar.style, px({
-			position: "absolute", zIndex: 74, top: top + "px", left: left + "px",
-			display: "flex", alignItems: "center", gap: 4,
-			padding: "0 3px", height: 18, border: "1px solid var(--dp-line, #3d4148)",
-			background: "var(--dp-bg-2, rgba(24,26,30,.94))",
-			borderRadius: "var(--dp-radius-sm, 5px)",
-			font: "600 10px/1 ui-monospace,Consolas,monospace", color: "var(--dp-t3, #8b9199)"
-		}));
-	} catch (e) { /* ignore */ }
-	if (!bar.getAttribute("data-dsh-built")) {
-		bar.setAttribute("data-dsh-built", "1");
-		bar.innerHTML = "";
-		const lab = document.createElement("span");
-		lab.textContent = "延迟";
-		const inp = document.createElement("input");
-		inp.id = "dsh-mem-delay";
-		inp.setAttribute("data-testid", "dp-mem-delay");
-		inp.setAttribute("data-dsh-plugin", "1");
-		inp.type = "number";
-		inp.step = "0.1"; inp.min = "0"; inp.max = "3";
-		Object.assign(inp.style, px({
-			width: 42, height: 14, border: "1px solid var(--dp-line, #3d4148)", borderRadius: 3,
-			background: "transparent", color: "var(--dp-t1, #e8eaed)",
-			font: "600 10px/1 ui-monospace,Consolas,monospace", padding: "0 2px", textAlign: "right"
-		}));
-		const unit = document.createElement("span");
-		unit.textContent = "s";
-		const lock = document.createElement("button");
-		lock.id = "dsh-mem-lock";
-		lock.setAttribute("data-testid", "dp-mem-lock");
-		lock.setAttribute("data-dsh-plugin", "1");
-		Object.assign(lock.style, px({
-			border: "1px solid var(--dp-line, #3d4148)", borderRadius: 3, background: "transparent",
-			color: "var(--dp-t3, #8b9199)", cursor: "pointer", padding: "0 4px",
-			font: "600 10px/1 ui-monospace,Consolas,monospace", height: 14
-		}));
-		/* 输入即生效（`input` 而非 `change`：闸门/probe 直接派发 input 事件就能验） */
-		inp.addEventListener("input", () => {
-			try { directorLayoutStore.setMemoryHoverDelay(Math.round(Number(inp.value) * 1000)); } catch (e) { /* ignore */ }
-			syncMemoryBar(findHostDirectorColumn(), findRow(findHostDirectorColumn()));
-		});
-		/* 表头点击已被我们接管；工具条上的锁按钮走**同一条语义**（同一真相源 `toggleMemoryLock`） */
-		lock.addEventListener("click", (e) => {
-			try { e.preventDefault(); e.stopPropagation(); } catch (err) { /* ignore */ }
-			toggleMemoryLock();
-			syncMemoryBar(findHostDirectorColumn(), findRow(findHostDirectorColumn()));
-		});
-		bar.appendChild(lab); bar.appendChild(inp); bar.appendChild(unit); bar.appendChild(lock);
-	}
-	try {
-		const inp2 = bar.querySelector("#dsh-mem-delay");
-		const lock2 = bar.querySelector("#dsh-mem-lock");
-		const secs = (delayMs() / 1000);
-		if (inp2 && document.activeElement !== inp2) inp2.value = String(Math.round(secs * 10) / 10);
-		if (lock2) {
-			const lk = isMemoryLocked();
-			lock2.textContent = lk ? "🔒" : "🔓";
-			lock2.title = lk ? "已锁定：鼠标移出也不收回。点击解锁并收起" : "未锁定：鼠标移出即收回。点击锁定";
-			lock2.setAttribute("data-locked", lk ? "1" : "0");
-		}
-		bar.setAttribute("data-delay-ms", String(delayMs()));
-		bar.setAttribute("data-locked", isMemoryLocked() ? "1" : "0");
-	} catch (e) { /* ignore */ }
-	hostColumnState.memBar = true;
-	return true;
-}
 
 /** 高度手柄：贴在记忆内容区上沿，向上拖 = 变高 */
 function syncMemoryHeightHandle(col, row) {
@@ -1043,12 +970,12 @@ function sync() {
 
 function removeChrome() {
 	try {
-		for (const id of [MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID]) {
+		for (const id of [MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID]) {
 			const n = document.getElementById(id);
 			if (n && n.parentElement) n.parentElement.removeChild(n);
 		}
 	} catch (e) { /* ignore */ }
-	hostColumnState.minBtn = hostColumnState.resizer = hostColumnState.memBar = hostColumnState.memHeight = false;
+	hostColumnState.minBtn = hostColumnState.resizer = hostColumnState.memHeight = false;
 }
 
 /**
@@ -1164,7 +1091,7 @@ export function uninstallHostDirectorColumn() { return restoreHostDirectorColumn
 
 function api() {
 	return {
-		COL_MARK, MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID,
+		COL_MARK, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID,
 		hostColumnState, colWidthMax,
 		findHostDirectorColumn, findHostResizer, findHostMemoryBlock, findMemoryContentWrap,
 		reactPropsOf, callHostHandler,

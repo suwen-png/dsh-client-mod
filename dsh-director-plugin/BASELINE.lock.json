@@ -1,11 +1,11 @@
 {
-  "sealedAt": "2026-09-16T06:55:31.874Z",
+  "sealedAt": "2026-09-17T14:07:02.250Z",
   "version": "V16",
   "title": "总监驾驶舱 · 三页签 + 设计图工作室（落死基线）",
   "policy": "指纹只锁会决定运行行为的东西（src/build/package.json/cordis.patch.yml/产物/设计图）。scripts/*.mjs 与 docs/*.md 属叙述层，不纳入。",
   "command": "node scripts/baseline-check.mjs   # 校验；--write 重新封存",
-  "fileCount": 84,
-  "totalBytes": 3295456,
+  "fileCount": 93,
+  "totalBytes": 3904037,
   "files": {
     "src/bridge/chat-bridge.js": {
       "bytes": 33553,
@@ -16,8 +16,8 @@
       "md5": "c6405462ee7ec22e0b78edfa298c06fc"
     },
     "src/bridge/host-director-column.js": {
-      "bytes": 57890,
-      "md5": "9ea348490a8d7b92ff10e928950a6810"
+      "bytes": 54930,
+      "md5": "bfdea9c306fd2ee8cd1f4aa7ffb88001"
     },
     "src/bridge/host-panel-trim.js": {
       "bytes": 33183,
@@ -26,6 +26,10 @@
     "src/bridge/nav-hook.js": {
       "bytes": 5825,
       "md5": "71a4cf156149d0d048d745bccfc9ff32"
+    },
+    "src/bridge/session-io.js": {
+      "bytes": 15567,
+      "md5": "9f289253dae487164861b64047e0160d"
     },
     "src/bridge/spike-fs-probe.js": {
       "bytes": 3853,
@@ -36,16 +40,16 @@
       "md5": "ad1f61f91dc5bc1e28aeb96026f031da"
     },
     "src/client-entry.js": {
-      "bytes": 55687,
-      "md5": "37fdd9a39a4b35baa0ca60e4422ba732"
+      "bytes": 57486,
+      "md5": "7ba408aac5e67d9643050ef1f3d98f85"
     },
     "src/components/DesignStudio.js": {
       "bytes": 94481,
       "md5": "92e92ae7b198e3b33dc3be6c53345b42"
     },
     "src/components/DirectorDialog.js": {
-      "bytes": 55704,
-      "md5": "dd3ba4046bf729b1e9f89c39f74f7cd9"
+      "bytes": 68061,
+      "md5": "5edbf4410aba59b3b2c2ecc2375dc9cb"
     },
     "src/components/DirectorFlow.js": {
       "bytes": 9873,
@@ -56,8 +60,8 @@
       "md5": "c8800a7e4dfd6cd33a2453dd81a8ce7b"
     },
     "src/components/DirectorPage.js": {
-      "bytes": 162212,
-      "md5": "7c2bdc0ac69783422e9ce06aebb5bdc4"
+      "bytes": 192505,
+      "md5": "255eb9a5b5f06f7eced53ad7c8d48ee9"
     },
     "src/components/DirectorWorkbench.js": {
       "bytes": 13819,
@@ -68,8 +72,8 @@
       "md5": "e5bbaf95921a8b0b7393b8d549c2454e"
     },
     "src/components/MindMap.js": {
-      "bytes": 70241,
-      "md5": "37351199e2dfa3923fafccdaff80a030"
+      "bytes": 73831,
+      "md5": "aa490c9d63c0aeb5ba7d93fcc473196e"
     },
     "src/components/ModelSeat.js": {
       "bytes": 16861,
@@ -88,8 +92,8 @@
       "md5": "4741e530535939948e34d60ccfa73b2e"
     },
     "src/components/PersonalizePanel.js": {
-      "bytes": 10954,
-      "md5": "85994473a16a395972d8a5b152205052"
+      "bytes": 16083,
+      "md5": "35ca2c972ec31dd8d54075579307191e"
     },
     "src/components/VersionPanel.js": {
       "bytes": 8678,
@@ -107,13 +111,17 @@
       "bytes": 5110,
       "md5": "8b48a6314f29fda124ea6cc91765eafd"
     },
+    "src/logic/attribution.js": {
+      "bytes": 22786,
+      "md5": "18939046a47a88d004cd1a8735e393c5"
+    },
     "src/logic/branch-focus.js": {
       "bytes": 8274,
       "md5": "a99904be14b29d537a7ba03a592d7e73"
     },
     "src/logic/branch-tree.js": {
-      "bytes": 35182,
-      "md5": "acac3a1f5423a168859c46f1490b25f9"
+      "bytes": 51821,
+      "md5": "390df4afbe534351b9598af54e0eb7b8"
     },
     "src/logic/catalog.js": {
       "bytes": 12992,
@@ -124,20 +132,36 @@
       "md5": "e88458a3305dadd17b96ae8d20750050"
     },
     "src/logic/dag.js": {
-      "bytes": 21479,
-      "md5": "a21a0462f28762914497761d687fdc27"
+      "bytes": 21502,
+      "md5": "04798f07556efb81cae813be962de7c8"
     },
     "src/logic/delegate.js": {
       "bytes": 13778,
       "md5": "9ffd2208b42df0cc9aab7bd6647ae7f7"
     },
+    "src/logic/dim-branch.js": {
+      "bytes": 6930,
+      "md5": "758678879814f4e889679e34c2d3196e"
+    },
     "src/logic/director-chain.js": {
-      "bytes": 3554,
-      "md5": "f95bb2875bd502c9ea1a2fa4fed39797"
+      "bytes": 3577,
+      "md5": "7d278bca16b0ee572b7ae4095dfc3c8a"
+    },
+    "src/logic/director-collect.js": {
+      "bytes": 20152,
+      "md5": "82f4bb3e29e97e2b0dea1078f58abe62"
+    },
+    "src/logic/director-dispatch.js": {
+      "bytes": 24445,
+      "md5": "e5fab8ff44723e51da437a8a967c7c4a"
+    },
+    "src/logic/director-reuse.js": {
+      "bytes": 18468,
+      "md5": "28c424703e9d7bf74ca162709fe15b08"
     },
     "src/logic/director-run.js": {
-      "bytes": 16783,
-      "md5": "41ffa03d110a448bca75a367c7a65138"
+      "bytes": 21909,
+      "md5": "3f3e543b9c769eddf43f3d252862a270"
     },
     "src/logic/discover.js": {
       "bytes": 6946,
@@ -152,12 +176,16 @@
       "md5": "835f25f5a2faf58b33009fbe9c45483a"
     },
     "src/logic/key-files.js": {
-      "bytes": 22529,
-      "md5": "77e45b5c0549bfab7fa358251387c495"
+      "bytes": 25482,
+      "md5": "66458a15a254b42f03f8607089483d50"
     },
     "src/logic/ledger.js": {
       "bytes": 9720,
       "md5": "783fc7b456bf8a10d877992536d31bb8"
+    },
+    "src/logic/lineage.js": {
+      "bytes": 16773,
+      "md5": "c8070a8cac1099cc4b75f81e6f98a08b"
     },
     "src/logic/mindmap-render.js": {
       "bytes": 7470,
@@ -188,12 +216,12 @@
       "md5": "5339779d25623dcb92c3abb50f443ead"
     },
     "src/logic/routing.js": {
-      "bytes": 19734,
-      "md5": "2f5405583afbeeeccd0d95e6c3d015e4"
+      "bytes": 27973,
+      "md5": "76a53d0455e6228289957a23a61d32a9"
     },
     "src/logic/split-dimensions.js": {
-      "bytes": 11077,
-      "md5": "755fa8f0026168fa9643746fa83ecf64"
+      "bytes": 39674,
+      "md5": "f58ed83cdf5d25fe71418284b51db973"
     },
     "src/logic/summarize.js": {
       "bytes": 10582,
@@ -239,6 +267,10 @@
       "bytes": 63926,
       "md5": "a70cbcae0317969b85956b019b6681b3"
     },
+    "src/store/dispatch-log.js": {
+      "bytes": 10340,
+      "md5": "559344ac17a2ed3a08193d2a82fac78d"
+    },
     "src/store/docs-index-inject.js": {
       "bytes": 4956,
       "md5": "e73970f52ad90fb50a4dab3aebcc3ced"
@@ -256,8 +288,8 @@
       "md5": "7d0c6f79c90c3a4dca85c6eed39cca59"
     },
     "src/store/hierarchy.js": {
-      "bytes": 19755,
-      "md5": "2d585f90d5a967abba88c3499bc68081"
+      "bytes": 19776,
+      "md5": "c994fc0bb3ece6007809ea3c73ee2e13"
     },
     "src/store/idb.js": {
       "bytes": 9626,
@@ -280,20 +312,24 @@
       "md5": "4cb13f656c791376d7ddab4a7c20f7af"
     },
     "src/store/persist.js": {
-      "bytes": 12920,
-      "md5": "dca97f3b914422d5c5d9c53b5500c0a8"
+      "bytes": 14181,
+      "md5": "790fddd0e8695a848e63d508c7b858df"
     },
     "src/store/personalize.js": {
-      "bytes": 19509,
-      "md5": "559e0469d28fd6c8a0b0d5372b8991df"
+      "bytes": 39417,
+      "md5": "41d2943260ff5508a5a42e12a9adca91"
     },
     "src/store/plugin-db.js": {
-      "bytes": 16651,
-      "md5": "c4d6e8b4eda1ea18e84080a6ac761402"
+      "bytes": 25406,
+      "md5": "040a09a6ec0b4b21c01884bc5a3df42a"
+    },
+    "src/store/session-dossier.js": {
+      "bytes": 15657,
+      "md5": "2a6867fe640aec99bc50c265bea066f1"
     },
     "src/store/split-index.js": {
-      "bytes": 8647,
-      "md5": "516b5ec2ce360cf721e93e1d205fc752"
+      "bytes": 9540,
+      "md5": "02f73cade25cdd9c873b6abb27e864bf"
     },
     "src/store/theme.js": {
       "bytes": 3417,
@@ -328,8 +364,8 @@
       "md5": "f26d0beea6c45dec02028229be0a1680"
     },
     "build/build.mjs": {
-      "bytes": 31436,
-      "md5": "74673f99c819080e86b86a4504c2fa0c"
+      "bytes": 32990,
+      "md5": "ae300eb5b9850d28770377526a021360"
     },
     "package.json": {
       "bytes": 1300,
@@ -340,8 +376,8 @@
       "md5": "1a23d6fe791934c72e413924d144a01e"
     },
     "lib/client.js": {
-      "bytes": 1692026,
-      "md5": "207e56af11a8c8271a8e144d3ffb904b"
+      "bytes": 2005289,
+      "md5": "142e798a2677ef4b7a6eb3aee49bbdfd"
     }
   }
 }

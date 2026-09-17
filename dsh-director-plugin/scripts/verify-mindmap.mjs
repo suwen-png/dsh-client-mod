@@ -55,6 +55,28 @@ const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
 
+/* 🔴 真实鼠标的**可见性前提**（第二十四轮统一加装 · 纪律 29/54）
+ *    CDP 的 `mousePressed/Released` 在 `document.visibilityState !== "visible"`
+ *    （Electron 窗口被遮挡/最小化/停在后台）时会被**整条吞掉**，而 `mouseMoved` 照常送达
+ *    ⇒ 表现是「拖不动 / 点了没反应」，读起来完全是**产品坏了**。
+ *    🔴 `document.hasFocus()` 在 hidden 时**仍为 true** ⇒ 不能拿它当判据，只认 `visibilityState`。
+ *    实测对照：hidden ⇒ 只送达 pointermove；visible ⇒ pointerdown/mousedown/pointerup/click 全到。
+ *    不成立 ⇒ 后续鼠标断言**不可信**，应判 INVALID（纪律 24），不判产品红。 */
+const FOCUS_PRE = await (async () => {
+	const { ensurePageFocus } = await import("./_cdp-focus.mjs");
+	const ev = async (e) => {
+		const r = await send("Runtime.evaluate", { expression: e, returnByValue: true });
+		return r && r.result ? r.result.value : undefined;
+	};
+	const fp = await ensurePageFocus({ send, ev, log: (s) => console.log(s) });
+	console.log("  [鼠标前提] visibility=" + JSON.stringify(fp.visibility)
+		+ " ｜ hasFocus=" + JSON.stringify(fp.hasFocus)
+		+ " ｜ bringToFront=" + fp.broughtToFront + " ｜ focusEmulated=" + fp.focusEmulated
+		+ (fp.reasons.length ? " ｜ 降级：" + fp.reasons.join(" / ") : ""));
+	return fp;
+})();
+
+
 async function js(expr) {
 	const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true, includeCommandLineAPI: true });
 	if (r.exceptionDetails) throw new Error("JS异常: " + r.exceptionDetails.text + " " + (r.exceptionDetails.exception?.description || ""));
@@ -357,6 +379,91 @@ const opened = await clickSel('[data-testid="d-open-mindmap"]');
 await sleep(500);
 t("C-M1b", "点击入口后导图层已挂载（#dsh-mindmap）", await js(`!!document.getElementById("dsh-mindmap")`) === true, null);
 
+/* ══════════════════════════════════════════════════════════════════
+ * 🔴 前提**实体化**（第二十四轮新增 · 纪律 51 / 80）
+ *
+ * 为什么必须加这一段：
+ *   血缘 `lineage` 来自宿主会话的 `parentSessionId`，只有**真实父子关系**才连得出线。
+ *   第二十一轮「清理全部会话」之后，宿主剩下的会话**全是平级**（实测 28 行、
+ *   `withParent=0`、edges 0、`lineage=false`，而 `source=ctx.sessions` 说明**不是降级**）
+ *   ⇒ 整段「连线语义」断言**没有对象可测**，报出来是 6 条红，读起来像产品坏了。
+ *   真因是**前提缺失**（纪律 31 的反面：闸门对「测不了」报红）。
+ *
+ * 为什么不改成"跳过"：跳过 = 连线功能**从未被检验**却报绿（纪律 18：跳过比红更危险）。
+ * ⇒ 按纪律 80「起点必须实体化」：**自己建立一个父子关系**再测。
+ *
+ * 🔴 为什么不会累积会话（用户第二十一轮明确不满「重复创建了一百多个会话」）：
+ *   **优先复用** —— 已有父子关系就**一个都不建**；只在「一条都没有」时才 fork **一个**。
+ *   与总监的「复用优先」同律 ⇒ 连跑时会话数**收敛为常数**，不是线性增长。
+ * ══════════════════════════════════════════════════════════════════ */
+const lineageBefore = await js(`(function(){try{return window.__dshBranchTree.getBranchSnapshot().lineage===true;}catch(e){return false;}})()`);
+let lineageBuilt = "reused";
+if (!lineageBefore) {
+	const canFork = await js(`!!document.querySelector('[data-testid="mm-new-fork"]')`);
+	console.log("  · 前提：宿主当前**无父子会话**（lineage=false）⇒ 建立血缘（fork 入口存在=" + canFork + "）");
+	if (!canFork) {
+		console.log("  ⚠️ 前提建立失败：fork 入口不在 DOM ⇒ 血缘/连线段**未检验**（后续相关红属 INVALID，不是产品坏）");
+		lineageBuilt = "unavailable";
+	} else {
+		await clickSel('[data-testid="mm-new-fork"]');
+		let ok = false;
+		for (let i = 0; i < 40 && !ok; i++) {
+			await sleep(300);
+			ok = await js(`(function(){try{return window.__dshBranchTree.getBranchSnapshot().lineage===true;}catch(e){return false;}})()`);
+		}
+		lineageBuilt = ok ? "forked" : "fork-failed";
+		console.log("  · 前提建立结果：" + lineageBuilt
+			+ " ｜ " + await js(`(function(){try{var s=window.__dshBranchTree.getBranchSnapshot();return JSON.stringify({rows:(s.tree.rows||[]).length,edges:(s.tree.edges||[]).length,withParent:(s.tree.rows||[]).filter(function(r){return r.parentSessionId;}).length});}catch(e){return '__exc';}})()`));
+	}
+}
+t("C-M1c", "🔴 血缘前提**已实体化**（宿主有父子会话：复用已有 或 本次 fork 成功）—— 否则连线/血缘段无从检验",
+	lineageBuilt === "reused" || lineageBuilt === "forked", lineageBuilt);
+
+/* 🔴 折叠/展开段还需要「**非根且有子**」的节点 ⇒ 血缘至少 **3 层**（根 → 子 → 孙）。
+ *   只 fork 一次只到 2 层：根(depth0) → 子(depth1，无子) ⇒ 没有「非根且有子」的对象
+ *   ⇒ C-M8q / C-M8a–d **双双跳过**，总数掉到 98 < 下限 100 ⇒ 整轮判 INVALID。
+ *   同样**复用优先**：已有 3 层就不动；只在缺时才再 fork **一个**（不是每次都建）。 */
+/* 🔴 判据必须**用产品自己的口径**，不能自己编一个（第二十四轮踩到：
+ *    第一版写成 `n.getAttribute('data-children') !== '0'` —— 而产品**根本没有** `data-children`
+ *    这个属性（全仓 grep 零命中）⇒ `getAttribute` 返回 `null`，`null !== '0'` **恒真**
+ *    ⇒ `deepEnough()` 对"任何非根节点"都返回 true ⇒ C-M1d **空真绿**，而真正的折叠段
+ *    用产品口径一查还是 0 个 ⇒ 照样跳过。**空真绿比红更坏**（纪律 23：先问反例上会不会也通过）。
+ *    ⇒ 改用与折叠段**完全相同**的口径：`mm-node-toggle[data-enabled="1"]` 且节点 `data-depth !== "0"`。 */
+const deepEnough = async () => await js(`(function(){
+  var ts = Array.from(document.querySelectorAll('[data-testid="mm-node-toggle"]'));
+  for (var i = 0; i < ts.length; i++) {
+    if (ts[i].getAttribute('data-enabled') !== '1') continue;
+    var id = ts[i].getAttribute('data-toggle-id');
+    var n = document.querySelector('[data-testid="mm-node"][data-session-id="' + id + '"]');
+    if (n && n.getAttribute('data-depth') !== '0') return true;
+  }
+  return false;
+})()`);
+let deepBuilt = "reused";
+if (await deepEnough()) {
+	deepBuilt = "reused";
+} else {
+	const kid = await js(`(function(){var ns=Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
+		var d1 = ns.filter(function(n){return n.getAttribute('data-depth')==='1';})[0];
+		return d1 ? d1.getAttribute('data-session-id') : null;})()`);
+	if (!kid) {
+		deepBuilt = "unavailable";
+		console.log("  ⚠️ 前提：连 depth=1 的节点都没有 ⇒ 折叠段**未检验**");
+	} else {
+		await js(`(function(){var n=document.querySelector('[data-testid="mm-node"][data-session-id="' + ${JSON.stringify(kid)} + '"]');if(n){n.click();return 1;}return 0;})()`);
+		await sleep(300);
+		await clickSel('[data-testid="mm-new-fork"]');
+		let ok = false;
+		for (let i = 0; i < 40 && !ok; i++) { await sleep(300); ok = await deepEnough(); }
+		deepBuilt = ok ? "forked" : "fork-failed";
+		console.log("  · 三层前提建立：" + deepBuilt
+			+ " ｜ 深度分布 " + await js(`(function(){var ns=Array.from(document.querySelectorAll('[data-testid="mm-node"]'));return JSON.stringify(ns.map(function(n){return n.getAttribute('data-depth');}).reduce(function(a,d){a[d]=(a[d]||0)+1;return a;},{}));})()`)
+			+ " ｜ 产品口径可折叠(非根且有子) = " + await js(`(function(){var ts=Array.from(document.querySelectorAll('[data-testid="mm-node-toggle"]'));return String(ts.filter(function(t){if(t.getAttribute('data-enabled')!=='1')return false;var n=document.querySelector('[data-testid="mm-node"][data-session-id="'+t.getAttribute('data-toggle-id')+'"]');return !!n&&n.getAttribute('data-depth')!=='0';}).length);})()`));
+	}
+}
+t("C-M1d", "🔴 折叠段前提**已实体化**（存在「非根且有子」的节点：复用已有 或 本次补 fork 一层）",
+	deepBuilt === "reused" || deepBuilt === "forked", deepBuilt);
+
 /* ══════════ 1. 数据真实性（本轮根因修复的自证） ══════════ */
 section("【1】数据真实性 —— 血缘必须来自宿主，不许静默降级");
 const data = await js(`(function(){
@@ -368,7 +475,11 @@ const data = await js(`(function(){
 })()`);
 t("C-M2a", "血缘通道 = ctx.sessions（不是 localStorage 降级）", data.source === "ctx.sessions", data.source);
 t("C-M2b", "宿主 sessions.list 可达且能取快照", data.hasList === true, data);
-t("C-M2c", "血缘字段 parentId 已吃到（lineage=true）", data.lineage === true, data.lineage);
+if (lineageBuilt === "unavailable") {
+	sk("C-M2c", "血缘字段 parentId 已吃到（lineage=true）", "宿主无父子会话且无法 fork ⇒ **未检验**（不是产品坏）");
+} else {
+	t("C-M2c", "血缘字段 parentId 已吃到（lineage=true）", data.lineage === true, data.lineage);
+}
 t("C-M2d", "快照字段形状符合取证（含 id/displayTitle/running/blank/updatedAt）",
 	["id", "displayTitle", "running", "blank", "updatedAt"].every((k) => data.sampleKeys.indexOf(k) >= 0), data.sampleKeys);
 t("C-M2e", "全部行的状态源 = host（没有一行退回推断）", data.rows > 0 && data.hosts === data.rows, [data.rows, data.hosts]);
@@ -435,7 +546,11 @@ t("C-M6b", "图例**不含**「出错」（宿主无该字段，不许画无源�
 /* ══════════ 4. 连线语义 ══════════ */
 section("【4】连线语义（主干实线 / 分支虚线 / 选中链高亮）");
 const edgeKinds = await js(`Array.from(document.querySelectorAll('[data-testid="mm-edges"] path')).map(function(p){return [p.getAttribute("data-edge-kind"), getComputedStyle(p).strokeDasharray];})`);
-t("C-M7a", "连线至少一条（有血缘边就画得出）", edgeKinds.length >= 1, edgeKinds);
+if (lineageBuilt === "unavailable") {
+	sk("C-M7a", "连线至少一条（有血缘边就画得出）", "无血缘边 ⇒ **未检验**（见 C-M1c）");
+} else {
+	t("C-M7a", "连线至少一条（有血缘边就画得出）", edgeKinds.length >= 1, edgeKinds);
+}
 t("C-M7b", "主干实线（trunk 的 dash = none/空）",
 	edgeKinds.filter((e) => e[0] === "trunk").every((e) => !e[1] || e[1] === "none"), edgeKinds);
 // 选中链：点一个有子节点的节点（或根），断言其到根路径上的边变 chain
@@ -817,6 +932,25 @@ if (await js(`!!document.querySelector('[data-testid="mm-ctxmenu"]')`)) {
 	await key("Escape", "Escape", 27);
 	await sleep(250);
 }
+/* 🔴 输入派发延迟是**可测的环境常数**，不是"偶发"（第二十四轮实测）
+ *    逐个 `mouseMoved` 量送达耗时（连续 6 个不同坐标）：974 / 981 / 982 / 976 / 1090 / 1093 ms，
+ *    **每次派发还会在页面上产生 3 个 mousemove**。
+ *    而本套件原来在 `mouseMoved` 之后固定 `sleep(300)` —— **只有真实耗时的 1/3**
+ *    ⇒ 「工具条没消失 / 没出现」全是**没等到**，却被记成产品缺陷（纪律 55：预算必须覆盖真实耗时）。
+ *    ⇒ 改为**有界轮询**：等到「期望状态出现」为止，预算 12s（≈12 倍实测耗时），
+ *      超预算才判红，并且**把实读值打出来**（纪律 19：不许无声）。 */
+const HOVER_BUDGET_MS = 12000;
+async function waitHover(want) {
+	const t0 = Date.now();
+	let last = null;
+	while (Date.now() - t0 < HOVER_BUDGET_MS) {
+		last = await js(`(function(){var e=document.querySelector('[data-testid="mm-hoverbar"]');return e?{present:1,id:e.getAttribute('data-hover-id')}:{present:0,id:null};})()`);
+		if (want === "gone" && last.present === 0) return last;
+		if (want !== "gone" && last.present === 1 && (!want || last.id === want)) return last;
+		await sleep(150);
+	}
+	return last;
+}
 const spot2 = (await focusVisibleNode()) || spot;
 if (spot2) {
 	/* 先移开鼠标证明工具条**会走**，再移上去证明它**会来** ——
@@ -833,14 +967,16 @@ if (spot2) {
 	} else {
 		console.log("  · 移开目标：确证空白点 (" + blank.x + "," + blank.y + ") 命中 " + blank.hit + "（不在任何节点/工具条内）");
 		emit("Input.dispatchMouseEvent",{ type: "mouseMoved", x: blank.x, y: blank.y });
-		await sleep(300);
-		const hbAway = await js(`!!document.querySelector('[data-testid="mm-hoverbar"]')`);
-		t("C-M15a0", "鼠标移开节点后工具条消失（先证明它会走）", hbAway === false, { hbAway, at: [blank.x, blank.y] });
+		const awayState = await waitHover("gone");
+		const hbAway = !!(awayState && awayState.present === 1);
+		t("C-M15a0", "鼠标移开节点后工具条消失（先证明它会走）", hbAway === false, { hbAway, at: [blank.x, blank.y], 实读: awayState });
 	}
 	emit("Input.dispatchMouseEvent",{ type: "mouseMoved", x: spot2.cx, y: spot2.cy });
-	await sleep(320);
+	/* 🔴 等到**这个节点**的工具条 —— 只等"工具条存在"会命中上一段的残留（纪律 23） */
+	const onState = await waitHover(spot2.sid || null);
 	const hb = await js(`(function(){var e=document.querySelector('[data-testid="mm-hoverbar"]');return e?{id:e.getAttribute("data-hover-id"), n:e.children.length, r:e.getBoundingClientRect().height, titles:Array.from(e.children).map(function(c){return c.getAttribute("title")||"";})}:null;})()`);
-	t("C-M15a", "悬停节点出现悬浮工具条（真实 mouseMoved 到节点中心）", hb !== null, hb);
+	t("C-M15a", "悬停节点出现悬浮工具条（真实 mouseMoved 到节点中心）",
+		hb !== null && (!spot2.sid || hb.id === spot2.sid), { hb: hb, 期望节点: spot2.sid, 轮询实读: onState });
 	if (hb) {
 		/* 🔴 2026-09-12 修：产品实际是 **7** 个动作 —— fork / 打开 / 抓取 / 审核 / 折叠 / 💬在右侧展开对话 / 更多。
 		 *  旧断言停在 6，名单里**少的就是 💬**（用户要求「点击框在右侧展开对话」时加的那个）。
@@ -882,16 +1018,23 @@ if (escSpot) {
 		t("C-M16a", "Esc 第一层：先关右键菜单，导图仍开着（逐层退）", menuGone && mapAlive === true, { menuGone, mapAlive });
 	}
 } else { sk("C-M16a", "Esc 第一层：先关菜单", "画布上没有可控节点"); }
+/* 🔴 同 C-M15a 的教训：输入派发实测 ~1s，原来 `sleep(150)` 后就读 toast
+ *    ⇒ 「toast 没出现」是**没等到**，不是「点了没反馈」（纪律 55）。
+ *    改为有界轮询：出现预算 8s；出现后再等它**自己消失**（预算 8s，> 2.4s 自动消失）。 */
+const toastRead = () => js(`!!document.querySelector('[data-testid="mm-toast"]')`);
 await clickSel('[data-testid="mm-fit"]');
-await sleep(150);
-const toastVisible = await js(`!!document.querySelector('[data-testid="mm-toast"]')`);
-await sleep(2800);
-const toastGone = await js(`!!document.querySelector('[data-testid="mm-toast"]')`);
-t("C-M16b", "toast 出现（点了有反馈，不是静默）", toastVisible === true, toastVisible);
+let toastVisible = false;
+for (let i = 0; i < 54 && !toastVisible; i++) { await sleep(150); toastVisible = await toastRead(); }
+let toastGone = false;
+if (toastVisible) { for (let i = 0; i < 54; i++) { await sleep(150); if (!(await toastRead())) { toastGone = true; break; } } }
+t("C-M16b", "toast 出现（点了有反馈，不是静默）", toastVisible === true, { toastVisible, 轮询预算: "8.1s" });
 /* 🔴 不能只断言 toastGone === false：toast 从没出现过时它**平凡为真**（空真）。
  *    必须叠加「刚才确实出现过」这个前置，才构成有效证据。
  *    （同一类陷阱已在本文件 C-M13a 用「防平凡真」前置拦过一次，此处补齐。） */
-t("C-M16c", "toast 2.4s 后自动消失（不是「永不消失」）", toastVisible === true && toastGone === false, [toastVisible, toastGone]);
+/* 🔴 语义记号（第二十四轮踩到并修正）：`toastGone` = 「**已消失**」（true 才是消失了）。
+ *    旧版同名变量存的是「**当前还在**」（true = 还在），判据写作 `toastGone === false`。
+ *    改成有界轮询后若照抄旧判据 ⇒ 语义反转，会把「正确消失」判成红（纪律 23：改判据必须先问反例）。 */
+t("C-M16c", "toast 2.4s 后自动消失（不是「永不消失」）", toastVisible === true && toastGone === true, [toastVisible, toastGone]);
 
 /* Esc 第二层：没有内层时，Esc 关掉整张导图（源码取证 MindMap.js:250 → Esc 逐层退
  *   「个性化 → 菜单 → 右侧面板 → 导图」）。

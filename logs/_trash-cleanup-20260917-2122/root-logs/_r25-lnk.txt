@@ -1,0 +1,45 @@
+
+#### C:\Users\15142\Desktop
+
+#### C:\Users\15142\AppData\Roaming\Microsoft\Windows\Start Menu
+
+#### C:\ProgramData\Microsoft\Windows\Start Menu
+
+  LNK: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\DeepSeek Harness.lnk
+       size=1358 mtime=2026-08-20 15:48:47
+       · 敥印敥
+       · 慈湲獥
+       · 敄歳潴p戀
+       · 攀攀瀀匀攀攀欀
+       · 愀爀渀攀猀猀
+       · 攀猀欀琀漀瀀
+       · 慈湲獥s刀
+       · 硥e娀
+       · 攀砀攀
+       · 岰敄灥敓步
+       · 牡敮獳
+       · 獥瑫灯
+       · 慈湲獥屳敄灥敓步
+       · 牡敮獳攮數
+       · CDeepSeek Harness desktop application with tray-owned Host lifecycle1D:\软件安装\DeepSeek-Harness-Desktop\DeepSeek HarnessFD:\软件安装\DeepSeek-Harness-Desktop\DeepSeek Harness\DeepSeek Harness.exe`
+       · 搀攀攀瀀猀攀攀欀
+       · 栀愀爀渀攀猀猀
+       · 搀攀猀欀琀漀瀀
+       · /D:\
+       · DeepSeek-Harness-Desktop
+       · DeepSeek Harness
+       · DeepSeek Harness.exe
+       · Data
+       · \DeepSeek-Harness-Desktop\DeepSeek Harness\DeepSeek Harness.exe
+       · 1SPSU(L
+       · 1SPS
+
+#### C:\Users\15142\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch
+
+#### C:\Users\15142\AppData\Roaming\Microsoft\Windows\Recent
+
+#### C:\Users\15142\AppData\Roaming\Microsoft\Windows\Start Menu\Programs
+
+#### C:\Users\Public\Desktop
+
+#### 命中 lnk 数 = 1

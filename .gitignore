@@ -88,3 +88,11 @@ dsh-director-plugin/_vf-run*.log
 dsh-director-plugin/_vm-run*.log
 dsh-director-plugin/scripts/_tmp-*
 
+# === 14. 第十八轮补登（2026-09-16） ===
+# ① 根 logs/ 的**子目录**：旧模式 `logs/*.png` 是**根锚定、不递归**，将来若在根 logs 下建子目录放取证图会漏掉。
+#   （核实：根 logs 现仅 `playwright-tests/` 与 0 张 png；插件 `dsh-director-plugin/logs/` 已被上面 §3 整目录覆盖。）
+logs/**/*.png
+logs/**/*.bmp
+# ② 并行会话（OpenClaw resume 回合）的工作目录 —— 非项目产物。
+/.cluster/
+

@@ -835,6 +835,24 @@ export function MindMap({ open, onClose }) {
 								 * `data-split` 空串 = 这一支不是分流出来的（**空串不等于缺失**，
 								 * 闸门按 `[data-split]` 非空计数即可，不必另设布尔位）。 */
 								"data-split": r.splitDim || "", "data-title-origin": r.titleOrigin || "",
+								/* 第 17 批：**总监派发**可见性 —— 用户原话「我需要在思维导图中看到这些」。
+								 * 🔴 字段名与前一行 `data-state` 刻意**不同名**：`data-state` 是**血缘状态**
+								 *    （宿主 running/blank 推导），这里是**派发状态**（本批台账）。同名不同义
+								 *    会让闸门量错对象 —— 本项目台账（二）#8 就是这么连爆三条红的。
+								 * 🔴 `data-said` 空串 = **确实没读到产出**（不是"未派发"）；
+								 *    未派发的节点该字段也是空串 ⇒ 判"有没有产出"必须**先看 `data-dispatch` 非空**。 */
+								"data-dispatch": r.dispatchId || "", "data-branch-state": r.dispatchState || "",
+								"data-said": r.dispatchSay || "",
+								/* 第 21 批：**会话档案**（R2/R3）可见性 —— 用户原话「（每个会话）都有自己的
+								 * 总监，存在自己的会话总结文档」。字段由 `applyDossiers` 在**唯一摄取点**
+								 * 写入，这里只做 DOM 投影（与 `data-split` / `data-dispatch` 同范式）。
+								 * 🔴 `data-has-dossier` 是**独立布尔位**：只靠 `data-dossier-role` 的空串
+								 *    分不出「没有档案」与「有档案但角色为空」——两者在闸门里必须可分。 */
+								"data-has-dossier": r.hasDossier ? "1" : "0",
+								"data-dossier-role": r.dossierRole || "",
+								"data-dossier-summary": r.dossierSummary || "",
+								"data-dossier-src": r.dossierSummarySrc || "",
+								"data-dossier-reason": r.dossierSummaryReason || "",
 								"data-collapsed": collapsed.has(r.sessionId) ? "1" : "0",
 								"data-current": r.isCurrent ? "1" : "0",
 								"data-moved": r.moved ? "1" : "0",
@@ -865,7 +883,13 @@ export function MindMap({ open, onClose }) {
 									setSel(r.sessionId);
 								},
 								title: r.sessionId + (r.parentSessionId ? " ← 父 " + r.parentSessionId : "（根/中心主题）") +
-									"｜" + stateTitleOf(r) + "｜点框=右侧展开对话 · 按住拖动=移动 · 右键=菜单"
+									"｜" + stateTitleOf(r) +
+									/* 第 21 批：**会话档案**（R2/R3）—— 用户原话「（每个会话）都有自己的总监，
+									 * 存在自己的会话总结文档」。角色走第 2 行（可见），总结走 title（不挤布局）；
+									 * 读不到时写**原因**而不是留白（纪律 18/58）。 */
+									(r.hasDossier ? "｜档案 · 总监 " + (r.dossierRole || "（未记）")
+										+ " · 总结 " + (r.dossierSummary || (r.dossierSummaryReason ? "（无：" + r.dossierSummaryReason + "）" : "（空）")) : "") +
+									"｜点框=右侧展开对话 · 按住拖动=移动 · 右键=菜单"
 							}, [
 								/* 第 1 行：类型图标 + 标题 + 状态点 */
 								h("div", {
@@ -882,7 +906,25 @@ export function MindMap({ open, onClose }) {
 								h("div", {
 									key: "r2", style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 									"data-testid": "mm-node-meta"
-								}, metaLineOf(r) + (r.splitDim ? " · 分流 " + r.splitDim : "") + (r.moved ? " · 已移动" : "")),
+								}, metaLineOf(r) + (r.splitDim ? " · 分流 " + r.splitDim : "") + (r.moved ? " · 已移动" : "")
+									/* 第 21 批 R2：**该会话归哪个总监管**直接写在第 2 行（可见位）。
+									 * 只挂 data 属性等于用户看不见（"闸门绿 ≠ 用户能验收"：纪律 57）。
+									 * 🔴 `dossierRole` 形如 `A6 打磨 总监`（已自带"总监"后缀）⇒ 这里**不再前置**"总监"，
+									 *    否则会渲染成 `总监 A6 打磨 总监`（第 21 批真机截图复核时发现）。 */
+									+ (r.dossierRole ? " · " + r.dossierRole : "")
+									+ (r.dispatchId ? " · 派发 " + (r.dispatchState || "unknown") : "")),
+								/* 第 3 行（仅派发分支有）：**产出摘要**或**读不到的原因**。
+								 * 🔴 读不到时**不许留空、也不许编**：写出 `dispatchSayReason`。
+								 *    只给有产出的节点加行 ⇒ 读图人会以为"没产出的那几条没派发过" —— 那是错的信息。 */
+								r.dispatchId ? h("div", {
+									key: "r2b",
+									style: {
+										fontSize: "calc(10px * var(--dp-font,1))", marginTop: 1,
+										color: r.dispatchSay ? "var(--dp-t2, #6b7280)" : "var(--dp-warn, #b45309)",
+										whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+									},
+									"data-testid": "mm-node-said", "data-said-empty": r.dispatchSay ? "0" : "1"
+								}, r.dispatchSay ? "产出：" + r.dispatchSay : "产出未读到：" + String(r.dispatchSayReason || "原因未知").slice(0, 60)) : null,
 								/* 第 3 行：**单框控件**（用户：「单个框没有展开和折叠的选项」）
 								 * 每个框都有这一行；不可用的项**显示出来并写明原因**，不悄悄消失 */
 								h("div", {

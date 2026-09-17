@@ -567,7 +567,23 @@ ok("E18 navHookStats 计数器存在（可核验命中）", typeof NAV.navHookSt
  * ══════════════════════════════════════════════════════════════════ */
 sec("F. 唯一总监页 + 智能路由 —— 要求 8「整理确认应进入哪一个对话，可转派/直调」");
 
-eqArr("F1 DESTINATION 三条去向", Object.values(ROUTE.DESTINATION), ["transfer", "direct", "create"]);
+/* 🔴 2026-09-17 判据纠错（过期判据 ⇒ 假红）：
+ *   旧写法 `eqArr(..., Object.values(DESTINATION), ["transfer","direct","create"])` 把
+ *   「去向**恰好三条**」写死了。19 号文 §N2 第 266 行明确要求**新增** `DESTINATION.LOCAL`
+ *   （就地处理、不投递），冻结契约的规则是「**只增不改**」⇒ 新增是允许的，
+ *   过期的是这条断言。⚠️ 红的是尺子，不是产品 —— 与台账（二）附带修正②同源。
+ *   新判据分两半：① 冻结的三条**不得改名/删档**（这才是契约）；② `local` 已登记。 */
+eqArr("F1 冻结三条去向未改名（transfer / direct / create —— 只增不改）",
+	["TRANSFER", "DIRECT", "CREATE"].map((k) => ROUTE.DESTINATION[k]), ["transfer", "direct", "create"]);
+eq("F1b 19 号文 §N2 新增档 `local` 已登记（就地处理）", ROUTE.DESTINATION.LOCAL, "local");
+/* ⚠️ 这里必须用 `ok(name, cond, detail)` 而不是 `eq(name, actual, expected)`：
+ *   `eq` 是「值比对（actual === expected）」，把布尔条件塞进 `actual`、把说明塞进
+ *   `expected` 会得到 `true === undefined` ⇒ **一条恒假的假红**。
+ *   （本轮真踩了一次：判据与产品都没问题，红在"用错了 helper"。） */
+ok("F1c 去向总数 = 4（3 冻结 + 1 新增），且文案逐条齐备（漏配文案会渲染出 undefined）",
+	Object.values(ROUTE.DESTINATION).length === 4
+	&& Object.values(ROUTE.DESTINATION).every((v) => typeof ROUTE.DESTINATION_LABEL[v] === "string" && ROUTE.DESTINATION_LABEL[v].length > 0),
+	Object.values(ROUTE.DESTINATION).map((v) => v + "=" + ROUTE.DESTINATION_LABEL[v]).join(" | "));
 eq("F2 去向文案「转给该对话的总监」（与需求逐字一致）", ROUTE.DESTINATION_LABEL.transfer, "转给该对话的总监");
 eq("F3 去向文案「直接调用对应对话」", ROUTE.DESTINATION_LABEL.direct, "直接调用对应对话");
 eq("F4 去向文案「新建对话」", ROUTE.DESTINATION_LABEL.create, "新建对话");

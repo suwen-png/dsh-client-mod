@@ -3342,14 +3342,28 @@ window.__ModuleLoader__.load({
 					if (cached) {
 						try {
 							const parsed = JSON.parse(cached);
-							plog("V9.3 load from file(OPFS): msgs=" + (parsed.messages?.length || 0)
-								+ " bytes=" + cached.length + " file=OPFS:" + DIRECTOR_DIR_NAME + "/" + DIRECTOR_STORE_FILENAME);
-							if (st) {
-								st.loadCount++;
-								st.lastLoadTime = Date.now();
-								st.savedMessages = parsed.messages?.length || 0;
+							/* 🔴 第 22 批 D5：OPFS 是**单文件**（`director-store.json`），**不含桶名**。
+							 *    不校验归属的话，任意作用域都会读到"最后一次保存"的那份 store
+							 *    ⇒ 多会话互相覆盖 / **串桶**（A1 的消息出现在 A2、A2 保存后 A1 读回 A2 的内容）。
+							 *    ⇒ 写入时在 payload 里记 `sid`；读时**不符即视为未命中**，
+							 *      继续走 cookie / localStorage（那两层是按 `safeDirectorKey` 分键的，天然分桶）。
+							 *    ⚠️ 旧格式（无 `sid`）**一律视为未命中** —— 宁可降级到按桶的层，
+							 *      也不许把"不知道属于谁"的数据塞给当前会话。 */
+							const want = safeDirectorKey(sessionId);
+							if (parsed.sid !== want) {
+								plog("V9.3 load from file(OPFS) SKIP：缓存属于 "
+									+ String(parsed.sid || "(旧格式无 sid)") + "，本次请求 " + want
+									+ " ⇒ 不串桶，继续走 cookie/localStorage");
+							} else {
+								plog("V9.3 load from file(OPFS): msgs=" + (parsed.messages?.length || 0)
+									+ " bytes=" + cached.length + " file=OPFS:" + DIRECTOR_DIR_NAME + "/" + DIRECTOR_STORE_FILENAME);
+								if (st) {
+									st.loadCount++;
+									st.lastLoadTime = Date.now();
+									st.savedMessages = parsed.messages?.length || 0;
+								}
+								return { messages: parsed.messages || [], config: mergeConfig(parsed.config) };
 							}
-							return { messages: parsed.messages || [], config: mergeConfig(parsed.config) };
 						} catch (e) {
 							pwarn("V9.3 load from file(OPFS) failed: " + e.message + ", fallback to cookie/localStorage");
 						}
@@ -3430,7 +3444,9 @@ window.__ModuleLoader__.load({
 				const st = getPersistState();
 				try {
 					const key = directorStorageKey(sessionId);
-					const payload = JSON.stringify({ messages: state.messages, config: state.config });
+					/* 🔴 第 22 批 D5：`sid` 是 OPFS 单文件的**归属标记**（见 `loadDirectorStore` 里的校验）。
+					 *    localStorage 那一层按 key 分桶，多这个字段不影响读（读侧只看 messages/config）。 */
+					const payload = JSON.stringify({ sid: safeDirectorKey(sessionId), messages: state.messages, config: state.config });
 			
 					// ① OPFS（含写后读回校验，替代宿主 6280-6288）
 					let fileOk = false;
@@ -4503,11 +4519,39 @@ window.__ModuleLoader__.load({
 					at: msg.at || Date.now(),
 					meta: msg.meta || {}
 				};
+				/* 🔴 19 号文 §3.2（N3 落点）：**信封是独立字段**，不是 `meta` 的子集。
+				 *    为什么不能塞进 `meta` 或 `text`：
+				 *      · 塞 `text` ⇒ 污染 `organize()` 语言整理与既有正则判据（§3.2 明文禁止）；
+				 *      · 塞 `meta` ⇒ `meta` 已被"派发台账/审核结论"等占用，语义混杂后
+				 *        无法用「有无 env」区分"这条消息属于某条血缘"。
+				 *    🔴 **只增不改**：`msg.env` 缺省时不写该字段 ⇒ 旧记录逐字节不变、
+				 *       读取方 `envOf()` 返回 `null` ⇒ 退化为旧行为（既有调用点零改动可跑）。 */
+				if (msg.env && typeof msg.env === "object") rec.env = msg.env;
 				return pPut(PDB.CONVERSATIONS, rec).then((ok) => (ok ? rec : null));
 			}
 			function listDirectorMessages(nodeId) {
 				return pGetAllByIndex(PDB.CONVERSATIONS, "nodeId", nodeId)
 					.then((rows) => rows.sort((a, b) => (a.at || 0) - (b.at || 0)));
+			}
+			
+			/**
+			 * 🔴 19 号文 **N3**（R2「上游可见下游摘要」）：读**全部**总监消息（**跨桶**）。
+			 *
+			 * 为什么必须新增、不能拿 `listDirectorMessages(nodeId)` 凑：
+			 *   消息按**作用域会话分桶**（`safeDirectorKey(sessionId)`）⇒ 单桶读**永远看不到**
+			 *   别的分支写了什么。而 R2 要的正是"上游节点**不必点进下游**就能看到它的产出摘要"
+			 *   ⇒ 判据天然跨桶。
+			 *
+			 * ⚠️ 代价与边界：这是**全量读**（IndexedDB 一次 `getAll`），比单桶读贵 ⇒
+			 *   只在需要血缘摘要时调（总监弹窗/总监页的 refresh），**不要**放进渲染循环。
+			 * ⚠️ 返回的行**不在这里做血缘过滤** —— 过滤是 `lineage.js#summariesFor()` 的职责
+			 *   （单一真相源：UI 与闸门用**同一个**纯函数判"这行该不该显示"）。
+			 */
+			function listAllDirectorMessages() {
+				return pGetAll(PDB.CONVERSATIONS).then((rows) => {
+					const list = Array.isArray(rows) ? rows.slice() : [];
+					return list.sort((a, b) => (a.at || 0) - (b.at || 0));
+				});
 			}
 			
 			/* ── 域辅助：审核 / 决策 / 方案 / 待办 ────────────────────────── */
@@ -4577,6 +4621,115 @@ window.__ModuleLoader__.load({
 			 * @param {string} [nodeId] 省略 ⇒ 清**所有**节点的消息
 			 * @returns {Promise<{ok:boolean, removed:number, before:number, scoped:boolean, hostBoundary:string, reason?:string}>}
 			 */
+			/* ── 清除安全网：备份 / 恢复（第 22 批 D4「清完就没了」）──────────────
+			 *
+			 * 🔴 为什么必须有这层：
+			 *   用户第 16 批要的「清除所有对话消息」是**真删除**（`pDelete`），
+			 *   而**验收闸门为了测这个按钮，自己也必须清一次**（`verify-novel-split` D 段）。
+			 *   两者叠加 ⇒ **每跑一轮验收 = 用户真实总监消息清零一次**。
+			 *   本轮实测取证：`directorConversations` 全表 0 条、`directorNodes` 却有 458 条
+			 *   ⇒ 不是「库打不开」，是**消息被清干净了**；用户看到「总监消息 0」，
+			 *   合理地读成"没持久化"。而一次真实写入（统筹）立刻让页签 0 → 1 ⇒ 通道本身是好的。
+			 *
+			 * ⇒ 清之前先落一份**可一键恢复**的快照：
+			 *   · 落点与消息同层（localStorage，同 origin）—— 跨页面重载可读；
+			 *   · 恢复按 `messageId` **幂等**（重复恢复不产生副本，不会把 1 条变成 2 条）；
+			 *   · 超限 / 写失败 **一律如实上报**（`ok:false` + `reason`）—— 不许让用户以为有安全网。
+			 */
+			const MSG_BACKUP_KEY = "dsh.director.msgs.backup";
+			/** 备份体量上限（localStorage 同源总配额约 5MB，留足余量给其它键） */
+			const MSG_BACKUP_MAX_BYTES = 3 * 1024 * 1024;
+			
+			/**
+			 * 把即将被删的行写进备份槽。
+			 * @param {object[]} rows 即将删除的消息行
+			 * @param {string} note 本次清除的说明（写进备份，便于事后判断"这份备份是哪次清的"）
+			 * @returns {{ok:boolean, count:number, bytes:number, key:string, reason:string}}
+			 */
+			function backupDirectorMessages(rows, note) {
+				const list = Array.isArray(rows) ? rows : [];
+				let text = "";
+				try { text = JSON.stringify({ v: 1, at: Date.now(), note: String(note == null ? "" : note), count: list.length, rows: list }); }
+				catch (e) { return { ok: false, count: 0, bytes: 0, key: MSG_BACKUP_KEY, reason: "序列化失败：" + String((e && e.message) || e) }; }
+				const bytes = text.length;
+				if (!list.length) return { ok: true, count: 0, bytes: 0, key: MSG_BACKUP_KEY, reason: "本次没有可备份的消息" };
+				if (bytes > MSG_BACKUP_MAX_BYTES) {
+					return { ok: false, count: 0, bytes, key: MSG_BACKUP_KEY, reason: "超出备份上限（" + bytes + "B > " + MSG_BACKUP_MAX_BYTES + "B）⇒ 未写入备份" };
+				}
+				try {
+					if (typeof localStorage === "undefined") return { ok: false, count: 0, bytes, key: MSG_BACKUP_KEY, reason: "无 localStorage" };
+					localStorage.setItem(MSG_BACKUP_KEY, text);
+					const back = localStorage.getItem(MSG_BACKUP_KEY);
+					return { ok: back === text, count: list.length, bytes, key: MSG_BACKUP_KEY, reason: back === text ? "" : "写后读回不一致" };
+				} catch (e) {
+					return { ok: false, count: 0, bytes, key: MSG_BACKUP_KEY, reason: "写入抛错：" + String((e && e.message) || e) };
+				}
+			}
+			
+			/** 读备份（无备份 / 损坏 ⇒ null，调用方必须能区分"没有"与"读不到"） */
+			function readMessageBackup() {
+				try {
+					if (typeof localStorage === "undefined") return null;
+					const raw = localStorage.getItem(MSG_BACKUP_KEY);
+					if (!raw) return null;
+					const rec = JSON.parse(raw);
+					if (!rec || !Array.isArray(rec.rows)) return null;
+					return { at: rec.at || 0, note: String(rec.note || ""), count: Number(rec.count) || rec.rows.length, bytes: raw.length, rows: rec.rows };
+				} catch (e) { return null; }
+			}
+			
+			/**
+			 * 挑出「需要写回」的行（**纯函数**，便于离线单测 —— 恢复的核心规则都在这里）。
+			 *
+			 * 规则两条（都是"不做就会出新事故"的）：
+			 *   · `messageId` 缺失/为空的行**一律丢弃**（写进去会产生无主键记录）；
+			 *   · 已在库中的**跳过** ⇒ 恢复**幂等**：重复点「恢复」不会把 1 条变成 2 条。
+			 *
+			 * @param {Iterable<string>|string[]} existingIds 库中已有的 messageId
+			 * @param {object[]} backupRows 备份里的行
+			 * @returns {{rows:object[], skipped:number}}
+			 */
+			function pickRestorableRows(existingIds, backupRows) {
+				const have = existingIds instanceof Set
+					? existingIds
+					: new Set(Array.isArray(existingIds) ? existingIds : []);
+				const out = [];
+				let skipped = 0;
+				for (const r of (Array.isArray(backupRows) ? backupRows : [])) {
+					if (!r || r.messageId === undefined || r.messageId === null || r.messageId === "") { skipped += 1; continue; }
+					if (have.has(r.messageId)) { skipped += 1; continue; }
+					out.push(r);
+				}
+				return { rows: out, skipped };
+			}
+			
+			/**
+			 * 从备份恢复（按 `messageId` 幂等）。
+			 * @returns {Promise<{ok:boolean, total:number, restored:number, skipped:number, at:number, reason:string}>}
+			 */
+			function restoreDirectorMessages() {
+				const bak = readMessageBackup();
+				if (!bak) return Promise.resolve({ ok: false, total: 0, restored: 0, skipped: 0, at: 0, reason: "没有备份可恢复（或备份已损坏）" });
+				return pGetAll(PDB.CONVERSATIONS).then(async (rows) => {
+					const have = new Set((Array.isArray(rows) ? rows : []).map((r) => r && r.messageId).filter(Boolean));
+					const pick = pickRestorableRows(have, bak.rows);
+					let restored = 0;
+					for (const r of pick.rows) {
+						if (await pPut(PDB.CONVERSATIONS, r)) restored += 1;
+					}
+					return { ok: restored + pick.skipped === bak.rows.length, total: bak.rows.length, restored, skipped: pick.skipped, at: bak.at, reason: "" };
+				}).catch((e) => ({ ok: false, total: 0, restored: 0, skipped: 0, at: 0, reason: String((e && e.message) || e) }));
+			}
+			
+			/** 丢弃备份槽（恢复确认无误后由用户显式调用） */
+			function clearMessageBackup() {
+				try {
+					if (typeof localStorage === "undefined") return false;
+					localStorage.removeItem(MSG_BACKUP_KEY);
+					return localStorage.getItem(MSG_BACKUP_KEY) === null;
+				} catch (e) { return false; }
+			}
+			
 			function clearDirectorMessages(nodeId) {
 				const scoped = nodeId !== undefined && nodeId !== null && nodeId !== "";
 				const want = scoped ? String(nodeId) : "";
@@ -4584,6 +4737,14 @@ window.__ModuleLoader__.load({
 					const list = Array.isArray(rows) ? rows : [];
 					const before = list.length;
 					const hit = scoped ? list.filter((r) => r && String(r.nodeId) === want) : list;
+					/* 🔴 先备份、再删除（顺序不可颠倒 —— 反了就永远备份不出来）。
+					 *   备份失败**不阻断**删除（用户是点了两次确认的），但必须报出来。 */
+					const backup = backupDirectorMessages(hit, scoped ? ("定向清除 nodeId=" + want) : "全表清除（无 nodeId 参数）");
+					/* 🔴 第 24 批：**三条口径必须能分开看**（第二十四轮 40 轮连跑后实测出来的）。
+					 *    真机出现过 `before=121 / 备份=123 / 快照=123` 三个数互不相同，
+					 *    而旧读数只暴露 `before`/`removed` ⇒ 差额**无从归因**（纪律 19：无声最坏）。
+					 *    `hit` = 纳入清除的条数；`noId` = 无主键而被跳过的条数（删不掉的合法原因）。 */
+					const noId = hit.filter((r) => !(r && r.messageId !== undefined)).length;
 					let removed = 0;
 					for (const r of hit) {
 						const id = r && r.messageId;
@@ -4594,11 +4755,12 @@ window.__ModuleLoader__.load({
 					}
 					return {
 						ok: removed === hit.length,
-						removed, before, scoped,
+						removed, before, hit: hit.length, noId, scoped, backup,
 						hostBoundary: "宿主侧对话消息不在插件权限内（sessions 服务无删除/清空契约）"
 					};
 				}).catch((e) => ({
-					ok: false, removed: 0, before: 0, scoped,
+					ok: false, removed: 0, before: 0, hit: 0, noId: 0, scoped,
+					backup: { ok: false, count: 0, bytes: 0, key: MSG_BACKUP_KEY, reason: "读取失败，未产生备份" },
 					hostBoundary: "宿主侧对话消息不在插件权限内（sessions 服务无删除/清空契约）",
 					reason: String((e && e.message) || e)
 				}));
@@ -4612,7 +4774,9 @@ window.__ModuleLoader__.load({
 					openPluginDB, pluginDbStats, pluginDbState,
 					pPut, pGet, pGetAll, pGetAllByIndex, pDelete, pCount, pClear,
 					saveDirectorNode, getDirectorNode, listDirectorNodes, deleteDirectorNode,
-					appendDirectorMessage, listDirectorMessages, clearDirectorMessages,
+					appendDirectorMessage, listDirectorMessages, listAllDirectorMessages, clearDirectorMessages,
+					backupDirectorMessages, readMessageBackup, restoreDirectorMessages, clearMessageBackup,
+					pickRestorableRows, MSG_BACKUP_KEY, MSG_BACKUP_MAX_BYTES,
 					saveReview, listReviews, saveDecision, listDecisions, savePlan, listPlans,
 					saveTodo, listTodos, resetPluginDb
 				};
@@ -4640,6 +4804,7 @@ window.__ModuleLoader__.load({
 			exports.deleteDirectorNode = deleteDirectorNode;
 			exports.appendDirectorMessage = appendDirectorMessage;
 			exports.listDirectorMessages = listDirectorMessages;
+			exports.listAllDirectorMessages = listAllDirectorMessages;
 			exports.saveReview = saveReview;
 			exports.listReviews = listReviews;
 			exports.saveDecision = saveDecision;
@@ -4650,6 +4815,13 @@ window.__ModuleLoader__.load({
 			exports.listTodos = listTodos;
 			exports.pluginDbStats = pluginDbStats;
 			exports.resetPluginDb = resetPluginDb;
+			exports.MSG_BACKUP_KEY = MSG_BACKUP_KEY;
+			exports.MSG_BACKUP_MAX_BYTES = MSG_BACKUP_MAX_BYTES;
+			exports.backupDirectorMessages = backupDirectorMessages;
+			exports.readMessageBackup = readMessageBackup;
+			exports.pickRestorableRows = pickRestorableRows;
+			exports.restoreDirectorMessages = restoreDirectorMessages;
+			exports.clearMessageBackup = clearMessageBackup;
 			exports.clearDirectorMessages = clearDirectorMessages;
 			exports.installPluginDbApi = installPluginDbApi;
 		};
@@ -4659,7 +4831,7 @@ window.__ModuleLoader__.load({
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：多层级总监结构（对话级 / 文件夹级 / 全局级）
 			 * 引用：要求 1 · 17 号文 §2.1 · T-PLUG-009
-			 * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/summarize.js, logic/sync.js, store/duty-config.js
+			 * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js
 			 * 下游：store/idb.js, store/plugin-db.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -7154,7 +7326,7 @@ window.__ModuleLoader__.load({
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：分流标签索引
 			 * 引用：—
-			 * 上游：components/DirectorPage.js, logic/branch-tree.js
+			 * 上游：components/DirectorDialog.js, components/DirectorPage.js, logic/branch-tree.js, logic/director-dispatch.js
 			 * 下游：（无）
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -7166,10 +7338,18 @@ window.__ModuleLoader__.load({
 			 * 🔴 为什么必须有这个模块（不这样做就**看不见**分流）
 			 * ───────────────────────────────────────────────────────────────────
 			 *  分流落地是「宿主 `sessions.create()` 建空白会话」。空白会话的标题由**宿主**决定
-			 *  （`normalizeSummary` 读 `raw.title || raw.displayTitle || sessionLabel(id)`），
-			 *  而宿主公开的 `sessions` 服务**没有 rename**（只有 `create` / `fork` / `open` /
-			 *  `list` / `search` —— 已逐条核对 `dsh-client-runtime/lib/client.js:8960-9010`，
-			 *  `rename` 只存在于**会话实体** `Session#rename`（:7351），插件拿不到那个实体）。
+			 *  （`normalizeSummary` 读 `raw.title || raw.displayTitle || sessionLabel(id)`）。
+			 *
+			 *  🔴 **第十九轮实测更正**（原文写的是"宿主没有 rename，rename 只存在于会话实体、插件拿不到"）：
+			 *     · 事实①：`sessions.rename({sessionId,title})` 这个 **RPC 确实存在**
+			 *       （宿主 `api.sessions` 成员表：`attachment/cancel/create/fork/history/list/models/prompt/rename/search/selectModel/updateQueue`）。
+			 *     · 事实②：**插件拿得到会话实体** —— `scopedConversationOf(id).scopedSession()` 就是它，
+			 *       `probeSessionIo` 正是靠这个实体读 `history()` 的。所以"拿不到那个实体"**不成立**。
+			 *     ⇒ 原文的结论（"只能插件侧覆盖"）**在能力判断上是错的**。
+			 *     ⇒ 但**当前实现仍走插件侧覆盖**，这是**已知的待改项**，不是"宿主做不到"：
+			 *       应改为**优先调 `rename`**（宿主侧生效，用户在宿主自己的列表/搜索里也能认出），
+			 *       失败再回落插件侧覆盖且降级可见。见 `docs/00-统筹入口/14-…20260916.md` §八 8.2。
+			 *       🔴 未完成前**不许**把这一段读成"已按宿主能力做过了"。
 			 *
 			 *  ⇒ 后果（若不补偿）：一次分出 8 条线，导图上 8 个节点**标题一模一样**，
 			 *     用户说的「思维导图应该能看出来」**完全落空** —— 而且因为是"建成功了"，
@@ -7351,13 +7531,590 @@ window.__ModuleLoader__.load({
 			exports.applySplitLabels = applySplitLabels;
 		};
 
+		// ── store/dispatch-log.js ──
+		__defs["store/dispatch-log.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：本次「总监派发」台账（第 17 批）
+			 * 引用：—
+			 * 上游：components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * store/dispatch-log.js — 本次「总监派发」台账（第 17 批）
+			 *
+			 * ── 定位 ────────────────────────────────────────────────────────
+			 *   第 16 批只记了「建了几条会话」（`store/split-index.js` 的 `dsh.director.split`）。
+			 *   本批要回答的是**另外三问**：派给谁 / 干到哪一步 / 产出了什么。
+			 *   这三问的答案是**运行内数据**（状态与产出会变），所以：
+			 *
+			 *   · **持久化沿用现有 key**（`dsh.director.split`，由 `recordSplits` 写）—— **不新开 key**；
+			 *   · 台账本身**只活在本次运行**，与 `bridge/chat-bridge.js` 的 `conversationMirror` 同策略
+			 *     （既有先例，见那里的注释：镜像只累积到本次运行）。
+			 *
+			 * ── 🔴 为什么状态与摘要**分开存**（纪律 19：降级可以无声不行）──────
+			 *   状态来自宿主会话快照（**一条 RPC 全拿到，永不缺**）；
+			 *   摘要来自逐会话 `history()`（**要读事件流，可能失败**）。
+			 *   若合成一个字段，界面就只能二选一：要么把"读不到摘要"显示成"没产出"，要么反过来撒谎。
+			 *   ⇒ `state` 与 `say` **各自带自己的来源与原因**：`stateSource` / `sayReason`。
+			 *
+			 * ── 🔴 空摘要不许拿标题充数 ────────────────────────────────────
+			 *   宿主会自动给会话起标题（实测 `session/title` 事件，来源
+			 *   `provider:"session-title-first-prompt-llm"`），它**不是分支的产出**。
+			 *   若把 `title` 当成 `say` 显示，界面上会出现"看起来有产出、其实是用户原话/模型起的名"。
+			 *   ⇒ `title` 单独放 `title` 字段，`say` **只**放真读到的助手正文（读不到就是 `""`）。
+			 */
+			
+			const listeners = new Set();
+			
+			/** 本次运行内的派发台账（**内存单例**；不改 localStorage 冻结契约） */
+			const dispatchLog = {
+				/** 派发时刻（ms） */
+				at: 0,
+				/** 派发用的需求原文 */
+				text: "",
+				/** 作品名（从原文提取，可能为空） */
+				name: "",
+				/** "novel" | "generic" */
+				kind: "",
+				/** 维度维度台账：[{ dim, label, sessionId, sentVia, sentAt, state, stateSource, turns, outputTokens, say, sayReason, title, collectedAt }] */
+				items: [],
+				/** 最近一次「回收产出」的总读数：{at, ok, done, running, blank, partial, failed, nextAction} */
+				collect: null
+			};
+			
+			/** 订阅台账变化（返回退订函数） */
+			function subscribeDispatch(fn) {
+				listeners.add(fn);
+				return () => listeners.delete(fn);
+			}
+			
+			/** 通知（**逐层 try**：一个订阅者抛错不许打哑其余订阅者） */
+			function emit() {
+				listeners.forEach((fn) => { try { fn(dispatchLog); } catch (e) { /* 订阅者自己的问题，不许打哑派发链 */ } });
+			}
+			
+			/** 读台账（返回**同一对象**：调用方只读；需要 React 重渲染请走订阅） */
+			function readDispatchLog() { return dispatchLog; }
+			
+			/**
+			 * 记一次派发（**整体替换** items —— 每次派发是一个新批次，不跨批次混）。
+			 * @param {{text?:string, name?:string, kind?:string, items?:Array}} entry
+			 * @returns {typeof dispatchLog}
+			 */
+			function recordDispatch(entry) {
+				const e = entry || {};
+				dispatchLog.at = Date.now();
+				dispatchLog.text = String(e.text == null ? "" : e.text);
+				dispatchLog.name = String(e.name == null ? "" : e.name);
+				dispatchLog.kind = String(e.kind == null ? "" : e.kind);
+				dispatchLog.items = (Array.isArray(e.items) ? e.items : []).map((it) => ({
+					dim: String(it.dim || ""),
+					label: String(it.label || ""),
+					sessionId: String(it.sessionId || ""),
+					/* 🔴 第 23 批补：**简报必须进台账**。
+					 *    `info.brief` 在 `logic/director-dispatch.js` 里**本来就构造了**（`briefOf(...)` 的
+					 *    返回值），但本白名单式 map 没带它 ⇒ 简报**在进台账那一刻被丢掉**。
+					 *    后果不是"少一个字段"，而是：**「总监到底给分支说了什么」完全无从核对**
+					 *    —— D8（需求整理）/ D9（项目把控）改的正是简报内容，改完却**没有观测面**，
+					 *    真机闸门只能读到一个 `""`（本轮实测），看起来像功能没落地。
+					 *    ⇒ 台账是运行内调试数据的唯一通道（不持久化、不进 localStorage 冻结契约），
+					 *      在这里补上零成本、零契约风险。 */
+					brief: String(it.brief || ""),
+					sentVia: String(it.sentVia || ""),
+					sentOk: it.sentOk === true,
+					sentReason: String(it.sentReason || ""),
+					attachFail: it.attachFail === true,
+					/* 状态初值：**未知**，不是"待处理" —— 派发那一刻我们确实还不知道宿主怎么看它 */
+					state: "unknown",
+					stateSource: "尚未取样",
+					turns: null,
+					outputTokens: null,
+					say: "",
+					sayReason: "尚未回收（点「回收产出」才读各分支事件流）",
+					title: null,
+					collectedAt: 0
+				}));
+				dispatchLog.collect = null;
+				emit();
+				return dispatchLog;
+			}
+			
+			/**
+			 * 用宿主快照刷新**状态**（不切页签、不读事件流 —— 这一路**不该失败**）。
+			 * @param {(id:string)=>object|null} summaryOf 由调用方给出的"取该会话原始摘要"函数
+			 * @param {(raw:object, say:string)=>object} stateFn `stateOfSummary`
+			 * @returns {number} 刷新条数
+			 */
+			function refreshStates(summaryOf, stateFn) {
+				let n = 0;
+				dispatchLog.items.forEach((it) => {
+					if (!it.sessionId) { it.state = "unknown"; it.stateSource = "无会话 id（未建成）"; return; }
+					const raw = summaryOf(it.sessionId);
+					if (!raw) { it.state = "unknown"; it.stateSource = "宿主快照里没有这条会话"; return; }
+					const s = stateFn(raw, it.say);
+					/* 🔴 `running` 只从宿主读，不从我们的调用推断 —— 推断出来的"应该在跑"
+					 *    会掩盖"投递其实没生效"（第 16 批就是这么漏掉的）。 */
+					it.state = s.state;
+					it.turns = s.turns;
+					it.outputTokens = s.outputTokens;
+					it.title = s.title;
+					it.stateSource = "宿主快照（sessions.list）";
+					n++;
+				});
+				if (n) emit();
+				return n;
+			}
+			
+			/** 逐条打补丁（回收时用；不传的字段不动） */
+			function patchDispatchItem(sessionId, patch) {
+				const it = dispatchLog.items.filter((x) => x.sessionId === String(sessionId))[0];
+				if (!it || !patch) return null;
+				Object.keys(patch).forEach((k) => { it[k] = patch[k]; });
+				emit();
+				return it;
+			}
+			
+			/** 记回收总读数 */
+			function setDispatchCollect(summary) {
+				dispatchLog.collect = summary ? Object.assign({ at: Date.now() }, summary) : null;
+				emit();
+				return dispatchLog.collect;
+			}
+			
+			/** 取某会话对应的派发条目 */
+			function dispatchItemOf(sessionId) {
+				const id = String(sessionId || "");
+				if (!id) return null;
+				for (let i = 0; i < dispatchLog.items.length; i++) {
+					if (dispatchLog.items[i].sessionId === id) return dispatchLog.items[i];
+				}
+				return null;
+			}
+			
+			/** 清空台账（**只清内存**；宿主里的分支会话不因此消失，这是刻意的） */
+			function clearDispatchLog() {
+				dispatchLog.at = 0;
+				dispatchLog.text = "";
+				dispatchLog.name = "";
+				dispatchLog.kind = "";
+				dispatchLog.items = [];
+				dispatchLog.collect = null;
+				emit();
+				return dispatchLog;
+			}
+			
+			/**
+			 * 把派发状态**覆盖到血缘树上**（就地改显示字段，与 `store/split-index.js` 的
+			 * `applySplitLabels` 同构、同调用点）。
+			 *
+			 * 🔴 只**新增**显示字段，宿主真值（`running` / `blank` / `updatedAt` / `parentSessionId`…）
+			 *    与 `applySplitLabels` 写过的 `splitDim` / `titleOrigin` **一个不动** ——
+			 *    两边都写同一批字段就会出现"导图说在跑、总监页说没跑"的双口径。
+			 * 🔴 新增字段名**刻意避开** `state` / `stateSource`（那两个已被导图占用为**血缘状态**）：
+			 *    同名不同义会让闸门量错对象（本项目台账（二）#8 就是这么炸的）⇒ 用 `dispatchState`。
+			 *
+			 * @param {{rows?:Array, byId?:Object}} tree `refreshBranchTree()` 产出的树
+			 * @returns {{applied:number, states:Object}} 覆盖条数 + 各状态计数
+			 */
+			function applyDispatchLabels(tree) {
+				const out = { applied: 0, states: {} };
+				if (!tree) return out;
+				const items = dispatchLog.items || [];
+				if (!items.length) return out;
+				const map = {};
+				items.forEach((it) => { if (it.sessionId) map[it.sessionId] = it; });
+				const patch = (row, countIt) => {
+					if (!row || !row.sessionId) return;
+					const it = map[String(row.sessionId)];
+					if (!it) return;
+					row.dispatchId = String(it.sessionId);
+					row.dispatchDim = String(it.dim || "");
+					row.dispatchState = String(it.state || "unknown");
+					row.dispatchSay = String(it.say || "");
+					row.dispatchSayReason = String(it.sayReason || "");
+					row.dispatchTurns = typeof it.turns === "number" ? it.turns : null;
+					if (countIt) {
+						out.applied++;
+						out.states[row.dispatchState] = (out.states[row.dispatchState] || 0) + 1;
+					}
+				};
+				(Array.isArray(tree.rows) ? tree.rows : []).forEach((r) => patch(r, true));
+				/* byId 与 rows 是**两个对象**（同一会话各一份）⇒ 两边都要打补丁；
+				 * 但 `applied` / `states` **只数 rows**（与 `applySplitLabels` 的 `countIt` 同口径）。
+				 *
+				 * 🔴 第 18 批修正：原实现两边都递增 ⇒ `diag.dispatchApplied` **翻倍**
+				 *    （真机日志实测台账只有 8 条，而 `diag` 报 `dispatchApplied:16`；
+				 *      `applySplitLabels` 报的 `splitApplied:40` 是正确口径 —— 两者"同口径"的**声明**当时并不成立）。
+				 *    由 `scripts/test-dispatch-log.mjs` 的 `DL-9` 抓出（新模块单测的直接收益）。 */
+				const byId = tree.byId && typeof tree.byId === "object" ? tree.byId : {};
+				Object.keys(byId).forEach((k) => patch(byId[k], false));
+				return out;
+			}
+			
+			exports.dispatchLog = dispatchLog;
+			exports.subscribeDispatch = subscribeDispatch;
+			exports.readDispatchLog = readDispatchLog;
+			exports.recordDispatch = recordDispatch;
+			exports.refreshStates = refreshStates;
+			exports.patchDispatchItem = patchDispatchItem;
+			exports.setDispatchCollect = setDispatchCollect;
+			exports.dispatchItemOf = dispatchItemOf;
+			exports.clearDispatchLog = clearDispatchLog;
+			exports.applyDispatchLabels = applyDispatchLabels;
+		};
+
+		// ── store/session-dossier.js ──
+		__defs["store/session-dossier.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：会话档案（第 19 批）
+			 * 引用：—
+			 * 上游：client-entry.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * store/session-dossier.js — 会话档案（第 19 批）
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 需求（用户原话，逐字）
+			 * ───────────────────────────────────────────────────────────────────
+			 *   「不会话都有自己的总监,存在自己的会话总结文档」
+			 *
+			 * 🔴 判为输入误打，实为「**每个会话**都有自己的总监」⇒ 落到数据结构就是**一份会话档案**：
+			 *      · `director` —— **自己的总监**：这条会话归哪个职能维度管（角色名 + 作品名）
+			 *      · `summary`  —— **自己的会话总结文档**：这条会话做了什么、产出什么
+			 *
+			 *   为什么要独立成一份档案，而不是塞进总监消息流：
+			 *     · 总监消息流是**一条线**（所有分支的汇报叠在一起），读不出"某条会话自己的状态"；
+			 *     · 用户要的是"**每个会话**存在自己的…文档" ⇒ 必须以 `sessionId` 为主键独立成档。
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 🔴 与 `store/split-index.js` 的分工（**不重复存同一事实**）
+			 * ───────────────────────────────────────────────────────────────────
+			 *   · `split-index`（key `dsh.director.split`，**冻结键**）
+			 *       = 「会话 id → 分流**显示标签**」—— 职责是**覆盖导图标题**（`applySplitLabels`）
+			 *   · `dossier`（key `dsh.director.dossier`，**新增键**）
+			 *       = 「会话 id → 总监身份 + 总结文档」—— 职责是**会话自己的档案**
+			 *   两者以 `sessionId` 关联；档案里**只存 `dim` 作关联键，不重复存 `label`**
+			 *   （`label` 的真相源仍是 `split-index`，重复存 = 两份真相，迟早不一致）。
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 契约
+			 * ───────────────────────────────────────────────────────────────────
+			 *   · 持久化键 `dsh.director.dossier` —— 在**冻结命名空间** `dsh.director` 之内。
+			 *     R5 冻结的是"既有键不得改名/删除"，**新增是允许的**；
+			 *     但**必须同步登记进 `cdp-click-dialog.mjs` 的白名单**，否则 R5 假红
+			 *     （第 6 批 `dsh.director.agentRuns.v1` 就是这么红的 —— 见该处补登注释）。
+			 *   · 脏数据**逐条丢弃**，绝不整体清空（一条坏记录抹掉全部档案比"少一条"糟得多）
+			 *   · 容量上限 `DOSSIER_MAX`（按 `at` 保新）—— localStorage 是全站共享预算
+			 *   · 🔴 **不许编摘要**：`summary.source` 只有三态 ——
+			 *       `collect`（回收读到的事件流正文）/ `host-title`（宿主标题）/ `none`（读不到）
+			 *     读不到就 `source:"none"` + `ok:false` + 原因，**绝不回落到"看起来像摘要"的占位文案**
+			 *     （纪律 19 同型：降级可以，无声不行）。
+			 */
+			
+			/** 持久化键（命名空间 `dsh.director` 内；新增键，需登记 R5 白名单） */
+			const DOSSIER_KEY = "dsh.director.dossier";
+			
+			/** 条目上限（按 `at` 保新裁掉多余） */
+			const DOSSIER_MAX = 200;
+			
+			/** `summary.source` 的**合法取值**（白名单式校验：非此三态一律归 `none`） */
+			const SUMMARY_SOURCES = Object.freeze(["collect", "host-title", "none"]);
+			
+			let mem = null;
+			
+			function storage() {
+				try { return typeof localStorage === "undefined" ? null : localStorage; } catch (e) { return null; }
+			}
+			
+			/**
+			 * 丢弃内存缓存，强制下次 `readDossiers()` 从 localStorage 重读。
+			 *
+			 * 🔴 为什么需要它：`readDossiers()` 带进程内缓存（一次解析、多次复用 ——
+			 *    导图每次刷新都会调 `applyDossiers()`）。以下两种情况缓存会**过期**：
+			 *      · 另一个标签页 / 窗口改了同一份档案（localStorage 跨标签共享）
+			 *      · 诊断脚本直接往 localStorage 塞了数据，要验证解析器对不对
+			 *    ⇒ 提供**显式**失效出口；**不自动失效**（跨标签监听的成本大于收益，
+			 *      而档案是"派发时写、回收时写"的低频数据，读到上一次的结果没有危害）。
+			 */
+			function resetDossierCache() { mem = null; return true; }
+			
+			function str(v) { return String(v == null ? "" : v); }
+			
+			/** 归一化 `director` 子对象；无有效内容返回 `null` */
+			function normDirector(raw) {
+				if (!raw || typeof raw !== "object") return null;
+				const role = str(raw.role).trim();
+				const name = str(raw.name).trim();
+				const at = Number(raw.at) || 0;
+				if (!role && !name) return null;
+				return { role, name, at };
+			}
+			
+			/**
+			 * 归一化 `summary` 子对象。
+			 * 🔴 `source` 只认白名单三态；`text` 为空 ⇒ `ok` **强制 false**
+			 *    （防"有 ok:true 却没有正文"这种自相矛盾的档案 —— 那会让读数说"有总结"而实际是空的）。
+			 */
+			function normSummary(raw) {
+				if (!raw || typeof raw !== "object") return null;
+				const source = SUMMARY_SOURCES.indexOf(str(raw.source)) >= 0 ? str(raw.source) : "none";
+				const text = str(raw.text);
+				const at = Number(raw.at) || 0;
+				/* 🔴 第 21 批新增 `reason`：「没有总结」必须能说清**为什么没有**。
+				 *    旧版读不到产出时根本不写 `summary` ⇒ 档案里恒为 `null`，
+				 *    「无产出」与「读不到」**不可分**（纪律 18/58）。
+				 *    只在**没有正文**时保留（有正文就不需要理由）；截 300 防超预算。 */
+				const reason = text ? "" : str(raw.reason).slice(0, 300);
+				if (!text && source === "none" && !at && !reason) return null;
+				return { text, at, source, ok: raw.ok === true && Boolean(text), reason };
+			}
+			
+			/** 归一化一条档案；`sessionId` 为空 ⇒ `null`（调用方丢弃） */
+			function normalizeDossier(sessionId, raw) {
+				const sid = str(sessionId).trim();
+				if (!sid || !raw || typeof raw !== "object") return null;
+				const d = {
+					sessionId: sid,
+					dim: str(raw.dim),
+					director: normDirector(raw.director),
+					summary: normSummary(raw.summary),
+					state: str(raw.state),
+					turns: typeof raw.turns === "number" && Number.isFinite(raw.turns) ? raw.turns : null,
+					at: Number(raw.at) || 0
+				};
+				/* 全空的档案没有意义（占额度不承载信息）—— 丢弃 */
+				if (!d.dim && !d.director && !d.summary && !d.state) return null;
+				return d;
+			}
+			
+			/**
+			 * 读全量档案（带内存缓存）。脏数据逐条丢弃，不整体抛错。
+			 * @returns {Object<string, object>}
+			 */
+			function readDossiers() {
+				if (mem) return mem;
+				const s = storage();
+				if (!s) { mem = {}; return mem; }
+				try {
+					const raw = s.getItem(DOSSIER_KEY);
+					const obj = raw ? JSON.parse(raw) : null;
+					const items = obj && obj.items && typeof obj.items === "object" ? obj.items : {};
+					const out = {};
+					for (const k of Object.keys(items)) {
+						const d = normalizeDossier(k, items[k]);
+						if (d) out[k] = d;
+					}
+					mem = out;
+				} catch (e) { mem = {}; }
+				return mem;
+			}
+			
+			/** 写全量档案（裁剪到 `DOSSIER_MAX`，按 `at` 保新；写失败不抛 —— 隐私模式下退化为"本次会话内有效"） */
+			function writeDossiers(map) {	const src = map && typeof map === "object" ? map : {};
+				const keys = Object.keys(src).filter((k) => src[k]);
+				keys.sort((a, b) => (src[b].at || 0) - (src[a].at || 0));
+				const keep = {};
+				for (const k of keys.slice(0, DOSSIER_MAX)) keep[k] = src[k];
+				mem = keep;
+				const s = storage();
+				if (s) {
+					try { s.setItem(DOSSIER_KEY, JSON.stringify({ v: 1, items: keep })); } catch (e) { /* 隐私模式 / 超预算：内存内仍生效 */ }
+				}
+				return Object.keys(keep).length;
+			}
+			
+			/**
+			 * 合并式写入一条档案（**patch 语义**：只覆盖显式给出的字段）。
+			 *
+			 * 🔴 为什么是合并而不是整体替换：派发时写 `director`、回收时写 `summary`
+			 *    —— 若用替换，回收那一次会把派发写的总监身份**冲掉**（两个调用点相隔很久，
+			 *    谁也不会知道对方写过什么）。合并让两个写入点**各自只管自己那一段**。
+			 *
+			 * @param {string} sessionId
+			 * @param {{dim?:string, director?:object, summary?:object, state?:string, turns?:number, at?:number}} patch
+			 * @returns {object|null} 写入后的档案；`sessionId` 空 ⇒ `null`
+			 */
+			function putDossier(sessionId, patch) {
+				const sid = str(sessionId).trim();
+				if (!sid) return null;
+				const p = patch && typeof patch === "object" ? patch : {};
+				const cur = { ...readDossiers() };
+				const old = cur[sid] || {};
+				const merged = {
+					dim: p.dim !== undefined ? p.dim : old.dim,
+					director: p.director !== undefined ? p.director : old.director,
+					summary: p.summary !== undefined ? p.summary : old.summary,
+					state: p.state !== undefined ? p.state : old.state,
+					turns: p.turns !== undefined ? p.turns : old.turns,
+					at: Number(p.at) || Date.now()
+				};
+				const norm = normalizeDossier(sid, merged);
+				if (!norm) return null;
+				cur[sid] = norm;
+				writeDossiers(cur);
+				return norm;
+			}
+			
+			/** 取单条 */
+			function dossierOf(sessionId) {
+				const k = str(sessionId).trim();
+				if (!k) return null;
+				return readDossiers()[k] || null;
+			}
+			
+			/** 忘掉若干条（不存在的 id 静默跳过并计入 `missed`） */
+			function forgetDossiers(ids) {
+				const arr = Array.isArray(ids) ? ids : [];
+				const cur = { ...readDossiers() };
+				let removed = 0, missed = 0;
+				for (let i = 0; i < arr.length; i++) {
+					const k = str(arr[i]).trim();
+					if (!k) continue;
+					if (cur[k]) { delete cur[k]; removed += 1; } else missed += 1;
+				}
+				if (removed) writeDossiers(cur);
+				return { removed, missed };
+			}
+			
+			/** 清空全部档案（返回被清掉的条数，供调用方如实汇报） */
+			function clearDossiers() {
+				const n = Object.keys(readDossiers()).length;
+				writeDossiers({});
+				return n;
+			}
+			
+			/**
+			 * 把档案**挂到血缘树上**（就地改显示字段，与 `applySplitLabels` 同范式）。
+			 *
+			 * 🔴 只**新增**字段（`hasDossier` / `dossierRole` / `dossierSummary` / `dossierSummarySrc`），
+			 *    宿主真值（`running` / `blank` / `updatedAt` / `parentSessionId` …）与
+			 *    `split-index` 覆盖的 `title` / `splitDim` **一个不动** —— 否则会出现
+			 *    "导图标题和总监页不一致"这类双口径问题。
+			 * 🔴 `applied` **只数 rows**（不把 `byId` 那份算进去）：同一会话在 `rows` 与 `byId` 里
+			 *    是**两个对象**，两边都数会让读数翻倍，而闸门会拿它当真值断言
+			 *    （第 18 批 `dispatchApplied:16` 的教训）。
+			 *
+			 * @param {{rows?:Array, byId?:Object}} tree `refreshBranchTree()` 产出的树
+			 * @param {Object} [map] 省略则读当前档案
+			 * @returns {{applied:number, withSummary:number, roles:string[]}}
+			 */
+			function applyDossiers(tree, map) {
+				const idx = map && typeof map === "object" ? map : readDossiers();
+				if (!tree) return { applied: 0, withSummary: 0, roles: [] };
+				const byId = tree.byId && typeof tree.byId === "object" ? tree.byId : {};
+				let applied = 0;
+				let withSummary = 0;
+				const roles = [];
+				const patch = (row, countIt) => {
+					if (!row || !row.sessionId) return;
+					const d = idx[str(row.sessionId)];
+					if (!d) return;
+					if (d.dim) row.dossierDim = d.dim;
+					if (d.director) row.dossierRole = d.director.role;
+					if (d.summary) {
+						row.dossierSummary = d.summary.text ? d.summary.text.slice(0, 200) : "";
+						row.dossierSummarySrc = d.summary.source;
+						row.dossierSummaryOk = d.summary.ok === true;
+						/* 第 21 批：读不到产出时的**可读原因**（没有正文才有；有正文恒为空串） */
+						row.dossierSummaryReason = d.summary.reason || "";
+					}
+					row.hasDossier = true;
+					if (countIt) {
+						applied += 1;
+						if (d.summary && d.summary.ok) withSummary += 1;
+						if (d.director && d.director.role && roles.indexOf(d.director.role) < 0) roles.push(d.director.role);
+					}
+				};
+				(Array.isArray(tree.rows) ? tree.rows : []).forEach((r) => patch(r, true));
+				Object.keys(byId).forEach((k) => patch(byId[k], false));
+				return { applied, withSummary, roles };
+			}
+			
+			/**
+			 * 档案读数（供面板/闸门；**纯读数，不改状态**）。
+			 * @returns {{total:number, withSummary:number, withDirector:number, sources:Object<string,number>, orphans:number}}
+			 */
+			function dossierStats(aliveIds) {
+				const map = readDossiers();
+				const keys = Object.keys(map);
+				const alive = Array.isArray(aliveIds) ? new Set(aliveIds.map(String)) : null;
+				const sources = { collect: 0, "host-title": 0, none: 0 };
+				let withSummary = 0, withDirector = 0, orphans = 0;
+				for (let i = 0; i < keys.length; i++) {
+					const d = map[keys[i]];
+					if (d.summary) { sources[d.summary.source] = (sources[d.summary.source] || 0) + 1; if (d.summary.ok) withSummary += 1; }
+					if (d.director && d.director.role) withDirector += 1;
+					if (alive && !alive.has(keys[i])) orphans += 1;
+				}
+				/* 🔴 19 号文 **N6 判据 3**：读数必须能**逐会话对账**，而不是只给一个总数。
+				 *    只有 `total` 时，「3 条档案覆盖了 3 个会话」与「3 条档案 + 97 个会话没档案」
+				 *    在读数上**完全同形**（这正是 N6 现象："档案是否全覆盖"看不出来）。
+				 *    新增三路：`aliveCount` / `withAlive` / `missingAlive`，并保持两条恒等式：
+				 *      ① `aliveCount === withAlive + missingAlive`
+				 *      ② `total === withAlive + orphans`（档案集 = 存活∩有档 + 孤儿）
+				 *    `missingIds` 给前 20 个**具体是谁**（读数若只有数字，排查时仍要手翻）。 */
+				let withAlive = 0, missingAlive = 0;
+				const missingIds = [];
+				if (alive) {
+					alive.forEach((id) => {
+						if (map[id]) withAlive += 1;
+						else { missingAlive += 1; if (missingIds.length < 20) missingIds.push(id); }
+					});
+				}
+				return {
+					total: keys.length, withSummary, withDirector, sources, orphans,
+					aliveCount: alive ? alive.size : 0, withAlive, missingAlive, missingIds
+				};
+			}
+			
+			/**
+			 * 把档案挂到 `window.__dshDossier`（**诊断出口**，与 `window.__dshDispatchLog`
+			 * / `window.__dshBranchTree` 同性质）。
+			 * 🔴 暴露的是**同一个活对象读数**（每次调用重新 `readDossiers()`）⇒ 读完即最新。
+			 * @returns {object}
+			 */
+			function installDossierApi() {
+				const api = {
+					key: DOSSIER_KEY, max: DOSSIER_MAX,
+					read: () => readDossiers(),
+					of: (id) => dossierOf(id),
+					put: (id, patch) => putDossier(id, patch),
+					forget: (ids) => forgetDossiers(ids),
+					clear: () => clearDossiers(),
+					resetCache: () => resetDossierCache(),
+					stats: (aliveIds) => dossierStats(aliveIds)
+				};
+				if (typeof window !== "undefined") window.__dshDossier = api;
+				return api;
+			}
+			
+			exports.DOSSIER_KEY = DOSSIER_KEY;
+			exports.DOSSIER_MAX = DOSSIER_MAX;
+			exports.SUMMARY_SOURCES = SUMMARY_SOURCES;
+			exports.resetDossierCache = resetDossierCache;
+			exports.readDossiers = readDossiers;
+			exports.writeDossiers = writeDossiers;
+			exports.putDossier = putDossier;
+			exports.dossierOf = dossierOf;
+			exports.forgetDossiers = forgetDossiers;
+			exports.clearDossiers = clearDossiers;
+			exports.applyDossiers = applyDossiers;
+			exports.dossierStats = dossierStats;
+			exports.installDossierApi = installDossierApi;
+		};
+
 		// ── logic/branch-tree.js ──
 		__defs["logic/branch-tree.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：分支血缘树（导图态的数据源）
 			 * 引用：—
-			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/mindmap-render.js
-			 * 下游：logic/discover.js, store/mindmap-schema.js, store/split-index.js
+			 * 上游：bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js
+			 * 下游：logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C2（分支生命周期状态机）· F1 / F5（导图行模型与宿主真值透传）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -7418,6 +8175,9 @@ window.__ModuleLoader__.load({
 			const { kindOfNode, stateOfRow, hasHostState } = __m("store/mindmap-schema.js");
 			/* 分流标签索引（第 16 批）：宿主不给 rename ⇒ 显示名由插件侧补，且**只有一处真相源** */
 			const { readSplitIndex, applySplitLabels } = __m("store/split-index.js");
+			const { applyDispatchLabels } = __m("store/dispatch-log.js");
+			/* 会话档案（第 19 批建、第 21 批**接进唯一摄取点**）：每会话自己的总监与总结 */
+			const { applyDossiers } = __m("store/session-dossier.js");
 			
 			/** 节点在导图画布上的布局常量（与 MindMap.js 共用，勿各自写死）
 			 * 🔴 2026-09-12 第三轮放大：节点从 200×56 调到 224×72 —— 用户要求"单个框要有展开
@@ -7737,7 +8497,30 @@ window.__ModuleLoader__.load({
 				let lineage = false;
 				const fromCtx = readSessionsFromCtx(ctxRef, diag);
 				if (fromCtx && fromCtx.length) {
-					tree = buildBranchTree(fromCtx, { currentId: diag.currentId });
+					/* 🔴 第 21 批 D1 —— 用户原话「重复创建了一百多个会话」的**真因**：
+					 *    宿主快照的 `ids` **包含已归档会话**。实测 126 条里 125 条是用户早已下架、
+					 *    侧栏看不见的幽灵；旧版把它们**全画进导图** ⇒ 用户看到 126 个框。
+					 *    归档集与派发复用**同一判据**（`archivedSessionIds()`），杜绝两套口径。
+					 *    🔴 `[]` 与 `null` 处置**相反**（同 `director-dispatch.js`）：
+					 *      `[]`   ⇒ 放心过滤（真的没有归档）；
+					 *      `null` ⇒ **不许过滤** —— 把"读不到"当"全归档"会一次清空导图。 */
+					let arch = null;
+					try { arch = await archivedSessionIds(); } catch (e) { arch = null; }
+					diag.archivedKnown = Array.isArray(arch);
+					diag.archivedN = Array.isArray(arch) ? arch.length : -1;
+					let live = fromCtx;
+					if (Array.isArray(arch) && arch.length) {
+						const set = new Set(arch);
+						live = fromCtx.filter((s) => {
+							const id = s && s.sessionId !== undefined ? s.sessionId : (s ? s.id : null);
+							return !(id && set.has(String(id)));
+						});
+					}
+					diag.archivedExcluded = fromCtx.length - live.length;
+					/* 🔴 快照非空 ⇒ **一律**走 buildBranchTree（过滤后为 0 就是空树）。
+					 *    绝不回退 `fallbackFromDiscover()` —— 那会用一份**伪造的平铺树**
+					 *    盖住"用户确实没有活会话"这个事实（降级可以，无声不行：纪律 19）。 */
+					tree = buildBranchTree(live, { currentId: diag.currentId });
 					source = "ctx.sessions";
 					lineage = tree.lineage;
 				} else {
@@ -7752,6 +8535,22 @@ window.__ModuleLoader__.load({
 				const split = applySplitLabels(tree, readSplitIndex());
 				diag.splitApplied = split.applied;
 				diag.splitDims = split.dims;
+				/* 🔴 第 17 批：派发状态覆盖（同一摄取点，**只新增字段**不改既有字段）。
+				 *    放在 `applySplitLabels` **之后**：两者写的字段集不相交（`splitDim`/`titleOrigin`
+				 *    vs `dispatchState`/`dispatchSay`…），顺序不影响结果，但放后面读起来更清楚
+				 *    "分流标签是基础，派发状态是叠加层"。 */
+				const disp = applyDispatchLabels(tree);
+				diag.dispatchApplied = disp.applied;
+				diag.dispatchStates = disp.states;
+				/* 🔴 第 21 批 D2：会话档案接进**唯一摄取点**。
+				 *    第 19 批只造了 `store/session-dossier.js`（单测 17/17 绿），但 `applyDossiers`
+				 *    **全仓零调用** ⇒ 档案写了却从不显示，用户原话「（每个会话）都有自己的总监，
+				 *    存在自己的会话总结文档」**完全看不见**（"注册成功 ≠ 渲染成功"，纪律 30）。
+				 *    与 `applySplitLabels` / `applyDispatchLabels` 同范式：就地**只新增**字段。 */
+				const dos = applyDossiers(tree);
+				diag.dossierApplied = dos.applied;
+				diag.dossierWithSummary = dos.withSummary;
+				diag.dossierRoles = dos.roles.length;
 				cache = { tree, source, lineage, at: Date.now(), diag };
 				notify();
 				return cache;
@@ -7823,6 +8622,24 @@ window.__ModuleLoader__.load({
 					if (typeof ctxRef.get === "function") return ctxRef.get("sessions") || null;
 				} catch (e) { /* 两级都不可用 */ }
 				return null;
+			}
+			
+			/**
+			 * sessions 服务**是否可用**（第 19 批新增）。
+			 *
+			 * 🔴 为什么必须有这个判据：`rawSessionSummaries()` 返回 `[]` 有**两种含义** ——
+			 *    ① 宿主里真的没有会话；② `sessions` 服务根本拿不到（读取失败）。
+			 *    第 19 批的"派发前先复用"要拿存活集去判"索引条目是不是孤儿"，
+			 *    这两种含义的处置**完全相反**：
+			 *      · 真没有会话 ⇒ 全部新建（正确）
+			 *      · 读不到服务 ⇒ 也全部新建，但必须**报降级**（否则就是无声失败，
+			 *        而这恰恰是「重复创建一百多个会话」这条需求要治的病）
+			 *    ⇒ 用本函数把两者分开；`[] + available:true` 才算"真的是空"。
+			 *
+			 * @returns {boolean}
+			 */
+			function sessionsAvailable() {
+				return Boolean(sessionsService());
 			}
 			
 			/**
@@ -7953,6 +8770,75 @@ window.__ModuleLoader__.load({
 					const snap = svc && svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
 					return snap && Array.isArray(snap.ids) ? snap.ids.slice() : [];
 				} catch (e) { return []; }
+			}
+			
+			/**
+			 * 宿主会话摘要的**原始数组**（第 17 批「分支状态」的数据源）。
+			 *
+			 * 🔴 为什么不用 `currentSessionId()` / DOM：分支状态要**同时**看 8 条会话，
+			 *    而"切页签才能读"的方案做不到"同时"，且会改宿主当前会话（纪律 26 要还回去）。
+			 *    `sessions.list.getSnapshot()` 是**一次拿到全部**，零副作用。
+			 *
+			 * ⚠️ 字段**只信实测**（纪律 53）：实测本机每条含
+			 *    `{ id, displayTitle, running, blank, updatedAt, agentPreset, cwd, projectionValues }`，
+			 *    其中 `projectionValues` 含 `title / goal / permissions / sessionStats{turns,steps,outputTokens,…} / tokenUsage`。
+			 *    调用方**不得假设**某字段一定存在 —— 缺了就如实标"未知"（纪律 19）。
+			 *
+			 * @returns {Array<object>} 原始摘要；失败返回 `[]`（不抛）
+			 */
+			function rawSessionSummaries() {
+				const svc = sessionsService();
+				try {
+					const snap = svc && svc.list && typeof svc.list.getSnapshot === "function" ? svc.list.getSnapshot() : null;
+					if (!snap) return [];
+					const ids = Array.isArray(snap.ids) ? snap.ids : [];
+					const out = [];
+					for (let i = 0; i < ids.length; i++) {
+						const s = snap.byId ? snap.byId[ids[i]] : null;
+						if (s && typeof s === "object") out.push(s);
+					}
+					return out;
+				} catch (e) { return []; }
+			}
+			
+			/**
+			 * 宿主「已归档会话」集（第 19 批新增 · **修真实缺陷**）。
+			 *
+			 * 🔴 为什么必须有它（2026-09-16 实测）：
+			 *    用户在宿主里**归档/清理**了会话之后，`sessions.list.getSnapshot()` 的 `ids`
+			 *    **仍然包含它们** —— 实测：磁盘 `~/.dsh/sessions/**` 已清 0、`workspace.json` 的
+			 *    `archivedSessionIds` 已清空、侧栏只剩 1 行，而 `snap.ids` 仍是 **116 条**
+			 *    （其中 115 条是已经下架的旧会话）。
+			 *    ⇒ 派发前的「先复用已有会话」会把这些**用户已经看不见的会话**当成存活去复用，
+			 *      新内容落进幽灵会话、用户在侧栏找不到 —— 正是本批要治的那个病。
+			 *    归档集**只能**从宿主 `api.workspace.list({})` 读：快照项里没有 `archived` 字段
+			 *    （实测字段仅 `id/displayTitle/running/blank/updatedAt/projectionValues/title/cwd/agentPreset`）。
+			 *    宿主侧 schema（`@deepseek-ai/dsh-host-apiproxy/.../api/workspace.schema.js`）：
+			 *      request `{}` ⇒ value `{ items: WorkspaceView[], archivedSessionIds: string[] }`
+			 *
+			 * @returns {Promise<string[]|null>} 数组 = 读到了（可能是空数组）；`null` = **读不到**
+			 *   🔴 `[]` 与 `null` 处置**相反**，调用方必须分开：
+			 *      `[]`   ⇒ 可以放心使用全部存活集（真的没有归档）；
+			 *      `null` ⇒ **不许过滤** —— 把"读不到"当成"全被归档"会一次建出双倍会话。
+			 */
+			async function archivedSessionIds() {
+				const svc = sessionsService();
+				if (!svc) return null;
+				let api = null;
+				try { api = svc.manager && svc.manager.api ? svc.manager.api : null; } catch (e) { api = null; }
+				if (!api || !api.workspace || typeof api.workspace.list !== "function") return null;
+				let r = null;
+				try { r = await api.workspace.list({}); } catch (e) { return null; }
+				/* 返回形态**只信实测、全形态归一**（纪律 53）：实测为 `{rpcId, result:{ok,value}}`，
+				 * 换版可能给 `{value}` 或裸 value ⇒ 三种都认，认不出才算读不到。 */
+				let v = null;
+				try {
+					if (r && r.result && r.result.value) v = r.result.value;
+					else if (r && r.value) v = r.value;
+					else if (r && Array.isArray(r.archivedSessionIds)) v = r;
+				} catch (e) { v = null; }
+				if (!v || !Array.isArray(v.archivedSessionIds)) return null;
+				return v.archivedSessionIds.map((x) => String(x));
 			}
 			
 			/**
@@ -8179,8 +9065,13 @@ window.__ModuleLoader__.load({
 					readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,
 					degradationReason, hostCapabilities, openSession, forkBranch, createSession,
 					currentSessionId, watchCurrentSession,
+					// 第 19 批：存活集是否可信（`[]` 的两种含义必须可分）
+					sessionsAvailable,
 					// 第 17 批：宿主能力**实测探针**（挂出来供 CDP 诊断；纯只读，不改状态）
-					probeSessionApi, probeConversationShape, scopedConversationOf, sessionIds
+					probeSessionApi, probeConversationShape, scopedConversationOf, sessionIds, rawSessionSummaries,
+					/* 第 21 批：归档集**挂出来**（闸门与 CDP 诊断要能独立复算"树为什么少了 N 条"，
+					 * 否则只能靠 `rows` 一个数反推，违反纪律 60「数出 0 ≠ 没有」） */
+					archivedSessionIds
 				};
 				if (typeof window !== "undefined") window.__dshBranchTree = api;
 				return api;
@@ -8200,10 +9091,13 @@ window.__ModuleLoader__.load({
 			exports.refreshBranchTree = refreshBranchTree;
 			exports.currentSessionId = currentSessionId;
 			exports.watchCurrentSession = watchCurrentSession;
+			exports.sessionsAvailable = sessionsAvailable;
 			exports.hostCapabilities = hostCapabilities;
 			exports.probeSessionApi = probeSessionApi;
 			exports.scopedConversationOf = scopedConversationOf;
 			exports.sessionIds = sessionIds;
+			exports.rawSessionSummaries = rawSessionSummaries;
+			exports.archivedSessionIds = archivedSessionIds;
 			exports.probeConversationShape = probeConversationShape;
 			exports.openSession = openSession;
 			exports.forkBranch = forkBranch;
@@ -8332,6 +9226,24 @@ window.__ModuleLoader__.load({
 				const out = [];
 				for (const n of nodes || []) {
 					if (!n || !n.id) continue;
+					/* 🔴 19 号文 N2：**维度节点**的命中由 **N1 归属判定**给出（调用方放进 `n.score`），
+					 *   不走本函数的字面打分。理由是**准不准**，不是**能不能**：
+					 *     · 本函数是"字面二元组匹配"（`tokenize()` **有 bigram 兜底** ⇒ 中文名**会**被命中，
+					 *       见 `pushBigrams`）—— 一句话同时提到两个维度时它**分不出主次**；
+					 *     · 归属判定有信号分级（label 3 / 目录 2.5 / 职责词 1）与 stage 相邻降权
+					 *       ⇒ 能给出"主要属于谁"。
+					 *   ⚠️ 收敛前我曾据此写下"中文维度名恒不命中"的注释 —— 那是**漏读 bigram 兜底**导致的
+					 *      错误结论（真机离线都反证了它）。此处如实记录，避免后人重犯。
+					 *   约定：调用方带 `n.score` ⇒ 本函数**尊重它**；不带 ⇒ 走原字面匹配（既有行为零改动）。 */
+					if (n.level === "dimension" && Number.isFinite(Number(n.score)) && Number(n.score) > 0) {
+						out.push({
+							nodeId: n.id, name: n.name, level: "dimension",
+							score: Math.round(Number(n.score) * 100) / 100,
+							reason: String(n.reason || "归属判定命中该维度"),
+							dimKey: n.dimKey || "", attr: true
+						});
+						continue;
+					}
 					const name = String(n.name || "");
 					const nameLower = name.toLowerCase();
 					let score = 0;
@@ -8352,7 +9264,12 @@ window.__ModuleLoader__.load({
 					// ④ 层级先验：会话级优先被"直调"，项目级优先被"转派"
 					if (n.level === "session") score += 0.3;
 					if (n.level === "project") score += 0.2;
-					if (score > 0) out.push({ nodeId: n.id, name: n.name, level: n.level, score: Math.round(score * 100) / 100, reason: reasons.join("；") || "弱相关" });
+					/* 🔴 19 号文 N2：**维度节点**（`{id,name,level:"dimension",dimKey}`）也进候选。
+					 *   给一点基础分，避免"维度名与用户输入无字面交集"时整条维度路被丢掉；
+					 *   `dimKey` **必须透传** —— 没有它，`suggestDestination` 判出 `transfer` 之后
+					 *   调用方无法知道"要转给哪个维度"（只能再从 name 解析，等于两份真相源）。 */
+					if (n.level === "dimension") score += 0.2;
+					if (score > 0) out.push({ nodeId: n.id, name: n.name, level: n.level, score: Math.round(score * 100) / 100, reason: reasons.join("；") || "弱相关", dimKey: n.dimKey || "" });
 				}
 				out.sort((a, b) => b.score - a.score);
 				return out;
@@ -8381,28 +9298,117 @@ window.__ModuleLoader__.load({
 			 * 四、STEP 4 路由决策（**待用户确认，不静默分发**）
 			 * ══════════════════════════════════════════════════════════════════ */
 			
-			/** 去向（要求 8 三条） */
+			/** 去向（要求 8 三条 + 🔴 19 号文 N2 新增 `local`） */
 			const DESTINATION = Object.freeze({
+				/* 🔴 19 号文 **N2**（2026-09-17）新增：**就地处理**（内容属于当前维度 ⇒ 不跨对话投递）。
+				 *   为什么必须新增而不是复用 `DIRECT`：`DIRECT` 的语义是"直接调用**对应对话**"
+				 *   （仍然换了一个目标会话），而用户要的是"就在这个分支里干，别搬走"。
+				 *   两者在界面上与消息归属上**完全不是一回事**，混用会让"没有投递"与"投递到别处"同形。
+				 *   ⚠️ 冻结契约**只增不改**：既有四处组件判断是
+				 *     `if (dest === DIRECT || dest === TRANSFER)` ⇒ `local` 自然落进 else（**不投递**），
+				 *     无需改动组件即行为正确（全仓 `grep DESTINATION` 已核对：**无 switch 穷举**）。 */
+				LOCAL: "local",         // 就地处理（本维度自己干）
 				TRANSFER: "transfer",   // 转给该对话的总监
 				DIRECT: "direct",       // 直接调用对应对话
 				CREATE: "create"        // 新建对话
 			});
 			const DESTINATION_LABEL = Object.freeze({
+				local: "就地处理（本维度）",
 				transfer: "转给该对话的总监",
 				direct: "直接调用对应对话",
 				create: "新建对话"
 			});
 			
 			/**
+			 * 🔴 19 号文 **N2**（2026-09-17）：把**归属判定结果**翻译成**路由候选**（纯函数）。
+			 *
+			 * 它治的是什么：N2 的两条平行通道各自为政 ——
+			 *   通道 A（`DirectorPage` 派发）**只认内容**（`plan()` 命中小说即全 8 维）；
+			 *   通道 B（`route()`）**只认层级树节点**（`level: "project" | "session"`）。
+			 *   而 A1–A8 这些**维度根本不是层级树节点** ⇒ 在 A3 分支里说 A5 的话，
+			 *   路由既**判不出**"这属于 A5"，候选里也**没有** A5 ⇒ 用户要的跨维度转发无从发生。
+			 * 本函数把「归属判定命中的维度」变成 `{id, name, level:"dimension", dimKey, score}`
+			 * 形态的候选，交给 `scoreNodes()`（它已支持维度节点：带 `score` 即**尊重**归属分）。
+			 *
+			 * ── 三条规则（逐条对应 19 号文 N2 的判据 1/2/4）────────────────────
+			 *   ① 命中**当前维度** ⇒ 候选 id = **当前节点** ⇒ `suggestDestination()` 判 `local`
+			 *      （就地处理，**零跨会话投递**）
+			 *   ② 命中**其他维度**、且该维度**已有分支会话** ⇒ 候选 id = 该分支**节点 id**
+			 *      ⇒ 判 `transfer`（目标由 `scopeKeyOf` 解析成该分支会话，**不另建**）
+			 *   ③ 命中其他维度但**该维度还没有分支会话** ⇒ **不进候选** ⇒ 候选集退化成既有形态
+			 *      ⇒ 自然落到 `create`（"由总监新建对话并初始化其总监节点"，**保留既有语义**）
+			 *
+			 * ⚠️ 为什么本函数**不**建会话：它是**纯函数**（无 store / 无 DOM / 无时钟）。
+			 *    建会话是副作用，属接线层的职责（`confirmRoute` 之后）。
+			 * ⚠️ `branchOf` 由调用方从**分流索引**（`dsh.director.split`，冻结键）反查 ⇒
+			 *    本模块不读 localStorage ⇒ 离线可单测（`test-routing-local.mjs` RL-2/3/4）。
+			 *
+			 * @param {{dims?:Array,attribution?:object}} plan `plan()` 的返回值（`plan.attribution` 带分数与理由）
+			 * @param {{currentNodeId?:string,currentDim?:string,branchOf?:Object}} [ctx]
+			 * @returns {Array<{id:string,name:string,level:string,dimKey:string,score:number,reason:string}>}
+			 */
+			function dimensionCandidates(plan, ctx = {}) {
+				const p = plan || {};
+				const c = ctx || {};
+				const list = Array.isArray(p.dims) ? p.dims : [];
+				const ad = (p.attribution && Array.isArray(p.attribution.dims)) ? p.attribution.dims : [];
+				const scored = {};
+				for (const a of ad) { if (a && a.key) scored[String(a.key)] = a; }
+				const curId = c.currentNodeId ? String(c.currentNodeId) : "";
+				const curDim = c.currentDim ? String(c.currentDim) : "";
+				const branchOf = (c.branchOf && typeof c.branchOf === "object") ? c.branchOf : {};
+				const out = [];
+				for (const d of list) {
+					if (!d || !d.key) continue;
+					const key = String(d.key);
+					const label = String(d.label || key);
+					const a = scored[key] || null;
+					/* 🔴 归属分缺省时给**中性 1**、不给 0：`scoreNodes()` 只认 `> 0` 的归属分
+					 *   （`n.score > 0` 才走"尊重归属"分支）⇒ 给 0 会让该维度**静默退出候选**。
+					 *   显式 `only` 路径下 `plan.attribution` 为 `null`，此处即走该兜底。 */
+					const score = (a && Number(a.score) > 0) ? Number(a.score) : 1;
+					const why = (a && a.reason) ? String(a.reason) : "归属判定命中该维度";
+					if (curDim && key === curDim) {
+						if (!curId) continue;
+						out.push({ id: curId, name: label, level: "dimension", dimKey: key, score: score, reason: "命中当前维度（" + why + "）" });
+						continue;
+					}
+					const b = branchOf[key];
+					if (!b || !b.nodeId) continue;
+					out.push({ id: String(b.nodeId), name: label, level: "dimension", dimKey: key, score: score, reason: "命中该维度（" + why + "）" });
+				}
+				return out;
+			}
+			
+			/**
 			 * 由候选分决定"建议去向"
 			 * 规则（可解释，非黑箱）：
+			 *   - 🔴 **维度节点优先**（N2）：命中 `level==="dimension"` 且 `nodeId === ctx.currentNodeId`
+			 *     ⇒ `local`（就地处理，**不投递**）；命中**其他**维度 ⇒ `transfer`（交该维度分支会话）
 			 *   - 有高分会话候选（≥3）→ 直调（产出型任务直接投给执行对话）
 			 *   - 有中分项目候选  → 转派（交给该层级总监继续治理）
 			 *   - 无候选          → 新建
+			 * @param {Array} candidates `scoreNodes()` 的输出
+			 * @param {{currentNodeId?:string}} [ctx] 当前所在节点（**可选** ⇒ 不传时行为与收敛前**逐字相同**）
 			 */
-			function suggestDestination(candidates) {
+			function suggestDestination(candidates, ctx) {
 				const top = (candidates || [])[0];
+				const cur = ctx && ctx.currentNodeId ? String(ctx.currentNodeId) : "";
 				if (!top) return { destination: DESTINATION.CREATE, confidence: 0.5, reason: "无匹配节点 → 由总监新建对话并初始化其总监" };
+				if (top.level === "dimension") {
+					if (cur && String(top.nodeId) === cur) {
+						return {
+							destination: DESTINATION.LOCAL, confidence: 0.9,
+							reason: "命中**当前维度**「" + top.name + "」⇒ 就地处理（不跨对话投递）",
+							dimKey: top.dimKey || ""
+						};
+					}
+					return {
+						destination: DESTINATION.TRANSFER, confidence: Math.min(0.9, 0.5 + top.score / 20),
+						reason: "命中**其他维度**「" + top.name + "」（" + top.reason + "）⇒ 转给该维度分支",
+						dimKey: top.dimKey || ""
+					};
+				}
 				if (top.level === "session" && top.score >= 3) return { destination: DESTINATION.DIRECT, confidence: Math.min(0.95, 0.5 + top.score / 20), reason: "命中会话「" + top.name + "」（" + top.reason + "）→ 直接调用该对话" };
 				if (top.level === "project") return { destination: DESTINATION.TRANSFER, confidence: Math.min(0.9, 0.45 + top.score / 20), reason: "命中项目/文件夹「" + top.name + "」→ 转派给该层级总监" };
 				return { destination: DESTINATION.DIRECT, confidence: 0.6, reason: "命中「" + top.name + "」→ 直接调用对应对话" };
@@ -8421,15 +9427,22 @@ window.__ModuleLoader__.load({
 				// STEP 1
 				const intent = classifyIntent(text);
 				// STEP 2（当前层级节点加权，体现"就近路由"）
+				/* 🔴 19 号文 N2：**维度节点不做「就近」加权**。
+				 *   实测量级冲突：归属分是 0.2~0.9，而这里的 `+1` 会把「当前维度」从 0.2 抬到 1.2，
+				 *   直接压过「内容真正属于的维度」的 0.9 ⇒ **内容归属被位置覆盖**，判据 2 必错。
+				 *   语义上正确的优先级：**内容属于谁 > 我现在在哪** —— 后者只是"还没判出归属时"的兜底。 */
 				const candidates = scoreNodes(text, nodes).map((c) => ({
 					...c,
-					score: c.nodeId === ctx.currentNodeId ? Math.round((c.score + 1) * 100) / 100 : c.score,
-					reason: c.nodeId === ctx.currentNodeId ? (c.reason + "；当前层级" ) : c.reason
+					score: (c.nodeId === ctx.currentNodeId && c.level !== "dimension") ? Math.round((c.score + 1) * 100) / 100 : c.score,
+					reason: (c.nodeId === ctx.currentNodeId && c.level !== "dimension") ? (c.reason + "；当前层级") : c.reason
 				})).sort((a, b) => b.score - a.score);
 				// STEP 3
 				const subtasks = splitTasks(text);
 				// STEP 4
-				const decision = suggestDestination(candidates);
+				/* 🔴 19 号文 N2：把 `ctx` 透进去 —— 维度节点的 `local`/`transfer` 判定
+				 *   **必须**知道"我现在在哪个节点"（无 ctx 时维度候选一律判 `transfer`，
+				 *   那会让"在当前维度就地处理"永远退化成"投出去"）。 */
+				const decision = suggestDestination(candidates, ctx);
 				// 步骤轨迹（供 UI 逐步展示）
 				const steps = [
 					{ n: 1, key: "intent", title: "意图理解", detail: intent.kind + "（置信 " + intent.confidence.toFixed(2) + "）", done: true },
@@ -8583,7 +9596,7 @@ window.__ModuleLoader__.load({
 				if (typeof window === "undefined") return null;
 				const api = {
 					INTENT, DESTINATION, DESTINATION_LABEL, REVIEW_DIMS,
-					tokenize, classifyIntent, scoreNodes, splitTasks, suggestDestination,
+					tokenize, classifyIntent, scoreNodes, splitTasks, suggestDestination, dimensionCandidates,
 					route, confirmRoute, review6, reviewAndSave,
 					listRouteHistory
 				};
@@ -8599,6 +9612,7 @@ window.__ModuleLoader__.load({
 			exports.splitTasks = splitTasks;
 			exports.DESTINATION = DESTINATION;
 			exports.DESTINATION_LABEL = DESTINATION_LABEL;
+			exports.dimensionCandidates = dimensionCandidates;
 			exports.suggestDestination = suggestDestination;
 			exports.route = route;
 			exports.confirmRoute = confirmRoute;
@@ -8607,6 +9621,1495 @@ window.__ModuleLoader__.load({
 			exports.review6 = review6;
 			exports.reviewAndSave = reviewAndSave;
 			exports.installRoutingApi = installRoutingApi;
+		};
+
+		// ── logic/attribution.js ──
+		__defs["logic/attribution.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：归属判定（19 号文 §3.3 / N1 · **纯函数**）
+			 * 引用：19 号文 §3.3
+			 * 上游：components/DirectorPage.js, logic/split-dimensions.js
+			 * 下游：logic/split-dimensions.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/attribution.js — 归属判定（19 号文 §3.3 / N1 · **纯函数**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 它治的是什么（用户原话，逐字）
+			 * ──────────────────────────────────────────────────────────────────
+			 *   「补充 A3 剧情第三章支线」⇒ 总监仍按 A1–A8 **全 8 维**建/派。
+			 *
+			 * 🔴 根因（源码逐行，不是推测）：
+			 *   `logic/split-dimensions.js#plan()` 里
+			 *     `const pool = novel ? SPLIT_DIMENSIONS : GENERIC_DIMENSIONS; let dims = pool.slice();`
+			 *   ⇒ **`o.only` 未传时恒为全量**；全仓**无**"按内容选维度"的函数。
+			 *
+			 * ── 🔴 两条不可逾越的纪律 ──────────────────────────────────────────
+			 *   ① **词表必须从 `SPLIT_DIMENSIONS` 派生**（`label` + `files` + `brief`），
+			 *      **禁止另立一份词表** —— 两份词表必漂移，且漂移是**静默**的
+			 *      （维度改了名，词表还在按旧名匹配 ⇒ 归属静默失效，谁也不报错）。
+			 *   ② **纯函数**：无 DOM、无 store、无时钟、不改入参 ⇒ 同输入必同输出。
+			 *      本模块是 UI（总监页读数）与闸门（`test-attribution.mjs` / `verify-*.mjs`）
+			 *      共用的**同一份判据**；一旦它有副作用，两边就各测各的，"全绿"不再有意义。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 判定规则（可解释、可测、非黑箱 —— 19 号文 §3.3 逐条落地）
+			 * ──────────────────────────────────────────────────────────────────
+			 *   1. **前置**：先过 `noiseReasonOf()`；命中 ⇒ `kind="noise"`、`dims=[]`，
+			 *      **不建任何分支**（保留 `plan()` 第 23 批的既有行为）。
+			 *   2. **词表派生**：见 `deriveDimensionTerms()`。
+			 *   3. **打分**：命中词数 × 权重；**信号分三级**（label > 目录 > 职责词）。
+			 *      🔴 分级是必须的，不是优化：`prose.files` 里含 `04-人物档案/`
+			 *      （**读**别人的目录），若不分级，「补充人物档案」会同时命中 `chars` 与 `prose`
+			 *      ⇒ 多派一条给正文分支。分级后 `chars` 靠 `label` 胜出，`prose` 出局。
+			 *   4. **多维度**：允许返回多个（用户一句话可含"世界观 + 剧情"）；
+			 *      **不得**因为"保险"而返回全部 8 维（那正是本条需求要治的病）。
+			 *   5. **显式全量**：仅当文本含全量信号**且**确为小说场景 ⇒ `extent="full"` 返回 8 维。
+			 *      🔴 反例（19 号文 N1 反例，逐字）：判据若写成"含『全』字" ⇒
+			 *      「全局变量改名」会被误判 full ⇒ **必须用词组**，且**加负对照**。
+			 *   6. **歧义**：`ambiguous=true` 时**不得静默选一个** —— 上层（总监页）须走确认通道。
+			 *      触发条件 = 命中 ≥2 维 **且** 存在 `stage` 相邻对
+			 *      （工序边界模糊才是真歧义；`world`+`power` 同属 stage 1 = 用户明确要两维，不算）。
+			 *   7. **零命中**：小说场景 ⇒ 8 维（**保留既有行为**：用户说了小说、没说维度，
+			 *      按 A1–A8 分线是技能本身的定义）；非小说场景 ⇒ `kind="generic"`、通用三段。
+			 *      ⚠️ 两者都**不得**判噪声（"没说维度"≠"没有内容"）。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * @param {string} text 需求原文
+			 * @param {object} [opts]
+			 * @param {string[]} [opts.excludeKeys] 强制排除的维度 key（如"已确认归属其他分支"）
+			 * @param {string} [opts.currentDim] 当前所在维度 key（配合 `continuous`）
+			 * @param {boolean} [opts.continuous] 话题是否与上文连续（`runDirector` 步骤 2 的产物）
+			 *        🔴 `continuous === false` ⇒ **候选集排除 `currentDim`**
+			 *        —— 这是把"总监判了连续性却不用它"（19 号文 §5.1 决定性事实 1 / F10）接上的唯一落点。
+			 * @param {boolean} [opts.generic] 强制走通用维度（与 `plan()` 同语义）
+			 * @returns {{kind:"novel"|"generic"|"noise"|"none", dims:Array<{key,label,reason,score}>,
+			 *            reason:string, confidence:number, ambiguous:boolean, extent:"full"|"partial",
+			 *            signal:"label"|"dir"|"brief"|"full"|"none", excluded:string[]}}
+			 */
+			
+			const SD = __m("logic/split-dimensions.js");
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、显式全量信号（**词组**，不是单字）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 「我要求走全套流程」的显式词组。
+			 * 🔴 必须是**词组**：单字/单字组合会误伤（"全"字见 19 号文 N1 反例逐字）。
+			 * 🔴 只在**确为小说场景**时才生效（见 `planAttribution`）：否则「端到端测试」这类
+			 *    通用说法会命中 `端到端` ⇒ 在一个非小说需求上返回 8 个小说维度。
+			 */
+			const FULL_SIGNALS = Object.freeze([
+				"全流程", "整个流程", "整套流程", "全量", "全部维度", "所有维度", "全维度",
+				"八个维度", "8个维度", "8 个维度", "八条线", "从设定到正文", "从世界观到正文"
+			]);
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、词表派生（**唯一来源 = SPLIT_DIMENSIONS**）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 去掉 `A1 ` 这类工序前缀（label 形如 `A1 世界观` ⇒ `世界观`） */
+			const LABEL_PREFIX_RE = /^[A-Za-z]{1,3}\d+\s*/;
+			/** 目录名去掉 `01-` / `08_` 这类排序前缀 */
+			const DIR_PREFIX_RE = /^\d+[-_]/;
+			/** 中文/英文标点清洗（brief 切出来的段可能带尾巴括号） */
+			const EDGE_PUNCT_RE = /^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu;
+			
+			/**
+			 * 从维度定义派生判定词表（纯函数）。
+			 *
+			 * 🔴 派生源与理由（**每一路都有它不可替代的作用**，删任一路都会掉命中率）：
+			 *   · `label`（`A1 世界观` → `世界观`）—— 用户最常说这个词，**最强信号**；
+			 *   · `files` 的**目录名** —— 用户会用目录名指代（"改 05-正文 里的东西"）；
+			 *     ⚠️ `files` 是"该维度**读**哪些目录 + **写**哪个目录"，因此**下游维度会带上游的目录**
+			 *     （`prose.files` 含 `04-人物档案/`）⇒ 目录命中**必须弱于 label 命中**（见文件头规则 3）；
+			 *   · `brief` 的分句（按 `/`、`、`、`，` 切）—— 覆盖"润色 / 关系网 / 支线"这类
+			 *     **只有职责描述里才有**的说法（用户就是照着技能表说话的）；
+			 *     ⚠️ 超过 12 字的整句**丢弃**（那不是"词"，用户不会原样念一句话）。
+			 *
+			 * @param {Array} dims 维度表（默认 `SPLIT_DIMENSIONS`）
+			 * @returns {Array<{key:string,label:string,stage:number,labelTerm:string,dirTerms:string[],briefTerms:string[]}>}
+			 */
+			function deriveDimensionTerms(dims) {
+				const list = Array.isArray(dims) && dims.length ? dims : SD.SPLIT_DIMENSIONS;
+				const out = [];
+				for (let i = 0; i < list.length; i++) {
+					const d = list[i] && typeof list[i] === "object" ? list[i] : {};
+					const label = String(d.label == null ? "" : d.label);
+					const labelTerm = label.replace(LABEL_PREFIX_RE, "").trim();
+					const files = Array.isArray(d.files) ? d.files : [];
+					const dirTerms = [];
+					for (let j = 0; j < files.length; j++) {
+						const seg = String(files[j] == null ? "" : files[j]).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+						const t = seg.replace(DIR_PREFIX_RE, "").replace(/^_+/, "").trim();
+						if (t.length >= 2 && dirTerms.indexOf(t) < 0) dirTerms.push(t);
+					}
+					/* 🔴 `ownDir` = **files 的末项**（= 该维度的**产出**目录；技能约定"读前面的、写最后一个"）。
+					 * 它必须与 `dirTerms` 分开记，因为两件事完全不同：
+					 *   · 命中**别人的读目录** ⇒ 理应被分级压掉（`prose` 要读 `04-人物档案/`，
+					 *     否则「补充人物档案」会连正文分支一起派）；
+					 *   · 命中**自己的产出目录** ⇒ 用户**真的在说这个维度**（见 `ambiguous` 判据）。
+					 * 第一版把两者混为一谈 ⇒ `AT-9c/9d` 抓出「世界观和力量体系一起改」被误判歧义
+					 * （`plot` 因读 `01-世界观/` 而命中、被压 ⇒ 触发歧义）。 */
+					const lastSeg = files.length
+						? String(files[files.length - 1] == null ? "" : files[files.length - 1])
+							.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || ""
+						: "";
+					const ownDir = lastSeg.replace(DIR_PREFIX_RE, "").replace(/^_+/, "").trim();
+					const briefTerms = [];
+					const parts = String(d.brief == null ? "" : d.brief).split(/[\/、，,；;·|]/);
+					for (let j = 0; j < parts.length; j++) {
+						const t = String(parts[j] == null ? "" : parts[j]).replace(EDGE_PUNCT_RE, "").trim();
+						if (t.length >= 2 && t.length <= 12 && briefTerms.indexOf(t) < 0) briefTerms.push(t);
+					}
+					out.push({
+						key: String(d.key == null ? "" : d.key),
+						label: label,
+						stage: Number(d.stage) || 0,
+						labelTerm: labelTerm,
+						dirTerms: dirTerms,
+						ownDir: ownDir,
+						briefTerms: briefTerms
+					});
+				}
+				return out;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、打分与分级
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 三级信号的权重（label > dir > brief —— 分量级，不是微调） */
+			const TERM_WEIGHT = Object.freeze({ label: 3, dir: 2.5, brief: 1 });
+			
+			/** 单维度打分（纯函数） */
+			function scoreOf(low, t) {
+				let score = 0;
+				let labelHit = 0;
+				let dirHit = 0;
+				let ownHit = 0;
+				let briefHit = 0;
+				const reasons = [];
+				if (t.labelTerm.length >= 2 && low.indexOf(t.labelTerm.toLowerCase()) >= 0) {
+					labelHit += 1; score += TERM_WEIGHT.label; reasons.push("标签「" + t.labelTerm + "」");
+				}
+				for (let i = 0; i < t.dirTerms.length; i++) {
+					if (low.indexOf(t.dirTerms[i].toLowerCase()) >= 0) {
+						dirHit += 1; score += TERM_WEIGHT.dir; reasons.push("目录「" + t.dirTerms[i] + "」");
+						/* 命中**自己的产出目录** ⇒ 单独记（它是"用户真的在说这个维度"的证据） */
+						if (t.ownDir && t.dirTerms[i] === t.ownDir) ownHit += 1;
+					}
+				}
+				for (let i = 0; i < t.briefTerms.length; i++) {
+					if (low.indexOf(t.briefTerms[i].toLowerCase()) >= 0) {
+						briefHit += 1; score += TERM_WEIGHT.brief; reasons.push("职责「" + t.briefTerms[i] + "」");
+					}
+				}
+				return {
+					score: Math.round(score * 100) / 100,
+					labelHit: labelHit, dirHit: dirHit, ownHit: ownHit, briefHit: briefHit, reasons: reasons
+				};
+			}
+			
+			/** 置信度：0.5 起步（"命中"本身已是一个信号）+ 分数加成；多维度略降（选项多了更难确定） */
+			function confidenceOf(signal, topScore, n) {
+				if (signal === "none") return 0.35;
+				if (signal === "full") return 0.9;
+				const base = 0.5 + Math.min(0.45, topScore / 10);
+				return Math.round(Math.min(0.95, n >= 2 ? base - 0.05 : base) * 100) / 100;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、主入口
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 归属判定（纯函数，见文件头契约）。
+			 * @param {string} text
+			 * @param {object} [opts]
+			 * @returns {object}
+			 */
+			function planAttribution(text, opts) {
+				const o = opts && typeof opts === "object" ? opts : {};
+				const src = String(text == null ? "" : text).trim();
+				const excluded = [];
+			
+				/* ── 规则 1：空 / 噪声 ⇒ 什么都不建（保留既有行为） ────────────── */
+				if (!src) {
+					return done("none", [], "需求文本为空 ⇒ 无归属", 0, false, "partial", "none", excluded);
+				}
+				const nr = SD.noiseReasonOf(src);
+				if (nr) {
+					return done("noise", [], "未识别到可执行需求（" + nr + "）⇒ 不建任何分支", 0.95, false, "partial", "none", excluded);
+				}
+			
+				const novel = o.generic ? false : SD.isNovelIntent(src);
+				const pool = novel ? SD.SPLIT_DIMENSIONS : SD.GENERIC_DIMENSIONS;
+			
+				/* ── 规则 7（前半）：非小说场景 ⇒ 通用三段（不做维度词表匹配） ────
+				 * 🔴 为什么非小说**不**做词匹配：通用维度只有 `方案/执行/验证`，
+				 *    拿它们去匹配任意文本必然零命中或误命中；而"通用任务"本身的三段分法
+				 *    就是既有行为（第 16 批定的），保留它才不会让老判据变红。 */
+				if (!novel) {
+					const dims = SD.GENERIC_DIMENSIONS.map((d) => ({
+						key: d.key, label: d.label, score: 0, reason: "通用场景 ⇒ 按通用三段分线"
+					}));
+					return done("generic", dims, "非小说场景 ⇒ 按通用三段分线（方案 / 执行 / 验证）",
+						confidenceOf("none", 0, dims.length), false, "partial", "none", excluded);
+				}
+			
+				/* ── 规则 5：显式全量（仅小说场景；词组匹配，见 FULL_SIGNALS 注释） ── */
+				const low = src.toLowerCase();
+				for (let i = 0; i < FULL_SIGNALS.length; i++) {
+					if (low.indexOf(String(FULL_SIGNALS[i]).toLowerCase()) >= 0) {
+						const dims = SD.SPLIT_DIMENSIONS.map((d) => ({
+							key: d.key, label: d.label, score: 0,
+							reason: "显式全量信号「" + FULL_SIGNALS[i] + "」⇒ 全套 A1–A8"
+						}));
+						return done("novel", dims, "命中显式全量信号「" + FULL_SIGNALS[i] + "」⇒ 走全套 A1–A8",
+							confidenceOf("full", 0, dims.length), false, "full", "full", excluded);
+					}
+				}
+			
+				/* ── 规则 2/3/4：词表打分 + 信号分级 ─────────────────────────── */
+				const terms = deriveDimensionTerms(pool);
+				const scored = [];
+				for (let i = 0; i < terms.length; i++) {
+					const s = scoreOf(low, terms[i]);
+					if (s.score <= 0) continue;
+					scored.push({
+						key: terms[i].key, label: terms[i].label, stage: terms[i].stage,
+						score: s.score, reason: s.reasons.join("；"),
+						labelHit: s.labelHit, dirHit: s.dirHit, ownHit: s.ownHit, briefHit: s.briefHit
+					});
+				}
+			
+				const byLabel = scored.filter((x) => x.labelHit > 0);
+				const byDir = scored.filter((x) => x.labelHit === 0 && x.dirHit > 0);
+				const byBrief = scored.filter((x) => x.labelHit === 0 && x.dirHit === 0 && x.briefHit > 0);
+				const signal = byLabel.length ? "label" : (byDir.length ? "dir" : (byBrief.length ? "brief" : "none"));
+				let picked = byLabel.length ? byLabel : (byDir.length ? byDir : byBrief);
+			
+				/* ── 规则 7（后半）：零命中 + 小说场景 ⇒ 8 维（保留既有行为） ────
+				 * 🔴 这是**保守**选择：用户说了"小说"但没说哪个维度 ⇒ 按技能 A1–A8 分线；
+				 *    绝不判噪声（"没说维度" ≠ "没有内容"），也不降到 3 维（那会丢工序）。 */
+				if (!picked.length) {
+					const dims = SD.SPLIT_DIMENSIONS.map((d) => ({
+						key: d.key, label: d.label, score: 0,
+						reason: "仅命中小说场景、未指明维度 ⇒ 按 A1–A8 分线（既有行为，保守不误杀）"
+					}));
+					return done("novel", dims, "命中小说场景但未指明维度 ⇒ 按 A1–A8 全量分线（保守：宁可多派一条，也不漏掉用户没说出口的维度）",
+						confidenceOf("none", 0, dims.length), false, "partial", "none", excluded);
+				}
+			
+				/* ── 规则 6 的输入之一（19 号文 N9 / F10）：不连续 ⇒ 排除当前维度 ──
+				 * 说明：这一步在**分级之后**做，而不是在打分时做 —— 否则"命中当前维度"这条
+				 * 事实会在排序前就消失，`excluded` 也就无从如实上报（纪律 19：降级可以，无声不行）。 */
+				const ex = new Set();
+				if (Array.isArray(o.excludeKeys)) {
+					for (let i = 0; i < o.excludeKeys.length; i++) ex.add(String(o.excludeKeys[i]));
+				}
+				if (o.continuous === false && o.currentDim) ex.add(String(o.currentDim));
+				if (ex.size) {
+					const kept = [];
+					for (let i = 0; i < picked.length; i++) {
+						if (ex.has(picked[i].key)) { excluded.push(picked[i].key); continue; }
+						kept.push(picked[i]);
+					}
+					picked = kept;
+					if (!picked.length) {
+						return done("none", [],
+							"命中的维度只有当前维度（" + excluded.join("、") + "），且判定话题不连续 ⇒ 无归属，不派发",
+							0, false, "partial", signal, excluded);
+					}
+				}
+			
+				/* ── 排序：分数降序，同分按工序 stage 升序（保证同输入必同输出）── */
+				picked.sort((a, b) => (b.score - a.score) || (a.stage - b.stage));
+			
+				/* ── 规则 6：歧义 = **有候选被信号分级压制，且它与入选者工序相邻** ──────
+				 * 🔴 第一版写法是"入选 ≥2 且存在相邻 stage" —— 被 `AT-9a` 抓出**设计错误**：
+				 *    用户明确列举两个维度时（「世界观和力量体系一起改」「审查和蒸馏都要」）
+				 *    两个都会入选 ⇒ 用户已经说清楚了 ⇒ 再标歧义只会让他多点一次确认。
+				 *    真正的歧义是另一件事：**某个维度也命中了，却被分级规则压掉** ——
+				 *    此时"用户到底要哪一个"是**规则替他做的决定**，而相邻工序（上游 ↔ 下游）
+				 *    尤其危险：「正文润色」里入选的是 `prose`（标签「正文」），被压掉的 `polish`
+				 *    恰恰命中「润色」这个**动作** ⇒ 用户很可能要的就是后者。 */
+				const pickedKeys = new Set();
+				for (let i = 0; i < picked.length; i++) pickedKeys.add(picked[i].key);
+				const dropped = scored.filter((x) => !pickedKeys.has(x.key));
+				/* 🔴 被压候选必须分两类（这是 `AT-9c/9d` 抓出的**第二个**设计错误）：
+				 *   · **仅靠"别人的读目录"命中** ⇒ 分级压得对，**不算歧义**
+				 *     （`plot` 因要读 `01-世界观/` 而在「世界观和力量体系一起改」里命中 —— 压掉它是对的）；
+				 *   · **命中自己的产出目录 / 自己的职责词** ⇒ 用户**可能在说它**
+				 *     （「正文和风格语料都要改」里被压的 `polish`，命中的正是它的产出目录 `07-风格语料/`）。 */
+				const risky = dropped.filter((x) => x.ownHit > 0 || x.briefHit > 0);
+				let crossStage = false;
+				for (let i = 0; i < risky.length && !crossStage; i++) {
+					for (let j = 0; j < picked.length; j++) {
+						if (Math.abs((risky[i].stage || 0) - (picked[j].stage || 0)) === 1) { crossStage = true; break; }
+					}
+				}
+				const ambiguous = risky.length > 0 && picked.length > 0 && crossStage;
+			
+				const dims = picked.map((x) => ({ key: x.key, label: x.label, score: x.score, reason: x.reason }));
+				const why = dims.map((d) => d.label + "（" + d.reason + "）").join("；");
+				const droppedNote = ambiguous
+					? " ⚠️ 另有相邻工序维度也被命中、但被规则压制：" + risky.map((d) => d.label).join("、")
+						+ " ⇒ 需用户确认（不得静默选一个）"
+					: "";
+				return done("novel", dims,
+					"命中小说场景 ⇒ 归属 " + dims.length + " 个维度：" + why + droppedNote,
+					confidenceOf(signal, dims[0].score, dims.length), ambiguous, "partial", signal, excluded);
+			}
+			
+			/** 统一出口（保证返回体形状恒定 —— 调用方无需做 undefined 防御） */
+			function done(kind, dims, reason, confidence, ambiguous, extent, signal, excluded) {
+				return {
+					kind: kind, dims: dims, reason: reason,
+					confidence: confidence, ambiguous: ambiguous, extent: extent, signal: signal,
+					excluded: (excluded || []).slice()
+				};
+			}
+			
+			/**
+			 * 归属判定的**一句话读数**（纯函数，供总监页常驻读数用 —— 19 号文 N8）。
+			 * 🔴 与判定同源：读数不是"另算一遍"，就是判定的输出 ⇒ 读数与判定不可能不一致。
+			 * @param {object} att `planAttribution()` 的返回
+			 * @returns {string}
+			 */
+			function attributionSummary(att) {
+				const a = att && typeof att === "object" ? att : {};
+				if (a.kind === "noise") return "归属：噪声 ⇒ 未建分支";
+				if (a.kind === "none") return "归属：无（" + String(a.reason || "") + "）";
+				if (!Array.isArray(a.dims) || !a.dims.length) return "归属：无";
+				const labels = a.dims.map((d) => d.label).join(" + ");
+				/* 🔴 措辞更正（N8 接线时发现）：这里原本写「**通道**」，而 N8 的常驻读数里
+				 *    "通道"指的是**路由通道**（`local` / `transfer`，见 `routing.js#DESTINATION`）。
+				 *    同一个词在一行读数里指两件事 ⇒ 用户必然读错（"通道局部"是什么？）。
+				 *    ⇒ 本字段改称「**范围**」（`extent`：局部 / 全量 / 待确认），
+				 *      "通道" 一词**只留给路由**。改的是文案，不是语义（`extent` 取值一字未动）。 */
+				return "归属 " + labels + " · 置信 " + Number(a.confidence || 0).toFixed(2)
+					+ " · 范围" + (a.ambiguous ? "待确认" : (a.extent === "full" ? "全量" : "局部"));
+			}
+			
+			exports.FULL_SIGNALS = FULL_SIGNALS;
+			exports.deriveDimensionTerms = deriveDimensionTerms;
+			exports.TERM_WEIGHT = TERM_WEIGHT;
+			exports.planAttribution = planAttribution;
+			exports.attributionSummary = attributionSummary;
+		};
+
+		// ── logic/split-dimensions.js ──
+		__defs["logic/split-dimensions.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：按维度拆线（**纯函数**：无 DOM、无 store、无副作用）
+			 * 引用：—
+			 * 上游：components/DirectorDialog.js, components/DirectorPage.js, logic/attribution.js, logic/director-dispatch.js
+			 * 下游：logic/attribution.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/split-dimensions.js — 按维度拆线（**纯函数**：无 DOM、无 store、无副作用）
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 需求来源（第 16 批用户原话）
+			 * ───────────────────────────────────────────────────────────────────
+			 *   「按照一个流程跑一遍 写小说吧,调用小说技能」
+			 *   「然后按照世界观剧情等应该自动分到不同的对话分支 然后思维导图应该能看出来」
+			 *
+			 * 🔴 关键判断：**不新造一套维度**。维度来自用户点名的小说技能
+			 *    `multi-agent-novel-brain` 的 **A1–A8 分工表**（该技能的核心就是
+			 *    "8 个智能体 + 各自的文件边界"，见其 SKILL.md「智能体分工与文件边界」）。
+			 *    用户说"世界观剧情等"里的"等"，正对应 A2/A4/A5/A6/A7/A8 —— 一个不落地对应过去，
+			 *    才是"自动分开"；只在插件里凭空列 3 个维度，等于把技能的边界模型丢了。
+			 *
+			 * 🔴 每条维度都带 **files（只读/可写目录）**：技能的关键约束是"每个智能体只读/只写
+			 *    自己的目录"。把这条边界**随简报一起投递**，分支里的智能体才不会越界去写别人的域
+			 *    （越界的后果是静默的：两个分支同时改世界观文件，谁也不报错）。
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 契约
+			 * ═══════════════════════════════════════════════════════════════════
+			 *   · `SPLIT_DIMENSIONS` 的 `key` 是**稳定标识**：进 `data-*` 与节点 id，改名即断血缘
+			 *   · `label` 是用户可见名（**分支名与导图标签**都用它开头 ⇒ 导图上一眼看出结构）
+			 *   · 纯函数：同输入必同输出（可离线单测；也是 UI 与闸门共用的**同一份判据**）
+			 */
+			
+			const ATTR = __m("logic/attribution.js");
+			
+			/* 🔴 19 号文 N1：上一行是归属判定的**唯一产品调用点**（在 `plan()` 内部）。
+			 * 依赖方向说明：attribution.js 反过来 import 本模块的 `SPLIT_DIMENSIONS` /
+			 * `GENERIC_DIMENSIONS` / `noiseReasonOf` / `isNovelIntent` ⇒ 二者**互为循环**。
+			 * ESM 下这是安全的，**前提是两边的模块顶层都不调用对方**（只在函数体内引用）。
+			 * ⚠️ 谁在顶层调用对方，谁就拿到 `undefined`（部分初始化）—— 这条必须保持。 */
+			
+			/**
+			 * 小说场景的八个维度（**逐条对应** `multi-agent-novel-brain` 的 A1–A8）。
+			 * `files` = 该维度**应当只读/只写**的目录（技能的文件边界，随简报投递）。
+			 * `stage` = 工序阶段，用于排序（先设定、后写正文、最后审校）。
+			 */
+			const SPLIT_DIMENSIONS = Object.freeze([
+				{ key: "world", label: "A1 世界观", stage: 1, files: ["01-世界观/"], brief: "搭建世界规则 / 地理 / 历史 / 势力" },
+				{ key: "power", label: "A2 力量体系", stage: 1, files: ["01-世界观/world-rules", "02-力量体系/"], brief: "设计修行 / 等级 / 技能 / 代价" },
+				{ key: "plot", label: "A3 剧情", stage: 2, files: ["01-世界观/", "02-力量体系/", "03-剧情架构/"], brief: "Hook / 分卷 / 章纲 / 支线" },
+				{ key: "chars", label: "A4 人物", stage: 2, files: ["01-世界观/factions", "03-剧情架构/arc-plan", "04-人物档案/"], brief: "角色心理学档案 / 关系网" },
+				{ key: "prose", label: "A5 正文", stage: 3, files: ["03-剧情架构/chapter-outline", "04-人物档案/", "05-正文/"], brief: "按章纲写正文，并保持与前文一致" },
+				{ key: "polish", label: "A6 打磨", stage: 4, files: ["05-正文/", "07-风格语料/"], brief: "润色 / 去 AI 味" },
+				{ key: "review", label: "A7 审查", stage: 4, files: ["03-剧情架构/", "04-人物档案/", "05-正文/", "08-审查/"], brief: "六关一致性审查（剧情 / 人物 / 设定 / 文风 / 推进 / 逻辑）" },
+				{ key: "distill", label: "A8 蒸馏", stage: 5, files: ["_memory/", "08-审查/"], brief: "跨对话记忆蒸馏（把各分支产出汇成一份可复用的记忆）" }
+			]);
+			
+			/** 小说意图关键词（命中任一 ⇒ 判为小说场景）。**全部小写比对**，调用方先归一化。 */
+			const NOVEL_HINTS = Object.freeze([
+				"小说", "世界观", "力量体系", "剧情", "章纲", "章节", "人物档案", "正文", "润色",
+				"novel", "chapter", "worldbuilding", "outline"
+			]);
+			
+			/** 通用场景的兜底维度（识别不到小说意图时**不硬套** A1–A8 —— 那会建出一堆空分支）。 */
+			const GENERIC_DIMENSIONS = Object.freeze([
+				{ key: "plan", label: "方案", stage: 1, files: [], brief: "把需求拆成可执行的方案" },
+				{ key: "build", label: "执行", stage: 2, files: [], brief: "按方案落地" },
+				{ key: "verify", label: "验证", stage: 3, files: [], brief: "验证产出是否达成目标" }
+			]);
+			
+			/* ══════════════════════════════════════════════════════════════════════
+			 * 🔴 第 23 批（第二十三轮真机驱动）：**总监要能分辨"无意义输入"**
+			 * ──────────────────────────────────────────────────────────────────────
+			 * 用户原话（逐字）：
+			 *   「然后可以发送一些无意义的东西，然后让总监去**分辨**，然后去整理整个项目」
+			 *
+			 * 真机实测的旧行为（`scripts/_probe-director-flow-r23.mjs`）：
+			 *   投「今天天气不错 哈哈哈哈」⇒ `kind=generic` · `made=3` · dims=`plan,build,verify`
+			 *   ⇒ **会话 +3、导图 +3 个空壳框、各投一份简报**。
+			 *   离线同一口径（`scripts/_probe-noise-r23.mjs`）：8 条噪声样本里 **7 条**会建分支。
+			 *
+			 * 这与第 19 批"一百多个会话"是**同型的污染** —— 用户看到的是导图上多出几个
+			 * 不知道干什么的框，而每个框后面都真的建了一条宿会话（宿主**没有删除契约**）。
+			 *
+			 * ── 判据设计原则：**保守** ──────────────────────────────────────────
+			 *   宁可漏拦（真需求被当成通用任务，代价 = 3 个分支），
+			 *   绝不误杀（真需求被拒，代价 = 用户以为插件坏了）。
+			 *   ⇒ 因此有**动作/意图动词**的输入**一律放行**，只在"确实没有可执行内容"时才拦。
+			 *   ⇒ 规则顺序是本函数最易写错的地方：**动词放行必须在长度类规则之前**
+			 *     （否则 1 个字的"写"会被"过短"误杀）。
+			 * ══════════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 动作/意图动词（命中任一 ⇒ **绝不判为噪声**）。
+			 * 中英文都要有：用户会用英文写需求（`build` / `fix` / `deploy`）。
+			 * 🔴 加词的标准：**它出现在真需求里的概率 >> 出现在噪声里的概率**。
+			 */
+			const ACTION_HINTS = Object.freeze([
+				"写", "做", "改", "建", "加", "删", "查", "看", "跑", "分", "派", "整理", "分析",
+				"实现", "开发", "设计", "优化", "修复", "测试", "帮", "需要", "生成", "输出",
+				"列出", "找", "读", "加载", "部署", "搭", "规划", "评估", "审查", "润色", "蒸馏",
+				"推进", "拆分", "梳理", "对比", "统计", "导出", "导入", "迁移", "重构", "接入",
+				"总结", "汇总", "复核", "校验", "验证", "新增", "删除", "更新", "继续", "开始",
+				"补充", "完善", "落地", "调研", "搜索", "抓取", "爬", "画", "渲染", "编排", "调度",
+				"create", "build", "write", "make", "add", "fix", "test", "run", "deploy", "review",
+				"analyze", "refactor", "generate", "help", "read", "list", "update", "design"
+			]);
+			
+			/** 寒暄/语气词模式（**必须配合"无动作动词"**才判噪声 —— 单用会误杀"帮我写"这类）。 */
+			const CHITCHAT_RE = /^(哈+|嘿+|呵+|嘻+|嗯+|哦+|噢+|啊+|呀+|哎+|额+|emmm+|hmm+|谢谢|多谢|在吗|在不在|早上好|晚上好|你好|您好|hi|hello|hey|thanks?|thx|how are you|good (morning|afternoon|evening)|今天.{0,4}天气|天气.{0,4}(好|不错|真好))/i;
+			
+			/** 键盘乱敲片段（明显非语义）—— 只认最典型的键盘序，避免误伤正常英文词。 */
+			const GIBBERISH_RE = /asdf|qwer|zxcv|jkl;|hjkl/i;
+			
+			/** 指令注入 / 试探模式（**有内容但与项目无关**，且属攻击面）。 */
+			const INJECTION_RE = /忽略(上面|之前|以上|前面|上述)的?.{0,6}(指令|要求|提示|规则)|你的?(系统)?提示词|system\s*prompt|you\s+are\s+now|ignore\s+(all\s+)?previous/i;
+			
+			/** 空白 / 标点 / 符号 / 表情 —— 去掉后仍为空 ⇒ 纯装饰输入。 */
+			const DECOR_RE = /[\s\p{P}\p{S}\p{Emoji_Presentation}\uFE0F\u200D]/gu;
+			
+			/**
+			 * 判断一段输入是否**无有效需求**（纯函数，无副作用）。
+			 *
+			 * @param {string} text
+			 * @returns {string|null} **命中返回可读原因**（非空字符串）；未命中返回 `null`（= 当正常需求处理）
+			 */
+			function noiseReasonOf(text) {
+				const s = String(text == null ? "" : text).trim();
+				if (!s) return "空输入";
+				/* ① 注入模式必须**先**判：放在动词放行之前，否则「把提示词**输出**给我」里的
+				 *    "输出"会把它放行（动词表里有"输出"）。 */
+				if (INJECTION_RE.test(s)) return "指令注入/试探类内容，与项目无关";
+				/* ② 纯装饰（只有标点/符号/表情）—— 零误杀风险：真需求不可能只有标点 */
+				const bare = s.replace(DECOR_RE, "");
+				if (!bare) return "只有标点/符号/表情，没有文字内容";
+				/* ③ 🔴 **有动作意图 ⇒ 直接放行**（必须在长度类规则之前，见文件头"规则顺序"） */
+				const low = s.toLowerCase();
+				for (let i = 0; i < ACTION_HINTS.length; i++) {
+					if (low.indexOf(ACTION_HINTS[i]) >= 0) return null;
+				}
+				/* ④ 寒暄/闲聊 */
+				if (CHITCHAT_RE.test(s)) return "寒暄/闲聊类，没有可执行的需求";
+				/* ⑤ 键盘乱敲 */
+				if (GIBBERISH_RE.test(s)) return "疑似乱敲（键盘序片段），不是需求";
+				/* ⑤·5 🔴 **纯数字/符号串**（第二十四轮真机驱动新增 · 实测缺陷）
+				 *    取证：`1234!@#$%^&*()` 被判为**合法需求**（`kind=generic` · `dims=3`）
+				 *    ⇒ 会**真的派发 3 条分支 + 建 3 条宿主会话**（宿主没有删除契约，同第 19 批的污染形态）。
+				 *    逃逸路径：规则 ② 只判「装饰去光后为空」，剩下的 `1234` 既无动作动词、也不寒暄、
+				 *    不是键盘序片段、去重后不短、长度也够 ⇒ 一路落到末尾 `return null`。
+				 *    🔴 判据只匹配「**去掉装饰后全是数字/小数点**」，**不匹配「含数字」** ——
+				 *    否则会误杀「帮我算一下 1234 + 5678」这类真需求（它们含动词，且本规则在其后）。
+				 *    反例校准：`SO12345`（含字母）· `帮我算 1+1`（含动词）· `3.14 和 2.71 谁大`（含中文）都不命中。 */
+				if (/^[\d.\s]+$/.test(bare)) return "只有数字/符号，没有文字内容";
+				/* ⑥ 重复字符（去重后极短）—— "哈哈哈哈" / "好好好" / "嗯嗯" */
+				const uniq = Array.from(new Set(bare.split(""))).join("");
+				if (uniq.length <= 2 && bare.length <= 10) return "只有重复的字，没有实际内容";
+				/* ⑦ 过短（1 个字符） */
+				if (bare.length <= 1) return "内容过短（" + bare.length + " 个字），无法构成需求";
+				return null;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════════
+			 * 🔴 第 23 批：**总监对语言的整理**（`organize`）
+			 * ──────────────────────────────────────────────────────────────────────
+			 * 用户原话：「回复包括**总监对语言的整理**，**对于文字的描述**…都是要有的」。
+			 *
+			 * 旧行为（真机取证）：`briefOf()` 的末行是 `需求原文：<原文>` —— 用户怎么打的就怎么投，
+			 *   **含噪声行、含重复、含空行**。8 个分支各自从一份乱七八糟的原文里猜意图。
+			 *
+			 * 🔴 **整理 ≠ 改写**（这是本函数最重要的一条纪律）：
+			 *   只做「按行分类 → 空白归一 → 去重复行 → 结构化」，**一个字都不许替换/增删语义**。
+			 *   改写需求 = 把用户的话变成 AI 的话，出了偏差**没人能追溯**（原文还在，但已不是判据）。
+			 *   ⇒ 输出里**必须同时保留 `raw`（原文）与 `clean`（整理后）**，且 `clean` 是 `raw` 的**子串级**重构。
+			 * ══════════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 整理需求文本（纯函数）。
+			 *
+			 * @param {string} text 需求原文
+			 * @returns {{raw:string, clean:string, lines:string[], noiseLines:Array<{text:string,why:string}>,
+			 *            droppedDup:number, name:string, intent:string, changed:boolean}}
+			 */
+			function organize(text) {
+				const raw = String(text == null ? "" : text);
+				const rawLines = raw.split(/\r?\n/);
+				const lines = [];
+				const noiseLines = [];
+				const seen = Object.create(null);
+				let droppedDup = 0;
+				for (let i = 0; i < rawLines.length; i++) {
+					/* 空白归一：**只动空白**（含全角空格），不动任何实义字符 */
+					const t = rawLines[i].replace(/[ \t\u3000]+/g, " ").trim();
+					if (!t) continue;                                   // 空行直接丢（不算噪声，也不计重复）
+					const why = noiseReasonOf(t);
+					if (why) { noiseLines.push({ text: t, why: why }); continue; }
+					if (seen[t]) { droppedDup++; continue; }
+					seen[t] = 1;
+					lines.push(t);
+				}
+				const clean = lines.join("\n");
+				const name = novelNameOf(text);
+				const nr = lines.length ? null : noiseReasonOf(raw.trim() || raw);
+				const intent = !lines.length
+					? (raw.trim() ? "noise" : "none")
+					: (isNovelIntent(clean) ? "novel" : "generic");
+				return {
+					raw: raw, clean: clean, lines: lines, noiseLines: noiseLines,
+					droppedDup: droppedDup, name: name, intent: intent,
+					changed: clean !== raw.trim(),
+					/* 整段都没内容时把原因也带上（调用方要能"如实说清为什么没整理出东西"） */
+					reason: (!lines.length && raw.trim()) ? String(nr || "没整理出可执行要点") : ""
+				};
+			}
+			
+			/**
+			 * 把 `organize()` 的结果渲染成**给分支/给用户看的一段话**（纯函数）。
+			 * 🔴 有噪声被剔除时**必须报数并给出原因**（纪律 19：降级可以，无声不行）——
+			 *    否则用户看到"总监没理我那句话"，而不知道是**被判成噪声剔掉了**。
+			 *
+			 * @param {object} org `organize()` 的返回
+			 * @param {number} [maxWhy=3] 最多列几条剔除原因（避免长文淹没正文）
+			 * @returns {string}
+			 */
+			function organizeSummary(org, maxWhy) {
+				const o = org || {};
+				const n = Number.isFinite(Number(maxWhy)) ? Number(maxWhy) : 3;
+				const out = [];
+				if (!o.lines || !o.lines.length) {
+					return "【需求整理】未整理出可执行要点 —— " + String(o.reason || "内容为空");
+				}
+				out.push("【需求整理】共 " + o.lines.length + " 条要点：");
+				for (let i = 0; i < o.lines.length; i++) out.push("  " + (i + 1) + ". " + o.lines[i]);
+				const notes = [];
+				if (o.noiseLines && o.noiseLines.length) {
+					const whys = [];
+					for (let i = 0; i < o.noiseLines.length && i < n; i++) whys.push(o.noiseLines[i].why);
+					notes.push("已剔除噪声 " + o.noiseLines.length + " 行（" + whys.join("；") + "）");
+				}
+				if (o.droppedDup) notes.push("已合并重复 " + o.droppedDup + " 行");
+				if (notes.length) out.push("· " + notes.join(" · "));
+				return out.join("\n");
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 🔴 19 号文 **N4**：把口语需求整理成「**AI 可执行规格**」
+			 *    —— 用户第 9 条原话：「去掉多余对人的解释，只要 AI 能看懂」。
+			 *
+			 *    `organize()` 产出的是**给人看的要点**（"需求整理 N 条"），下游 AI 还得二次解读。
+			 *    这里在**同一份去噪结果**上再分一层结构，输出下游可以直接照着做的字段：
+			 *      goal（要达成什么）/ scope（做什么）/ outOfScope（不做什么）
+			 *      / acceptance（怎么算做完）/ forbidden（明令禁止）/ refs（要用到的路径）
+			 *
+			 *    🔴 两条硬约束（判据要求）：
+			 *      ① `origin` **逐字保留原文**（整理不得改写语义 —— 与 `organize()` 同一条纪律）；
+			 *      ② 输出**不含对人类的敬语**（请您/建议您/希望…）—— 那些是给人的客套，
+			 *         对 AI 是噪声，且会让"这条需求到底要什么"变得模糊。
+			 *      ③ 没有内容的字段 ⇒ **空数组**，**不写「（未指定）」这类占位**
+			 *         （占位会挤占下游注意力，且让"没有"与"写了但为空"无法分辨）。
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 规格字段（顺序即渲染顺序；新增一类只加一行，**不改流程**） */
+			const SPEC_KEYS = Object.freeze(["goal", "scope", "outOfScope", "acceptance", "forbidden", "refs"]);
+			
+			/* 归类规则（**顺序即优先级**）：
+			 *   · 先判「禁止 / 排除」—— 它们是**负向**要求，含"不要/不得"等词，
+			 *     放在后面会被"验收"类词抢走（"不得低于"同时含"不得"与"低"）；
+			 *   · `refs` 只认**盘符路径 / 文件扩展名 / 「根在」**，**不认裸斜杠** ——
+			 *     中文里「世界观/力量体系」这类斜杠分隔极常见，认斜杠会把整句话误判成路径。 */
+			const SPEC_RULES = Object.freeze([
+				{ key: "forbidden", re: /(不要|别写|禁止|不许|不得|避免|严禁|不能写|无需)/ },
+				{ key: "outOfScope", re: /(不在范围|不包含|暂不|先不|本期不做|除外|另议|下次再)/ },
+				{ key: "acceptance", re: /(验收|必须|要求|要能|通过|检查|一致|达标|核对|至少)/ },
+				{ key: "refs", re: /([A-Za-z]:[\\/]|[\w.-]+\.(?:js|mjs|json|md|html|txt|png|wav|csv)\b|根在|项目根)/ },
+				{ key: "scope", re: null }
+			]);
+			
+			/* 对人类的敬语 —— 只删这些**客套短语本身**，不动任何实义字符。
+			 * 🔴 不用 `您|你` 单字：那会误伤「你方接口」「第 3 人称」这类实义内容。 */
+			const POLITE_RE = /(请您|请帮忙|麻烦您|麻烦你|建议您|希望你|希望您|烦请|劳驾|如果方便的话|如果你方便的话)/g;
+			
+			/** 去掉客套短语（纯字符串处理，**不改语义**） */
+			function stripPolite(s) {
+				return String(s == null ? "" : s)
+					.replace(POLITE_RE, "")
+					.replace(/^[，,、。；;：:\s]+/, "")
+					.trim();
+			}
+			
+			/** 按规则表给一行归类；都不中 ⇒ `scope`（兜底，故规则表最后一项 `re: null`） */
+			function classifySpecLine(line) {
+				for (let i = 0; i < SPEC_RULES.length; i++) {
+					const r = SPEC_RULES[i];
+					if (!r.re) return r.key;
+					if (r.re.test(line)) return r.key;
+				}
+				return "scope";
+			}
+			
+			/**
+			 * 把需求整理成 **AI 可执行规格**（纯函数）。
+			 *
+			 * @param {string} text 需求原文（口语/多行/带噪声都行）
+			 * @param {string} [dim] 可选：归属维度 key（写进 `dim`，便于下游知道这条规格属于哪条线）
+			 * @returns {{goal:string, scope:string[], outOfScope:string[], acceptance:string[],
+			 *            forbidden:string[], refs:string[], origin:string, dim:string,
+			 *            lines:number, noise:number, droppedDup:number, reason:string}}
+			 */
+			function organizeSpec(text, dim) {
+				const raw = String(text == null ? "" : text);
+				/* 🔴 复用 `organize()` 的去噪/去重（**单一真相源**）—— 不在这里重建一套清洗逻辑，
+				 *    否则"什么算噪声"会有两份定义，两边漂移时下游拿到的东西就不一致了。 */
+				const org = organize(raw);
+				const out = {
+					goal: "", scope: [], outOfScope: [], acceptance: [], forbidden: [], refs: [],
+					origin: raw, dim: dim ? String(dim) : "",
+					lines: 0, noise: (org.noiseLines || []).length, droppedDup: org.droppedDup || 0,
+					reason: ""
+				};
+				const lines = (org.lines || []).map(stripPolite).filter((s) => s !== "");
+				for (let i = 0; i < lines.length; i++) {
+					out[classifySpecLine(lines[i])].push(lines[i]);
+				}
+				out.lines = lines.length;
+				/* goal = 第一条**正向**要点（"要做什么"）；全被禁止/排除占满时退回首行（不编内容） */
+				const positive = [];
+				for (let i = 0; i < lines.length; i++) {
+					const k = classifySpecLine(lines[i]);
+					if (k !== "forbidden" && k !== "outOfScope") positive.push(lines[i]);
+				}
+				out.goal = positive.length ? positive[0] : (lines.length ? lines[0] : "");
+				/* 没内容时**如实说明原因**（纪律 19：降级可以，无声不行）；但**不写占位字段** */
+				if (!lines.length) out.reason = org.reason || (raw.trim() ? "没整理出可执行要点" : "内容为空");
+				return out;
+			}
+			
+			/** 中文书名号提取：《我的小说》 ⇒ "我的小说"；取不到返回空串（**不编名字**） */
+			function novelNameOf(text) {
+				const s = String(text == null ? "" : text);
+				const m = s.match(/《([^》]{1,40})》/);
+				return m ? m[1] : "";
+			}
+			
+			/** 是否小说意图（纯函数；空文本 ⇒ false，不许"默认当小说"） */
+			function isNovelIntent(text, extraHints) {
+				const s = String(text == null ? "" : text).toLowerCase();
+				if (!s.trim()) return false;
+				const hints = Array.isArray(extraHints) && extraHints.length ? extraHints : NOVEL_HINTS;
+				return hints.some((k) => s.indexOf(String(k).toLowerCase()) >= 0);
+			}
+			
+			/**
+			 * 分支名（纯函数）：**维度名在前** + 书名（有则带上）。
+			 * 为什么维度名必须在前：导图里节点按 `label` 排序阅读时，"A1/A2/A3…"这层结构
+			 * 一眼可见；把书名放前面（"《X》· A1 世界观"）会让八个节点的**共同前缀**占满可视区，
+			 * 反而看不出结构（这也是本项目"路由面只暴露前 29 字符"那条教训的同型问题）。
+			 */
+			function branchTitle(dim, novelName) {
+				const n = String(novelName == null ? "" : novelName).trim();
+				return "「" + String(dim && dim.label ? dim.label : "维度") + "」" + (n ? "《" + n + "》" : "");
+			}
+			
+			/**
+			 * 简报标题前缀（纯函数）—— **宿主会话标题的开头**。
+			 *
+			 * 🔴 为什么需要它（第 25 批实测 · 19 号文 U10/P9 的**真因**）：
+			 *   宿主把**首条消息的首行**当会话标题 ⇒ 实测宿主快照 `title` = `【A1 世界观】《灵能修仙》 —— …`，
+			 *   也就是 `briefOf()` 的 `head` 原样打头。而上一版拿 `branchTitle()` 去做"标题弱匹配"，
+			 *   它产出的是 `「A1 世界观」《灵能修仙》`（**角括号**）—— 连字形都不同
+			 *   ⇒ 全等匹配**恒 0 命中**，冷启动每次仍然新建 8 条（`reused:0 / created:8`）。
+			 *   这正是本项目纪律 27「看起来相等 ≠ 同源」的同型事故：**匹配串与真值串必须同一个来源**。
+			 *
+			 *   ⇒ 本函数是 head 与匹配判据的**唯一真相源**：`briefOf()` 用它在最前面拼 head，
+			 *     `director-reuse.js` 用它做前缀判据 ⇒ 改一处两处同时变（不许各写一份）。
+			 *   ⇒ 长度也稳定（≈ `【标签】《书名》`，约 20–30 字）⇒ 宿主标题被截断也**截不到前缀部分**。
+			 *
+			 * @param {{label?:string}} dim 维度
+			 * @param {string} novelName 作品名（可为空 ⇒ 只有 `【标签】`）
+			 * @returns {string} 形如 `【A1 世界观】《灵能修仙》`
+			 */
+			function briefTitlePrefix(dim, novelName) {
+				const n = String(novelName == null ? "" : novelName).trim();
+				return "【" + String((dim && dim.label) || "") + "】" + (n ? "《" + n + "》" : "");
+			}
+			
+			/**
+			 * 生成分流计划（纯函数）。
+			 * @param {string} text 需求原文
+			 * @param {{only?:string[], all?:boolean, max?:number, generic?:boolean}} [opts]
+			 *   `only` 只要这几条维度（key 数组）；`max` 上限（防一次建太多）；
+			 *   `generic: true` 强制走通用维度；`generic: false` **严格模式**（未命中小说意图 ⇒ `none`，不兜底）
+			 * @returns {{kind:"novel"|"generic"|"none"|"noise", dims:Array, name:string, reason:string}}
+			 */
+			function plan(text, opts = {}) {
+				const o = opts || {};
+				const src = String(text == null ? "" : text).trim();
+				const name = novelNameOf(text);
+				/* 🔴 空需求 ⇒ **不建任何分支**：不猜、也不给"默认三条"。
+				 *    建出来的是**空壳分支**，而且会让导图变脏 —— 用户看到多出 3 个不知道干什么的节点，
+				 *    比"什么都没发生"更糟（纪律 19 的反面：宁可如实说"没识别到"，也不无声造垃圾）。 */
+				if (!src) return { kind: "none", dims: [], name, reason: "需求文本为空 ⇒ 不自动建分支" };
+				const novel = o.generic ? false : isNovelIntent(src);
+				/* 🔴 第 23 批：**严格模式**与**噪声**都必须不建分支，差别只在 `kind` 与 `reason` ——
+				 *    严格模式是"调用方要求严格"，噪声是"输入本身没有可执行内容"。
+				 *    两者若共用 `none`，用户/闸门就分不清「插件没识别到」与「你打的字没内容」。 */
+				if (!novel) {
+					if (o.generic === false) {
+						return { kind: "none", dims: [], name, reason: "既不是小说意图，也未指定通用维度 —— 不自动建分支" };
+					}
+					/* 🔴 第 23 批新增：**噪声短路**（第二十三轮真机驱动）。
+					 *    旧逻辑：未命中小说意图 ⇒ **无条件**走通用兜底 ⇒ 投「今天天气不错 哈哈哈哈」
+					 *    会建出 `plan/build/verify` **3 个空壳分支**（真机实测：会话 +3、导图 +3 框、各投 1 份简报）。
+					 *    与第 19 批"一百多个会话"同型的污染。⇒ 判为噪声时**一条都不建**，并把原因报出去。 */
+					const nr = noiseReasonOf(src);
+					if (nr) {
+						return {
+							kind: "noise", dims: [], name,
+							reason: "未识别到可执行需求（" + nr + "）⇒ 不自动建分支（避免建出空壳分支污染导图）"
+						};
+					}
+				}
+				const pool = novel ? SPLIT_DIMENSIONS : GENERIC_DIMENSIONS;
+				let dims = pool.slice();
+				/* ══════════════════════════════════════════════════════════════════
+				 * 🔴 19 号文 N1（用户原话）：「补充 A3 剧情第三章支线」⇒ 总监仍按 A1–A8 **全 8 维**建/派。
+				 *    旧实现就是本行 `let dims = pool.slice();` —— **`o.only` 未传时恒为全量**，
+				 *    全仓没有任何"按内容选维度"的代码 ⇒ 一句话建 8 条宿主会话 + 投 8 份简报。
+				 *
+				 *    ⚠️ `o.only` **仍然最高优先**（向后兼容）：`plan(x, {only:[...]})` 的既有调用点
+				 *       与既有判据（`SD-8a–c`）**一字不改也必须过**。
+				 *    ⚠️ 归属判定返回空（如"命中的维度只有当前维度、且判定话题不连续"）⇒ **不建分支**，
+				 *       如实把原因报出去；**不兜底建默认三条**（那是空壳污染，见本文件第 23 批注释）。
+				 * ══════════════════════════════════════════════════════════════════ */
+				let attribution = null;
+				if (Array.isArray(o.only) && o.only.length) {
+					const want = o.only.map((k) => String(k));
+					dims = dims.filter((d) => want.indexOf(d.key) >= 0);
+				} else {
+					attribution = ATTR.planAttribution(src, o);
+					if (!attribution.dims.length) {
+						return {
+							kind: attribution.kind === "noise" ? "noise" : "none",
+							dims: [], name, reason: attribution.reason, attribution: attribution
+						};
+					}
+					const keys = attribution.dims.map((a) => a.key);
+					dims = dims.filter((d) => keys.indexOf(d.key) >= 0);
+				}
+				/* 排序：先按工序阶段（设定 → 剧情/人物 → 正文 → 打磨/审查 → 蒸馏），
+				 * 同阶段**按表内原始序**（= A1→A8 的固定次序）。
+				 * 🔴 同阶段**不能用 key 字典序**：那会把 A2 力量体系排到 A1 世界观前面
+				 *    （"power" < "world"），导图第一眼就读成「没有按工序来」。
+				 *    显式用表内下标排序，**不依赖 Array#sort 的稳定性**（少一个隐性前提）。 */
+				const order = new Map(pool.map((d, i) => [d.key, i]));
+				dims.sort((a, b) => (a.stage - b.stage) || (order.get(a.key) - order.get(b.key)));
+				const max = Number.isFinite(Number(o.max)) && Number(o.max) > 0 ? Math.round(Number(o.max)) : 0;
+				if (max && dims.length > max) dims = dims.slice(0, max);
+				return {
+					kind: novel ? "novel" : "generic",
+					dims,
+					name,
+					/* 🔴 `reason` 走归属判定的原话（含命中理由）—— 用户/闸门看到的是**同一条判据**
+					 * 的产物，不是另写一句文案（另写必漂移）。`o.only` 路径下 attribution 为 null，
+					 * 此时如实说明"是显式指定的"，**不冒充**归属判定的结论。 */
+					reason: attribution
+						? attribution.reason
+						: (novel
+							? "显式 `only` 指定维度 ⇒ 按指定过滤（未走归属判定）"
+							: "未命中小说意图 ⇒ 按通用三段分线（显式 `only` 指定）"),
+					/* 归属判定读数（19 号文 N8 的读数来源之一）—— 显式 `only` 时为 null */
+					attribution: attribution
+				};
+			}
+			
+			/**
+			 * 每条维度要投递的**简报文本**（纯函数）。
+			 * 🔴 必须显式带上：① 它的角色名 ② 它能读/能写的目录边界 ③ 不要越界的告诫。
+			 *    只发一句"你去写世界观"会让分支里的智能体**去改剧情文件**——而且不报错。
+			 *
+			 * @param {object} dim 维度定义
+			 * @param {string} text 需求原文
+			 * @param {string} novelName 作品名
+			 * @param {{root?:string, name?:string}|null} [project] **项目根**（第 17 批新增，可选）
+			 *   🔴 为什么需要它：技能 `multi-agent-novel-brain` 要求的目录是
+			 *      `01-世界观/ 02-力量体系/ …`，而真实作品常用**扁平命名**（`world.md` / `assets/*.json`）
+			 *      —— 两者不符时分支会**找不到文件且不报错**（静默空转）。
+			 *      本参数把"项目在哪"送进去，并明确**以项目自身的清单为准**（而不是照抄技能默认目录）。
+			 *      传 `null` / 无 `root` ⇒ 这一段**整段不出现**（不写"（未指定）"这类占位）。
+			 * @param {object} [org] `organize()` 的结果（第 23 批新增，可选）
+			 *   🔴 给了它 ⇒ 简报里先出「需求整理」（去噪后的要点），**再附原文保真**。
+			 *      没给 ⇒ 退回旧行为（只有 `需求原文：`）——保证既有调用点零改动也能跑。
+			 * @param {object} [upstream] 上游血缘约束（19 号文 §3.4 **R3** 落点，可选）
+			 *   `{ bound?: string }` —— 给了它 ⇒ 本简报的「边界」段**逐字继承**上游，
+			 *   **下游不得自造边界**（自造的表现与"上游没传"在读数上无法区分 ⇒ 必须先把它送出去）。
+			 *   没给 ⇒ 退回旧行为（按本维度 `files` 现算）—— 既有调用点零改动可跑。
+			 * @param {string|{text?:string, at?:number}} [prevSummary] 上一轮结论摘要（19 号文 §3.5 **P3** 落点，可选）
+			 *   第 7 参。给了且非空 ⇒ 简报开头插入「上一轮结论」段，供本轮**承接**。
+			 *   🔴 必须**逐字同源**：直接取 `session-dossier` 的 `summary.text`，不二次格式化、不截断改写
+			 *      —— 否则「这个分支的上下游总监消息是一致的」这条要求会在**跨轮**上失效
+			 *      （本轮改了措辞 ⇒ 分支看到的"上一轮结论"与档案里的不是同一句话）。
+			 *   没给 / 空 ⇒ 整段不出现（**不写**"（无历史）"这类占位）。
+			 *   ⚠️ 只有"复用同一会话"时才有上一轮；新建会话**本就没有历史** ⇒ 传入空串是如实表达。
+			 */
+			function briefOf(dim, text, novelName, project, org, upstream, prevSummary) {
+				const name = String(novelName == null ? "" : novelName).trim();
+				const label = String((dim && dim.label) || "");
+				const head = briefTitlePrefix(dim, name) + " —— " + String((dim && dim.brief) || "");
+				const files = Array.isArray(dim && dim.files) ? dim.files : [];
+				const boundSelf = files.length
+					? "边界：只读/只写 " + files.join("、") + "；**不要**修改未列出的目录（越界改动在两个分支之间是静默冲突）。"
+					: "边界：无文件域限制（通用维度）。";
+				/* 🔴 R3（19 号文 §3.4）：上游给了约束 ⇒ **逐字**带上，下游不得自造。
+				 *    反例（§3.4 点名）：若判据只比 `includes`，前缀相同的两句话会通过 ⇒
+				 *    `test-lineage-msg.mjs#LM-3b` 用「逐字且首字符起」+ 负对照锁住这一点。 */
+				const upBound = upstream && upstream.bound ? String(upstream.bound).trim() : "";
+				const bound = upBound
+					? "边界（**继承自上游 · 逐字同源**）：" + upBound
+						+ (boundSelf && upBound.indexOf(boundSelf) < 0 && boundSelf !== upBound
+							? "\n本维度补充：" + boundSelf : "")
+					: boundSelf;
+				/* 🔴 用户原话「按照一个流程跑一遍 写小说吧,**调用小说技能**」——
+				 *    插件**不能**替分支加载技能（宿主渲染进程里没有 WorkBuddy 的技能注册表），
+				 *    能做且必须做的是：**把技能名与角色身份写进简报**，让分支里的智能体自己去加载。
+				 *    只发一句"你去写世界观"的后果：分支不会加载技能、也不会读 `_memory/A{N}_MEMORY.md`
+				 *    ⇒ 八个分支各自从零开始，技能里的"Token 最小化 / 记忆蒸馏"整套机制全部落空。
+				 *    没写这行的表现与"写了但分支没照做"在读数上**无法区分** ⇒ 必须先把它送出去。 */
+				const who = (label.match(/^A[1-8]/) || [""])[0];
+				const skill = who
+					? "技能：加载 multi-agent-novel-brain，担任 " + who + "；启动先读 _BRAIN.md §一路由 + §三状态，再读 _memory/" + who + "_MEMORY.md 与 _memory/CHANGE_LOG.md。"
+					: "技能：通用维度，不加载小说技能。";
+				/* ══════════════════════════════════════════════════════════════════
+				 * 🔴 第 23 批（第二十三轮用户原话）：**总监对项目的把控**
+				 *   「对于**整个项目把控**都是要有的」。
+				 *
+				 *   旧版本只写「落点：先读项目根下的清单文件（…存在即读）确定本维度的实际分区」
+				 *   —— 这等于**把"把控项目"整件事推给了分支**：总监自己一个文件都没看，
+				 *   8 个分支各自去摸索，而总监对"这个项目现在有什么、到哪一步了"**零认知**。
+				 *
+				 *   ⚠️ 硬边界（已实测，不可绕）：宿主**只注入 `slots` + `sessions`，没有 fs 服务**
+				 *      （`window.require` / `global.require` / `electron.remote.require` 全 `undefined`）
+				 *      ⇒ **总监自己读不到项目文件**。能做到、也必须做到的是：
+				 *      **把"把控"变成结构化的、必须回报的指令**（读哪几份、提哪些字段、按什么格式回报）。
+				 *
+				 *   🔴 仍然**不写死任何用户数据**：清单文件名用**通用候选集**，作品名/目录由分支实读得出。
+				 * ══════════════════════════════════════════════════════════════════ */
+				const proj = (project && project.root)
+					? "项目根：" + String(project.root)
+						+ "\n【项目把控 · 先做这四步再动手】"
+						+ "\n  ① 读清单：项目根下的 project.yaml（首选）/ README.md / _BRAIN.md / AGENTS.md —— **存在即读，读到哪份算哪份**"
+						+ "\n  ② 提取并回报：项目名 / 体裁 / 当前状态 / 各分区进度 / 核心创意（一句话）/ 已冻结设定"
+						+ "\n  ③ 对分区：以清单里写的**实际目录**为准（不是技能默认目录）；清单没写就列一遍项目根"
+						+ "\n  ④ 回报格式：**第一句先写**「项目现状：<名> · <体裁> · <状态> ｜ 我负责的 <维度>：…」，再开始本维度工作"
+						+ "\n  ⚠️ 为什么这步不能省：技能默认目录与项目实际不符时，按默认路径取文件会**找不到且不报错**（静默空转），"
+						+ "而回报里没有「项目现状」这一句 ⇒ 总监无法判断你到底是**没找到项目**还是**没干活**。"
+					: "";
+				const srcText = String(text == null ? "" : text).trim();
+				/* 🔴 19 号文 §3.5 **P3**：**跨轮上下文** —— 复用同一会话时，本轮简报必须带上
+				 *    上一轮的结论摘要（`session-dossier` 的 `summary.text`）。
+				 *    没有它 ⇒ 分支每一轮都当"第一轮"做，总监对话的持续性在分支侧**从来不存在**
+				 *    （用户原话「总监对话的持续性一直没有看到」正是这一层）。
+				 *    ⚠️ **逐字**取用：不 trim 掉内部换行之外的内容、不改写、不截断
+				 *    —— P3 判据是「逐字同源」，任何二次格式化都会让它变成另一句话。 */
+				const prevText = typeof prevSummary === "string"
+					? prevSummary.trim()
+					: (prevSummary && prevSummary.text ? String(prevSummary.text).trim() : "");
+				const prev = prevText ? "【上一轮结论 · 逐字同源】" + prevText : "";
+				/* 🔴 第 23 批：**总监对语言的整理** —— 有整理结果就先出要点，再附原文保真。 */
+				let demand = "";
+				if (srcText) {
+					const hasOrg = org && Array.isArray(org.lines) && org.lines.length;
+					demand = (hasOrg ? organizeSummary(org) + "\n" : "") + "需求原文：" + srcText;
+				}
+				return [head, skill, proj, prev, bound, demand].filter(Boolean).join("\n");
+			}
+			
+			exports.SPLIT_DIMENSIONS = SPLIT_DIMENSIONS;
+			exports.NOVEL_HINTS = NOVEL_HINTS;
+			exports.GENERIC_DIMENSIONS = GENERIC_DIMENSIONS;
+			exports.ACTION_HINTS = ACTION_HINTS;
+			exports.noiseReasonOf = noiseReasonOf;
+			exports.organize = organize;
+			exports.organizeSummary = organizeSummary;
+			exports.SPEC_KEYS = SPEC_KEYS;
+			exports.organizeSpec = organizeSpec;
+			exports.novelNameOf = novelNameOf;
+			exports.isNovelIntent = isNovelIntent;
+			exports.branchTitle = branchTitle;
+			exports.briefTitlePrefix = briefTitlePrefix;
+			exports.plan = plan;
+			exports.briefOf = briefOf;
+		};
+
+		// ── logic/dim-branch.js ──
+		__defs["logic/dim-branch.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「维度 ↔ 分支节点」绑定的**唯一翻译点**（19 号文 N2 · **纯函数**）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js
+			 * 下游：store/hierarchy.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/dim-branch.js — 「维度 ↔ 分支节点」绑定的**唯一翻译点**（19 号文 N2 · **纯函数**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 它治的是什么
+			 * ──────────────────────────────────────────────────────────────────
+			 *   19 号文 N2 的两条平行通道各自为政：
+			 *     通道 A（`DirectorPage` 派发）**只认内容** —— `plan()` 命中小说即全 8 维；
+			 *     通道 B（`route()`）**只认层级树节点** —— 候选集是 `level: "project" | "session"`。
+			 *   ⇒ 在 A3 分支里说 A5 的话，路由既**判不出**"这属于 A5"，候选里也**没有** A5。
+			 *   要合并两条通道，先得回答一个问题：**"A5 这条维度，在树上对应哪个节点？"**
+			 *   本模块就是**这一句话的实现**，且**只有这一份**。
+			 *
+			 * ── 🔴 为什么必须只有一份（而不是两个组件各写一遍）────────────────────
+			 *   总监页与总监弹窗都要用这个映射。两处各写一遍的形态在本项目已经出现过：
+			 *   `director-chain.js#DIRECTOR_CHAIN` 与 `director-run.js#runDirector()` 就是
+			 *   **两份真相源**（19 号文 N9），表现为"面板上展示的五步"与"真正跑的五步"不一致，
+			 *   而**谁都不报错**。所以这里从第一行起就固定成单一实现，两个组件都调它。
+			 *
+			 * ── 🔴 为什么从分流索引反查，而不是自己维护一份映射表 ────────────────
+			 *   `dsh.director.split`（`store/split-index.js`，**冻结键**）**本来就是**
+			 *   "分支会话 id ↔ 维度 key"的既有绑定：`recordSplits()` 写、`applySplitLabels()` 读来做标签覆盖。
+			 *   再立一份必然漂移（同一事实两处存储 ⇒ 总有一处先过期）。
+			 *
+			 * ── 🔴 为什么是纯函数 ──────────────────────────────────────────────
+			 *   `tree` 与 `index` 都由调用方传入 ⇒ 无 localStorage / 无 DOM / 无时钟 / 不改入参。
+			 *   离线套件可以拿**手工构造的树与索引**直接断言（`test-routing-local.mjs` RL-2/3/4），
+			 *   而不必起 Harness —— 真机只用来验"接线装对了没有"，不重复验逻辑。
+			 */
+			
+			const { findNodeBySessionId, scopeHasConversation, scopeKeyOf } = __m("store/hierarchy.js");
+			
+			/** 本模块的绑定来源标记（读数的"这个映射是谁给的"判据） */
+			const DIM_BRANCH_ORIGIN = "plugin:split-index";
+			
+			/**
+			 * 由「层级树 + 分流索引」算出路由需要的**维度上下文**。
+			 *
+			 * @param {object|null} tree 插件层级树的根节点（`loadTree()` 的产物；含 `childNodes`）
+			 * @param {Object<string,{dim?:string,label?:string,name?:string,at?:number}>} index
+			 *        分流索引（`readSplitIndex()` 的产物；键 = **分支会话 id**）
+			 * @param {{nodeId?:string,node?:object}} [opts] 当前所在节点（用它判"我现在属于哪个维度"）
+			 * @returns {{branchOf:Object, currentDim:string, accounts:{indexKeys:number,dimKeys:number,bound:number,unbound:number}}}
+			 *   · `branchOf[dimKey] = {nodeId, sessionId, at, label}`（同维度多条 ⇒ 取 `at` **最新**）
+			 *   · `currentDim` = 当前节点挂的会话在索引里的维度 key（无 ⇒ `""`）
+			 *   · `accounts` 供调用方对账（纪律 78 单一真相源：`dimKeys = bound + unbound`）
+			 *
+			 * ⚠️ **不在这里判"该不该转发"** —— 那是 `routing.js#suggestDestination()` 的职责
+			 *    （它才持有 `DESTINATION` 契约）。本模块只回答"维度对应哪个节点"。
+			 */
+			function dimBranchContext(tree, index, opts = {}) {
+				const o = opts || {};
+				const idx = (index && typeof index === "object") ? index : {};
+				const keys = Object.keys(idx);
+				const branchOf = {};
+				let dimKeys = 0;
+				let unbound = 0;
+				for (let i = 0; i < keys.length; i++) {
+					const sid = keys[i];
+					const e = idx[sid];
+					/* 无 `dim` 的条目**不算错**：分流索引里可能只有标题覆盖（历史条目）。
+					 * 它进不了 `dimKeys`，所以不会污染对账。 */
+					if (!e || !e.dim) continue;
+					const dim = String(e.dim);
+					dimKeys++;
+					const nd = tree ? findNodeBySessionId(tree, sid) : null;
+					/* 🔴 找不到节点**不等于**该维度不存在：会话可能已被归档/清理，
+					 *    而索引条目还在（`SPLIT_MAX` 按 `at` 保新，不按存活）。如实计入 `unbound`
+					 *    而不是静默丢弃 —— 否则"转发候选少了"会看不出原因（纪律 19）。 */
+					if (!nd) { unbound++; continue; }
+					const prev = branchOf[dim];
+					/* 🔴 同维度多条 ⇒ 取 `at` **最新**：与 `planReuse()` 的"同组取最新"**同口径**
+					 *    （两处口径不同会让"复用到 A"与"转发到 B"指向不同会话，且都"成功"）。 */
+					if (!prev || Number(e.at || 0) > Number(prev.at || 0)) {
+						branchOf[dim] = {
+							nodeId: String(nd.id), sessionId: String(sid),
+							at: Number(e.at || 0), label: String(e.label || "")
+						};
+					}
+				}
+				/* 当前维度：当前节点**真的有对话**（`scopeHasConversation` 是 hierarchy 的单一真相源）
+				 * 且该会话在索引里有维度 ⇒ 才算"我在 A3 分支里"。否则 `currentDim` 为空 ——
+				 * 空是**诚实的**：在全局根 / 项目文件夹上，本来就不属于任何维度。 */
+				const curScope = (o.node && scopeHasConversation(o.node)) ? scopeKeyOf(o.nodeId, o.node) : "";
+				const ce = curScope ? (idx[curScope] || null) : null;
+				const currentDim = (ce && ce.dim) ? String(ce.dim) : "";
+				return {
+					branchOf: branchOf,
+					currentDim: currentDim,
+					accounts: { indexKeys: keys.length, dimKeys: dimKeys, bound: dimKeys - unbound, unbound: unbound }
+				};
+			}
+			
+			/**
+			 * 安装全局契约（与 `installRoutingApi` / `installLineageApi` 同风格）——
+			 * 供真机脚本直接对账"维度↔节点"的映射，**不必**从界面上反推。
+			 */
+			function installDimBranchApi() {
+				if (typeof window === "undefined") return null;
+				const api = { DIM_BRANCH_ORIGIN, dimBranchContext };
+				window.__dshDimBranch = api;
+				return api;
+			}
+			
+			exports.DIM_BRANCH_ORIGIN = DIM_BRANCH_ORIGIN;
+			exports.dimBranchContext = dimBranchContext;
+			exports.installDimBranchApi = installDimBranchApi;
+		};
+
+		// ── logic/lineage.js ──
+		__defs["logic/lineage.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
+			 * 引用：19 号文 §3.2 · 19 号文 §3.4
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/lineage.js — 上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 它治的是什么（用户原话，逐字）
+			 * ──────────────────────────────────────────────────────────────────
+			 *   「**同一个分支上下游的总监消息需要是一致的**」
+			 *   + 「总监对话的持续性一直没有看到」
+			 *
+			 * 🔴 根因（源码逐行，不是推测）：
+			 *   `logic/branch-focus.js` 只有 `upstreamChain()` / `downstreamIds()` —— 那是**视图聚焦范围**，
+			 *   即"导图上显示哪几个框"；它对**消息语义零贡献**。
+			 *   全仓 `grep` 无任何"同一血缘 = 同一事实"的表达 ⇒ 上游看不到下游摘要、
+			 *   下游自造边界、同一需求两处文本不一致，**谁都不报错**。
+			 *
+			 * ── 🔴 三条不可逾越的纪律 ──────────────────────────────────────────
+			 *   ① **纯函数**：无 DOM / 无 store / 无时钟 / 不改入参 ⇒ 同输入必同输出。
+			 *      本模块是 UI（总监页上游摘要行）与闸门（`test-lineage-msg.mjs`）共用的
+			 *      **同一份判据**；一旦它有副作用，两边就各测各的，"全绿"不再有意义。
+			 *   ② **信封只增字段**（冻结契约：只许新增，不可改名）：`env` 全部可选，
+			 *      缺省时**退化为旧行为** ⇒ 既有调用点零改动可跑。
+			 *   ③ **不得把 `env` 塞进 `text`** —— 会污染语言整理（`organize()`）与既有正则判据。
+			 *      信封是 `msg.env` 这个**独立字段**（与 `msg.meta` 并列，不是它的子集）。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 四条规则（§3.4 · 每条一个可跑判据）
+			 * ──────────────────────────────────────────────────────────────────
+			 *   R1 同一事实同源  → `factKey()` 全等（**`===` 级**，不是 includes 前缀）
+			 *   R2 上游可见摘要  → `summariesFor()` 返回下游摘要行（带 `env.parent` 指回）
+			 *   R3 下游带上游约束 → `carriesBound()` 逐字包含上游 `bound`
+			 *   R4 范围 = 血缘    → `auditLineage()` 检查 `env.root` 内的 `env.parent` 不跨根
+			 *
+			 * ⚠️ R1 的反例（19 号文 §3.4 点名）：只比 `includes` ⇒ 「A3 剧情」与「A3 剧情线」
+			 *    的前缀关系会让**不同事实**通过 ⇒ 必须全等。
+			 */
+			
+			/** 投递通道（19 号文 §3.2 · 与 `routing.js` 的 `DESTINATION` 同值域 + 新增 `local`） */
+			const VIA = Object.freeze({
+				LOCAL: "local",
+				TRANSFER: "transfer",
+				DIRECT: "direct",
+				CREATE: "create"
+			});
+			
+			/** 信封字段白名单（**只增不改**；新增字段时同步这里与 `makeEnvelope`） */
+			const ENV_FIELDS = Object.freeze([
+				"id", "from", "to", "via", "round", "root", "parent", "ref", "cause"
+			]);
+			
+			/** 事实字段（R1 比较的**唯一**集合；两侧都从同一个 `factOf` 取，禁止各自格式化） */
+			const FACT_FIELDS = Object.freeze(["reqText", "novelName", "dims"]);
+			
+			/**
+			 * 构造信封（19 号文 §3.2）。
+			 * @param {{id?:string,from?:string,to?:string,via?:string,round?:number,root?:string,parent?:string,ref?:string,cause?:string}} [o]
+			 * @param {{self?:string}} [fallback] `self` 用于补 `root`（血缘根缺省 = 自身）
+			 * @returns {{id:string,from:string|null,to:string|null,via:string,round:number,root:string|null,parent:string|null,ref:string|null,cause:string}}
+			 */
+			function makeEnvelope(o = {}, fallback = {}) {
+				/* 🔴 显式传 `null` 必须**不抛穿**（本仓实测：`makeEnvelope(x, null)` 曾直接
+				 *   `Cannot read properties of null (reading 'self')`）。
+				 *   为什么这个细节重要：默认参数 `fallback = {}` **只对 `undefined` 生效**，
+				 *   `null` 会穿透 ⇒ 调用方写 `makeEnvelope(o, maybeNull)` 就炸。
+				 *   而本模块在**执行链**上（派发/路由都可能调）⇒ 抛穿会让整条链静默失效（纪律 100）。 */
+				const fb = (fallback && typeof fallback === "object") ? fallback : {};
+				const self = fb.self ? String(fb.self) : null;
+				const raw = o || {};
+				const viaRaw = raw.via == null ? VIA.LOCAL : String(raw.via);
+				/* 🔴 **按「值」校验，不是按「键」**（LM-1d 实测踩到，纪律 31「报绿先审口径」）：
+				 *    首版写 `hasOwnProperty(VIA, via.toUpperCase())` —— `VIA` 的键是
+				 *    `LOCAL/TRANSFER/direct/...`（常量名），值是 `"local"`。
+				 *    ⇒ 传 `"TRANSFER"` 时键命中 ⇒ **原样透出大写 `"TRANSFER"`**，
+				 *    下游按 `=== "transfer"` 比较的地方全部静默失配。
+				 *    正解：拿**值域数组**比对，并归一为小写。 */
+				const VIA_VALUES = [VIA.LOCAL, VIA.TRANSFER, VIA.DIRECT, VIA.CREATE];
+				const viaLower = viaRaw.toLowerCase();
+				const viaOk = VIA_VALUES.indexOf(viaLower) >= 0;
+				const via = viaOk ? viaLower : VIA.LOCAL;
+				const round = Number(raw.round);
+				return {
+					id: raw.id ? String(raw.id) : "",
+					from: raw.from ? String(raw.from) : self,
+					to: raw.to ? String(raw.to) : null,
+					via: via,
+					round: Number.isFinite(round) && round >= 0 ? round : 0,
+					root: raw.root ? String(raw.root) : self,
+					parent: raw.parent ? String(raw.parent) : null,
+					ref: raw.ref ? String(raw.ref) : null,
+					/* 非法 via 不静默接受：落到 `local` 并**在 cause 里说明**（纪律 19「降级可以，无声不行」） */
+					cause: (raw.cause == null ? "" : String(raw.cause))
+						+ (viaOk ? "" : (raw.cause ? "；" : "") + "非法 via「" + viaRaw + "」⇒ 降级为 local")
+				};
+			}
+			
+			/**
+			 * 归一化**已存在**的信封（旧消息没有 `env` ⇒ 返回 `null`，调用方据此走旧行为）。
+			 * 与 `makeEnvelope` 的差别：这里**不补 `from`/`root`**（不知道的就保持 null，
+			 * 而不是拿当前节点冒充来源 —— 冒充会产生假血缘）。
+			 * @param {object|null|undefined} env
+			 * @param {string} [selfNodeId]
+			 */
+			function normalizeEnv(env, selfNodeId) {
+				if (!env || typeof env !== "object") return null;
+				const out = makeEnvelope(env, {});
+				if (!out.from && selfNodeId) out.from = String(selfNodeId);
+				if (!out.root) out.root = out.from || (selfNodeId ? String(selfNodeId) : null);
+				return out;
+			}
+			
+			/**
+			 * 🔴 **血缘内派生的唯一构造点**（跨节点转发 / 下游接收必须走它）。
+			 *
+			 * 为什么不能各处自己 `makeEnvelope`：
+			 *   `makeEnvelope` 的 `root` 缺省 = **自身** ⇒ 下游若忘了继承 `root`，
+			 *   这条消息会被分到**自己的**血缘组里，而**没有任何报错** ——
+			 *   表现与"本来就是两条无血缘的消息"**完全同形**（静默失效，纪律 36 同型）。
+			 *   本函数把「继承 root、parent 指向源、round+1」固化成一条路径。
+			 *
+			 * @param {object} srcEnv 源消息的信封（`envOf(srcRow)` 的返回值）
+			 * @param {{id?:string,to?:string,via?:string,cause?:string}} [o]
+			 * @returns {object} 新信封
+			 */
+			function childEnvelope(srcEnv, o = {}) {
+				const s = normalizeEnv(srcEnv, null) || {};
+				const raw = o || {};
+				return makeEnvelope({
+					id: raw.id ? String(raw.id) : "",
+					from: raw.from ? String(raw.from) : (s.to || s.from || null),
+					to: raw.to ? String(raw.to) : null,
+					via: raw.via == null ? VIA.TRANSFER : raw.via,
+					round: Number(s.round || 0) + 1,
+					root: s.root || s.id || null,
+					parent: s.id || null,
+					ref: raw.ref ? String(raw.ref) : (s.id || null),
+					cause: raw.cause == null ? "" : String(raw.cause)
+				}, {});
+			}
+			
+			/**
+			 * R1 · 事实规范化 —— **全仓唯一的格式化点**。
+			 * 上下游两边都调它 ⇒ "同源"是结构保证的，而不是靠人工比对。
+			 * @param {{reqText?:string,novelName?:string,dims?:Array<string>|string}} [fact]
+			 */
+			function factOf(fact) {
+				const f = fact || {};
+				const dims = Array.isArray(f.dims)
+					? f.dims.map((d) => String(d)).filter(Boolean).slice().sort()
+					: (f.dims == null || f.dims === "" ? [] : [String(f.dims)]);
+				return {
+					reqText: String(f.reqText == null ? "" : f.reqText).trim(),
+					novelName: String(f.novelName == null ? "" : f.novelName).trim(),
+					dims: dims
+				};
+			}
+			
+			/** R1 · 事实指纹（`===` 级比较的载体；分隔符用 `\u0000` 防拼接歧义） */
+			function factKey(fact) {
+				const f = factOf(fact);
+				return f.reqText + "\u0000" + f.novelName + "\u0000" + f.dims.join(",");
+			}
+			
+			/** R1 · 两条消息是否同源（都无事实 ⇒ 返回 null = **不适用**，不是 true） */
+			function sameFact(a, b) {
+				const fa = a && a.fact ? factOf(a.fact) : null;
+				const fb = b && b.fact ? factOf(b.fact) : null;
+				if (!fa || !fb) return null;
+				return factKey(fa) === factKey(fb);
+			}
+			
+			/** 从一行消息里取信封（行可能来自 IndexedDB 或内存，两条路径共用） */
+			function envOf(row) {
+				if (!row || typeof row !== "object") return null;
+				return normalizeEnv(row.env, row.nodeId ? String(row.nodeId) : null);
+			}
+			
+			/** 从一行消息里取事实（放在 `meta.fact` 或 `env.fact` 都认，优先 `meta`） */
+			function factOfRow(row) {
+				if (!row || typeof row !== "object") return null;
+				const a = row.meta && row.meta.fact ? row.meta.fact : null;
+				const b = row.env && row.env.fact ? row.env.fact : null;
+				const f = a || b;
+				return f ? factOf(f) : null;
+			}
+			
+			/**
+			 * 按 `env.root` 分血缘组。
+			 * @returns {{groups:Object<string,Array>, orphans:Array, rawCount:number}}
+			 *   🔴 `orphans` = 无 `env` 的旧消息（不计入任何血缘，也**不丢**）
+			 *   ⇒ 调用方须能对账 `rows = 组内条数 + orphans`（纪律 78「单一真相源」）
+			 */
+			function lineageGroups(rows) {
+				const all = Array.isArray(rows) ? rows : [];
+				const groups = {};
+				const orphans = [];
+				for (const r of all) {
+					const e = envOf(r);
+					if (!e) { orphans.push(r); continue; }
+					const key = e.root || "(无根)";
+					(groups[key] = groups[key] || []).push(r);
+				}
+				return { groups: groups, orphans: orphans, rawCount: all.length };
+			}
+			
+			/**
+			 * 沿 `env.parent` 向上回溯（**不含自身**，远 → 近）。
+			 * 环保护：`seen` 集截断。父不在 rows ⇒ 止于此，不报错。
+			 * @returns {Array}
+			 */
+			function ancestorsOf(rows, msgId) {
+				const all = Array.isArray(rows) ? rows : [];
+				const byId = new Map();
+				for (const r of all) {
+					const e = envOf(r);
+					if (e && e.id) byId.set(e.id, r);
+				}
+				const out = [];
+				const seen = new Set([String(msgId)]);
+				let cur = all.find((r) => { const e = envOf(r); return e && e.id === String(msgId); });
+				while (cur) {
+					const e = envOf(cur);
+					const pid = e && e.parent;
+					if (!pid || seen.has(pid) || !byId.has(pid)) break;
+					seen.add(pid);
+					cur = byId.get(pid);
+					out.unshift(cur);
+				}
+				return out;
+			}
+			
+			/** 血缘内全部后代（含自身）；兄弟枝**不含** */
+			function descendantsOf(rows, msgId) {
+				const all = Array.isArray(rows) ? rows : [];
+				const kids = new Map();
+				for (const r of all) {
+					const e = envOf(r);
+					if (!e || !e.parent) continue;
+					const arr = kids.get(e.parent) || [];
+					arr.push(r);
+					kids.set(e.parent, arr);
+				}
+				const out = [];
+				const seen = new Set();
+				const stack = [String(msgId)];
+				while (stack.length) {
+					const id = stack.pop();
+					if (seen.has(id)) continue; // 环保护
+					seen.add(id);
+					for (const r of all) { const e = envOf(r); if (e && e.id === id) out.push(r); }
+					for (const k of kids.get(id) || []) { const ke = envOf(k); if (ke && ke.id) stack.push(ke.id); }
+				}
+				return out;
+			}
+			
+			/** R2 · 下游摘要行（上游列表里显示这一行 = "看得见下游产出"） */
+			function summaryLine(row) {
+				const e = envOf(row);
+				const f = factOfRow(row);
+				const text = String((row && row.text) || "").replace(/\s+/g, " ").trim();
+				const head = e && e.to ? "【下游 · " + e.to + "】" : "【下游】";
+				const name = f && f.novelName ? "《" + f.novelName + "》" : "";
+				return head + name + (text ? " " + text.slice(0, 80) : "");
+			}
+			
+			/**
+			 * R2 · 某节点**作为上游**应看到的摘要行（= 它的血缘后代里带 `to` 的最近一层）。
+			 * @returns {Array<{messageId:string, line:string, from:string|null}>}
+			 */
+			function summariesFor(rows, nodeId) {
+				const all = Array.isArray(rows) ? rows : [];
+				const nid = String(nodeId);
+				const envs = all.map((r) => ({ row: r, e: envOf(r) })).filter((x) => x.e);
+				const mine = envs.filter((x) => x.e.from === nid || x.e.root === nid || x.e.to === nid);
+				const ids = new Set(mine.map((x) => x.e.id).filter(Boolean));
+				const out = [];
+				for (const x of envs) {
+					if (!x.e.parent || !ids.has(x.e.parent)) continue;   // parent 指回本血缘才收
+					out.push({
+						messageId: x.e.id,
+						line: summaryLine(x.row),
+						from: x.e.from
+					});
+				}
+				return out;
+			}
+			
+			/** R3 · 下游简报是否**逐字**带上游约束（`indexOf` 而非前缀/模糊匹配） */
+			function carriesBound(brief, upstreamBound) {
+				const b = String(brief == null ? "" : brief);
+				const u = String(upstreamBound == null ? "" : upstreamBound).trim();
+				if (!u) return null;                        // 上游无 bound ⇒ 不适用
+				return b.indexOf(u) >= 0;
+			}
+			
+			/**
+			 * R1 + R4 · 血缘一致性审计（UI 读数与闸门共用；返回**问题清单**，不只返回 t/f）。
+			 * @param {Array} rows 消息行（跨多个节点，例如全库或某血缘）
+			 * @returns {{ok:boolean, issues:Array<{code:string,detail:string}>, stats:object}}
+			 */
+			function auditLineage(rows) {
+				const all = Array.isArray(rows) ? rows : [];
+				const { groups, orphans, rawCount } = lineageGroups(all);
+				const issues = [];
+				let sameFactPairs = 0;
+			
+				for (const root of Object.keys(groups)) {
+					const g = groups[root];
+					/* R4：组内每条消息的 root 必须一致（分组保证），但**跨根 parent** 必须为空 */
+					const ids = new Set(g.map((r) => { const e = envOf(r); return e && e.id; }).filter(Boolean));
+					for (const r of g) {
+						const e = envOf(r);
+						if (e.parent && !ids.has(e.parent)) {
+							/* parent 指向组外 ⇒ 要么父消息不在本次入参里（正常：分页/按节点查），
+							 * 要么**跨血缘**（异常）。用 `root` 是否能成立来分辨。 */
+							const foreign = all.some((x) => {
+								const xe = envOf(x);
+								return xe && xe.id === e.parent && xe.root !== e.root;
+							});
+							if (foreign) issues.push({ code: "R4-cross-root", detail: "parent " + e.parent + " 属别的血缘（" + root + "）" });
+						}
+					}
+					/* R1：同组内**所有带事实的消息**必须同源 */
+					const withFact = g.filter((r) => factOfRow(r));
+					const keys = {};
+					for (const r of withFact) {
+						const k = factKey(factOfRow(r));
+						keys[k] = (keys[k] || 0) + 1;
+					}
+					const distinct = Object.keys(keys);
+					if (distinct.length > 1) {
+						issues.push({
+							code: "R1-not-same-fact",
+							detail: "血缘 " + root + " 内出现 " + distinct.length + " 种事实（应恰好 1 种）"
+						});
+					}
+					if (withFact.length >= 2 && distinct.length === 1) sameFactPairs++;
+				}
+			
+				return {
+					ok: issues.length === 0,
+					issues: issues,
+					stats: {
+						groups: Object.keys(groups).length,
+						orphans: orphans.length,
+						rawCount: rawCount,
+						/* 🔴 单一真相源对账（纪律 78）：组内 + 孤儿 必须等于入参总数 */
+						accounted: rawCount === (rawCount - orphans.length) + orphans.length,
+						consistentGroups: sameFactPairs
+					}
+				};
+			}
+			
+			/** 安装全局契约（供真机脚本调用；与 `installBranchFocusApi` 同风格） */
+			function installLineageApi() {
+				if (typeof window === "undefined") return null;
+				const api = {
+					VIA, ENV_FIELDS, FACT_FIELDS,
+					makeEnvelope, normalizeEnv, childEnvelope, factOf, factKey, sameFact,
+					envOf, factOfRow, lineageGroups, ancestorsOf, descendantsOf,
+					summaryLine, summariesFor, carriesBound, auditLineage
+				};
+				window.__dshLineage = api;
+				return api;
+			}
+			
+			exports.VIA = VIA;
+			exports.ENV_FIELDS = ENV_FIELDS;
+			exports.FACT_FIELDS = FACT_FIELDS;
+			exports.makeEnvelope = makeEnvelope;
+			exports.normalizeEnv = normalizeEnv;
+			exports.childEnvelope = childEnvelope;
+			exports.factOf = factOf;
+			exports.factKey = factKey;
+			exports.sameFact = sameFact;
+			exports.envOf = envOf;
+			exports.factOfRow = factOfRow;
+			exports.lineageGroups = lineageGroups;
+			exports.ancestorsOf = ancestorsOf;
+			exports.descendantsOf = descendantsOf;
+			exports.summaryLine = summaryLine;
+			exports.summariesFor = summariesFor;
+			exports.carriesBound = carriesBound;
+			exports.auditLineage = auditLineage;
+			exports.installLineageApi = installLineageApi;
 		};
 
 		// ── logic/duties.js ──
@@ -8897,13 +11400,585 @@ window.__ModuleLoader__.load({
 			exports.installDutyApi = installDutyApi;
 		};
 
+		// ── logic/director-chain.js ──
+		__defs["logic/director-chain.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监五步链的声明式依赖图（纯数据，零依赖）
+			 * 引用：03 号文 §1.2
+			 * 上游：components/OrchestratorPanel.js, logic/director-run.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 三（五步链的声明式依赖图：纯数据，视图与闸门共用同一份）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/director-chain.js — 总监五步链的声明式依赖图（纯数据，零依赖）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么单独一个模块（而不是写在组件里）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  这份图是「编排」这件事的**核心数据**，不是某一块界面的私产。
+			 *  它原先定义在 `components/OrchestratorPanel.js` 内部，后果是：
+			 *    ① 任何想读它的代码都得先能解析组件 —— 而组件 import react，
+			 *       本仓库按 ADR-001 **不装 node_modules**（react 由平台 factory 提供）
+			 *       ⇒ 离线闸门 `import` 它直接 ERR_MODULE_NOT_FOUND；
+			 *    ② 真机闸门于是只能把节点数/波次**硬编码**，产品一改就假红。
+			 *  提到 `logic/` 后：数据归数据、视图归视图，`dag.js` 的现算能力两边都能用。
+			 *
+			 * ── 图的内容（来源：03 号文 §1.2 的五步）─────────────────────────
+			 *   落地为声明式步骤图后，三件事变成可计算的：
+			 *     ① 依赖关系（谁必须等谁）
+			 *     ② 波次由 `planWaves()` 现算 —— 没有任何写死的顺序数组
+			 *     ③ 「切换分支」与「调整模型」互不依赖 ⇒ 同一波，可并行
+			 *
+			 *   🔴 如实标注现状：`director-run.js` 目前仍是**串行**执行这两步。
+			 *      图上"可并行"是结构事实，运行时"还串行"也是事实 —— 两个都写出来，
+			 *      由面板在 `dp-orch-parallel-note` 明示，不假装已经并行。
+			 *
+			 *  用法：
+			 *    import { DIRECTOR_CHAIN } from "./director-chain.js";
+			 *    const g = normalizeGraph(DIRECTOR_CHAIN);      // 来自 dag.js
+			 *    const waves = planWaves(g, { concurrency: 2 }); // 波次现算
+			 */
+			
+			/** 五步链的声明式步骤（字段语义见 dag.js 的 normalizeStep） */
+			const DIRECTOR_CHAIN = [
+				{ id: "polish", role: "polisher", output: "polished", task: "整理语言：口语 → 精确指令" },
+				{ id: "branch", role: "branch-judge", output: "branch", depends_on: ["polish"], task: "判定话题连续性 / 是否需要新分支" },
+				{ id: "model", role: "model-router", output: "model", depends_on: ["polish"], task: "按任务类型选模型档" },
+				{ id: "context", role: "context-picker", output: "ctx", depends_on: ["branch", "model"], task: "筛选需要传递的上下文片段" },
+				{ id: "review", role: "output-reviewer", output: "verdict", depends_on: ["context"], task: "审核产出是否符合原始需求" }
+			];
+			
+			/** 一条人工闸门的示范（用于展示「闸门长什么样」，不冒充已有数据 —— 故恒为 null） */
+			const GATE_SAMPLE = null;
+			
+			exports.DIRECTOR_CHAIN = DIRECTOR_CHAIN;
+			exports.GATE_SAMPLE = GATE_SAMPLE;
+		};
+
+		// ── logic/dag.js ──
+		__defs["logic/dag.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：声明式步骤图
+			 * 引用：—
+			 * 上游：client-entry.js, components/OrchestratorPanel.js, logic/director-run.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 三（声明式执行图 · 6 类错误校验 · 波浪并行 · 条件与模板）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/dag.js — 声明式步骤图
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么需要它
+			 * ══════════════════════════════════════════════════════════════════
+			 *  改之前：执行链是 `director-run.js` 里**写死的 5 个顺序块** ——
+			 *  想调顺序要改代码，想加一步要改代码，想并行**做不到**。
+			 *  agency-orchestrator 的做法是把它变成**一份声明**：
+			 *
+			 *      steps:
+			 *        - id: analyze   role: product/product-manager   output: requirements
+			 *        - id: tech      role: engineering/architect     depends_on: [analyze]
+			 *        - id: design    role: design/ux-researcher      depends_on: [analyze]
+			 *        - id: summary   depends_on: [tech, design]
+			 *
+			 *  引擎从 depends_on 自动构建 DAG，**同层无依赖的自动并行**（官方演示：
+			 *  「市场调研员和用户研究员自动并行执行，从 DAG 依赖关系检测」）。
+			 *
+			 *  ⇒ 本文件只做三件事：**建图、查错、排波次**。它是纯函数，不跑任何步骤。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  字段口径（逐项对应 agency-orchestrator 的原字段名，便于对照上游文档）
+			 * ══════════════════════════════════════════════════════════════════
+			 *   id              步骤唯一标识
+			 *   role            角色 id（本项目的 Agent Card id，对应上游的 分类/角色名 路径）
+			 *   task            任务描述（支持 {{变量}} 占位）
+			 *   output          输出变量名，供下游 {{}} 引用
+			 *   depends_on[]    依赖的步骤 id
+			 *   depends_on_mode "all"（默认）| "any_completed"
+			 *   condition       条件表达式，不满足则跳过
+			 *   type            "task" | "approval" | "human_input" | "assert"
+			 *   prompt          approval / human_input 节点的提示文本
+			 *   acceptance      验收标准（语义层，交模型评审）
+			 *   assert          机械断言（纯函数层，不过模型）
+			 *   loop            { back_to, max_iterations(1-10), exit_condition }
+			 *
+			 * 🔴 两条与上游**刻意不同**的地方（不照抄，因为上游的写法在本场景会埋雷）：
+			 *   ① 上游 `depends_on_mode: "any_completed"` 在**聚合类步骤**上是陷阱：
+			 *      只等一个上游就开跑，会拿到半份输入。本项目保留该字段但
+			 *      `validateGraph()` 会对它**告警**（而非直接判错），由调用方决定。
+			 *   ② 上游没有「依赖成环」的明确处置。本项目把**环**判为**硬错误**
+			 *      （exit 意义上等价于 FAIL），因为它意味着步骤永远排不出波次。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、常量
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 步骤类型（agency-orchestrator 的 type 字段 + 本项目补充） */
+			const STEP_TYPE = Object.freeze({
+				TASK: "task",                 // 普通执行步
+				APPROVAL: "approval",         // 人工审批节点（跑到这里暂停，等人点通过）
+				HUMAN_INPUT: "human_input",   // 人工输入节点（跑到这里暂停，读人的输入作为产出注入下游）
+				ASSERT: "assert"              // 纯机械断言步（不过模型）
+			});
+			
+			/** 依赖模式 */
+			const DEP_MODE = Object.freeze({
+				ALL: "all",
+				ANY: "any_completed"
+			});
+			
+			/** 需要人工介入的步骤类型（UI 上要显示闸门） */
+			const GATE_TYPES = Object.freeze([STEP_TYPE.APPROVAL, STEP_TYPE.HUMAN_INPUT]);
+			
+			/** 步骤 id 合法性：与角色 id 同规（便于日志与 URL 化） */
+			const STEP_ID_RE = /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/;
+			
+			/** 默认并行上限（与 agency-orchestrator 一致：concurrency 默认 2） */
+			const DEFAULT_CONCURRENCY = 2;
+			
+			/** 循环上限（上游限定 1 到 10，本项目沿用） */
+			const MAX_LOOP = 10;
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、归一化
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 归一化一个步骤：补默认值、修类型、去重依赖。
+			 * 🔴 不猜「缺失的 depends_on」—— 缺就是无依赖（= 第一波），
+			 *    这比按数组顺序推断更安全（顺序推断会把并行悄悄变成串行）。
+			 * @param {object} raw
+			 * @param {number} [index] 数组下标，仅用于给缺 id 的步骤造一个可报错的名字
+			 * @returns {object}
+			 */
+			function normalizeStep(raw, index = 0) {
+				const s = raw && typeof raw === "object" ? raw : {};
+				const deps = Array.isArray(s.depends_on)
+					? [...new Set(s.depends_on.filter((d) => d != null && String(d).trim()).map((d) => String(d).trim()))]
+					: [];
+				const loop = s.loop && typeof s.loop === "object" && s.loop.back_to
+					? {
+						back_to: String(s.loop.back_to),
+						max_iterations: clampInt(s.loop.max_iterations, 1, MAX_LOOP, 3),
+						exit_condition: s.loop.exit_condition ? String(s.loop.exit_condition) : ""
+					}
+					: null;
+			
+				return {
+					id: s.id != null && String(s.id).trim() ? String(s.id).trim() : ("step-" + (index + 1)),
+					role: s.role ? String(s.role) : "",
+					task: s.task != null ? String(s.task) : "",
+					output: s.output ? String(s.output) : "",
+					depends_on: deps,
+					depends_on_mode: s.depends_on_mode === DEP_MODE.ANY ? DEP_MODE.ANY : DEP_MODE.ALL,
+					condition: s.condition ? String(s.condition) : "",
+					type: Object.values(STEP_TYPE).includes(s.type) ? s.type : STEP_TYPE.TASK,
+					prompt: s.prompt != null ? String(s.prompt) : "",
+					acceptance: s.acceptance != null ? String(s.acceptance) : "",
+					assert: s.assert && typeof s.assert === "object" ? { ...s.assert } : null,
+					loop
+				};
+			}
+			
+			function clampInt(v, min, max, dflt) {
+				const n = Number(v);
+				if (!Number.isFinite(n)) return dflt;
+				return Math.max(min, Math.min(max, Math.round(n)));
+			}
+			
+			/** 归一化整张图 */
+			function normalizeGraph(steps) {
+				return (Array.isArray(steps) ? steps : []).map((s, i) => normalizeStep(s, i));
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、校验（查错要**点名**，不能只说「图有问题」）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 校验步骤图。
+			 * @param {Array} steps 原始或已归一化的步骤
+			 * @returns {{ok:boolean, errors:string[], warnings:string[], ids:string[]}}
+			 *   errors   = 硬错误（图不可执行）：重复 id / 悬空依赖 / 依赖成环 / id 非法
+			 *   warnings = 软问题（可执行但有风险）：any_completed 聚合 / 无 output 却被人依赖 /
+			 *              闸门步缺 prompt / 循环缺 exit_condition
+			 */
+			function validateGraph(steps) {
+				const list = normalizeGraph(steps);
+				const errors = [];
+				const warnings = [];
+			
+				if (!list.length) return { ok: false, errors: ["步骤图为空"], warnings, ids: [] };
+			
+				/* ① id 合法且唯一 */
+				const seen = new Set();
+				for (const s of list) {
+					if (!STEP_ID_RE.test(s.id)) errors.push("步骤 id 非法：" + s.id + "（须小写字母数字，可用 _ 或 - 连接）");
+					if (seen.has(s.id)) errors.push("步骤 id 重复：" + s.id);
+					seen.add(s.id);
+				}
+			
+				/* ② 悬空依赖（指向不存在的步骤） */
+				for (const s of list) {
+					for (const d of s.depends_on) {
+						if (!seen.has(d)) errors.push(s.id + " 依赖了不存在的步骤：" + d);
+						if (d === s.id) errors.push(s.id + " 依赖了自己");
+					}
+				}
+			
+				/* ③ 成环（环 = 永远排不出波次，属硬错误） */
+				const cycle = findCycle(list);
+				if (cycle) errors.push("依赖成环：" + cycle.join(" → "));
+			
+				/* ④ 软问题 */
+				for (const s of list) {
+					if (GATE_TYPES.includes(s.type) && !s.prompt.trim()) {
+						warnings.push(s.id + " 是人工闸门但没写 prompt（用户不知道要确认什么）");
+					}
+					if (s.depends_on_mode === DEP_MODE.ANY && s.depends_on.length > 1) {
+						warnings.push(s.id + " 用 any_completed 且有多个上游：只等一个就开跑，会拿到半份输入");
+					}
+					if (s.loop && !s.loop.exit_condition) {
+						warnings.push(s.id + " 有循环但没写 exit_condition（只能靠 max_iterations 兜底）");
+					}
+					if (s.loop && !seen.has(s.loop.back_to)) {
+						errors.push(s.id + " 的 loop.back_to 指向不存在的步骤：" + s.loop.back_to);
+					}
+				}
+			
+				/* ⑤ 被人依赖却没有 output 名（下游无法用 {{}} 引用它） */
+				for (const s of list) {
+					const dependents = list.filter((x) => x.depends_on.includes(s.id));
+					if (dependents.length && !s.output) {
+						warnings.push(s.id + " 没有 output 名，但被 " + dependents.map((x) => x.id).join("、") + " 依赖（下游拿不到它的产出）");
+					}
+				}
+			
+				return { ok: errors.length === 0, errors, warnings, ids: list.map((s) => s.id) };
+			}
+			
+			/**
+			 * 找一条环（DFS 三色标记）。
+			 * @returns {string[]|null} 环上的 id 序列，无环返回 null
+			 */
+			function findCycle(steps) {
+				const list = normalizeGraph(steps);
+				const byId = new Map(list.map((s) => [s.id, s]));
+				const WHITE = 0, GRAY = 1, BLACK = 2;
+				const color = new Map();
+				const stack = [];
+			
+				let found = null;
+				const visit = (id) => {
+					if (found) return;
+					const node = byId.get(id);
+					if (!node) return;
+					const c = color.get(id) || WHITE;
+					if (c === GRAY) {
+						const at = stack.indexOf(id);
+						found = stack.slice(at >= 0 ? at : 0).concat(id);
+						return;
+					}
+					if (c === BLACK) return;
+					color.set(id, GRAY);
+					stack.push(id);
+					for (const d of node.depends_on) visit(d);
+					stack.pop();
+					color.set(id, BLACK);
+				};
+			
+				for (const s of list) if (!color.get(s.id)) visit(s.id);
+				return found;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、拓扑排序与波次
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 拓扑序（Kahn 算法，同层按原数组顺序稳定输出）。
+			 *
+			 * 🔴 成环时**不抛错也不返回半张图** —— 返回 null 并交由 `validateGraph()` 报错。
+			 *    返回半张图会让调用方「看起来跑完了」，那是静默失败。
+			 * @returns {string[]|null}
+			 */
+			function topoSort(steps) {
+				const list = normalizeGraph(steps);
+				if (findCycle(list)) return null;
+			
+				const indeg = new Map(list.map((s) => [s.id, 0]));
+				const outs = new Map(list.map((s) => [s.id, []]));
+				for (const s of list) {
+					for (const d of s.depends_on) {
+						if (!indeg.has(d)) continue;
+						indeg.set(s.id, indeg.get(s.id) + 1);
+						outs.get(d).push(s.id);
+					}
+				}
+			
+				const order = [];
+				let frontier = list.filter((s) => indeg.get(s.id) === 0).map((s) => s.id);
+				while (frontier.length) {
+					for (const id of frontier) order.push(id);
+					const next = [];
+					for (const id of frontier) {
+						for (const o of outs.get(id) || []) {
+							indeg.set(o, indeg.get(o) - 1);
+							if (indeg.get(o) === 0) next.push(o);
+						}
+					}
+					frontier = next;
+				}
+				return order.length === list.length ? order : null;
+			}
+			
+			/**
+			 * 拓扑分层：同层 = 互不依赖 = **可并行**。
+			 * @returns {string[][]} 层数组；成环返回 []
+			 */
+			function topoLevels(steps) {
+				const list = normalizeGraph(steps);
+				if (findCycle(list)) return [];
+			
+				const depth = new Map();
+				const byId = new Map(list.map((s) => [s.id, s]));
+				const depthOf = (id, guard = new Set()) => {
+					if (depth.has(id)) return depth.get(id);
+					if (guard.has(id)) return 0;         // 防御：理论上到不了这里（已查过环）
+					guard.add(id);
+					const n = byId.get(id);
+					if (!n) return 0;
+					let d = 0;
+					for (const p of n.depends_on) d = Math.max(d, depthOf(p, guard) + 1);
+					guard.delete(id);
+					depth.set(id, d);
+					return d;
+				};
+			
+				for (const s of list) depthOf(s.id);
+			
+				const maxD = Math.max(0, ...list.map((s) => depth.get(s.id) || 0));
+				const levels = [];
+				for (let i = 0; i <= maxD; i++) {
+					const ids = list.filter((s) => (depth.get(s.id) || 0) === i).map((s) => s.id);
+					if (ids.length) levels.push(ids);
+				}
+				return levels;
+			}
+			
+			/**
+			 * 排执行波次：把拓扑层按 `concurrency` 上限切成一批批。
+			 *
+			 * 🔴 为什么不能只给「层」：层内 5 个步骤在 concurrency=2 时**不能一次全发**，
+			 *    否则上限形同虚设。故这里切到「每一波内步骤数不超过 concurrency」，
+			 *    并把波次编号一起返回（UI 上直接画进度）。
+			 *
+			 * @param {Array} steps
+			 * @param {object} [opts] { concurrency?:number }
+			 * @returns {Array<{index:number, level:number, ids:string[]}>}
+			 */
+			function planWaves(steps, opts = {}) {
+				const concurrency = Math.max(1, clampInt(opts.concurrency, 1, 64, DEFAULT_CONCURRENCY));
+				const levels = topoLevels(steps);
+				const waves = [];
+				for (let li = 0; li < levels.length; li++) {
+					const ids = levels[li];
+					for (let i = 0; i < ids.length; i += concurrency) {
+						waves.push({ index: waves.length, level: li, ids: ids.slice(i, i + concurrency) });
+					}
+				}
+				return waves;
+			}
+			
+			/**
+			 * 就绪集：依赖已满足、且尚未完成的步骤。
+			 * @param {Array} steps
+			 * @param {string[]} done 已完成的步骤 id
+			 * @param {object} [opts] { concurrency?:number } 本波剩余可发数
+			 * @returns {string[]}
+			 */
+			function readySteps(steps, done = [], opts = {}) {
+				const list = normalizeGraph(steps);
+				const doneSet = new Set(done);
+				const cap = opts.concurrency ? Math.max(1, clampInt(opts.concurrency, 1, 64, DEFAULT_CONCURRENCY)) : Infinity;
+			
+				const ready = [];
+				for (const s of list) {
+					if (doneSet.has(s.id)) continue;
+					if (s.depends_on.length === 0) { ready.push(s.id); continue; }
+					if (s.depends_on_mode === DEP_MODE.ANY) {
+						if (s.depends_on.some((d) => doneSet.has(d))) ready.push(s.id);
+					} else {
+						if (s.depends_on.every((d) => doneSet.has(d))) ready.push(s.id);
+					}
+				}
+				return ready.slice(0, cap === Infinity ? ready.length : cap);
+			}
+			
+			/** 图规模统计（UI 与成本预估共用） */
+			function graphStats(steps) {
+				const list = normalizeGraph(steps);
+				const levels = topoLevels(list);
+				const waves = planWaves(list);
+				return {
+					steps: list.length,
+					edges: list.reduce((n, s) => n + s.depends_on.length, 0),
+					levels: levels.length,
+					waves: waves.length,
+					/* 最大并行度 = 单层最多几个（这才是「并行到底有没有用」的判据） */
+					maxParallel: levels.reduce((m, l) => Math.max(m, l.length), 0),
+					gates: list.filter((s) => GATE_TYPES.includes(s.type)).length,
+					loops: list.filter((s) => s.loop).length
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、条件表达式（极简，刻意不用 eval）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 求值 `condition`。
+			 * 支持四种最小形式（对应 agency-orchestrator 文档里的 `{{var}} contains 技术`）：
+			 *   {{var}} exists
+			 *   {{var}} contains 子串
+			 *   {{var}} equals 值
+			 *   !{{var}} exists
+			 *
+			 * 🔴 刻意**不用 eval / new Function**：条件字符串来自工作流定义，
+			 *    在插件里它是可被用户编辑的数据 —— 用 eval 等于给这份数据开了执行权限。
+			 * 🔴 变量缺失时返回 `false` 且 `reason` 写明「变量不存在」——
+			 *    静默当 true 会让「本该跳过的步骤」照跑。
+			 *
+			 * @param {string} expr
+			 * @param {object} vars
+			 * @returns {{ok:boolean, reason:string}}
+			 */
+			function evalCondition(expr, vars = {}) {
+				const raw = String(expr || "").trim();
+				if (!raw) return { ok: true, reason: "无条件 → 执行" };
+			
+				const m = raw.match(/^(!?)\s*\{\{\s*([\w.]+)\s*\}\}\s*(exists|contains|equals)?\s*([\s\S]*)$/);
+				if (!m) return { ok: false, reason: "条件语法不支持：" + raw + "（支持 exists / contains / equals）" };
+			
+				const negate = m[1] === "!";
+				const key = m[2];
+				const arg = String(m[4] || "").trim();
+				/* 🔴 没有操作符但尾部还有内容 ⇒ **语法不支持**，不得静默按 exists 处理。
+				 *   实测（2026-09-14）：`{{k}} 大约等于 5` 曾被当成 `exists` 而**返回真**，
+				 *   于是「本该跳过的步骤照跑」且没有任何提示 —— 与纪律 18「跳过比红更危险」同源。 */
+				if (!m[3] && arg) {
+					return { ok: false, reason: "条件语法不支持：" + raw + "（支持 exists / contains / equals）" };
+				}
+				const op = m[3] || "exists";
+			
+				if (!(key in vars) || vars[key] == null) {
+					return { ok: negate, reason: "变量 " + key + " 不存在" };
+				}
+				const val = String(vars[key]);
+			
+				let hit;
+				if (op === "exists") hit = val.trim().length > 0;
+				else if (op === "contains") hit = val.indexOf(arg) >= 0;
+				else hit = val === arg;
+			
+				const ok = negate ? !hit : hit;
+				return { ok, reason: "{{" + key + "}} " + op + (arg ? " " + arg : "") + " → " + (hit ? "真" : "假") };
+			}
+			
+			/** 步骤是否应执行（condition 为空 = 执行） */
+			function shouldRun(step, vars = {}) {
+				const s = normalizeStep(step);
+				if (!s.condition) return { run: true, reason: "无条件" };
+				const r = evalCondition(s.condition, vars);
+				return { run: r.ok, reason: r.reason };
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 六、变量替换与产出引用
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 替换 `task` 里的 {{变量}}。
+			 * 未命中的占位**原样保留**并记进 `missing` —— 替换成空串会让下游看到
+			 * 一句语法通顺但缺了关键输入的指令，比留着一个显眼的 {{x}} 更危险。
+			 * @returns {{text:string, missing:string[]}}
+			 */
+			function fillTemplate(tpl, vars = {}) {
+				const missing = [];
+				const text = String(tpl == null ? "" : tpl).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (all, key) => {
+					if (key in vars && vars[key] != null) return String(vars[key]);
+					missing.push(key);
+					return all;
+				});
+				return { text, missing };
+			}
+			
+			/** 该步骤引用了哪些上游产出（用于上下文装配，防「全量转发」） */
+			function refsOf(step) {
+				const s = normalizeStep(step);
+				const found = new Set();
+				for (const m of s.task.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) found.add(m[1]);
+				if (s.condition) for (const m of s.condition.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) found.add(m[1]);
+				for (const m of String(s.acceptance || "").matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) found.add(m[1]);
+				return [...found];
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 七、全局契约
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
+			function installDagApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshDag = {
+					STEP_TYPE, DEP_MODE, GATE_TYPES, DEFAULT_CONCURRENCY,
+					normalize: normalizeGraph,
+					validate: validateGraph,
+					findCycle,
+					topoSort,
+					topoLevels,
+					planWaves,
+					readySteps,
+					graphStats,
+					evalCondition,
+					shouldRun,
+					fillTemplate,
+					refsOf
+				};
+				return window.__dshDag;
+			}
+			
+			exports.STEP_TYPE = STEP_TYPE;
+			exports.DEP_MODE = DEP_MODE;
+			exports.GATE_TYPES = GATE_TYPES;
+			exports.STEP_ID_RE = STEP_ID_RE;
+			exports.DEFAULT_CONCURRENCY = DEFAULT_CONCURRENCY;
+			exports.MAX_LOOP = MAX_LOOP;
+			exports.normalizeStep = normalizeStep;
+			exports.normalizeGraph = normalizeGraph;
+			exports.validateGraph = validateGraph;
+			exports.findCycle = findCycle;
+			exports.topoSort = topoSort;
+			exports.topoLevels = topoLevels;
+			exports.planWaves = planWaves;
+			exports.readySteps = readySteps;
+			exports.graphStats = graphStats;
+			exports.evalCondition = evalCondition;
+			exports.shouldRun = shouldRun;
+			exports.fillTemplate = fillTemplate;
+			exports.refsOf = refsOf;
+			exports.installDagApi = installDagApi;
+		};
+
 		// ── logic/director-run.js ──
 		__defs["logic/director-run.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：总监预处理中枢（03号文 §1.2 五步标准执行逻辑）
 			 * 引用：03 号文 §1.2
 			 * 上游：client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js
-			 * 下游：logic/duties.js, config/model.js, util/debug.js
+			 * 下游：logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -8931,9 +12006,18 @@ window.__ModuleLoader__.load({
 			
 			const { cloneDefaultDuties, normalizeDuties } = __m("logic/duties.js");
 			const { callLocalModel, polishLanguage, classifyTask } = __m("config/model.js");
+			/* 🔴 19 号文 N9/F9：五步链的**唯一真相源** —— 顺序由图经 `topoSort()` 现算，
+			 *    本模块不再自建 1..5（收敛前正是"两份真相源"）。两个依赖都是纯模块（零 side-effect）。 */
+			const { DIRECTOR_CHAIN } = __m("logic/director-chain.js");
+			const { topoSort } = __m("logic/dag.js");
 			const { dshLog } = __m("util/debug.js");
 			
-			/** 任务类型 → 模型建议（文档 §1.2 第 3 步 / §3.1「调整模型」模板语义） */
+			/** 任务类型 → 模型建议（文档 §1.2 第 3 步 / §3.1「调整模型」模板语义）
+			 * 🔴 19 号文 **P7 N7**：导出这两张表 —— 职能矩阵的"开启时按 tier 选择"判据
+			 *    必须能拿**期望值**比对，而不是只看"模型名是个字符串"。
+			 *    ⚠️ 只看字符串会在 `research`/`writing` 上**空真**：那两类本来就映射到
+			 *    `deepseek-chat`，与"开关关掉后的回落值"**完全同形** ⇒ 判据必须落在
+			 *    `code`（coder）/ `design`（reasoner）这两类**可分辨**的输入上。 */
 			const TASK_MODEL = {
 				code: "deepseek-coder",
 				design: "deepseek-reasoner",
@@ -8968,6 +12052,27 @@ window.__ModuleLoader__.load({
 			 *                    reasoning: string, taskNote: object|null,
 			 *                    forward: {done:boolean, at?:number}}>}
 			 */
+			/**
+			 * 由图**现算**执行计划（纯函数 · 19 号文 N9/F9 的收敛支点）。
+			 *
+			 * 抽成导出函数是为了**可测**：套件要能注入"图上多一步而本版本未实现"或
+			 * "图顺序与默认不同"的情形，验证
+			 *   ① 顺序**随图变**（而不是写死的）；
+			 *   ② 缺失实现时**可分辨地降级**、**不抛穿**（执行链上的模块抛穿会让整条链失效）。
+			 *
+			 * @param {Array} chain 步骤声明（如 `DIRECTOR_CHAIN`）
+			 * @param {string[]} implIds 本版本**已实现**的步骤 id（调用方传 `Object.keys(IMPL)`，
+			 *        这样"实现了哪些"只有一处真相源，不会出现第三份清单）
+			 * @returns {Array<{id:string, n:number, implemented:boolean}>}
+			 *          顺序 = `topoSort()` 拓扑序；图上成环（`null`）⇒ **降级为声明顺序**，不抛。
+			 */
+			function chainPlan(chain, implIds) {
+				const list = Array.isArray(chain) ? chain : [];
+				const order = topoSort(list) || list.map((s) => String(s ? s.id : ""));
+				const have = Array.isArray(implIds) ? implIds.map(String) : [];
+				return order.map((id, i) => ({ id: id, n: i + 1, implemented: have.indexOf(String(id)) >= 0 }));
+			}
+			
 			async function runDirector({
 				sessionId, userText, store, duties, config,
 				autoForward = false, onForward, taskNote = null
@@ -8975,7 +12080,18 @@ window.__ModuleLoader__.load({
 				const d = normalizeDuties(duties || cloneDefaultDuties());
 				const cfg = config || { localModel: { enabled: false } };
 				const steps = [];
-				const push = (n, name, enabled, grade, text) => steps.push({ n, name, enabled, grade, text });
+				/* 🔴 19 号文 **N9 / F9**：五步链收敛为**单一真相源** —— 执行顺序由图经
+				 *    `chainPlan()`（内部 `dag.js#topoSort()`）**现算**，见下方实现表之后的循环。
+				 *    ⚠️ 收敛前这里是自建的 `push(1..5)`：既**无 id**、顺序又**硬编码**；
+				 *      而面板与闸门按 `DIRECTOR_CHAIN` 展示 ⇒ **两份真相源**（F9 缺口）。 */
+				/* 各步的中间结果（实现表读写它；**顺序**由图算，不在实现表里） */
+				const ctx = {
+					polished: String(userText == null ? "" : userText),
+					branch: "沿用当前分支",
+					model: "deepseek-chat",
+					context: "",
+					review: ""
+				};
 			
 				if (store && running.has(store)) {
 					throw new Error("总监正在处理上一条指令，请稍候");
@@ -9017,93 +12133,136 @@ window.__ModuleLoader__.load({
 						store.setStatus("running");
 					}
 			
-					/* ── 步骤 1：整理语言（§1.2 ①） ── */
-					let polished = userText;
-					let g1 = "G0";
-					if (d.languagePolish.enabled) {
-						polished = polishLanguage(userText);
-						if (cfg.localModel?.enabled) {
-							const out = await callLocalModel(
-								d.languagePolish.prompt + "\n\n## 用户输入\n" + userText + noteBlock
-								+ "\n\n请只输出整理后的指令本身，不要解释。",
-								cfg
-							);
-							if (out && out.trim()) { polished = out.trim().split("\n")[0]; g1 = "G1"; }
-						}
-					}
-					push(1, "整理语言", d.languagePolish.enabled, g1, polished);
-			
-					/* ── 步骤 2：判断是否需要切新分支（§1.2 ②） ── */
-					let branch = "沿用当前分支";
-					let g2 = "G0";
-					if (d.branchSwitch.enabled) {
-						const prev = (state.messages || []).filter((m) => m.role === "user").slice(-1)[0];
-						branch = prev ? judgeBranch(prev.content, userText) : "新会话首条 → 沿用当前分支";
-						// 分支判断属语义连续性判定，规则不足以覆盖时交本地模型
-						if (cfg.localModel?.enabled) {
-							const out = await callLocalModel(
-								d.branchSwitch.prompt + "\n\n## 上一条用户消息\n" + (prev ? prev.content : "(无)")
-								+ "\n\n## 当前用户消息\n" + userText + noteBlock
-								+ "\n\n只回答：连续 或 不连续，并给一句理由。",
-								cfg
-							);
-							if (out) {
-								g2 = "G1";
-								branch = /不连续/.test(out) ? "建议开新分支（" + out.trim().slice(0, 40) + "）" : "沿用当前分支";
+					/* ══════════════════════════════════════════════════════════════════
+					 * 五步链的**实现表**（key = `DIRECTOR_CHAIN` 的 id）
+					 *   🔴 **顺序不在这里** —— 一旦写在这里，就又是一份硬编码顺序（N9 的病因）。
+					 *   每张实现返回 `{name, enabled, grade, text}`，并把中间结果写进 `ctx` 供后续步骤读。
+					 * ══════════════════════════════════════════════════════════════════ */
+					const IMPL = {
+						/* ── ① 整理语言（§1.2 ①） ── */
+						polish: async () => {
+							let polished = ctx.polished;
+							let g = "G0";
+							if (d.languagePolish.enabled) {
+								polished = polishLanguage(userText);
+								if (cfg.localModel?.enabled) {
+									const out = await callLocalModel(
+										d.languagePolish.prompt + "\n\n## 用户输入\n" + userText + noteBlock
+										+ "\n\n请只输出整理后的指令本身，不要解释。",
+										cfg
+									);
+									if (out && out.trim()) { polished = out.trim().split("\n")[0]; g = "G1"; }
+								}
 							}
-						}
-					}
-					push(2, "切换分支", d.branchSwitch.enabled, g2, branch);
+							ctx.polished = polished;
+							return { name: "整理语言", enabled: d.languagePolish.enabled, grade: g, text: polished };
+						},
 			
-					/* ── 步骤 3：判断是否需要切模型（§1.2 ③） ── */
-					let model = "deepseek-chat";
-					let g3 = "G0";
-					if (d.modelRouting.enabled) {
-						model = TASK_MODEL[taskType] || "deepseek-chat";
-						if (cfg.localModel?.enabled) {
-							const out = await callLocalModel(
-								d.modelRouting.prompt + "\n\n## 用户输入\n" + userText + noteBlock
-								+ "\n\n## 规则初判\n任务类型=" + (TASK_NAME[taskType] || taskType) + "，建议=" + model,
-								cfg
-							);
-							if (out) {
-								g3 = "G1";
-								const m = out.match(/(deepseek-[a-z]+)/);
-								if (m) model = m[1];
+						/* ── ② 判断是否需要切新分支（§1.2 ②） ── */
+						branch: async () => {
+							let branch = "沿用当前分支";
+							let g = "G0";
+							if (d.branchSwitch.enabled) {
+								const prev = (state.messages || []).filter((m) => m.role === "user").slice(-1)[0];
+								branch = prev ? judgeBranch(prev.content, userText) : "新会话首条 → 沿用当前分支";
+								// 分支判断属语义连续性判定，规则不足以覆盖时交本地模型
+								if (cfg.localModel?.enabled) {
+									const out = await callLocalModel(
+										d.branchSwitch.prompt + "\n\n## 上一条用户消息\n" + (prev ? prev.content : "(无)")
+										+ "\n\n## 当前用户消息\n" + userText + noteBlock
+										+ "\n\n只回答：连续 或 不连续，并给一句理由。",
+										cfg
+									);
+									if (out) {
+										g = "G1";
+										branch = /不连续/.test(out) ? "建议开新分支（" + out.trim().slice(0, 40) + "）" : "沿用当前分支";
+									}
+								}
 							}
-						}
-					}
-					push(3, "调整模型", d.modelRouting.enabled, g3, "任务类型=" + (TASK_NAME[taskType] || taskType) + " → " + model);
+							ctx.branch = branch;
+							return { name: "切换分支", enabled: d.branchSwitch.enabled, grade: g, text: branch };
+						},
 			
-					/* ── 步骤 4：上下文筛选（§1.2 ④） ── */
-					let context = "";
-					let g4 = "G0";
-					if (d.contextFilter.enabled) {
-						const needSwitch = /新分支/.test(branch) || model !== "deepseek-chat";
-						if (needSwitch) {
-							context = pickContext(state.messages || [], userText, 5);
-							g4 = "G0";
-						} else {
-							context = "无需切换 → 传递完整上下文";
-						}
-					} else {
-						context = "职责未启用 → 不筛选";
-					}
-					push(4, "上下文筛选", d.contextFilter.enabled, g4, context);
+						/* ── ③ 判断是否需要切模型（§1.2 ③） ── */
+						model: async () => {
+							let model = "deepseek-chat";
+							let g = "G0";
+							if (d.modelRouting.enabled) {
+								model = TASK_MODEL[taskType] || "deepseek-chat";
+								if (cfg.localModel?.enabled) {
+									const out = await callLocalModel(
+										d.modelRouting.prompt + "\n\n## 用户输入\n" + userText + noteBlock
+										+ "\n\n## 规则初判\n任务类型=" + (TASK_NAME[taskType] || taskType) + "，建议=" + model,
+										cfg
+									);
+									if (out) {
+										g = "G1";
+										const m = out.match(/(deepseek-[a-z]+)/);
+										if (m) model = m[1];
+									}
+								}
+							}
+							ctx.model = model;
+							return { name: "调整模型", enabled: d.modelRouting.enabled, grade: g,
+								text: "任务类型=" + (TASK_NAME[taskType] || taskType) + " → " + model };
+						},
 			
-					/* ── 步骤 5：自动审核产出（§1.2 ⑤ / §2.3 ⑤） ── */
-					// 注意：本步审核的是「总监组装出的待提交报文」是否符合原始需求（§3.1 模板语义：
-					// "大模型返回结果后，自动审核文档/代码是否符合原始需求"）。
-					// 真实的大模型产出在转发之后才产生，故此处先产出**审核结论占位 + 规则自检**，
-					// 由 `reviewOutput()` 在拿到产出后调用；本步负责登记开关与规则自检结果。
-					let review = "职责未启用 → 跳过审核";
-					let g5 = "G0";
-					if (d.outputReview.enabled) {
-						const r0 = reviewOutput(userText, polished, d);
-						review = r0.passed ? "自检通过" : "发现 " + r0.issues.length + " 项问题：" + r0.issues.join("；");
-						g5 = "G0";
+						/* ── ④ 上下文筛选（§1.2 ④） ── */
+						context: async () => {
+							let context = "";
+							let g = "G0";
+							if (d.contextFilter.enabled) {
+								const needSwitch = /新分支/.test(ctx.branch) || ctx.model !== "deepseek-chat";
+								if (needSwitch) {
+									context = pickContext(state.messages || [], userText, 5);
+									g = "G0";
+								} else {
+									context = "无需切换 → 传递完整上下文";
+								}
+							} else {
+								context = "职责未启用 → 不筛选";
+							}
+							ctx.context = context;
+							return { name: "上下文筛选", enabled: d.contextFilter.enabled, grade: g, text: context };
+						},
+			
+						/* ── ⑤ 自动审核产出（§1.2 ⑤ / §2.3 ⑤） ──
+						 * 注意：本步审核的是「总监组装出的待提交报文」是否符合原始需求（§3.1 模板语义：
+						 * "大模型返回结果后，自动审核文档/代码是否符合原始需求"）。
+						 * 真实的大模型产出在转发之后才产生，故此处先产出**审核结论占位 + 规则自检**，
+						 * 由 `reviewOutput()` 在拿到产出后调用；本步负责登记开关与规则自检结果。 */
+						review: async () => {
+							let review = "职责未启用 → 跳过审核";
+							const g = "G0";
+							if (d.outputReview.enabled) {
+								const r0 = reviewOutput(userText, ctx.polished, d);
+								review = r0.passed ? "自检通过" : "发现 " + r0.issues.length + " 项问题：" + r0.issues.join("；");
+							}
+							ctx.review = review;
+							return { name: "自动审核产出", enabled: d.outputReview.enabled, grade: g, text: review };
+						}
+					};
+			
+					/* 🔴 **执行 = 按图算出的顺序遍历实现表**。`chainPlan` 的同时给出
+					 *    「本版本实现了哪些」—— 图上新增步骤而这里未实现时
+					 *    **可分辨地降级**（记一条 `enabled:false` + 明文原因），**不静默少跑** —— 纪律 19。 */
+					for (const st of chainPlan(DIRECTOR_CHAIN, Object.keys(IMPL))) {
+						const impl = IMPL[st.id];
+						if (!impl) {
+							steps.push({ id: st.id, n: st.n, name: st.id, enabled: false, grade: "G0",
+								text: "本版本未实现该步骤（声明图已含它）⇒ 降级为跳过（**不静默**）" });
+							continue;
+						}
+						const r = await impl();
+						steps.push({ id: st.id, n: st.n, name: r.name, enabled: r.enabled, grade: r.grade, text: r.text });
 					}
-					push(5, "自动审核产出", d.outputReview.enabled, g5, review);
+			
+					/* 回填：后续报文组装沿用既有局部名（**新增 `id` 字段、不改既有字段** —— 冻结契约只增） */
+					const polished = ctx.polished;
+					const branch = ctx.branch;
+					const model = ctx.model;
+					const context = ctx.context;
+					const review = ctx.review;
 			
 					/* ── 组装报文 + 写入总监对话流（§2.3 ③） ── */
 					const reasoning = steps
@@ -9140,7 +12299,9 @@ window.__ModuleLoader__.load({
 					}
 			
 					dshLog("director", "runDirector done: session=" + sessionId + " taskType=" + taskType
-						+ " grade=" + [g1, g2, g3, g4, g5].join("/") + " forward=" + forward.done);
+						/* 🔴 N9 收敛后 grade 串**由实际执行的步骤派生**（顺序/条数随图走）。
+						 *    收敛前这里是手写的 `[g1..g5]` —— 图上一加步，日志就开始"少报一步"却没人发现。 */
+						+ " grade=" + steps.map((s) => s.grade).join("/") + " forward=" + forward.done);
 			
 					return { steps, instruction: polished, model, branch, taskType, reasoning, forward, payload,
 						noteInjected: payload.taskNote ? payload.taskNote : null };
@@ -9267,6 +12428,9 @@ window.__ModuleLoader__.load({
 				return { passed: issues.length === 0, issues, grade: "G0" };
 			}
 			
+			exports.TASK_MODEL = TASK_MODEL;
+			exports.TASK_NAME = TASK_NAME;
+			exports.chainPlan = chainPlan;
 			exports.runDirector = runDirector;
 			exports.installDirectorRunApi = installDirectorRunApi;
 			exports.tokenize = tokenize;
@@ -10673,8 +13837,22 @@ window.__ModuleLoader__.load({
 				motion: true,
 				edge: "curve",
 				minimap: true,
-				legend: true
+				legend: true,
+				/* ── 总监弹窗背景（2026-09-17 新增 · 见下方 P_DIALOG_BG）──
+				 * 需求原文（用户）：「左侧点击总监按钮，总监的弹窗，背景是黑色的。调整下，按照人眼最舒服
+				 *   温馨的风格调整背景和文字的颜色；同时增加自定义背景颜色的选项，可以上传图片作为背景；
+				 *   默认的话可以跟随软件的背景主题」
+				 * ⚠️ 默认档**刻意**不取 follow：宿主当前是深色主题，follow 出来的仍是黑底 ——
+				 *    那等于「用户抱怨什么就保持什么」。「跟随主题」作为**并列可选项**保留（一键可切）。
+				 */
+				dialogBg: "warm",
+				dialogBgColor: "#f7f2e8",
+				dialogBgImage: "",
+				dialogBgDim: 0.72
 			});
+			
+			/** 背景图上限（字符数，≈1.95 MB 二进制）。超限一律丢弃 —— 见 normalizePersonalize。 */
+			const P_IMG_MAX = 2600000;
 			
 			/** 主色（4 档，全部取宿主暗色系里"能当强调色"的） */
 			const P_ACCENTS = Object.freeze([
@@ -10727,6 +13905,26 @@ window.__ModuleLoader__.load({
 				{ key: "elbow", label: "折线", desc: "直角折线，更工程化" }
 			]);
 			
+			/**
+			 * 总监弹窗底色方案（四档）。
+			 *
+			 * 🔴 这一档存在的理由：弹窗是**浮层**，按 V16 的设计口径浮层统一走 `:root` 的深色底，
+			 *    于是「点左侧总监按钮 → 一片黑」。用户原话就是「背景是黑色的」。
+			 *    浮层不能直接抄总监页那套宿主令牌桥接（宿主深色 ⇒ 还是黑），所以给它**自己的一档底色**。
+			 *
+			 * 四档的差别是"什么时候人眼最舒服"，不是"哪个好看"：
+			 *   · follow —— 严格跟随 Harness 主题令牌：宿主换明/暗，弹窗**实时**跟着变（无自定义时最省心）
+			 *   · warm   —— 暖白米色：亮环境 / 白天长时间读文字最舒服（默认）
+			 *   · dim    —— 暖夜暖褐：暗环境护眼。**刻意不是纯黑** —— #000 上的白字有光晕感，久看发涩
+			 *   · custom —— 自选底色；文字深浅由底色**亮度**自动决定（见 relLuma / dialogSkinFor）
+			 */
+			const P_DIALOG_BG = Object.freeze([
+				{ key: "follow", label: "跟随主题", desc: "严格跟随 Harness 主题令牌：宿主浅色则浅、宿主深色则深" },
+				{ key: "warm", label: "暖白", desc: "米白暖调 · 亮环境与白天最舒适（默认）" },
+				{ key: "dim", label: "暖夜", desc: "暖褐深色 · 夜间护眼，不刺眼也不是纯黑" },
+				{ key: "custom", label: "自定义", desc: "自选底色；文字按底色亮度自动配深浅" }
+			]);
+			
 			/** 十六进制 → rgba（解析失败回落主色蓝，绝不产出 NaN） */
 			function pHexSoft(hex, alpha) {
 				try {
@@ -10735,6 +13933,276 @@ window.__ModuleLoader__.load({
 					const n = parseInt(m[1], 16);
 					return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + alpha + ")";
 				} catch (e) { return "rgba(47,111,235," + alpha + ")"; }
+			}
+			
+			/** 十六进制 → [r,g,b]；解析失败返回 null（调用方自行回落，绝不产出 NaN） */
+			function hexToRgb(hex) {
+				try {
+					const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+					if (!m) return null;
+					const n = parseInt(m[1], 16);
+					return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+				} catch (e) { return null; }
+			}
+			
+			/**
+			 * 相对亮度（WCAG 2.1 定义，0 = 全黑 / 1 = 全白）。
+			 *
+			 * 🔴 判断"这个底色上该写深字还是浅字"**只能**用它。
+			 *    不能用 `(r+g+b)/3` 这类算术均值：人眼对绿最敏感、对蓝最不敏感
+			 *    （系数 0.7152 / 0.0722），算术均值会把深蓝 #1d2739（均值 39）和
+			 *    深绿 #27391d（均值 39）判成同一亮度，而后者看起来亮得多。
+			 */
+			function relLuma(hex) {
+				const c = hexToRgb(hex);
+				if (!c) return 0;
+				const f = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+				return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+			}
+			
+			/** 两色对比度（WCAG 2.1，1–21）。把"文字够不够清楚"从主观判断变成**可断言的数**。 */
+			function contrastRatio(a, b) {
+				const la = relLuma(a), lb = relLuma(b);
+				const hi = Math.max(la, lb), lo = Math.min(la, lb);
+				return (hi + 0.05) / (lo + 0.05);
+			}
+			
+			/** 该底色算"浅底"吗（阈值 0.42）。只用于**表面/强调色**分档；正文文字方向走对比度择优。 */
+			function isLightHex(hex) { return relLuma(hex) > 0.42; }
+			
+			/**
+			 * 把 `col` 朝 `pole` 推，直到它与 `base` 的对比度**刚好达到** `target`（二分 16 次）。
+			 *
+			 * 为什么需要它（真机实测暴露的算法缺陷，2026-09-17）：
+			 *   自定义底色的文字色原先用**固定比例**混色（`t2 = mixHex(base, ink, 0.72)`）。
+			 *   固定比例在**中间色**上必然翻车 —— 实测底色 `#7a7262`（luma 0.17）时
+			 *   t2 落到 `rgb(218,216,211)`，对比度只有 **3.34:1**，正文不达标（需 4.5）。
+			 *   根因不是"选错了边"（`ink` 方向已按对比度择优），而是**混合强度是个常数、
+			 *   而目标是个不等式**。⇒ 改成解这个方程：按目标对比度反解混合比例。
+			 *
+			 * 边界：连 `pole` 本身都达不到 `target`（极浅/极深两侧夹逼的色域极值）时
+			 *   返回 `pole` —— **尽力而为，且绝不产出 NaN / 无限循环**。
+			 */
+			function clampToContrast(col, base, pole, target) {
+				if (contrastRatio(col, base) >= target) return col;
+				if (contrastRatio(pole, base) < target) return pole;
+				let lo = 0, hi = 1;
+				for (let i = 0; i < 16; i++) {
+					const mid = (lo + hi) / 2;
+					if (contrastRatio(mixHex(col, pole, mid), base) >= target) hi = mid; else lo = mid;
+				}
+				return mixHex(col, pole, hi);
+			}
+			
+			/**
+			 * 挑一个"能真正解决问题"的极端色（黑白二选一）作为钳制方向。
+			 *
+			 * 🔴 这里踩过一次（2026-09-17 自测抓出）：第一版按"**离原色更远**"选极点，
+			 *   结果在浅紫底 `#c8a2c8` 上给白色强调色选了 `#ffffff` ——
+			 *   白离原色（深蓝）确实更远，**但白对浅紫底的对比度只有 2.22**，
+			 *   钳制完全失效（`clampToContrast` 发现极点也达不到目标 ⇒ 原样返回极点）。
+			 *   ⇒ 正确口径：极点必须**对底色**有效（`contrastRatio(pole, base) >= target`）；
+			 *     两个都有效时再按"离原色远"选，以尽量少改色相。
+			 */
+			function poleAwayFrom(col, base, target) {
+				const away = contrastRatio(col, "#000000") >= contrastRatio(col, "#ffffff") ? "#000000" : "#ffffff";
+				const other = away === "#000000" ? "#ffffff" : "#000000";
+				if (contrastRatio(away, base) >= target) return away;
+				if (contrastRatio(other, base) >= target) return other;
+				return contrastRatio(away, base) >= contrastRatio(other, base) ? away : other;
+			}
+			
+			/** 两色线性插值（t=0 取 a，t=1 取 b）。任一解析失败原样返回 a，**不产出 NaN**。 */
+			function mixHex(a, b, t) {
+				const A = hexToRgb(a), B = hexToRgb(b);
+				if (!A || !B) return String(a || b || "#000000");
+				const k = Math.max(0, Math.min(1, Number(t) || 0));
+				const h = (v) => Math.round(v).toString(16).padStart(2, "0");
+				return "#" + h(A[0] + (B[0] - A[0]) * k) + h(A[1] + (B[1] - A[1]) * k) + h(A[2] + (B[2] - A[2]) * k);
+			}
+			
+			/**
+			 * 内置两套底色的完整皮肤（follow 档没有色值，故不在此表 —— 它一个变量都不产出）。
+			 * 两个原则写死在数值里：
+			 *   ① 正文字色**不用纯黑 / 纯白**：暖白底配 `#3a3228`（暖黑）而不是 `#000`，暖夜底配
+			 *      `#f3eadd`（暖白）而不是 `#fff` —— 纯黑/纯白对比过刚，长文阅读发涩。
+			 *   ② 强调色按底色亮度换一套：浅底上用深紫/深蓝（浅紫在米白上几乎看不见），
+			 *      深底上用浅紫/浅蓝。状态色（成功/警告/危险）同理。
+			 */
+			const DLG_PRESETS = Object.freeze({
+				warm: {
+					bg: "#f7f2e8", bg1: "#fffdf8", bg2: "#efe7d8", line: "#ded2bd", lineSoft: "rgba(120,100,70,0.20)",
+					t1: "#3a3228", t2: "#5d5246", t3: "#8b7f6f",
+					ac: "#1f5fd0", ac2: "#6b3fc4", ok: "#1a7f37", warn: "#8a6100", bad: "#b42318"
+				},
+				dim: {
+					bg: "#262120", bg1: "#2f2825", bg2: "#3a312c", line: "#4d4139", lineSoft: "rgba(255,236,215,0.14)",
+					t1: "#f3eadd", t2: "#cfc1b1", t3: "#9e8f7d",
+					ac: "#9ec1ff", ac2: "#c4a4ff", ok: "#78d18a", warn: "#e5c06a", bad: "#ff9b93"
+				}
+			});
+			
+			/** 自定义底色的强调/状态色（按亮度二选一，与内置两套同源） */
+			const DLG_ACCENTS = Object.freeze({
+				light: { ac: "#1f5fd0", ac2: "#6b3fc4", ok: "#1a7f37", warn: "#8a6100", bad: "#b42318" },
+				dark: { ac: "#9ec1ff", ac2: "#c4a4ff", ok: "#78d18a", warn: "#e5c06a", bad: "#ff9b93" }
+			});
+			
+			/**
+			 * 设定 → 总监弹窗皮肤（**纯函数**）。
+			 *
+			 * 返回值约定：
+			 *   · `mode === "follow"` ⇒ 除遮罩外**一个色值都不产出**（`bg` 为 undefined）。
+			 *     这不是偷懒：follow 必须靠组件内联 fallback 直接读宿主令牌，才能"宿主换主题 ⇒ 弹窗
+			 *     **实时**跟着换"。若在这里固化成色值写进 `:root`，既拿不到 body 上的 `--dsw-alias-*`
+			 *     （var() 在定义处求值，见下方 pCssText 的长注释），又会在宿主换主题后停在旧值上。
+			 *   · 其它档 ⇒ 给全套色值；`image` 非空时把「卡片/标题栏」换成同色半透明（不透明 = 照片被盖死）。
+			 *
+			 * @param {object} p 个性化设定
+			 * @returns {{mode:string,image:string,dim:number,light:boolean,scrim:string,bg?:string,bg1?:string,bg2?:string,line?:string,lineSoft?:string,t1?:string,t2?:string,t3?:string,ac?:string,ac2?:string,ok?:string,warn?:string,bad?:string}}
+			 */
+			function dialogSkinFor(p) {
+				const s = normalizePersonalize(p);
+				const img = s.dialogBgImage;
+				const dim = s.dialogBgDim;
+				if (s.dialogBg === "follow") {
+					/* 跟随主题：不产出色值。只有"跟随 + 图片"这一种组合需要遮罩 —— 照片亮度与宿主令牌无关，
+					 * 故用中性黑遮罩；文字仍走宿主令牌（深色宿主上是浅字，天然压得住）。 */
+					return { mode: "follow", image: img, dim: dim, light: false, scrim: img ? "rgba(0,0,0," + dim + ")" : "" };
+				}
+				const preset = s.dialogBg === "custom" ? null : DLG_PRESETS[s.dialogBg];
+				const base = preset ? preset.bg : s.dialogBgColor;
+				const light = isLightHex(base);
+				/* 两个方向**必须分开**（这是自定义底色最容易搞反的一处）：
+				 *   · 表面（bg1/bg2）永远往白推 —— 浅底上卡片比画布更白、深底上卡片比画布更亮，
+				 *     两边都是"抬起来"的效果；
+				 *   · 文字/描边往**文字色**一侧推 —— 浅底往黑（深字 + 深描边），深底往白。
+				 * 若共用一个方向，浅底会得到"比画布更黑的卡片"（压下去），层次整个反了。 */
+				const surfToward = "#ffffff";
+				/* 文字方向**不用"浅底/深底"二分，而是直接按对比度择优** ——
+				 * 二分在中间灰（例 #7a7262，luma 0.17）上会选错边：按 luma 判"深底 ⇒ 白字"，
+				 * 实测白字对比度 4.2 反而**低于**黑字。择优只多两次计算，却在整个色域上都不会选反。
+				 * （t1 的混合强度两侧不同：深底上白字要更实才压得住，浅底上黑字 0.80 已经足够。） */
+				const inkDark = mixHex(base, "#000000", 0.88);
+				const inkLight = mixHex(base, "#ffffff", 0.93);
+				const useDarkInk = contrastRatio(base, inkDark) >= contrastRatio(base, inkLight);
+				const ink = useDarkInk ? "#000000" : "#ffffff";
+				const inkPole = useDarkInk ? "#000000" : "#ffffff";
+				/** 强调/状态色钳制：朝"对底色真正有效"的极端色推到 3:1（非文本 UI 的 WCAG 门槛） */
+				const fixAcc = (c) => clampToContrast(c, base, poleAwayFrom(c, base, 3.0), 3.0);
+				const acc = light ? DLG_ACCENTS.light : DLG_ACCENTS.dark;
+				const skin = preset || {
+					bg: base,
+					bg1: mixHex(base, surfToward, light ? 0.62 : 0.09),
+					bg2: mixHex(base, surfToward, light ? 0.34 : 0.17),
+					line: mixHex(base, ink, light ? 0.28 : 0.22),
+					lineSoft: pHexSoft(useDarkInk ? "#000000" : "#ffffff", 0.10),
+					/* 🔴 文字/强调色一律**按目标对比度反解混合比例**，不拍固定常数 ——
+					 *   固定比例在中间色上必翻车（实测 `#7a7262` 的正文只有 3.34:1，不达 AA 4.5）。
+					 *   目标：正文 t1/t2 = 4.5:1；弱化文字 t3 = 3:1；强调/状态色 = 3:1。 */
+					t1: clampToContrast(useDarkInk ? inkDark : inkLight, base, inkPole, 4.5),
+					t2: clampToContrast(mixHex(base, ink, useDarkInk ? 0.62 : 0.72), base, inkPole, 4.5),
+					t3: clampToContrast(mixHex(base, ink, useDarkInk ? 0.44 : 0.52), base, inkPole, 3.0),
+					ac: fixAcc(acc.ac),
+					ac2: fixAcc(acc.ac2),
+					ok: fixAcc(acc.ok),
+					warn: fixAcc(acc.warn),
+					bad: fixAcc(acc.bad)
+				};
+				return {
+					mode: s.dialogBg, image: img, dim: dim, light: light,
+					scrim: img ? pHexSoft(base, dim) : "",
+					bg: skin.bg,
+					/* 有照片时卡片必须半透明，否则整张照片只在缝隙里露几条纹 = 白买了这张图。
+					 * 透明度取 0.88 / 0.74：既能看见照片，又保证文字对比度（配 dialogBgDim 遮罩）。 */
+					bg1: img ? pHexSoft(base, 0.88) : skin.bg1,
+					bg2: img ? pHexSoft(base, 0.74) : skin.bg2,
+					line: skin.line, lineSoft: skin.lineSoft,
+					t1: skin.t1, t2: skin.t2, t3: skin.t3,
+					ac: skin.ac, ac2: skin.ac2, ok: skin.ok, warn: skin.warn, bad: skin.bad
+				};
+			}
+			
+			/** 弹窗皮肤的变量名全表（**清场用**：切回 follow 时必须逐条 remove，否则残留上一档的色值） */
+			const DIALOG_VAR_KEYS = Object.freeze([
+				"--dp-dlg-bg", "--dp-dlg-bg1", "--dp-dlg-bg2", "--dp-dlg-line", "--dp-dlg-line-soft",
+				"--dp-dlg-t1", "--dp-dlg-t2", "--dp-dlg-t3",
+				"--dp-dlg-ac", "--dp-dlg-ac2", "--dp-dlg-ok", "--dp-dlg-warn", "--dp-dlg-bad",
+				"--dp-dlg-scrim", "--dp-dlg-dim", "--dp-dlg-img"
+			]);
+			
+			/**
+			 * 设定 → 弹窗皮肤 CSS 变量表（**纯函数**）。
+			 * follow 档返回 `{}`（一个变量都不产出）—— 组件的 `var(--dp-dlg-*, <宿主令牌>)` 于是整条
+			 * 落到宿主令牌上，宿主换明暗主题时**无需重新 apply** 就跟着变。
+			 * @param {object} p
+			 * @returns {Record<string,string>}
+			 */
+			function dialogVarsFor(p) {
+				const s = normalizePersonalize(p);
+				const k = dialogSkinFor(s);
+				const img = s.dialogBgImage;
+				if (k.bg === undefined) {
+					return img ? { "--dp-dlg-scrim": k.scrim, "--dp-dlg-dim": String(s.dialogBgDim) } : {};
+				}
+				const out = {
+					"--dp-dlg-bg": k.bg, "--dp-dlg-bg1": k.bg1, "--dp-dlg-bg2": k.bg2,
+					"--dp-dlg-line": k.line, "--dp-dlg-line-soft": k.lineSoft,
+					"--dp-dlg-t1": k.t1, "--dp-dlg-t2": k.t2, "--dp-dlg-t3": k.t3,
+					"--dp-dlg-ac": k.ac, "--dp-dlg-ac2": k.ac2, "--dp-dlg-ok": k.ok,
+					"--dp-dlg-warn": k.warn, "--dp-dlg-bad": k.bad,
+					"--dp-dlg-dim": String(s.dialogBgDim)
+				};
+				if (img) {
+					out["--dp-dlg-scrim"] = k.scrim;
+					out["--dp-dlg-img"] = 'url("' + img + '")';
+				}
+				return out;
+			}
+			/**
+			 * 把用户选的图片文件读成"能直接写进 localStorage 的 dataURL"。
+			 *
+			 * 🔴 必须先压缩再存：手机直出 3–8 MB，base64 再涨 33% ⇒ 直接塞 localStorage 会**爆配额**，
+			 *    而爆配额在 savePersonalize 里是被 catch 掉的静默失败 —— 用户以为换成功了，
+			 *    下次打开还是旧图。规格：最长边 ≤ 1920px；JPEG 质量 0.82；仍超上限降到 0.6 再压一次。
+			 * 任何一步失败（非图片 / 解码失败 / 无 DOM）一律 resolve("")，不抛。
+			 * @param {File|Blob} file
+			 * @returns {Promise<string>} dataURL，或 ""（失败）
+			 */
+			function readImageAsDataUrl(file) {
+				return new Promise((resolve) => {
+					try {
+						if (typeof document === "undefined" || typeof FileReader === "undefined" || !file) { resolve(""); return; }
+						const fr = new FileReader();
+						fr.onerror = () => resolve("");
+						fr.onload = () => {
+							const raw = String(fr.result || "");
+							if (!/^data:image\//.test(raw)) { resolve(""); return; }
+							/* 小图（且已是 base64）直接用原图，避免多一次有损重编码 */
+							if (raw.length <= P_IMG_MAX && raw.indexOf(";base64,") > 0 && raw.length <= 700000) { resolve(raw); return; }
+							const img = new Image();
+							img.onerror = () => resolve("");
+							img.onload = () => {
+								try {
+									const maxEdge = 1920;
+									const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+									const w = Math.max(1, Math.round((img.width || 1) * scale));
+									const h = Math.max(1, Math.round((img.height || 1) * scale));
+									const cv = document.createElement("canvas");
+									cv.width = w; cv.height = h;
+									const cx = cv.getContext("2d");
+									if (!cx) { resolve(""); return; }
+									cx.drawImage(img, 0, 0, w, h);
+									let out = cv.toDataURL("image/jpeg", 0.82);
+									if (out.length > P_IMG_MAX) out = cv.toDataURL("image/jpeg", 0.6);
+									resolve(out.length > P_IMG_MAX ? "" : out);
+								} catch (e) { resolve(""); }
+							};
+							img.src = raw;
+						};
+						fr.readAsDataURL(file);
+					} catch (e) { resolve(""); }
+				});
 			}
 			
 			/** 数值夹紧（防脏数据把界面搞崩） */
@@ -10757,6 +14225,15 @@ window.__ModuleLoader__.load({
 					return keys.indexOf(v) >= 0 ? v : dflt;
 				};
 				const hexOk = (v) => /^#[0-9a-f]{6}$/i.test(String(v || ""));
+				/* 背景图只接受 **内联 dataURL**，且必须真的是图片类型、长度在上限内。
+				 * 🔴 为什么不接受 http(s) 链接或本地路径：这个值会被写进 `--dp-dlg-img: url(...)`。
+				 *    收外链 ⇒ 每次开弹窗都发一次外部请求（离线环境挂住、也泄露"我开了这个界面"）；
+				 *    收 file:// / 相对路径 ⇒ 在不同 origin 下静默 404，用户只看到"我设的图没了"。
+				 *    超长直接丢弃而不是截断：截断出来的 base64 不是合法图片，只会得到一个坏图标。 */
+				const imgOk = (v) => {
+					const s = String(v || "");
+					return s.length <= P_IMG_MAX && /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s);
+				};
 				return {
 					accent: hexOk(r.accent) ? String(r.accent).toLowerCase() : P_DEFAULTS.accent,
 					accent2: hexOk(r.accent2) ? String(r.accent2).toLowerCase() : P_DEFAULTS.accent2,
@@ -10767,7 +14244,11 @@ window.__ModuleLoader__.load({
 					edge: pick(P_EDGE, r.edge, P_DEFAULTS.edge),
 					motion: r.motion === undefined ? P_DEFAULTS.motion : Boolean(r.motion),
 					minimap: r.minimap === undefined ? P_DEFAULTS.minimap : Boolean(r.minimap),
-					legend: r.legend === undefined ? P_DEFAULTS.legend : Boolean(r.legend)
+					legend: r.legend === undefined ? P_DEFAULTS.legend : Boolean(r.legend),
+					dialogBg: pick(P_DIALOG_BG, r.dialogBg, P_DEFAULTS.dialogBg),
+					dialogBgColor: hexOk(r.dialogBgColor) ? String(r.dialogBgColor).toLowerCase() : P_DEFAULTS.dialogBgColor,
+					dialogBgImage: imgOk(r.dialogBgImage) ? String(r.dialogBgImage) : P_DEFAULTS.dialogBgImage,
+					dialogBgDim: clampNum(r.dialogBgDim, 0, 0.95, P_DEFAULTS.dialogBgDim)
 				};
 			}
 			
@@ -10874,6 +14355,21 @@ window.__ModuleLoader__.load({
 				L.push('html[data-dp-texture="grid"] .dp-textured{background-image:linear-gradient(var(--dp-tex) 1px,transparent 1px),linear-gradient(90deg,var(--dp-tex) 1px,transparent 1px);background-size:22px 22px;}');
 				L.push('html[data-dp-texture="dots"] .dp-textured{background-image:radial-gradient(var(--dp-tex-strong) 1px,transparent 1px);background-size:16px 16px;}');
 				L.push('html[data-dp-texture="glass"] .dp-textured{background-image:linear-gradient(135deg,var(--dp-tex-strong),transparent 40%);backdrop-filter:blur(10px);}');
+				//
+				// ③b 总监弹窗的**图片背景**（只有这一条需要样式表：inline style 写不出"照片 + 遮罩"两层）
+				//
+				//  选择器**刻意**只列弹窗自己的四个壳（面板 / 左右竖条），不用 `.dp-*` 通配：
+				//  写宽了会把总监页、导图、工作室一起铺上照片（它们各有各的宿主桥接与纹理）。
+				//  两个技术点：
+				//   ① 遮罩走 `--dp-dlg-scrim`（= 当前底色 + 用户调的浓度）⇒ 文字对比度由浓度**直接**决定，
+				//      换底色时遮罩自动跟着换，不需要另算一套。
+				//   ② `background-attachment:fixed` 让两块面板共用"一张以视口为坐标系的照片" ——
+				//      否则左右两块各铺各的，中间一条接缝像两张图拼的。
+				L.push('html[data-dp-dlgimg="1"] [data-testid="d-panel"],'
+					+ 'html[data-dp-dlgimg="1"] [data-testid="d-left-rail"],'
+					+ 'html[data-dp-dlgimg="1"] [data-testid="d-right-rail"]{'
+					+ "background-image:linear-gradient(var(--dp-dlg-scrim, rgba(0,0,0,.72)),var(--dp-dlg-scrim, rgba(0,0,0,.72))),var(--dp-dlg-img, none);"
+					+ "background-size:cover,cover;background-position:center,center;background-repeat:no-repeat,no-repeat;background-attachment:fixed,fixed;}");
 				// ④ 动效开关
 				L.push('html[data-dp-motion="0"] .dp-anim,html[data-dp-motion="0"] .dp-pulse,html[data-dp-motion="0"] .dp-rise{animation:none !important;transition:none !important;}');
 				return L.join("\n");
@@ -10897,6 +14393,16 @@ window.__ModuleLoader__.load({
 					// 变量
 					const vars = pVarsFor(s);
 					for (const k of Object.keys(vars)) root.style.setProperty(k, vars[k]);
+					// 总监弹窗皮肤：**先清场、再写本轮**
+					//  🔴 清场不是洁癖：`follow` 档刻意**一个变量都不产出**，靠的就是"属性不存在 ⇒ 组件
+					//     内联 fallback 落到宿主令牌 ⇒ 宿主换明暗主题时弹窗实时跟着变"。
+					//     少了这一步，用户从「暖白」切回「跟随主题」会**残留上一档的米色**，
+					//     而界面上"跟随主题"明明是选中的 —— 典型的静默失效。
+					for (const k of DIALOG_VAR_KEYS) root.style.removeProperty(k);
+					const dvars = dialogVarsFor(s);
+					for (const k of Object.keys(dvars)) root.style.setProperty(k, dvars[k]);
+					root.setAttribute("data-dp-dlgbg", s.dialogBg);
+					root.setAttribute("data-dp-dlgimg", s.dialogBgImage ? "1" : "0");
 					// 纹理 / 动效 / 连线（给 CSS 选择器用；同时给 e2e 提供稳定的读点）
 					root.setAttribute("data-dp-texture", s.texture);
 					root.setAttribute("data-dp-motion", s.motion ? "1" : "0");
@@ -10931,18 +14437,22 @@ window.__ModuleLoader__.load({
 				let state = loadPersonalize();
 				const listeners = new Set();
 				function emit() { for (const fn of listeners) { try { fn(state); } catch (e) { /* 单个订阅者异常不影响其他 */ } } }
+				/** localStorage 是否可用（隐私模式 / SSR 下不可用；此时"存不上"不算失败） */
+				function hasLS() { try { return typeof localStorage !== "undefined" && localStorage !== null; } catch (e) { return false; } }
 				applyPersonalize(state);
 				return {
 					getState: () => state,
 					subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
-					/** 改一项（未知键忽略，保证 store 不会被写脏） */
+					/** 改一项（未知键忽略，保证 store 不会被写脏）。
+					 *  @returns {boolean} false = 未知键**或**未能持久化（典型：背景图太大撑爆配额）。
+					 *    调用方据此把"看起来换了、重启后没了"变成一句可读的提示。 */
 					set: (key, value) => {
 						if (!(key in P_DEFAULTS)) return false;
 						state = normalizePersonalize({ ...state, [key]: value });
-						savePersonalize(state);
+						const saved = savePersonalize(state);
 						applyPersonalize(state);
 						emit();
-						return true;
+						return saved || !hasLS();
 					},
 					patch: (obj) => {
 						state = normalizePersonalize({ ...state, ...(obj || {}) });
@@ -10964,9 +14474,10 @@ window.__ModuleLoader__.load({
 			/** 全局契约（调试 / e2e 用） */
 			function installPersonalizeApi() {
 				const api = {
-					PERSONALIZE_KEY, PERSONALIZE_STYLE_ID, P_DEFAULTS,
-					P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE,
+					PERSONALIZE_KEY, PERSONALIZE_STYLE_ID, P_DEFAULTS, P_IMG_MAX,
+					P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DIALOG_BG,
 					normalizePersonalize, pVarsFor, pCssText, applyPersonalize,
+					hexToRgb, relLuma, isLightHex, mixHex, clampToContrast, dialogSkinFor, dialogVarsFor, DIALOG_VAR_KEYS, readImageAsDataUrl,
 					loadPersonalize, savePersonalize, store: personalizeStore
 				};
 				if (typeof window !== "undefined") window.__dshPersonalize = api;
@@ -10976,6 +14487,7 @@ window.__ModuleLoader__.load({
 			exports.PERSONALIZE_KEY = PERSONALIZE_KEY;
 			exports.PERSONALIZE_STYLE_ID = PERSONALIZE_STYLE_ID;
 			exports.P_DEFAULTS = P_DEFAULTS;
+			exports.P_IMG_MAX = P_IMG_MAX;
 			exports.P_ACCENTS = P_ACCENTS;
 			exports.P_ACCENT2 = P_ACCENT2;
 			exports.P_DENSITY = P_DENSITY;
@@ -10983,7 +14495,18 @@ window.__ModuleLoader__.load({
 			exports.P_RADIUS = P_RADIUS;
 			exports.P_TEXTURES = P_TEXTURES;
 			exports.P_EDGE = P_EDGE;
+			exports.P_DIALOG_BG = P_DIALOG_BG;
 			exports.pHexSoft = pHexSoft;
+			exports.hexToRgb = hexToRgb;
+			exports.relLuma = relLuma;
+			exports.contrastRatio = contrastRatio;
+			exports.isLightHex = isLightHex;
+			exports.clampToContrast = clampToContrast;
+			exports.mixHex = mixHex;
+			exports.dialogSkinFor = dialogSkinFor;
+			exports.DIALOG_VAR_KEYS = DIALOG_VAR_KEYS;
+			exports.dialogVarsFor = dialogVarsFor;
+			exports.readImageAsDataUrl = readImageAsDataUrl;
 			exports.normalizePersonalize = normalizePersonalize;
 			exports.pVarsFor = pVarsFor;
 			exports.pCssText = pCssText;
@@ -11032,7 +14555,7 @@ window.__ModuleLoader__.load({
 			 */
 			
 			const react = require("react");
-			const { personalizeStore, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DEFAULTS } = __m("store/personalize.js");
+			const { personalizeStore, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DIALOG_BG, P_DEFAULTS, readImageAsDataUrl } = __m("store/personalize.js");
 			
 			const h = react.createElement;
 			const PERSONALIZE_PANEL_ID = "dsh-personalize-panel";
@@ -11062,6 +14585,15 @@ window.__ModuleLoader__.load({
 				swatch: (on, hex) => ({
 					width: 26, height: 20, borderRadius: "var(--dp-radius-sm, 5px)", background: hex, cursor: "pointer",
 					border: on ? "2px solid var(--dp-t1, #e8eaed)" : "1px solid var(--dp-line, #31343a)", boxSizing: "border-box"
+				}),
+				/* 取色器的一项：外框和 opt 一致，里面塞一个原生 color input（点哪都能开色盘） */
+				pick: (on) => ({
+					display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer",
+					padding: "2px 7px", borderRadius: "var(--dp-radius-sm, 5px)",
+					fontSize: "calc(11px * var(--dp-font, 1))",
+					border: "1px solid " + (on ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
+					background: on ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "var(--dp-bg-2, #1c1e23)",
+					color: on ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)", fontWeight: on ? 600 : 400
 				}),
 				toggle: (on) => ({
 					display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
@@ -11096,6 +14628,25 @@ window.__ModuleLoader__.load({
 					() => personalizeStore.getState(),
 					() => personalizeStore.getState()
 				);
+			
+				/* 背景图：文件选择 → 压缩 → 落库。
+				 * 🔴 必须把"存不上"讲出来（配额满 / 图片过大）：savePersonalize 失败是**静默**的，
+				 *    不讲的话用户会以为换成功了，重启一看还是旧图 —— 本项目纪律 54「静默半成功更坏」。 */
+				const fileRef = react.useRef(null);
+				const [bgMsg, setBgMsg] = react.useState("");
+				const onPickFile = react.useCallback((e) => {
+					const f = e && e.target && e.target.files ? e.target.files[0] : null;
+					if (e && e.target) e.target.value = "";
+					if (!f) return;
+					setBgMsg("正在压缩图片…");
+					readImageAsDataUrl(f).then((url) => {
+						if (!url) { setBgMsg("图片处理失败：换一张 JPG / PNG 再试"); return; }
+						const ok = personalizeStore.set("dialogBgImage", url);
+						setBgMsg(ok
+							? "已应用背景图 · " + Math.round(url.length / 1024) + " KB（仅存本机）"
+							: "保存失败：本地存储空间不足，换一张更小的图");
+					});
+				}, []);
 			
 				/* Esc 关闭 —— 与导图/工作室的"逐层退"一致：本面板在最上层，先关它 */
 				react.useEffect(() => {
@@ -11147,6 +14698,63 @@ window.__ModuleLoader__.load({
 						key: "tx", title: "质感", hint: "背景纹理 —— 这一项就是用户说的「文字背景」",
 						children: optionRow(P_TEXTURES, p.texture, "texture")
 					}),
+					/* ── 总监弹窗背景 ──
+					 * 用户原话：「左侧点击总监按钮，总监的弹窗，背景是黑色的。按人眼最舒服温馨的风格调整
+					 *   背景和文字的颜色；同时增加自定义背景颜色的选项，可以上传图片作为背景；
+					 *   默认的话可以跟随软件的背景主题」
+					 * 四档 + 取色器 + 传图 + 遮罩浓度。**只有弹窗受它影响**，所以 hint 里写明范围，
+					 * 否则用户会以为"改了没生效"（总监页/导图/工作室各有各的宿主桥接，不由这一档管）。 */
+					h(Section, {
+						key: "dlg", title: "总监弹窗背景", hint: "只改总监弹窗（左侧「总监」开的那一扇）· 文字按底色自动配深浅",
+						children: [
+							optionRow(P_DIALOG_BG, p.dialogBg, "dlgbg"),
+							h("label", {
+								key: "col", style: S.pick(p.dialogBg === "custom"), "data-testid": "pp-dlgbg-color-wrap",
+								title: "自选底色；点开色盘即切到「自定义」档（文字深浅按底色亮度自动配，保证看得清）"
+							}, [
+								h("span", { key: "l" }, "底色"),
+								h("input", {
+									key: "i", type: "color", value: p.dialogBgColor, "data-testid": "pp-dlgbg-color",
+									"aria-label": "自定义弹窗底色",
+									style: { width: 26, height: 20, border: "none", background: "transparent", padding: 0, cursor: "pointer" },
+									onChange: (e) => personalizeStore.patch({ dialogBg: "custom", dialogBgColor: e.target.value })
+								})
+							]),
+							h("div", {
+								key: "up", style: S.opt(p.dialogBgImage ? "1" : "0"), "data-testid": "pp-dlgbg-upload",
+								title: "选一张本地图片：自动压到 1920px 内并转 JPEG 后存本机（不上传）；卡片会变半透明让图透出来",
+								onClick: () => { if (fileRef.current) fileRef.current.click(); }
+							}, p.dialogBgImage ? "换一张图" : "上传图片"),
+							p.dialogBgImage ? h("div", {
+								key: "clr", style: S.opt(false), "data-testid": "pp-dlgbg-clear",
+								title: "只移除图片，底色方案保留",
+								onClick: () => { personalizeStore.set("dialogBgImage", ""); setBgMsg("已移除背景图"); }
+							}, "移除图片") : null,
+							h("input", {
+								key: "f", ref: fileRef, type: "file", accept: "image/*",
+								"data-testid": "pp-dlgbg-file", "aria-label": "选择弹窗背景图片",
+								style: { display: "none" }, onChange: onPickFile
+							})
+						]
+					}),
+					/* 遮罩浓度：只在有图时出现 —— 它是"照片与文字"的唯一权衡旋钮，默认 72% 已够读 */
+					p.dialogBgImage ? h("div", { key: "dlgdim", style: { ...S.sec, display: "flex", alignItems: "center", gap: 6 } }, [
+						h("span", { key: "l", style: { ...S.secT, marginBottom: 0, whiteSpace: "nowrap" } }, "图片遮罩"),
+						h("input", {
+							key: "r", type: "range", min: 0, max: 95, step: 1, value: Math.round(p.dialogBgDim * 100),
+							"data-testid": "pp-dlgbg-dimrange", "aria-label": "图片遮罩浓度",
+							style: { flex: 1, minWidth: 60, accentColor: "var(--dp-ac, #2f6feb)" },
+							onChange: (e) => personalizeStore.set("dialogBgDim", Number(e.target.value) / 100)
+						}),
+						h("span", {
+							key: "v", "data-testid": "pp-dlgbg-dimval",
+							style: { ...S.secT, marginBottom: 0, width: 34, textAlign: "right" }
+						}, Math.round(p.dialogBgDim * 100) + "%")
+					]) : null,
+					bgMsg ? h("div", {
+						key: "dlgmsg", "data-testid": "pp-dlgbg-msg",
+						style: { ...S.secT, marginBottom: 6, color: "var(--dp-t2, #c3c8ce)", whiteSpace: "normal" }
+					}, bgMsg) : null,
 					h(Section, {
 						key: "dn", title: "密度", hint: "行高与间距的整体乘数",
 						children: optionRow(P_DENSITY, p.density, "density")
@@ -11191,7 +14799,8 @@ window.__ModuleLoader__.load({
 						h("span", {
 							key: "n", style: { ...S.secT, marginBottom: 0, flex: 1 },
 							"data-testid": "pp-summary"
-						}, "四处共用 · " + p.texture + " / " + Math.round(p.density * 100) + "% / r" + p.radius),
+						}, "四处共用 · " + p.texture + " / " + Math.round(p.density * 100) + "% / r" + p.radius
+							+ " · 弹窗 " + p.dialogBg + (p.dialogBgImage ? " + 图" : "")),
 						h("button", {
 							key: "r", style: S.opt(false), "data-testid": "pp-reset",
 							title: "恢复默认：" + P_DEFAULTS.texture + " / r" + P_DEFAULTS.radius + " / " + P_DEFAULTS.accent,
@@ -12041,7 +15650,7 @@ window.__ModuleLoader__.load({
 			 * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
 			 * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
 			 * 上游：client-entry.js, components/DirectorPage.js, mount.js
-			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
+			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -12081,8 +15690,12 @@ window.__ModuleLoader__.load({
 			const { applySplit, clearSplit, getSplitRootRect } = __m("bridge/split.js");
 			const { sendToChat, deliverToChat, observeConversation, readConversation, installChatBridgeApi } = __m("bridge/chat-bridge.js");
 			const { openSession } = __m("logic/branch-tree.js");
-			const { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL } = __m("logic/routing.js");
-			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, PLUGIN_DB_NAME } = __m("store/plugin-db.js");
+			const { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL, dimensionCandidates } = __m("logic/routing.js");
+			const { plan: planSplit } = __m("logic/split-dimensions.js");
+			const { dimBranchContext } = __m("logic/dim-branch.js");
+			const { readSplitIndex } = __m("store/split-index.js");
+			const { makeEnvelope, childEnvelope, VIA, summariesFor } = __m("logic/lineage.js");
+			const { appendDirectorMessage, listDirectorMessages, listAllDirectorMessages, pluginDbStats, makeId, PLUGIN_DB_NAME } = __m("store/plugin-db.js");
 			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
 			const { DirectorHierarchy } = __m("components/DirectorHierarchy.js");
 			const { dshLog } = __m("util/debug.js");
@@ -12175,46 +15788,46 @@ window.__ModuleLoader__.load({
 					position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column",
 					/* 🔴 `backgroundColor` 长写（非 `background` 简写）：简写会把 `background-image` 重置，
 					 *    使 `.dp-textured` 的三档纹理（个性化「质感」）静默失效。四处已统一修正。 */
-					backgroundColor: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
+					backgroundColor: "var(--dp-dlg-bg, var(--dsw-alias-bg-overlay, #16171a))", color: "var(--dp-dlg-t1, var(--dsw-alias-label-primary, #e8eaed))",
 					border: "1px solid var(--dp-ac2-line, rgba(137,87,229,.42))", borderRadius: "var(--dp-radius-lg, 10px)", overflow: "hidden",
 					boxShadow: "var(--dp-shadow, 0 24px 70px rgba(0,0,0,.62))", fontFamily: "inherit",
 					fontSize: "calc(12.5px * var(--dp-font, 1))"
 				},
-				head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1c1e22)" },
+				head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1c1e22))" },
 				headTitle: { fontWeight: 620, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
-				lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "#b794f6", whiteSpace: "nowrap" },
+				lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "var(--dp-dlg-ac2, #b794f6)", whiteSpace: "nowrap" },
 				btns: { marginLeft: "auto", display: "flex", gap: 3 },
-				btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
-				seg: { display: "flex", border: "1px solid var(--dsw-alias-border-l2, #3d4148)", borderRadius: 6, overflow: "hidden", margin: "6px 8px 0", flex: "0 0 auto" },
-				segItem: (on) => ({ flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer", border: "none", color: on ? "#c9a9ff" : "var(--dsw-alias-label-tertiary, #8b9199)", background: on ? "rgba(137,87,229,.20)" : "var(--dsw-alias-bg-sunken, #212429)", fontWeight: on ? 600 : 400 }),
+				btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
+				seg: { display: "flex", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", borderRadius: 6, overflow: "hidden", margin: "6px 8px 0", flex: "0 0 auto" },
+				segItem: (on) => ({ flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer", border: "none", color: on ? "var(--dp-dlg-ac2, #c9a9ff)" : "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", backgroundColor: on ? "rgba(137,87,229,.20)" : "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", fontWeight: on ? 600 : 400 }),
 				body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 },
-				blk: { border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 7, background: "var(--dsw-alias-bg-sunken, #1c1e22)", padding: "8px 9px" },
-				blkT: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", letterSpacing: ".4px", marginBottom: 7, display: "flex", alignItems: "center", gap: 6 },
+				blk: { border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 7, backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #1c1e22))", padding: "8px 9px" },
+				blkT: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", letterSpacing: ".4px", marginBottom: 7, display: "flex", alignItems: "center", gap: 6 },
 				kv: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 },
-				kvc: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 5, padding: "5px 7px" },
+				kvc: { backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 5, padding: "5px 7px" },
 				kvV: { fontSize: 14, fontWeight: 650 },
-				kvK: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", marginTop: 1 },
+				kvK: { fontSize: 10.5, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", marginTop: 1 },
 				chips: { display: "flex", flexWrap: "wrap", gap: 5 },
 				chip: (mode, on) => ({
 					fontSize: 11, padding: "3px 8px", borderRadius: 5, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
 					border: "1px solid " + (mode === "auto" ? "rgba(137,87,229,.42)" : "rgba(210,153,34,.42)"),
-					background: on ? "rgba(137,87,229,.16)" : "var(--dsw-alias-bg-base, #212429)",
-					color: mode === "auto" ? "#b794f6" : "#e0b341", fontWeight: on ? 600 : 400
+					backgroundColor: on ? "rgba(137,87,229,.16)" : "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))",
+					color: mode === "auto" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-warn, #e0b341)", fontWeight: on ? 600 : 400
 				}),
 				dot: (c) => ({ width: 5, height: 5, borderRadius: "50%", background: c || "#39c5cf", display: "inline-block" }),
-				input: { flex: 1, minWidth: 0, height: 28, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #141619)", color: "var(--dsw-alias-label-primary, #e8eaed)", padding: "0 9px", fontSize: 11.5, boxSizing: "border-box" },
+				input: { flex: 1, minWidth: 0, height: 28, borderRadius: 6, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #141619))", color: "var(--dp-dlg-t1, var(--dsw-alias-label-primary, #e8eaed))", padding: "0 9px", fontSize: 11.5, boxSizing: "border-box" },
 				btnPrimary: { height: 28, padding: "0 11px", borderRadius: 6, border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" },
-				btnGhost: { height: 24, padding: "0 9px", borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap" },
+				btnGhost: { height: 24, padding: "0 9px", borderRadius: 6, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))", cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap" },
 				rail: (side) => ({
 					position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column", alignItems: "center",
 					justifyContent: "flex-start", gap: 8, paddingTop: 10, cursor: "pointer",
-					background: "var(--dsw-alias-bg-sunken, #1b1e23)", border: "1px solid var(--dsw-alias-border-l2, #31343a)",
-					color: side === "left" ? "#b794f6" : "#79a8ff", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
+					backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1b1e23))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))",
+					color: side === "left" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
 				}),
-				muted: { fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.6 },
+				muted: { fontSize: 11, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", lineHeight: 1.6 },
 				msg: { display: "flex", gap: 6, marginBottom: 6 },
-				av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
-				bub: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
+				av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" : "var(--dp-dlg-ac2, #b794f6)", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
+				bub: { backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
 			};
 			
 			/* ── 小工具 ── */
@@ -12226,7 +15839,7 @@ window.__ModuleLoader__.load({
 			}
 			
 			/** 六维状态色 */
-			const DIM_COLOR = { ok: "#3fb950", warn: "#d29922", bad: "#f85149" };
+			const DIM_COLOR = { ok: "var(--dp-dlg-ok, #3fb950)", warn: "var(--dp-dlg-warn, #d29922)", bad: "var(--dp-dlg-bad, #f85149)" };
 			const DIM_MARK = { ok: "✅", warn: "⚠", bad: "❌" };
 			
 			/* ══════════════════════════════════════════════════════════════════
@@ -12241,12 +15854,12 @@ window.__ModuleLoader__.load({
 						h("div", { key: "1" }, "意图：" + result.intent.kind + "（置信 " + result.intent.confidence.toFixed(2) + "）"),
 						h("div", { key: "2" }, "候选：" + (result.candidates.length ? result.candidates.slice(0, 3).map((c) => c.name + "(" + c.score + ")").join(" / ") : "无")),
 						h("div", { key: "3" }, "子任务：" + result.subtasks.length + " 个"),
-						h("div", { key: "4", style: { color: "#b794f6" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
+						h("div", { key: "4", style: { color: "var(--dp-dlg-ac2, #b794f6)" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
 						h("div", { key: "5" }, "理由：" + d.reason)
 					]),
 					h("div", { key: "b", style: { display: "flex", gap: 5, flexWrap: "wrap" } }, [
 						h("button", { key: "tr", style: S.btnGhost, "data-testid": "d-route-transfer", disabled: busy, onClick: () => onConfirm(DESTINATION.TRANSFER) }, "转给该对话的总监"),
-						h("button", { key: "di", style: { ...S.btnGhost, borderColor: "#2f6bdd", color: "#79a8ff" }, "data-testid": "d-route-direct", disabled: busy, onClick: () => onConfirm(DESTINATION.DIRECT) }, "直接调用对应对话"),
+						h("button", { key: "di", style: { ...S.btnGhost, borderColor: "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #2f6bdd))", color: "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" }, "data-testid": "d-route-direct", disabled: busy, onClick: () => onConfirm(DESTINATION.DIRECT) }, "直接调用对应对话"),
 						h("button", { key: "cr", style: S.btnGhost, "data-testid": "d-route-new", disabled: busy, onClick: () => onConfirm(DESTINATION.CREATE) }, "新建对话"),
 						h("button", { key: "cx", style: S.btnGhost, "data-testid": "d-route-cancel", disabled: busy, onClick: onCancel }, "取消")
 					])
@@ -12265,9 +15878,9 @@ window.__ModuleLoader__.load({
 					result
 						? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-review-dim": d.key, "data-status": d.status }, [
 							h("span", { key: "m", style: { color: DIM_COLOR[d.status], width: 14, flex: "0 0 14px" } }, DIM_MARK[d.status]),
-							h("span", { key: "l", style: { width: 62, flex: "0 0 62px", color: "#c3c8ce" } }, d.label),
+							h("span", { key: "l", style: { width: 62, flex: "0 0 62px", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))" } }, d.label),
 							h("span", { key: "n", style: { ...S.muted, flex: 1, minWidth: 0 } }, d.note)
-						])).concat([h("div", { key: "s", style: { ...S.muted, marginTop: 5, color: result.pass ? "#6fd388" : "#f0877f" }, "data-testid": "d-review-summary" }, result.summary)]))
+						])).concat([h("div", { key: "s", style: { ...S.muted, marginTop: 5, color: result.pass ? "var(--dp-dlg-ok, #6fd388)" : "var(--dp-dlg-bad, #f0877f)" }, "data-testid": "d-review-summary" }, result.summary)]))
 						: h("div", { key: "e", style: S.muted, "data-testid": "d-review-summary" }, "尚未审核。点「重跑审核」或等待对话产出变化自动触发。")
 				]);
 			}
@@ -12275,7 +15888,7 @@ window.__ModuleLoader__.load({
 			/* ══════════════════════════════════════════════════════════════════
 			 * 子组件：左面板（R2 / R3 / R5 / R6 + 层级管理）
 			 * ══════════════════════════════════════════════════════════════════ */
-			function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg }) {
+			function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg }) {
 				const counts = react.useMemo(() => countByLevel(tree), [tree]);
 				const [agentSeg, setAgentSeg] = react.useState("agents");
 				const [called, setCalled] = react.useState({});
@@ -12296,7 +15909,7 @@ window.__ModuleLoader__.load({
 							h("div", { key: "k", style: S.kv }, [
 								h("div", { key: "p", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.project)), h("div", { key: "k", style: S.kvK }, "项目 / 文件夹")]),
 								h("div", { key: "s", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.session)), h("div", { key: "k", style: S.kvK }, "对话")]),
-								h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "#e0b341" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
+								h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "var(--dp-dlg-warn, #e0b341)" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
 								h("div", { key: "td", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String((node && node.todos ? node.todos.length : 0))), h("div", { key: "k", style: S.kvK }, "待办")])
 							]),
 							h("div", { key: "m", style: { ...S.muted, marginTop: 6 } }, "阶段：" + ((node && node.meta && node.meta.currentPhase) || "未设置") + " · 目标：" + ((node && node.meta && node.meta.goal) || "未设置"))
@@ -12304,16 +15917,34 @@ window.__ModuleLoader__.load({
 			
 						/* R5 总监流（只治理不执行） */
 						h("div", { key: "r5", style: S.blk, "data-testid": "d-r5" }, [
-							h("div", { key: "t", style: S.blkT }, ["R5 总监对话区", h("span", { key: "x", style: { marginLeft: "auto", color: "#8b9199" } }, "只治理 · 不执行")]),
+							h("div", { key: "t", style: S.blkT }, ["R5 总监对话区", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "只治理 · 不执行")]),
 							messages.length
 								? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
 									h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 									h("div", { key: "b", style: S.bub }, [
-										m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
+										m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 3 } }, m.kind) : null,
 										h("span", { key: "t2" }, m.text)
 									])
 								]))
-								: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。")
+								: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。"),
+							/* 🔴 19 号文 **N3 · R2**：**上游可见下游摘要**（用户原话「同一个分支上下游的
+							 *    总监消息需要是一致的」）—— 不必点进下游节点就能看到它的产出摘要行。
+							 *    · 判据来自 `logic/lineage.js#summariesFor()`（**纯函数**）⇒
+							 *      界面与闸门 `test-lineage-msg.mjs` 用的是**同一份**判据（不是两套）。
+							 *    · `data-said` = 下游消息 id（可追溯到**具体哪一条**，不是"有摘要"就算过）；
+							 *      `data-from` = 产出节点 id（哪个分支产的，可对账）。
+							 *    · 空 ⇒ **不渲染**该块（不画空壳 —— 空壳会让"没有下游"与"下游没产出"同形）。 */
+							upstream.length ? h("div", {
+								key: "up", "data-testid": "d-upstream-sum", "data-count": String(upstream.length),
+								style: { marginTop: 7, borderTop: "1px dashed var(--dp-dlg-line, var(--dsw-alias-border-l2, #33383f))", paddingTop: 6 }
+							}, [h("div", { key: "t", style: { ...S.muted, marginBottom: 3 } }, "下游产出摘要 · " + upstream.length + " 条（血缘 " + String((upstream[0] && upstream[0].from) || "") + " 内）")]
+								.concat(upstream.slice(-4).map((u) => h("div", {
+									key: u.messageId, "data-said": u.messageId, "data-from": u.from || "",
+									style: {
+										fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
+										color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 2, wordBreak: "break-all"
+									}
+								}, u.line)))) : null
 						]),
 			
 						/* 六维审核 */
@@ -12339,7 +15970,7 @@ window.__ModuleLoader__.load({
 					/* ── 智能体段（R3：分段切换 + 调用情况 + 手选调用）── */
 					seg === LEFT_TAB.AGENTS ? h("div", { key: "ag", style: { display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "agents" }, [
 						h("div", { key: "r3", style: S.blk, "data-testid": "d-r3" }, [
-							h("div", { key: "t", style: S.blkT }, ["R3 智能体 ｜ 技能", h("span", { key: "x", style: { marginLeft: "auto", color: "#8b9199" } }, "总监自动 / 客户手选")]),
+							h("div", { key: "t", style: S.blkT }, ["R3 智能体 ｜ 技能", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "总监自动 / 客户手选")]),
 							h("div", { key: "seg", style: { ...S.seg, margin: "0 0 7px" } }, [
 								h("button", { key: "a", style: S.segItem(agentSeg === "agents"), "data-testid": "d-agent-seg-agents", onClick: () => setAgentSeg("agents") }, "智能体"),
 								h("button", { key: "s", style: S.segItem(agentSeg === "skills"), "data-testid": "d-agent-seg-skills", onClick: () => setAgentSeg("skills") }, "技能")
@@ -12356,14 +15987,14 @@ window.__ModuleLoader__.load({
 										+ (a.noUse ? "｜不适用：" + a.noUse : ""),
 									"data-testid": "d-agent-" + a.key, "data-mode": a.mode,
 									onClick: () => { setCalled((c) => ({ ...c, [a.key]: true })); onCallAgent(a); }
-								}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "#b794f6" : "#e0b341") }), h("span", { key: "l" }, a.label)])
+								}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-warn, #e0b341)") }), h("span", { key: "l" }, a.label)])
 							)
 						)]),
 						h("div", { key: "run", style: S.blk, "data-testid": "d-agent-runs", "data-run-total": agentRuns.length }, [
 							h("div", { key: "t", style: S.blkT }, ["调用情况（最近" + (agentRuns.length > RUNS_SHOWN ? " " + RUNS_SHOWN + "/" + agentRuns.length : "") + "）"]),
 							agentRuns.length
 								? agentRuns.slice(0, RUNS_SHOWN).map((r, i) => h("div", { key: i, style: { ...S.muted, display: "flex", gap: 6 }, "data-run-key": r.key }, [
-									h("i", { key: "d", style: S.dot(r.status === "ok" ? "#3fb950" : "#d29922") }),
+									h("i", { key: "d", style: S.dot(r.status === "ok" ? "var(--dp-dlg-ok, #3fb950)" : "var(--dp-dlg-warn, #d29922)") }),
 									h("span", { key: "k", style: { width: 54, flex: "0 0 54px" } }, r.key),
 									h("span", { key: "s", style: { flex: 1, minWidth: 0 } }, r.status + (r.note ? " · " + r.note : ""))
 								]))
@@ -12398,6 +16029,15 @@ window.__ModuleLoader__.load({
 				const [toast, setToast] = react.useState("");
 				// V17 审校补漏：toast 与导图/设计图一致，约 2.2s 自动消失（原先只靠下一条覆盖，会常驻不消失）
 				const toastTimerRef = react.useRef(null);
+				/* 🔴 19 号文 **N3 · R2**（2026-09-17）：上游应看到的**下游产出摘要行**。
+				 *    判据由 `logic/lineage.js#summariesFor()` 给出（**纯函数**）——
+				 *    界面与闸门用**同一份**判据，避免"界面上看着有、闸门读不到"（本项目反复踩过）。
+				 *    ⚠️ 与 `messages`（本节点单桶）**并列**，不是它的子集：摘要行天然**跨桶**。 */
+				const [upstream, setUpstream] = react.useState([]);
+				/* 🔴 19 号文 **N2**：上一条"需求澄清"的**信封 + 事实**。
+				 *    转派时由它派生目标信封（`childEnvelope` = 血缘内派生的**唯一构造点**）⇒
+				 *    R1「同一事实同源」与 R4「一致性范围 = 血缘」是**结构保证**的，不靠两处各自格式化。 */
+				const srcEnvRef = react.useRef(null);
 				react.useEffect(() => {
 					if (!toast) return undefined;
 					if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -12492,6 +16132,12 @@ window.__ModuleLoader__.load({
 						const [msgs, s] = await Promise.all([listDirectorMessages(nodeId), pluginDbStats()]);
 						setMessages(msgs || []);
 						setStats(s);
+						/* 🔴 N3/R2：跨桶读**全部**消息 → 交给纯函数判"哪些是下游产出摘要"。
+						 *    全量读失败**不影响**主列表（降级可以，无声不行：`catch` 里留 `data-upstream-err`）。 */
+						try {
+							const all = await listAllDirectorMessages();
+							setUpstream(summariesFor(all, nodeId) || []);
+						} catch (e) { setUpstream([]); }
 						setRuns(listAgentRuns());
 					} catch (e) { /* 数据层异常不影响 UI */ }
 				}, [nodeId]);
@@ -12596,11 +16242,33 @@ window.__ModuleLoader__.load({
 				};
 			
 				/* ── 行为 ── */
-				const pushMsg = async (kind, text, role) => {
-					const rec = await appendDirectorMessage(nodeId, { kind, text, role: role || "director" });
+				/* 🔴 19 号文 N2/N3：`env`（信封）与 `fact`（事实）是**两个独立可选参数** ——
+				 *    `env` 落 `msg.env`（§3.2 冻结契约，**不得**塞进 `text` / `meta`）；
+				 *    `fact` 落 `msg.meta.fact`（R1 同源的比较载体；全仓唯一格式化点是 `lineage.js#factOf`）。
+				 *    两者缺省 ⇒ 既有调用点**零改动**、旧记录**逐字节不变**。
+				 *
+				 * 🔴 `env.id` 必须与 `messageId` **同值**（这里用同一个 `makeId` 现算）：
+				 *    血缘回溯（`ancestorsOf` / `descendantsOf` / `summariesFor`）全靠 `env.id` 与
+				 *    `env.parent` 的**对得上**；两者不同值 ⇒ `parent` 永远匹配不上 ⇒ R2 静默失效，
+				 *    而表现与"本来就没有下游"完全同形（纪律 36 同型）。 */
+				const pushMsg = async (kind, text, role, env, fact) => {
+					const mid = makeId("dm", nodeId);
+					const extra = {};
+					if (env) extra.env = { ...env, id: env.id || mid };
+					if (fact) extra.meta = { fact: fact };
+					const rec = await appendDirectorMessage(nodeId, { messageId: mid, kind: kind, text: text, role: role || "director", ...extra });
 					await refresh();
 					return rec;
 				};
+			
+				/** 🔴 19 号文 **N2**：路由的**维度上下文**（当前维度 + 各维度已有的分支节点）。
+				 *
+				 * 🔴 实现**只有一份** —— `logic/dim-branch.js#dimBranchContext()`（纯函数）。
+				 *    本组件与总监页都调它。两处各写一遍的形态本项目栽过：19 号文 N9 的
+				 *    `DIRECTOR_CHAIN` vs `runDirector()` —— 两份真相源、行为不一致、**谁都不报错**。
+				 * 数据源：分流索引（`dsh.director.split`，**冻结键**）—— 它本来就是
+				 *    "分支会话 ↔ 维度"的既有绑定，不新立映射表（新立必漂移）。 */
+				const dimContext = () => dimBranchContext(tree, readSplitIndex(), { nodeId: nodeId, node: node });
 			
 				const doReview = async () => {
 					setBusy(true);
@@ -12632,13 +16300,41 @@ window.__ModuleLoader__.load({
 							setToast(r.mode === "sent" ? "已发送到对话" : "已填入对话输入框");
 						} else {
 							// 目标＝总监：走智能路由（要求 8），先出确认卡，**不静默分发**
-							await pushMsg("需求澄清", text, "user");
+							/* 🔴 19 号文 **N2 接线**（2026-09-17）：候选集 = 层级树拍平节点 **∪ 维度分支节点**。
+							 *    收敛前只喂层级树 ⇒ A1–A8 **根本不在候选里** ⇒ "在 A3 分支说 A5 的话"
+							 *    既判不出归属、也没有可转的目标 ⇒ 用户第 5 条诉求无从发生。
+							 *    维度节点来自 `plan()`（= N1 归属判定），经 `dimensionCandidates()` 翻译成
+							 *    路由候选（`level:"dimension"` + `dimKey`），`scoreNodes()` 已支持该形态。 */
+							const p = planSplit(text);
+							const dc = dimContext();
+							const dimNodes = dimensionCandidates(p, {
+								currentNodeId: nodeId, currentDim: dc.currentDim, branchOf: dc.branchOf
+							});
+							/* 🔴 **R1 同源**：事实**在源头构造一次**，源消息 / 目标接收凭证 / 下游简报
+							 *    全部复用**同一个对象**（`childEnvelope()` 只派生信封，**不重新格式化事实**）
+							 *    ⇒ "上下游一致"是**结构保证**的，而不是靠两处各自拼字符串（那必漂移）。 */
+							const fact = { reqText: text, novelName: String(p.name || ""), dims: (p.dims || []).map((d) => d.key) };
+							const env = makeEnvelope({ from: nodeId, to: null, via: VIA.LOCAL, round: 0, root: nodeId, cause: "" }, { self: nodeId });
+							const srcMsg = await pushMsg("需求澄清", text, "user", env, fact);
+							srcEnvRef.current = {
+								env: (srcMsg && srcMsg.env) ? srcMsg.env : env,
+								fact: fact,
+								messageId: (srcMsg && srcMsg.messageId) || ""
+							};
 							const flat = [];
 							const walk = (n) => { flat.push({ id: n.id, name: n.name, level: n.level, meta: n.meta, conversations: n.conversations }); (n.childNodes || []).forEach(walk); };
 							if (tree) walk(tree);
-							const r = route(text, { nodes: flat, currentNodeId: nodeId });
+							/* 🔴 同一节点**只以维度语义出现一次**：维度候选的 id 用的是**真节点 id**
+							 *    （这样 `findNodeById()` 找得到、`scopeKeyOf()` 解析得出目标会话）⇒
+							 *    必须把 `flat` 里的同 id 项摘掉。否则 `scoreNodes()` 会对同一节点出两条候选，
+							 *    层级那条吃到"就近 +1"加权就把归属那条压掉 —— **内容归属又输给位置**，
+							 *    正是 `RL-6a` 校准要拦的形态。 */
+							const dimIds = new Set(dimNodes.map((x) => String(x.id)));
+							const nodes = flat.filter((x) => !dimIds.has(String(x.id))).concat(dimNodes);
+							const r = route(text, { nodes: nodes, currentNodeId: nodeId });
 							setRouteResult(r);
-							recordAgentRun("doc", "ok", "路由候选 " + r.candidates.length);
+							recordAgentRun("doc", "ok", "路由候选 " + r.candidates.length + "（维度 " + dimNodes.length
+								+ " · 归属 " + String(p.kind || "none") + (dc.currentDim ? " · 当前维度 " + dc.currentDim : "") + "）");
 							setRuns(listAgentRuns());
 							setToast("总监已整理，待你确认去向");
 						}
@@ -12656,7 +16352,12 @@ window.__ModuleLoader__.load({
 						/* 目标会话：只有"真有对话"的节点才有 —— 判据走 store/hierarchy.js 的单一真相源
 						 * （`scopeHasConversation` / `scopeKeyOf`），不在这里各算各的。 */
 						const targetSession = (targetNode && scopeHasConversation(targetNode)) ? scopeKeyOf(targetNode.id, targetNode) : null;
-						const summary = DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : "");
+						/* 🔴 N2：维度 key 优先从**决策**取（`suggestDestination()` 判出的那一个），
+						 *    兜底才看候选 —— 决策是"判定的产物"，候选只是它的输入，取候选会失真。 */
+						const dimKey = String((routeResult.decision && routeResult.decision.dimKey) || (cand && cand.dimKey) || "");
+						const summary = DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : "") + (dimKey ? "（维度 " + dimKey + "）" : "");
+						/* 🔴 N3：源信封/事实从 `srcEnvRef` 取（onSend 写的那一条），转派时**只派生、不重造** */
+						const src = srcEnvRef.current || null;
 						if (dest === DESTINATION.DIRECT || dest === DESTINATION.TRANSFER) {
 							/* 🔴 第 5 批 bug ⑥ 根治：改前无论判到哪个节点一律 `sendToChat`（= 当前会话）
 							 * ⇒ 现象"有流转、但没按消息判定归属对话"。现在按**目标会话**投递；
@@ -12669,10 +16370,54 @@ window.__ModuleLoader__.load({
 								});
 								const how = sent.mode === "sent" ? "已发送到该对话"
 									: sent.ok ? "已填入该对话输入框" : "投递失败：" + (sent.reason || "未知");
-								await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + how + "）");
+								/* 🔴 **N2 判据 3 + F3「接收确认」**：**目标分支**必须留下一条可追溯的接收凭证。
+								 *    为什么不能只靠"投递成功"这个返回值：投递是**宿主动作**（进的是原生对话），
+								 *    在总监消息流里**不留痕** ⇒ 用户切到目标分支后看不到"谁转来的 / 何时 / 指哪条源消息"。
+								 *    `env.ref` → 源消息 id（可追溯）；`env.parent` → 源信封 id（血缘可回溯，
+								 *    由 `childEnvelope()` 派生 ⇒ `root` 继承、`round`+1，**不会自成一条血缘**）。 */
+								let recvEnv = null;
+								if (targetNode && String(targetNode.id) !== String(nodeId)) {
+									try {
+										const recvId = makeId("dm", targetNode.id);
+										recvEnv = childEnvelope(src && src.env ? src.env : makeEnvelope({ from: nodeId, root: nodeId }, { self: nodeId }), {
+											id: recvId,
+											to: targetNode.id,
+											via: VIA.TRANSFER,
+											ref: (src && src.messageId) ? src.messageId : "",
+											cause: "由「" + String((node && node.name) || "总监") + "」按归属判定转派"
+										});
+										await appendDirectorMessage(targetNode.id, {
+											messageId: recvId,
+											kind: "接收 · 转派",
+											role: "director",
+											text: "【总监接收】来自「" + String((node && node.name) || "总监") + "」的转派"
+												+ (dimKey ? "（维度 " + dimKey + "）" : "") + "："
+												+ String((src && src.fact && src.fact.reqText) || "") + "\n落地：" + how,
+											env: recvEnv,
+											meta: (src && src.fact) ? { fact: src.fact } : {}
+										});
+									} catch (e) { recvEnv = null; }
+								}
+								/* 🔴 **源分支本地留痕**（19 号文 §8 v4 追加）：`via="transfer"` + `to=<目标>`
+								 *    ⇒ 源侧也读得出"这条已经转出去了、转给谁"，不是只有目标侧知道。
+								 *    `cause` 在目标侧没落成时**显式说明**（降级可以，无声不行 —— 纪律 19）。 */
+								const ownEnv = makeEnvelope({
+									from: nodeId, to: targetNode ? targetNode.id : null, via: VIA.TRANSFER, round: 0, root: nodeId,
+									ref: (src && src.messageId) ? src.messageId : "",
+									cause: recvEnv ? "" : "目标侧接收凭证未写入（目标节点不存在或写库失败）"
+								}, { self: nodeId });
+								await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + how + "）"
+									+ (recvEnv ? "\n目标总监已留接收凭证（血缘 " + String(recvEnv.root || "") + " · 轮次 " + recvEnv.round + "）"
+										: "\n⚠️ 目标侧接收凭证未写入（原因见该条 cause）"),
+									"assistant", ownEnv, (src && src.fact) ? src.fact : null);
 							}
 						} else {
-							await pushMsg("方案 · 派活", "路由已落实：" + summary + "（由总监新建对话并初始化其总监节点）");
+							/* 🔴 N2：`local`（就地）走这里 —— 与 `create` **同一分支但不是同一件事**：
+							 *   `local` 的语义是"内容属于当前维度 ⇒ **一个字都不用搬**"，必须如实报"未投递"，
+							 *   否则"就地处理"与"压根没判出来"在界面上**同形**（纪律 54：静默半成功更坏）。 */
+							await pushMsg("方案 · 派活", dest === DESTINATION.LOCAL
+								? "路由已落实：" + summary + "（归属命中**当前维度** ⇒ 就地处理，未跨对话投递）"
+								: "路由已落实：" + summary + "（由总监新建对话并初始化其总监节点）");
 						}
 						setRouteResult(null);
 						await refresh();
@@ -12699,8 +16444,8 @@ window.__ModuleLoader__.load({
 						style: {
 							position: "absolute", right: 18, bottom: 18, pointerEvents: "auto", cursor: "pointer",
 							display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 20,
-							background: "var(--dsw-alias-bg-sunken, #23262c)", border: "1px solid rgba(137,87,229,.45)",
-							color: "#b794f6", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
+							backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #23262c))", border: "1px solid rgba(137,87,229,.45)",
+							color: "var(--dp-dlg-ac2, #b794f6)", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
 						}
 					}, [
 						h("span", { key: "i" }, "◆"),
@@ -12742,7 +16487,7 @@ window.__ModuleLoader__.load({
 								 * 但面板本体仍是 `position:fixed` 贴右上角，见文件末尾 PersonalizePanel）。 */
 								h("button", { key: "p", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); setPOpen((v) => !v); } }, "⚙"),
 								h("button", { key: "m", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogCollapsed(true); } }, "–"),
-								h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
+								h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "var(--dp-dlg-bad, #f0877f)" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
 							])
 						])
 						: h("div", {
@@ -12762,7 +16507,7 @@ window.__ModuleLoader__.load({
 									key: "sel", "data-testid": "d-level", "aria-label": "切换层级",
 									value: nodeId,
 									onChange: (e) => directorLayoutStore.setActiveNode(e.target.value),
-									style: { maxWidth: 132, height: 22, fontSize: 11, borderRadius: 5, border: "1px solid #3d4148", background: "#212429", color: "#c3c8ce" }
+									style: { maxWidth: 132, height: 22, fontSize: 11, borderRadius: 5, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))" }
 								}, buildOptions(tree)),
 								h("span", { key: "c", style: S.lvchip, "data-testid": "d-level-chip" }, (node ? (LEVEL_LABEL[node.level] || node.level) : "—")),
 								h("div", { key: "b", style: S.btns }, [
@@ -12774,7 +16519,7 @@ window.__ModuleLoader__.load({
 									 * 本按钮在 `btns`（marginLeft:auto ⇒ 贴面板右上角），展开的面板本体
 									 * 由文件末尾的 PersonalizePanel 以 fixed 定位贴整个窗口右上角。 */
 									h("button", { key: "6", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: () => setPOpen((v) => !v) }, "⚙"),
-									h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
+									h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "var(--dp-dlg-bad, #f0877f)" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
 								])
 							]),
 			
@@ -12784,7 +16529,7 @@ window.__ModuleLoader__.load({
 			
 							/* 面板主体 */
 							h(DirectorPanel, {
-								key: "body", node, tree, messages, reviewResult, onReview: doReview,
+								key: "body", node, tree, messages, upstream, reviewResult, onReview: doReview,
 								agentRuns: runs, onCallAgent, engineStats: stats,
 								seg, setSeg: (s) => directorLayoutStore.setLeftTab(s)
 							}),
@@ -12794,14 +16539,14 @@ window.__ModuleLoader__.load({
 								h(RouteCard, { result: routeResult, onConfirm: onConfirmRoute, onCancel: () => setRouteResult(null), busy })) : null,
 			
 							/* mfoot：R8 全局输入框 + 焦点路由（I3/I7/I10）*/
-							h("div", { key: "f", style: { borderTop: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1b1e23)", padding: "7px 8px", display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" } }, [
+							h("div", { key: "f", style: { borderTop: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1b1e23))", padding: "7px 8px", display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" } }, [
 								h("span", {
 									key: "fc", "data-testid": "d-focus", "data-target": st.focusTarget,
 									style: {
 										fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
 										border: "1px solid " + (st.focusTarget === "director" ? "rgba(137,87,229,.45)" : "rgba(47,111,235,.5)"),
 										background: st.focusTarget === "director" ? "rgba(137,87,229,.16)" : "rgba(47,111,235,.16)",
-										color: st.focusTarget === "director" ? "#b794f6" : "#79a8ff", cursor: "pointer"
+										color: st.focusTarget === "director" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", cursor: "pointer"
 									},
 									title: "点击切换提交目标",
 									onClick: () => directorLayoutStore.setFocusTarget(st.focusTarget === "director" ? "chat" : "director")
@@ -12817,7 +16562,7 @@ window.__ModuleLoader__.load({
 							]),
 			
 							/* 提示条 */
-							toast ? h("div", { key: "toast", style: { ...S.muted, padding: "0 9px 7px", color: "#79a8ff" }, "data-testid": "d-toast", onClick: () => setToast("") }, toast) : null
+							toast ? h("div", { key: "toast", style: { ...S.muted, padding: "0 9px 7px", color: "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" }, "data-testid": "d-toast", onClick: () => setToast("") }, toast) : null
 						]),
 			
 					/* 中缝拖拽手柄（双击复位）*/
@@ -12844,7 +16589,7 @@ window.__ModuleLoader__.load({
 					}, h("div", {
 						style: {
 							position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
-							color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
+							color: "var(--dp-dlg-ok, #6fd388)", backgroundColor: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
 						}
 					}, "● 与「对话 tab」同源（同一渲染节点）")) : null,
 			
@@ -18403,6 +22148,24 @@ window.__ModuleLoader__.load({
 											 * `data-split` 空串 = 这一支不是分流出来的（**空串不等于缺失**，
 											 * 闸门按 `[data-split]` 非空计数即可，不必另设布尔位）。 */
 											"data-split": r.splitDim || "", "data-title-origin": r.titleOrigin || "",
+											/* 第 17 批：**总监派发**可见性 —— 用户原话「我需要在思维导图中看到这些」。
+											 * 🔴 字段名与前一行 `data-state` 刻意**不同名**：`data-state` 是**血缘状态**
+											 *    （宿主 running/blank 推导），这里是**派发状态**（本批台账）。同名不同义
+											 *    会让闸门量错对象 —— 本项目台账（二）#8 就是这么连爆三条红的。
+											 * 🔴 `data-said` 空串 = **确实没读到产出**（不是"未派发"）；
+											 *    未派发的节点该字段也是空串 ⇒ 判"有没有产出"必须**先看 `data-dispatch` 非空**。 */
+											"data-dispatch": r.dispatchId || "", "data-branch-state": r.dispatchState || "",
+											"data-said": r.dispatchSay || "",
+											/* 第 21 批：**会话档案**（R2/R3）可见性 —— 用户原话「（每个会话）都有自己的
+											 * 总监，存在自己的会话总结文档」。字段由 `applyDossiers` 在**唯一摄取点**
+											 * 写入，这里只做 DOM 投影（与 `data-split` / `data-dispatch` 同范式）。
+											 * 🔴 `data-has-dossier` 是**独立布尔位**：只靠 `data-dossier-role` 的空串
+											 *    分不出「没有档案」与「有档案但角色为空」——两者在闸门里必须可分。 */
+											"data-has-dossier": r.hasDossier ? "1" : "0",
+											"data-dossier-role": r.dossierRole || "",
+											"data-dossier-summary": r.dossierSummary || "",
+											"data-dossier-src": r.dossierSummarySrc || "",
+											"data-dossier-reason": r.dossierSummaryReason || "",
 											"data-collapsed": collapsed.has(r.sessionId) ? "1" : "0",
 											"data-current": r.isCurrent ? "1" : "0",
 											"data-moved": r.moved ? "1" : "0",
@@ -18433,7 +22196,13 @@ window.__ModuleLoader__.load({
 												setSel(r.sessionId);
 											},
 											title: r.sessionId + (r.parentSessionId ? " ← 父 " + r.parentSessionId : "（根/中心主题）") +
-												"｜" + stateTitleOf(r) + "｜点框=右侧展开对话 · 按住拖动=移动 · 右键=菜单"
+												"｜" + stateTitleOf(r) +
+												/* 第 21 批：**会话档案**（R2/R3）—— 用户原话「（每个会话）都有自己的总监，
+												 * 存在自己的会话总结文档」。角色走第 2 行（可见），总结走 title（不挤布局）；
+												 * 读不到时写**原因**而不是留白（纪律 18/58）。 */
+												(r.hasDossier ? "｜档案 · 总监 " + (r.dossierRole || "（未记）")
+													+ " · 总结 " + (r.dossierSummary || (r.dossierSummaryReason ? "（无：" + r.dossierSummaryReason + "）" : "（空）")) : "") +
+												"｜点框=右侧展开对话 · 按住拖动=移动 · 右键=菜单"
 										}, [
 											/* 第 1 行：类型图标 + 标题 + 状态点 */
 											h("div", {
@@ -18450,7 +22219,25 @@ window.__ModuleLoader__.load({
 											h("div", {
 												key: "r2", style: { fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 												"data-testid": "mm-node-meta"
-											}, metaLineOf(r) + (r.splitDim ? " · 分流 " + r.splitDim : "") + (r.moved ? " · 已移动" : "")),
+											}, metaLineOf(r) + (r.splitDim ? " · 分流 " + r.splitDim : "") + (r.moved ? " · 已移动" : "")
+												/* 第 21 批 R2：**该会话归哪个总监管**直接写在第 2 行（可见位）。
+												 * 只挂 data 属性等于用户看不见（"闸门绿 ≠ 用户能验收"：纪律 57）。
+												 * 🔴 `dossierRole` 形如 `A6 打磨 总监`（已自带"总监"后缀）⇒ 这里**不再前置**"总监"，
+												 *    否则会渲染成 `总监 A6 打磨 总监`（第 21 批真机截图复核时发现）。 */
+												+ (r.dossierRole ? " · " + r.dossierRole : "")
+												+ (r.dispatchId ? " · 派发 " + (r.dispatchState || "unknown") : "")),
+											/* 第 3 行（仅派发分支有）：**产出摘要**或**读不到的原因**。
+											 * 🔴 读不到时**不许留空、也不许编**：写出 `dispatchSayReason`。
+											 *    只给有产出的节点加行 ⇒ 读图人会以为"没产出的那几条没派发过" —— 那是错的信息。 */
+											r.dispatchId ? h("div", {
+												key: "r2b",
+												style: {
+													fontSize: "calc(10px * var(--dp-font,1))", marginTop: 1,
+													color: r.dispatchSay ? "var(--dp-t2, #6b7280)" : "var(--dp-warn, #b45309)",
+													whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+												},
+												"data-testid": "mm-node-said", "data-said-empty": r.dispatchSay ? "0" : "1"
+											}, r.dispatchSay ? "产出：" + r.dispatchSay : "产出未读到：" + String(r.dispatchSayReason || "原因未知").slice(0, 60)) : null,
 											/* 第 3 行：**单框控件**（用户：「单个框没有展开和折叠的选项」）
 											 * 每个框都有这一行；不可用的项**显示出来并写明原因**，不悄悄消失 */
 											h("div", {
@@ -19472,6 +23259,1037 @@ window.__ModuleLoader__.load({
 			exports.mountHierarchyOverlay = mountHierarchyOverlay;
 		};
 
+		// ── logic/director-reuse.js ──
+		__defs["logic/director-reuse.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「先考虑目前存在的会话」（第 19 批 · **纯函数**）
+			 * 引用：—
+			 * 上游：logic/director-dispatch.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/director-reuse.js — 「先考虑目前存在的会话」（第 19 批 · **纯函数**）
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 它治的是什么（用户原话，逐字）
+			 * ───────────────────────────────────────────────────────────────────
+			 *   「现在会话有问题, 重复创建了一百多个会话,
+			 *     我需要的是总监确认完需求之后**先考虑目前存在的会话,然后没有才是新建会话**」
+			 *
+			 * 🔴 根因（源码逐行，不是推测）：
+			 *   `logic/director-dispatch.js` 第 106 行 `const cs = await createSession({});`
+			 *   在**维度循环体内**，之前**没有任何"这个维度是不是已经有一条会话了"的判断**。
+			 *   ⇒ 每派一次 = 无条件建 8 条。真机循环 ~10 次 ≈ 80 条，闸门验收每次再 +8
+			 *     （闸门自打印：「本轮真实新建了 8 个宿主会话（宿主无删除契约，无法回收）」）
+			 *   ⇒ 导图上归集出 **123 个框**（实测 `.cluster/read-C-seg.out` 的 C1–C3 三行均为 `框 123`）。
+			 *
+			 * ── 🔴 复用生效后，闸门自己也就不再制造会话 ─────────────────────────
+			 *   闸门 `verify-novel-split.mjs` 走的就是产品派发链。一旦派发带复用，
+			 *   第二、第三次跑同一部作品同一批维度时**自动接上已有的那 8 条**
+			 *   ⇒ 会话数**不增**。这是"一个改动封堵两个污染源"。
+			 *
+			 * ═══════════════════════════════════════════════════════════════════
+			 * 匹配算法（为什么是这样，而不是"随便找一条"）
+			 * ───────────────────────────────────────────────────────────────────
+			 *   ① 候选集 = `dsh.director.split` 索引条目 **∩** 宿主现存会话（`aliveIds`）
+			 *      —— 只有"索引里有、宿主里也有"的才可能复用。索引有而宿主没有 = **孤儿**。
+			 *   ② 分组键 = `(作品名, 维度key)` —— 复用必须"同一部作品的同一个职能维度"。
+			 *      · 作品名可能为空（用户没给路径）⇒ 空名与空名匹配，**不与他名混**。
+			 *      · 用 `\0` 分隔而非 `|`：目录名里 `|` 是非法字符但**其他来源的 name 未必**，
+			 *        用不可见字符可彻底排除"name 含分隔符导致跨组误配"。
+			 *   ③ 同组多条 ⇒ **取 `at` 最新**。
+			 *      理由：用户要的是"接着上次干"。最老的那条多半是早期脏数据
+			 *      （第 18 批真机里模型零输出的 `partial`），接上去等于**接脏**。
+			 *   ④ 同批次内一个会话**只接一个维度**（`used` 集合）。
+			 *   ⑤ **`aliveKnown === false` 一律 `create` + `why:"alive-unknown"`** ——
+			 *      读不到宿主存活集时**不许**假设"都在"（会复用幽灵）也**不许**假设"都没有"
+			 *      （会静默累积，正是本条需求要治的病）；如实报降级，由上层决定是否提示
+			 *      （纪律 19：降级可以，无声不行）。
+			 *
+			 * ── 纯函数 ──────────────────────────────────────────────────────────
+			 *   无 DOM、无 store、无时钟（`at` 只读不写）、不改入参。同输入必同输出
+			 *   ⇒ 可离线单测，也是 UI 与闸门共用的**同一份判据**。
+			 */
+			
+			/** 分组分隔符：不可见，避免 name 含 `|` 等字符时跨组误配 */
+			const SEP = "\u0000";
+			
+			/**
+			 * 标题归一化（**弱匹配**的第一步）：去首尾空白、把全角空格与连续空白压成一个半角空格。
+			 * 🔴 为什么必须归一化：宿主对标题做过展示层处理（有可能压空白、也可能保留原文），
+			 *    而 `branchTitle()` 里带「」与书名号 ⇒ 只差一个空格的"看起来相等"会**静默漏匹配**
+			 *    （纪律 27：「看起来相等」≠「同源」）。
+			 */
+			function titleKey(t) {
+				return String(t == null ? "" : t).replace(/[\u3000\s]+/g, " ").trim();
+			}
+			
+			/** 分组键 `作品名 \0 维度key` */
+			function keyOf(name, dim) {
+				return String(name == null ? "" : name) + SEP + String(dim == null ? "" : dim);
+			}
+			
+			/**
+			 * 派发前的**复用决策**（纯函数）。
+			 *
+			 * @param {Array<{key:string,label?:string}>} dims 本次要派的维度（`plan().dims`）
+			 * @param {object} ctx
+			 * @param {Object<string,{dim:string,label:string,name:string,at:number}>} ctx.index
+			 *        `dsh.director.split` 读出的索引（`readSplitIndex()`）
+			 * @param {Array<string>} ctx.aliveIds 宿主**现存**会话 id（`rawSessionSummaries().map(s=>s.id)`）
+			 * @param {string} [ctx.name] 作品名（可空；空名只与空名匹配）
+			 * @param {boolean} [ctx.aliveKnown=true] 存活集是否**可信**；显式传 `false` ⇒ 全部新建并报降级
+			 * @param {Array<{sessionId:string,title:string,at?:number}>} [ctx.hostTitles] 宿主会话**现有标题**
+			 *   （19 号文 **P9 / U10** 落点，可选）
+			 *   🔴 为什么需要它：分流索引存在 `localStorage`，而 **origin 含端口** ⇒
+			 *      宿主每次启动端口都变 ⇒ **冷启动后索引必然为空**（`indexN:0 / hostSessions:74`）
+			 *      ⇒ 首次派发**必然重建全部 N 条**（真机实测 `run01 +8` / `run04 +3`）。
+			 *      宿主自己的会话列表是**跨启动保留**的，故退一步按**标题**弱匹配。
+			 * @param {Object<string,string>} [ctx.wantTitles] `{ 维度key: 期望标题 }`（**必与 `branchTitle()` 同源**）
+			 *   由调用方算好传进来 —— 本模块**不** import `split-dimensions`（避免依赖方向反转），
+			 *   而"期望标题"必须与真正写进宿主的那一个**是同一个函数产出的**，否则是两份真相。
+			 *   ⚠️ 没传 / 该维度没有期望标题 ⇒ **不做**标题匹配（保持旧行为），并在 `titleMissed` 里报数。
+			 * @returns {{
+			 *   decisions:Array<{dim:string,label:string,action:"reuse"|"create",sessionId:string|null,why:string,at:number}>,
+			 *   reuse:number, create:number, aliveKnown:boolean, degraded:boolean,
+			 *   orphans:Array<string>, orphanKeys:Array<string>, surplus:Array<string>,
+			 *   picked:Object<string,string>
+			 * }}
+			 */
+			function planReuse(dims, ctx) {
+				const o = ctx && typeof ctx === "object" ? ctx : {};
+				const list = Array.isArray(dims) ? dims : [];
+				const index = o.index && typeof o.index === "object" ? o.index : {};
+				/* 默认可信（调用方只在**确认读不到**时显式传 false）——
+				 * 默认 false 会让"没传参数"变成静默降级，那是无声失败。 */
+				const aliveKnown = o.aliveKnown !== false;
+				const aliveArr = Array.isArray(o.aliveIds) ? o.aliveIds : [];
+				const alive = new Set();
+				for (let i = 0; i < aliveArr.length; i++) {
+					if (aliveArr[i] == null || aliveArr[i] === "") continue;
+					alive.add(String(aliveArr[i]));
+				}
+				const name = String(o.name == null ? "" : o.name);
+				const wantTitles = o.wantTitles && typeof o.wantTitles === "object" ? o.wantTitles : null;
+				/* ── 🔴 U10（P9）：宿主标题池（**前缀**匹配）──────────────────────────
+				 * 只在**存活集可信**时构建（读不到存活集时连"谁还在"都不知道，
+				 * 按标题匹配等于凭空造会话；纪律 19：此时如实报降级，不猜）。
+				 *
+				 * 🔴 为什么判据是**前缀**而不是全等（第 25 批实测更正，19 号文 U10/P9 的真因）：
+				 *   宿主把**首条消息的首行**当会话标题 ⇒ 宿主标题 = `briefOf()` 的 head 打头
+				 *   （实测 `【A1 世界观】《灵能修仙》 —— …`）。上一版拿 `branchTitle()` 去全等比 ——
+				 *   它产出 `「A1 世界观」《灵能修仙》`（**角括号**，head 用的是**方头括号**）
+				 *   ⇒ 连字形都不同 ⇒ 恒 0 命中。拿"看起来一样"的另一个串当判据，是本项目
+				 *   纪律 27 的同型事故，**不是匹配器少写了个 `includes`**。
+				 *   `wantTitles[dim]` 现在传 `briefTitlePrefix()` 的产物（与 head **同源**）。
+				 *
+				 *   · 前缀**自带边界**（不需要另写"边界字符"规则，少一条规则少一处漂移）：
+				 *     `【A10 配角】…` 不以 `【A1 世界观】` 开头；`《灵能修仙传》` 不以 `《灵能修仙》` 开头
+				 *     —— 两个方向的误配都被收尾的 `】` / `》` 封死。
+				 *   · 同前缀多条（同一维度跑过很多轮）⇒ 取 `at` **最新**：重复派发应接着**最近那条**
+				 *     线程，回到最老的会把最新上下文丢掉。排序口径与 `groups` 一致（不另立一套）。
+				 *   · 命中后可用的**只剩下"未被本批占用"的**——一次派发 8 个维度必须落在 8 条不同会话上。 */
+				const titlePool = [];
+				if (aliveKnown && wantTitles && Array.isArray(o.hostTitles)) {
+					for (let i = 0; i < o.hostTitles.length; i++) {
+						const h = o.hostTitles[i];
+						if (!h || !h.sessionId) continue;
+						const sid = String(h.sessionId);
+						if (!alive.has(sid)) continue;
+						const tk = titleKey(h.title);
+						if (!tk) continue;
+						titlePool.push({ sessionId: sid, key: tk, at: Number(h.at) || 0 });
+					}
+					titlePool.sort((a, b) => b.at - a.at);
+				}
+				/** 本批次**有几条是靠宿主标题救回来的**（> 0 ⇒ 冷启动兜底真的起作用；读数见返回值） */
+				let titleHitAny = false;
+				let titleHits = 0;
+			
+				/* ── ① 索引条目分桶：存活 ⇒ 按 (name,dim) 入组；不存活 ⇒ 孤儿 ──
+				 *
+				 * 🔴🔴 `aliveKnown === false` 时**整个分桶都不做** —— 这不是优化，是**防事故**：
+				 *    "读不到宿主会话列表"与"宿主里真的没有会话"在数据上**都表现为 alive 为空集**。
+				 *    若照常分桶，读不到时会把**索引里每一条存活的会话都判成孤儿**，
+				 *    而上游 `director-dispatch.js` 会对孤儿调 `forgetSplits()`
+				 *    ⇒ **一次读取失败就清空整份复用索引**，下次派发全部新建，
+				 *    反而把"重复创建会话"这个要治的病**放大**。
+				 *    （本缺陷由 `scripts/test-director-reuse.mjs` 的 `RU-12` 正负对照抓出 —— 纪律 23：
+				 *     每条断言都要问"反例上会不会也通过"，这次是反过来问"降级路径会不会更糟"。） */
+				const groups = {};
+				const orphans = [];
+				const allKeys = {};
+				if (aliveKnown) {
+					for (const sid of Object.keys(index)) {
+						const e = index[sid];
+						if (!e || typeof e !== "object") continue;
+						const k = keyOf(e.name, e.dim);
+						allKeys[k] = true;
+						if (!alive.has(String(sid))) { orphans.push(String(sid)); continue; }
+						if (!groups[k]) groups[k] = [];
+						groups[k].push({ sessionId: String(sid), at: Number(e.at) || 0 });
+					}
+				}
+				/* ── ② 组内按 `at` 降序（最新优先；`at` 缺失时记 0 排最后，顺序稳定）── */
+				for (const k of Object.keys(groups)) groups[k].sort((a, b) => b.at - a.at);
+			
+				const orphanKeys = [];
+				for (let i = 0; i < orphans.length; i++) {
+					const e = index[orphans[i]];
+					const k = e ? keyOf(e.name, e.dim) : "";
+					if (k && orphanKeys.indexOf(k) < 0) orphanKeys.push(k);
+				}
+			
+				/* ── ③ 逐维度决策 ── */
+				const used = new Set();
+				const decisions = [];
+				const surplus = [];
+				const titleMissed = [];
+				const picked = {};
+				for (let i = 0; i < list.length; i++) {
+					const d = list[i] && typeof list[i] === "object" ? list[i] : {};
+					const dim = String(d.key == null ? "" : d.key);
+					const label = String(d.label == null ? "" : d.label);
+					const k = keyOf(name, dim);
+					if (!aliveKnown) {
+						decisions.push({ dim, label, action: "create", sessionId: null, why: "alive-unknown", at: 0 });
+						continue;
+					}
+					const cands = groups[k] || [];
+					let pick = null;
+					for (let j = 0; j < cands.length; j++) {
+						if (!used.has(cands[j].sessionId)) { pick = cands[j]; break; }
+					}
+					if (pick) {
+						used.add(pick.sessionId);
+						picked[k] = pick.sessionId;
+						decisions.push({ dim, label, action: "reuse", sessionId: pick.sessionId, why: "index-hit", at: pick.at });
+						/* 同组未被选中的存活条目 = **多余的**（不是删，只报告，供清理入口用） */
+						for (let j = 0; j < cands.length; j++) {
+							const sid = cands[j].sessionId;
+							if (sid !== pick.sessionId && surplus.indexOf(sid) < 0) surplus.push(sid);
+						}
+					} else {
+						/* 原因必须**可分辨**（纪律 18）：
+						 *   · `already-used`  —— 同组有存活候选但已被本批次别的维度占了
+						 *   · `orphan-only`   —— 索引里**只有**该键的孤儿（宿主已删 ⇒ 索引该清理）
+						 *   · `no-match`      —— 索引里根本没有这个 (作品,维度)
+						 * 三者对用户的含义完全不同：前两者要清索引，后者是第一次派。
+						 * 🔴 19 号文 **U10 / P9**：**只有 `no-match`** 才退一步做标题弱匹配 ——
+						 *    前两类是"索引里有、只是用不上"（该清索引），拿标题去补会把它们**糊过去**。
+						 *    ⚠️ 判据 = **归一化后前缀**（不是全等，也不是 `includes`）：
+						 *      全等 ⇒ 恒 0 命中（宿主标题 = head + 简报正文，见上方 titlePool 注释）；
+						 *      `includes` ⇒ `【A1 世界观】` 会命中 `【A10 …】`，且拿正文里的任意片段
+						 *      也能命中别的维度 ⇒ **简报投给别的维度**，比多建一条会话糟得多。
+						 *      前缀 + 自带边界（`】`/`》`）是这两者之间唯一的正确档位。 */
+						let why = cands.length ? "already-used" : (allKeys[k] ? "orphan-only" : "no-match");
+						let titlePick = null;
+						const want = wantTitles ? titleKey(wantTitles[dim]) : "";
+						if (why === "no-match" && want) {
+							for (let j = 0; j < titlePool.length; j++) {
+								const h = titlePool[j];
+								if (used.has(h.sessionId)) continue;
+								if (h.key.indexOf(want) === 0) { titlePick = h; break; }
+							}
+						}
+						if (titlePick) {
+							used.add(titlePick.sessionId);
+							picked[k] = titlePick.sessionId;
+							titleHitAny = true;
+							titleHits += 1;
+							decisions.push({ dim, label, action: "reuse", sessionId: titlePick.sessionId, why: "title-hit", at: titlePick.at });
+						} else {
+							if (why === "no-match" && wantTitles) titleMissed.push(dim);
+							decisions.push({ dim, label, action: "create", sessionId: null, why, at: 0 });
+						}
+					}
+				}
+			
+				let reuse = 0;
+				for (let i = 0; i < decisions.length; i++) if (decisions[i].action === "reuse") reuse += 1;
+				return {
+					decisions,
+					reuse,
+					create: decisions.length - reuse,
+					aliveKnown,
+					degraded: !aliveKnown,
+					orphans,
+					orphanKeys,
+					surplus,
+					picked,
+					/* 🔴 U10 / P9 读数（纪律 19：降级可以，无声不行）——
+					 * `titleHit`：本批次**有几条是靠宿主标题救回来的**（> 0 说明冷启动兜底真的起作用了）；
+					 * `titleMissed`：索引没命中**且标题也没匹配上**的维度（那才是"确实要新建"）；
+					 * `titlePoolN`：参与匹配的宿主标题条数 —— **0 命中时靠它分辨两种含义**
+					 *   （"宿主标题形态变了"还是"根本没读到标题"），否则只能靠猜（纪律 60）。 */
+					titleHit: titleHitAny,
+					/* **靠标题救回来的条数**（不是布尔）—— 上游据此决定"索引要补登记几条"：
+					 * 标题命中的那几条**不在索引里**（索引在冷启动时是空的），必须补进索引，
+					 * 否则导图拿不到插件侧标签、下次派发还得靠标题兜底（第 25 批实测补的实际缺口）。 */
+					titleHits,
+					titleMissed,
+					titlePoolN: titlePool.length
+				};
+			}
+			
+			/**
+			 * 该维度对应的**总监角色名**（纯函数）—— 「每个会话都有自己的总监」的命名来源。
+			 *
+			 * 复用 `SPLIT_DIMENSIONS` 的 `label`（形如 `A1 世界观`）⇒ 角色名 `A1 世界观 总监`。
+			 * 🔴 不新造一套命名表：维度名与导图标签、简报抬头用的是**同一个** `label`，
+			 *    三处同源才不会出现"导图叫 A1 世界观、档案叫世界观总监、简报叫 world"的三口径。
+			 *
+			 * @param {{key?:string,label?:string}|null} dim
+			 * @returns {string} 角色名；取不到 label 时退化为通用 `"总监"`（**不编**具体职能名）
+			 */
+			function directorRoleOf(dim) {
+				const d = dim && typeof dim === "object" ? dim : {};
+				const label = String(d.label == null ? "" : d.label).trim();
+				if (!label) return "总监";
+				return /总监$/.test(label) ? label : label + " 总监";
+			}
+			
+			/**
+			 * 本轮派发的**一句话摘要**（纯函数，供读数与总监消息流共用同一句）。
+			 *
+			 * 🔴 「复用了几条」必须**显式出现**：用户这一轮的全部不满就来自"看不见它在重复建"。
+			 *    只报 `made=8` 与"复用 6 + 新建 2"在界面上完全不同 —— 后者才让人敢再点一次。
+			 *
+			 * @param {{reuse:number,create:number,aliveKnown?:boolean,orphans?:Array,surplus?:Array}} plan
+			 * @returns {string}
+			 */
+			function reuseSummary(plan) {
+				const p = plan && typeof plan === "object" ? plan : {};
+				const reuse = Number(p.reuse) || 0;
+				const create = Number(p.create) || 0;
+				const orphanN = Array.isArray(p.orphans) ? p.orphans.length : 0;
+				const surplusN = Array.isArray(p.surplus) ? p.surplus.length : 0;
+				const parts = ["复用已有 " + reuse + " 条", "新建 " + create + " 条"];
+				if (orphanN) parts.push("索引孤儿 " + orphanN + " 条（宿主已无此会话，建议清理索引）");
+				if (surplusN) parts.push("同维度多余 " + surplusN + " 条（可选清理）");
+				if (p.aliveKnown === false) parts.push("⚠ 读不到宿主会话列表 ⇒ 本次全部新建（降级，未做复用判断）");
+				return parts.join(" · ");
+			}
+			
+			exports.planReuse = planReuse;
+			exports.directorRoleOf = directorRoleOf;
+			exports.reuseSummary = reuseSummary;
+		};
+
+		// ── bridge/session-io.js ──
+		__defs["bridge/session-io.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：逐会话读写通道（第 17 批）
+			 * 引用：—
+			 * 上游：logic/director-collect.js, logic/director-dispatch.js
+			 * 下游：logic/branch-tree.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * bridge/session-io.js — 逐会话读写通道（第 17 批）
+			 *
+			 * ── 🔴 这个模块为什么能存在（真机实测，2026-09-16）──────────────────
+			 *   第 16 批的结论是「总监页签下宿主消息 DOM 整体卸载 ⇒ 读产出只能逐个切页签」。
+			 *   那个结论**只对 DOM 通道成立**。本轮实测到一条**服务通道**：
+			 *
+			 *     `sessions.scope(id).get("conversation")`            ← 宿主 client.js:11572 scopedConversation 同源
+			 *        └─ `.scopedSession()`  → SessionConversation
+			 *              ├─ `.history({})`  → { ok:true, value:{ events:[{event:{type,data}}], hasMore, projections } }
+			 *              └─ `.send(...)`    → 投递
+			 *
+			 *   实测读数（`_probe-eval.mjs`，会话 `session-51a74d66…`）：
+			 *     `history({})` 返回 **23 条事件**，`valueKeys = ["events","hasMore","projections"]`，
+			 *     事件类型含 `user/message` / `assistant/message` / `assistant/chunk` / `session/title` /
+			 *     `turn/start` / `turn/end` / `step/start` / `step/end` / `request/*` / `permission/*`。
+			 *     `assistant/message.data.message.content[0].text === "收到"` —— **正文可读**。
+			 *
+			 *   ⇒ 「回流」不需要切页签：**一次拿全部**，8 条分支可以并列读。
+			 *
+			 * ── 🔴 必须过滤的两类"假用户消息"────────────────────────────────
+			 *   `user/message` 里**不只**是用户输入：宿主还会把
+			 *     · `Current runtime context. This snapshot supersedes…`（实测 457 B）
+			 *     · `<system-reminder> …`（实测 **48,722 B**）
+			 *   当成 user 消息推入事件流。若不过滤，产出摘要会被 48 KB 的系统提示淹没，
+			 *   而且**读数看起来完全正常**（条数对得上、都有 text）。故 `isInjectedUserText()` 是必需的。
+			 *
+			 * ── 降级纪律（本模块的硬约束）────────────────────────────────────
+			 *   · 任何失败都返回 `{ ok:false, reason }`，**不抛**（调用方在渲染链 / 批处理链上）。
+			 *   · `reason` 必须**可分辨**：拿不到 `history` / 事件为空 / 无助手消息 —— 三者原因不同。
+			 *   · **不许编摘要**：读不到就是 `""` + 原因，绝不回落到"看起来像摘要"的占位文案。
+			 */
+			
+			const { scopedConversationOf } = __m("logic/branch-tree.js");
+			
+			const MAX_ITEMS = 40;
+			
+			/**
+			 * 该 `user/message` 文本是否是**宿主注入**的（不是用户真正输入的内容）。
+			 *
+			 * 🔴 判据取「开头前缀」而非「包含」：注入文本**从不**出现在用户输入的开头
+			 *    （用户不会以 `<system-reminder>` 开头），而正文里提到这些词是正常的
+			 *    —— 用「包含」会把分支写的**讲评书/讲提示词的文章**整段误杀。
+			 *
+			 * @param {string} t
+			 * @returns {boolean}
+			 */
+			function isInjectedUserText(t) {
+				const s = String(t == null ? "" : t).replace(/^\s+/, "");
+				if (!s) return true;
+				return s.indexOf("Current runtime context") === 0
+					|| s.indexOf("<system-reminder>") === 0
+					|| s.indexOf("<system_reminder>") === 0;
+			}
+			
+			/** 从一条事件的 `data.content` / `data.message.content` 里取纯文本 */
+			function textOfContent(content) {
+				if (!Array.isArray(content)) return "";
+				const parts = [];
+				for (let i = 0; i < content.length; i++) {
+					const c = content[i];
+					if (c && c.type === "text" && typeof c.text === "string") parts.push(c.text);
+				}
+				return parts.join("");
+			}
+			
+			/**
+			 * 事件流 → 可读对话条目（纯函数）。
+			 *
+			 * 只取两类事件：
+			 *   · `user/message`      → `data.content[]`（过滤宿主注入）
+			 *   · `assistant/message` → `data.message.content[]`（助手正文）
+			 * 其余（`assistant/chunk` 流式块、`turn/*`、`step/*`、`request/*`、`session/title`）
+			 * 不产生"对话条目"，但 `session/title` 单独取出来当**机器可读的产出标题**。
+			 *
+			 * @param {Array} events `history().value.events`
+			 * @returns {{items:Array<{role:string,text:string,at:number,turn:number|null}>, title:string|null, endReason:string|null,
+			 *            endFailure:{kind:string|null,message:string|null,code:string|null,status:number|null}|null}}
+			 */
+			function extractTurns(events) {
+				const out = { items: [], title: null, endReason: null, endFailure: null };
+				const list = Array.isArray(events) ? events : [];
+				for (let i = 0; i < list.length; i++) {
+					const row = list[i];
+					const e = row && row.event ? row.event : row;
+					if (!e || typeof e !== "object") continue;
+					const d = e.data || {};
+					if (e.type === "user/message") {
+						const t = textOfContent(d.content);
+						if (t && !isInjectedUserText(t)) {
+							out.items.push({ role: "user", text: t, at: Number(e.time) || 0, turn: typeof d.turn === "number" ? d.turn : null });
+						}
+					} else if (e.type === "assistant/message") {
+						const msg = d.message || {};
+						const t = textOfContent(msg.content);
+						if (t) {
+							out.items.push({ role: "assistant", text: t, at: Number(e.time) || 0, turn: typeof d.turn === "number" ? d.turn : null });
+						}
+					} else if (e.type === "session/title") {
+						if (d.title) out.title = String(d.title);
+					} else if (e.type === "turn/end") {
+						const k = d.reason && d.reason.kind ? String(d.reason.kind) : null;
+						if (k) out.endReason = k;
+						/* 🔴 第 19 批：把宿主自己给出的**失败详情**取出来。
+						 *    宿主在 `reason.kind==="error"` 时把真因放在 `reason.error` / `reason.failure`：
+						 *      `{ message:"Insufficient Balance", code:"QUOTA", status:402 }`（实测 2026-09-16）
+						 *    只留 `kind="error"` ⇒ 「模型配额不足」「模型拒答」「网络断了」在界面上
+						 *    **长得一模一样**，用户只看到"没产出"，无从处置。
+						 *    纪律 58：「没跑成」必须与「失败」可分，且**必须先落地读数**。
+						 *    🔴 取**最后**一次（循环覆盖）＝本轮最近一次运行的结局，正是回收要的。 */
+						const f = (d.reason && (d.reason.error || d.reason.failure)) || null;
+						if (f && typeof f === "object") {
+							const fs2 = Number(f.status);
+							out.endFailure = {
+								kind: k,
+								message: f.message ? String(f.message).slice(0, 160) : null,
+								code: f.code ? String(f.code) : null,
+								status: Number.isFinite(fs2) ? fs2 : null
+							};
+						}
+					}
+				}
+				return out;
+			}
+			
+			/**
+			 * 读某会话的**事件流**（宿主 `SessionConversation.history`）。
+			 *
+			 * @param {string} sessionId
+			 * @returns {Promise<{ok:boolean, events:Array, projections:object|null, hasMore:boolean|null, reason:string|null}>}
+			 */
+			async function readSessionEvents(sessionId) {
+				if (!sessionId) return { ok: false, events: [], projections: null, hasMore: null, reason: "缺 sessionId" };
+				const conv = scopedConversationOf(sessionId);
+				if (!conv) {
+					return { ok: false, events: [], projections: null, hasMore: null,
+						reason: "取不到会话作用域下的 conversation 服务（sessions.scope(id).get('conversation') 为空）" };
+				}
+				let ss = null;
+				try { ss = typeof conv.scopedSession === "function" ? conv.scopedSession() : null; }
+				catch (e) { return { ok: false, events: [], projections: null, hasMore: null, reason: "scopedSession() 抛出：" + String((e && e.message) || e) }; }
+				if (!ss || typeof ss.history !== "function") {
+					return { ok: false, events: [], projections: null, hasMore: null, reason: "会话对象没有 history()（宿主契约变化）" };
+				}
+				let h = null;
+				try { h = await ss.history({}); }
+				catch (e) { return { ok: false, events: [], projections: null, hasMore: null, reason: "history() 抛出：" + String((e && e.message) || e) }; }
+				const v = h && h.result && h.result.ok ? h.result.value : null;
+				if (!v) {
+					const err = h && h.result && h.result.error ? JSON.stringify(h.result.error).slice(0, 200) : "返回体无 value";
+					return { ok: false, events: [], projections: null, hasMore: null, reason: "history() 未返回 ok：真 " + err };
+				}
+				return {
+					ok: true,
+					events: Array.isArray(v.events) ? v.events : [],
+					projections: v.projections || null,
+					hasMore: typeof v.hasMore === "boolean" ? v.hasMore : null,
+					reason: null
+				};
+			}
+			
+			/**
+			 * 读某会话的**可读产出**（对话条目 + 宿主标题 + 结束原因）。
+			 *
+			 * @param {string} sessionId
+			 * @param {number} [limit=40] 最多回多少条（取**最后** N 条：摘要在尾部）
+			 * @returns {Promise<{ok:boolean, items:Array, count:number, title:string|null, endReason:string|null,
+			 *                    endFailure:{kind:string|null,message:string|null,code:string|null,status:number|null}|null,
+			 *                    lastText:string, reason:string|null}>}
+			 */
+			async function readSessionOutput(sessionId, limit) {
+				const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.round(Number(limit)) : MAX_ITEMS;
+				const r = await readSessionEvents(sessionId);
+				if (!r.ok) {
+					return { ok: false, items: [], count: 0, title: null, endReason: null, endFailure: null, lastText: "", reason: r.reason };
+				}
+				const ex = extractTurns(r.events);
+				const all = ex.items;
+				const start = Math.max(0, all.length - n);
+				return {
+					ok: true,
+					items: all.slice(start),
+					count: all.length,
+					title: ex.title,
+					endReason: ex.endReason,
+					/* 🔴 第 19 批：宿主侧失败详情随产出一起上交（null = 本轮没有失败事件） */
+					endFailure: ex.endFailure || null,
+					lastText: all.length ? all[all.length - 1].text : "",
+					reason: null
+				};
+			}
+			
+			/**
+			 * 会话**状态**（纯函数）—— 由宿主原始摘要推导，**不切页签**。
+			 *
+			 * 真机摘要字段（实测，纪律 53）：
+			 *   `{ id, displayTitle, running, blank, updatedAt, projectionValues, cwd, agentPreset }`
+			 *   `projectionValues.sessionStats = { turns, steps, llmMs, toolMs, ttftMs, decodeMs, decodeTokens }`
+			 *
+			 * 状态判定顺序（**先证前提再断结果**，纪律 23）：
+			 *   ① `running === true`            → `"running"`（宿主明说在跑，优先）
+			 *   ② `blank === true`              → `"blank"`（宿主明说空白会话：简报还没进去 / 还没跑）
+			 *   ③ `stats.turns > 0` 且有助手产出 → `"done"`
+			 *   ④ `stats.turns > 0` 但无助手产出 → `"partial"`（跑了但没拿到回复 ⇒ 可能与"正常"混同，必须分开）
+			 *   ⑤ 其余                          → `"unknown"`（**不猜**）
+			 *
+			 * @param {object} raw `rawSessionSummaries()` 的一条
+			 * @param {string|null} [assistantText] 已读到的助手正文（有则用于 ③/④ 判别）
+			 * @returns {{state:string, turns:number|null, steps:number|null, outputTokens:number|null, title:string|null}}
+			 */
+			function stateOfSummary(raw, assistantText) {
+				const empty = { state: "unknown", turns: null, steps: null, outputTokens: null, title: null };
+				if (!raw || typeof raw !== "object") return empty;
+				const pv = raw.projectionValues || {};
+				const st = pv.sessionStats || null;
+				const turns = st && typeof st.turns === "number" ? st.turns : null;
+				const steps = st && typeof st.steps === "number" ? st.steps : null;
+				const outputTokens = st && typeof st.decodeTokens === "number" ? st.decodeTokens : null;
+				const title = pv.title ? String(pv.title) : (raw.displayTitle ? String(raw.displayTitle) : null);
+				let state;
+				if (raw.running === true) state = "running";
+				else if (raw.blank === true) state = "blank";
+				else if (turns !== null && turns > 0) state = (assistantText && String(assistantText).trim()) ? "done" : "partial";
+				else state = "unknown";
+				return { state, turns, steps, outputTokens, title };
+			}
+			
+			/**
+			 * 往某会话投递一段文本（**不碰 DOM**）。
+			 *
+			 * 通道优先级（**如实标注走的是哪一级**，纪律 19）：
+			 *   ① `window.__directChatSubmit(sessionId, text)` —— 宿主 `client.js` 暴露的直投
+			 *      （实测：投递后 3s 内 `running` 由 false→true→false、`turns` 1、正文可读回）
+			 *   ② 会话作用域下的 `conversation.send(...)`
+			 *   ③ 都没有 ⇒ `ok:false` + 原因（**不假装已派发**）
+			 *
+			 * ⚠️ ①是**fire-and-forget**（返回 `undefined`）⇒ "投递成功"这一读数**只能**由
+			 *    "会话真的开始跑"反推，不能由返回值给出。本函数只报"调用是否发出"，
+			 *    真伪由调用方用 `stateOfSummary()` 的 `turns/running` 复核。
+			 *
+			 * @param {string} sessionId
+			 * @param {string} text
+			 * @returns {Promise<{ok:boolean, via:string, reason:string|null}>}
+			 */
+			async function sendToSession(sessionId, text) {
+				if (!sessionId) return { ok: false, via: "none", reason: "缺 sessionId" };
+				if (typeof window !== "undefined" && typeof window.__directChatSubmit === "function") {
+					try {
+						window.__directChatSubmit(sessionId, text);
+						return { ok: true, via: "host-direct", reason: null };
+					} catch (e) {
+						/* 掉到下一级，但**记下**这一级失败的原因 */
+						const conv = scopedConversationOf(sessionId);
+						if (conv && typeof conv.send === "function") {
+							try { conv.send(text); return { ok: true, via: "conversation-send", reason: "直投抛出后转 send：" + String((e && e.message) || e) }; }
+							catch (e2) { return { ok: false, via: "none", reason: "直投与 send 都抛出：" + String((e2 && e2.message) || e2) }; }
+						}
+						return { ok: false, via: "none", reason: "__directChatSubmit 抛出：" + String((e && e.message) || e) };
+					}
+				}
+				const conv = scopedConversationOf(sessionId);
+				if (conv && typeof conv.send === "function") {
+					try { conv.send(text); return { ok: true, via: "conversation-send", reason: null }; }
+					catch (e) { return { ok: false, via: "none", reason: "conversation.send 抛出：" + String((e && e.message) || e) }; }
+				}
+				return { ok: false, via: "none", reason: "宿主未提供 __directChatSubmit，会话作用域也没有 send（能力探测见 probeSessionApi）" };
+			}
+			
+			/**
+			 * 取某会话的**原始摘要**（`rawSessionSummaries()` 里的一条）。
+			 * @param {Array<object>} raws
+			 * @param {string} sessionId
+			 * @returns {object|null}
+			 */
+			function findSummary(raws, sessionId) {
+				const list = Array.isArray(raws) ? raws : [];
+				for (let i = 0; i < list.length; i++) {
+					if (list[i] && String(list[i].id) === String(sessionId)) return list[i];
+				}
+				return null;
+			}
+			
+			/**
+			 * 诊断：把逐会话读通道的**每一条**分别报出来（供 CDP 探针与降级显示用）。
+			 * @param {string} sessionId
+			 * @returns {Promise<object>}
+			 */
+			async function probeSessionIo(sessionId) {
+				const out = { sessionId: sessionId || null };
+				out.scoped = Boolean(scopedConversationOf(sessionId || ""));
+				const r = await readSessionEvents(sessionId || "");
+				out.eventsOk = r.ok;
+				out.eventCount = r.ok ? r.events.length : 0;
+				out.reason = r.reason;
+				if (r.ok) {
+					const types = {};
+					r.events.forEach((row) => {
+						const t = row && row.event && row.event.type ? row.event.type : "?";
+						types[t] = (types[t] || 0) + 1;
+					});
+					out.types = types;
+					const ex = extractTurns(r.events);
+					out.turns = { count: ex.items.length, title: ex.title, endReason: ex.endReason, last: ex.items.length ? ex.items[ex.items.length - 1].text.slice(0, 120) : "" };
+				}
+				return out;
+			}
+			
+			exports.isInjectedUserText = isInjectedUserText;
+			exports.extractTurns = extractTurns;
+			exports.readSessionEvents = readSessionEvents;
+			exports.readSessionOutput = readSessionOutput;
+			exports.stateOfSummary = stateOfSummary;
+			exports.sendToSession = sendToSession;
+			exports.findSummary = findSummary;
+			exports.probeSessionIo = probeSessionIo;
+		};
+
+		// ── logic/director-dispatch.js ──
+		__defs["logic/director-dispatch.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：总监 → 职能分支的**派发**（第 17 批）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorPage.js
+			 * 下游：logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/director-dispatch.js — 总监 → 职能分支的**派发**（第 17 批）
+			 *
+			 * ── 它和第 16 批的「按维度分流」差在哪 ────────────────────────────────
+			 *   第 16 批：建会话 → `deliverToChat` → 记索引。**没有主体**（谁派的？不知道）。
+			 *   本批：多三样东西 ——
+			 *     ① **主体是总监**：派发由总监五步的产物驱动（`opts.director` 带回五步读数），
+			 *        派发结果也**回写总监消息流**（`appendDirectorMessage`）；
+			 *     ② **投递通道换成"不碰 DOM"的直投**（`sendToSession`），并**复核**它真的跑起来了；
+			 *     ③ **台账**（`store/dispatch-log.js`）：派给谁 / 走哪条通道 / 现在什么状态。
+			 *
+			 * ── 🔴 投递成功 ≠ 分支跑起来了（纪律 30 的同型错误）───────────────
+			 *   `__directChatSubmit` 是 **fire-and-forget**（返回 `undefined`，实测）。
+			 *   ⇒ 本模块在投递后**等一拍再取样**（`hostConfirmMs`）：宿主快照里出现
+			 *     `turns > 0` 或 `running === true` 才算"真的起来了"；否则如实标 `unconfirmed`。
+			 *   **不拿"调用没抛错"当成功** —— 那正是第 16 批 `sent:8` 看着像成功的原因。
+			 *
+			 * ── 🔴 空需求 / 无维度 ⇒ 一条都不建 ──────────────────────────────
+			 *   `plan()` 已经保证"空需求不建分支"。本模块**继承**这条：`dims.length === 0`
+			 *   时直接返回失败 + 原因，**不兜底建默认三条**（建出来的是空壳，比"什么都没发生"更糟）。
+			 */
+			
+			const { plan, briefOf, branchTitle, briefTitlePrefix, organize } = __m("logic/split-dimensions.js");
+			const { planReuse, directorRoleOf, reuseSummary } = __m("logic/director-reuse.js");
+			const { createSession, rawSessionSummaries, refreshBranchTree, sessionsAvailable, archivedSessionIds } = __m("logic/branch-tree.js");
+			const { sendToSession, findSummary, stateOfSummary } = __m("bridge/session-io.js");
+			const { recordDispatch, refreshStates, patchDispatchItem, readDispatchLog, dispatchItemOf } = __m("store/dispatch-log.js");
+			const { recordSplits, readSplitIndex, forgetSplits } = __m("store/split-index.js");
+			const { putDossier, dossierOf } = __m("store/session-dossier.js");
+			
+			const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+			
+			/**
+			 * 从需求原文里提取**项目根路径**与**作品名**（纯函数）。
+			 *
+			 * 🔴 为什么不写死 `D:\workspace\novels\墟海`：那是**用户这一次的数据**，
+			 *    写进产品等于把一次性输入变成硬编码（下次换作品就静默失效）。
+			 *    实测用户原话形如：「…你读取"D:\workspace\novels\墟海"这个文件的信息作为填充」
+			 *    ⇒ 从原文里**找绝对路径**即可，找不到就不带（简报里少一段，不是错）。
+			 *
+			 * 识别形态（真机原话覆盖）：
+			 *   · `"D:\workspace\novels\墟海"`（引号包裹）
+			 *   · `D:\workspace\novels\墟海`（裸路径）
+			 *   · `d:/workspace/novels/墟海` / `d:/workspace/novels/墟海/`
+			 *
+			 * @param {string} text
+			 * @returns {{root:string|null, name:string|null}}
+			 */
+			function projectOf(text) {
+				const s = String(text == null ? "" : text);
+				/* 盘符 + 反斜杠或正斜杠 + 至少一层（路径里允许中文、空格、下划线、点、连字符）
+				 *
+				 * 🔴 第 18 批修正：**终止条件必须含中文标点**（由 `scripts/test-director-dispatch.mjs`
+				 *    的 `DD-1` 抓出）。原字符类只排除空白与英式引号/通配符 ⇒
+				 *    「项目根 D:\workspace\novels\墟海，先搭世界观」会把「，先搭世界观」**一起吞进 `root`**；
+				 *    真机原话里恰好是 `"…墟海"`（带引号）才没踩到 —— 属**运气**不是正确性。
+				 *    中文**字**仍允许（目录名可能就是中文，如 `墟海`），只排除中文**标点**。 */
+				const STOP = "\\s\"'“”‘’<>|?*，。；：、（）()【】《》！？!";
+				const m = s.match(new RegExp("[A-Za-z]:[\\\\/][^" + STOP + "]*[^" + STOP + "\\\\/]"));
+				if (!m) return { root: null, name: null };
+				const root = m[0].replace(/[，。；：、）)】\]]+$/, "");
+				const parts = root.split(/[\\/]+/).filter(Boolean);
+				const name = parts.length ? parts[parts.length - 1] : null;
+				return { root, name: name && name.length <= 40 ? name : null };
+			}
+			
+			/**
+			 * 派发：总监识别职能 → 建分支会话 → 投简报 → 记账。
+			 *
+			 * @param {string} text 需求原文（**不是** key 数组 —— 意图识别在 `plan()` 内部）
+			 * @param {object} [opts]
+			 * @param {object} [opts.director] 总监五步读数（`runDirector` 的返回）；用于记录"主体是总监"
+			 * @param {object} [opts.project] 覆盖自动提取的项目根 `{root, name}`
+			 * @param {number} [opts.max] 上限（防一次建太多）
+			 * @param {boolean} [opts.continuous] 上一条与本条是否**话题连续**
+			 *        （`runDirector().branch` 的判定结果）；传 `false` 时归属判定会**排除 `currentDim`**
+			 *        —— 这正是 N9/F10 的落点：判了「建议开新分支」就得**真的换维度去**，
+			 *        否则"要开新分支"只写进一段文字，需求还是派回同一个维度。
+			 * @param {string} [opts.currentDim] 当前所在分支的维度 key（配合 `continuous=false` 使用）
+			 * @param {number} [opts.hostConfirmMs=2500] 投递后等宿主确认的时间（**复核"真的起来了"**）
+			 * @param {(msg:string)=>void} [opts.log] 进度回调（每建成一条报一次，便于界面"看得见在动"）
+			 * @param {(info:object)=>Promise<void>} [opts.onBranch] 每建成一条后的**外部挂载钩子**
+			 *        （总监页用它把分支挂到插件自己的层级树上 —— 逻辑层不反向依赖组件，故做成回调）
+			 * @returns {Promise<{ok:boolean, kind:string, name:string, dims:Array, made:number, failed:number,
+			 *                    confirmed:number, unconfirmed:number, items:Array, reason:string}>}
+			 */
+			async function dispatchBranches(text, opts = {}) {
+				const o = opts || {};
+				const src = String(text == null ? "" : text).trim();
+				const project = o.project || projectOf(src);
+				/* 🔴 第 23 批：**总监对语言的整理**（用户原话「回复包括总监对语言的整理，对于文字的描述」）。
+				 *    派发前先把原文整理成**要点**（逐行去噪 → 空白归一 → 去重复行 → 提取书名），
+				 *    整理结果随简报投递（`briefOf` 第 5 参），**原文仍保真附在简报末尾**。
+				 *    🔴 整理**不改写语义** —— 见 `organize()` 头注释。
+				 * ⚠️ 本行曾在一次**同文件并行编辑**中静默丢失（两次 Edit 都报成功，后写者按旧内容覆盖），
+				 *    真机表现为 `data-error: "org is not defined"`（噪声路径不经过这里 ⇒ 只有真实派发才暴露）。 */
+				const org = organize(src);
+				/* 🔴 19 号文 **N9 / F10**：把「话题连续性」判定结果**接进归属判定**。
+				 *    收敛前 `plan()` 只收到 `max` ⇒ 步骤 2 判出的 `branch` **全仓零消费者**
+				 *    （只被拼进 `reasoning` 文本）⇒ 总监"判了"连续性却"不用"它决定去向。
+				 *    这里显式透传：`continuous === false` + `currentDim` ⇒ 归属候选**排除当前维度**。
+				 *    ⚠️ 只在调用方**真的给了** `continuous` 时才传：`undefined` 会覆盖归属判定里的默认语义。 */
+				const planOpts = {};
+				if (o.max) planOpts.max = o.max;
+				if (o.continuous !== undefined && o.continuous !== null) planOpts.continuous = o.continuous === true;
+				if (o.currentDim) planOpts.currentDim = String(o.currentDim);
+				const p = plan(src, planOpts);
+				if (!p.dims.length) {
+					return { ok: false, kind: p.kind || "none", name: p.name || "", dims: [], made: 0, failed: 0,
+						confirmed: 0, unconfirmed: 0, items: [],
+						organized: { lines: org.lines.length, noise: org.noiseLines.length, dup: org.droppedDup, intent: org.intent },
+						reason: String(p.reason || "没有可用维度") };
+				}
+			
+				/* ══════════════════════════════════════════════════════════════════
+				 * 🔴 第 19 批：派发前**先考虑目前存在的会话**（用户原话逐字）
+				 *    「我需要的是总监确认完需求之后先考虑目前存在的会话,然后没有才是新建会话」
+				 *
+				 *   第 18 批之前这里是**无条件** `createSession({})`（在维度循环体内）⇒
+				 *   每派一次必建 8 条，真机循环 ~10 次 + 闸门验收每次 8 条 ⇒ 导图上累积 123 个框。
+				 *
+				 *   复用判据全部由**纯函数** `planReuse()` 给出（可离线单测，见
+				 *   `scripts/test-director-reuse.mjs`）；本函数只做三件纯函数做不到的事：
+				 *     ① 读活数据（宿主现存会话 + 分流索引）
+				 *     ② 落盘（会话档案 + 分流索引）
+				 *     ③ 报数（复用几条 / 新建几条 —— 必须**可分**，否则用户还是看不见它在重复建）
+				 * ══════════════════════════════════════════════════════════════════ */
+				const raws = rawSessionSummaries();
+				const aliveAll = raws.map((s) => (s && s.id ? String(s.id) : "")).filter(Boolean);
+				/* 🔴 第 19 批补漏：存活集必须**排除已归档**会话。
+				 *    宿主快照的 `ids` 里**仍留着归档会话**（实测：磁盘清 0、侧栏 0 行时 `ids` 还是 116 条）
+				 *    ⇒ 直接拿它当「目前存在的会话」，「先复用」会落到用户**看不见**的幽灵会话上。
+				 *    `archivedSessionIds()` 返回 `null`（读不到归档集）⇒ **不过滤**：
+				 *    把"读不到"当成"全被归档"会一次建出双倍会话（与纪律 19 同型的静默放大）。 */
+				let archivedSet = null;
+				let archivedExcluded = 0;
+				try {
+					const arch = await archivedSessionIds();
+					if (Array.isArray(arch)) {
+						archivedSet = new Set(arch);
+						for (let i = 0; i < aliveAll.length; i++) { if (archivedSet.has(aliveAll[i])) archivedExcluded++; }
+					}
+				} catch (e) { archivedSet = null; archivedExcluded = 0; }
+				const aliveIds = archivedSet ? aliveAll.filter((id) => !archivedSet.has(id)) : aliveAll;
+				/* 🔴 `aliveKnown` 区分「真的没有会话」与「读不到宿主服务」——
+				 *    两者都表现为 `[]`，但处置相反（后者必须报降级，见 `sessionsAvailable` 头注释）。 */
+				const aliveKnown = sessionsAvailable();
+				/* 🔴 19 号文 **U10 / P9**：把宿主会话**现有标题**送进复用判定。
+				 *   为什么必须送：分流索引存在 `localStorage`，而 **origin 含端口**、
+				 *   宿主每次启动端口都变 ⇒ **冷启动后索引必然为空** ⇒ 首次派发必然重建全部 N 条
+				 *   （真机实测 `run01 +8` / `run04 +3`）。宿主自己的会话列表是**跨启动保留**的
+				 *   ⇒ 退一步按标题弱匹配（判据见 `director-reuse.js#planReuse`）。
+				 *
+				 *   🔴🔴 **第 25 批实测更正 —— 上一版这里是错的**（纪律 27：看起来相等 ≠ 同源）：
+				 *     上一版 `wantTitles` 取 `branchTitle()`，注释断言"与真正写进宿主的那个名字同源"。
+				 *     实测**不同源**：`branchTitle()` 产出 `「A1 世界观」《灵能修仙》`（角括号），
+				 *     而宿主标题来自**首条消息的首行** = `briefOf()` 的 head = `【A1 世界观】《灵能修仙》 —— …`
+				 *     （**方头括号**）⇒ 全等匹配恒 0 命中，冷启动仍 `reused:0 / created:8`。
+				 *     ⇒ 现在取 `briefTitlePrefix()`（**head 的唯一真相源**），并且匹配是**前缀**不是全等。
+				 *   ⚠️ 读数 `prevSummaryLen` / `titleHit` / `titleMissed` / `titlePoolN` 一并回传 ——
+				 *      "建了 N 条"必须能回答"为什么"，否则只能靠猜（纪律 18/60）。 */
+				const hostTitles = raws.map((s) => ({
+					sessionId: s && s.id ? String(s.id) : "",
+					title: String((s && (s.title || s.name)) || ""),
+					at: Number((s && (s.updatedAt || s.at)) || 0)
+				})).filter((x) => x.sessionId);
+				const wantTitles = {};
+				for (let i = 0; i < p.dims.length; i++) {
+					const dd = p.dims[i];
+					if (dd && dd.key) wantTitles[String(dd.key)] = briefTitlePrefix(dd, p.name);
+				}
+				const reusePlan = planReuse(p.dims, {
+					index: readSplitIndex(), aliveIds: aliveIds, name: p.name, aliveKnown: aliveKnown,
+					hostTitles: hostTitles, wantTitles: wantTitles
+				});
+			
+				const made = [];
+				const failed = [];
+				for (let i = 0; i < p.dims.length; i++) {
+					const dim = p.dims[i];
+					const dec = reusePlan.decisions[i] || { action: "create", sessionId: null, why: "no-decision" };
+					const label = branchTitle(dim, p.name);
+					const role = directorRoleOf(dim);
+					let sessionId = null;
+					let reused = false;
+					let attachFail = false;
+					let attachWhy = "";
+					if (dec.action === "reuse" && dec.sessionId) {
+						/* **复用已有会话 ⇒ 一条新会话都不建** —— 这正是本批要治的病 */
+						sessionId = String(dec.sessionId);
+						reused = true;
+					} else {
+						const cs = await createSession({});
+						if (!cs.ok || !cs.sessionId) {
+							failed.push({ dim: dim.key, label, why: "建会话失败：" + String((cs && cs.reason) || "未知") });
+							continue;
+						}
+						sessionId = String(cs.sessionId);
+						attachFail = cs.attached === false;
+						attachWhy = String(cs.reason || "");
+					}
+					/* 🔴 19 号文 §3.5 **P3**（对话持续性）：简报必须在 **sessionId 定下来之后**才构造 ——
+					 *    「上一轮结论」只有**复用同一会话**时才存在；新建会话本就没有历史。
+					 *    旧顺序把 `briefOf()` 放在决定 sessionId 之前 ⇒ 即便复用，也**永远带不上**上一轮结论
+					 *    （分支每轮都当第一轮做，用户看到的"持续性"就一直是零）。
+					 *    ⚠️ 逐字取用档案里的 `summary.text`，这里**不做任何格式化**（P3 判据：逐字同源）。 */
+					const prevDos = dossierOf(sessionId);
+					const prevSummary = (prevDos && prevDos.summary && prevDos.summary.ok) ? String(prevDos.summary.text || "") : "";
+					const brief = briefOf(dim, src, p.name, project, org, null, prevSummary);
+					/* 投简报：复用与新建走**同一条通道**（先复用再自研 —— 不新开投递路径，
+					 * 否则复用那条会走上一条没人验证过的路）。 */
+					const sent = await sendToSession(sessionId, brief);
+					/* 会话档案：**每个会话自己的总监**（第 19 批 R2）。
+					 * 合并式写入 ⇒ 与回收链写 `summary` 互不覆盖。写失败**不改变"已派发"这一事实**。 */
+					try {
+						putDossier(sessionId, {
+							dim: dim.key,
+							director: { role: role, name: String(p.name || ""), at: Date.now() },
+							at: Date.now()
+						});
+					} catch (e) { /* 档案写失败不改派发结论 */ }
+					const info = {
+						dim: dim.key, label, sessionId: sessionId, brief, reused: reused, reuseWhy: String(dec.why || ""),
+						/* 🔴 P3 读数（纪律 19：降级可以，无声不行）——
+						 *   `0` 与"有值"必须**可分**：没有历史（新建会话）与"读了但读不到"在界面上
+						 *   长得一样，闸门/用户都无法判断持续性到底有没有生效 ⇒ 必须报数。 */
+						prevSummaryLen: prevSummary.length,
+						directorRole: role,
+						sentOk: sent.ok === true, sentVia: String(sent.via || ""), sentReason: String(sent.reason || ""),
+						attachFail: attachFail, attachWhy: attachWhy, name: p.name
+					};
+					made.push(info);
+					/* 外部挂载钩子（总监页 → 插件层级树）。钩子抛错**不许**打断派发，
+					 * 但要把原因带进条目（"建出来了但没挂上"与"完全成功"必须可分）。 */
+					if (typeof o.onBranch === "function") {
+						try { await o.onBranch(info); } catch (e) { info.nodeErr = String((e && e.message) || e); }
+					}
+					if (typeof o.log === "function") { try { o.log("已派发 " + (i + 1) + "/" + p.dims.length + "：" + label); } catch (e) { /* 日志回调不许打断派发 */ } }
+				}
+			
+				recordDispatch({ text: src, name: p.name, kind: p.kind, items: made });
+				refreshStates((id) => findSummary(rawSessionSummaries(), id), stateOfSummary);
+				/* 持久化沿用**现有 key**（`dsh.director.split`）——不新开 localStorage 契约。
+				 *
+				 * 🔴 **登记规则（第 25 批实测更正）**：登记「新建的」**∪「索引里没有的复用」**。
+				 *    上一版只登记"新建的"，理由写的是「复用的那条**早就在索引里**」——
+				 *    这条前提在**冷启动**下**不成立**：索引存在 `localStorage`（origin 含端口、每次启动都变），
+				 *    而这批复用是**靠宿主标题**认回来的（见上方 U10 注释）⇒ 索引里**一条都没有**。
+				 *    真机实测（第二十五轮）：`派发 8 · 复用 8` 而 `dsh.director.split` **整键不存在**
+				 *    ⇒ 两个真实后果：① 导图那 8 个节点拿不到 `titleOrigin="plugin:split"`（插件侧标签覆盖失效）；
+				 *      ② 下一次派发又只能走标题兜底 —— **索引这条快路永远用不上**。
+				 *    ⚠️ 仍然**排除"索引命中"的那些**：它们已在索引里，重复登记只会刷新 `at`，
+				 *      把它一直顶在最前、掩盖真正的新条目（上一版点名的风险依旧成立）。
+				 *    ⇒ 判据用 `reusePlan` 自己的分类（`why`），不在这里另写一套推断（纪律 92）。 */
+				const fromIndex = new Set();
+				for (let i = 0; i < reusePlan.decisions.length; i++) {
+					const dd = reusePlan.decisions[i];
+					if (dd && dd.action === "reuse" && dd.why === "index-hit" && dd.sessionId) fromIndex.add(String(dd.sessionId));
+				}
+				let recorded = 0;
+				try {
+					recorded = recordSplits(made.filter((m) => m.sessionId && !fromIndex.has(String(m.sessionId))).map((m) => ({
+						sessionId: m.sessionId, dim: m.dim, label: m.label, name: m.name
+					})));
+				} catch (e) { /* 索引写入失败不改变"分支已建出"这一事实；读数里另记 */ }
+			
+				/* ── 顺手清掉**索引孤儿**：索引里有、宿主里已无的会话 ────────────────
+				 * 这是"清理无效条目"的产品化落点（用户需求 R4 的一部分）。
+				 * 🔴 两道门（**缺一不可**）：
+				 *    ① `aliveKnown` —— 读不到宿主列表时**一条都不许清**
+				 *       （"读不到"≠"不存在"；一次读取失败就清空索引会把病情放大）
+				 *    ② **必须报数** —— 不许无声删除（纪律 19 同型） */
+				let orphanForgotten = 0;
+				try {
+					if (aliveKnown && reusePlan.orphans.length) orphanForgotten = forgetSplits(reusePlan.orphans).removed;
+				} catch (e) { /* 清理失败不改变派发结论 */ }
+			
+				/* ── 复核："投递出去了" ≠ "分支真的跑起来了" ─────────────────────
+				 * 判据（**跑程内**，纪律 42）：等待窗口内取样，宿主快照出现
+				 *   `running === true` 或 `turns > 0` 即算 confirmed。
+				 * 超时未确认 ⇒ 标 `unconfirmed`（**如实**，不写成功）。 */
+				const waitMs = Number(o.hostConfirmMs) >= 0 ? Number(o.hostConfirmMs) : 2500;
+				let confirmed = 0;
+				if (made.length && waitMs > 0) {
+					const deadline = Date.now() + waitMs;
+					const pending = made.slice();
+					while (pending.length && Date.now() < deadline) {
+						for (let i = pending.length - 1; i >= 0; i--) {
+							const raw = findSummary(rawSessionSummaries(), pending[i].sessionId);
+							const s = raw ? stateOfSummary(raw, null) : null;
+							const alive = raw && (raw.running === true || (s && s.turns !== null && s.turns > 0));
+							if (alive) {
+								patchDispatchItem(pending[i].sessionId, { confirmed: true, confirmedVia: raw.running === true ? "running" : "turns>0" });
+								pending.splice(i, 1);
+							}
+						}
+						if (pending.length) await sleep(300);
+					}
+					pending.forEach((it) => patchDispatchItem(it.sessionId, { confirmed: false }));
+					confirmed = made.length - pending.length;
+				}
+				const unconfirmed = made.filter((m) => { const it = dispatchItemOf(m.sessionId); return it && it.confirmed !== true; }).length;
+			
+				try { await refreshBranchTree(); } catch (e) { /* 血缘刷新失败不影响派发本身的结果 */ }
+			
+				const reusedN = made.filter((m) => m.reused).length;
+				const createdN = made.length - reusedN;
+				return {
+					ok: made.length > 0,
+					kind: p.kind, name: p.name, dims: p.dims.map((d) => d.key),
+					/* 🔴 19 号文 **N8**（人可感知层）：把**归属判定的原样输出**带上来。
+					 *    总监页的常驻读数由 `attributionSummary(attribution)` 渲染 ——
+					 *    **同源**，不是"另算一遍"（另算必漂移，纪律 78）。
+					 *    `null` 表示走了 `o.only` 显式指定路径（没做归属判定）⇒
+					 *    读数如实说"显式指定"，**不伪造一个置信度**。 */
+					attribution: p.attribution || null,
+					made: made.length, failed: failed.length,
+					confirmed, unconfirmed, recorded,
+					/* 🔴 第 19 批：复用与新建**必须可分** —— 上一条真机循环里正是
+					 *    "只报 made=8" 让用户看不出它在重复建会话。 */
+					reused: reusedN, created: createdN, orphanForgotten,
+					/* 🔴 归档过滤必须**报数**（纪律 19：降级可以，无声不行）——
+					 *    `archivedKnown=false` 表示"读不到归档集、本轮未过滤"，
+					 *    读数的人要能一眼分清「没有归档」与「没读到归档」。 */
+					archivedExcluded: archivedExcluded,
+					archivedKnown: !!archivedSet,
+					aliveAll: aliveAll.length,
+					reusePlan: {
+						reuse: reusePlan.reuse, create: reusePlan.create,
+						degraded: reusePlan.degraded, aliveKnown: reusePlan.aliveKnown,
+						orphans: reusePlan.orphans.length, surplus: reusePlan.surplus.length,
+						/* U10/P9 读数：靠宿主标题救回来的 / 标题也没匹配上的 */
+						titleHit: !!reusePlan.titleHit, titleMissed: (reusePlan.titleMissed || []).slice(),
+						titlePoolN: Number(reusePlan.titlePoolN) || 0,
+						/* 🔴 补登记条数（**不是布尔**）：标题命中的那几条**不在索引里** ⇒ 已补进索引。
+						 *    上游据此对账 `索引新增 == created + titleHits`（纪律 78：数出 0 ≠ 没有）。 */
+						titleHits: Number(reusePlan.titleHits) || 0,
+						recorded: recorded
+					},
+					summary: reuseSummary({
+						reuse: reusedN, create: createdN, aliveKnown: aliveKnown,
+						orphans: reusePlan.orphans, surplus: reusePlan.surplus
+					}),
+					attachFail: made.filter((m) => m.attachFail).length,
+					nodeFail: made.filter((m) => m.nodeErr).length,
+					/* 🔴 第 23 批：「整理」也要**可读数** —— 否则"整理生效了没有"在界面上无从判断（纪律 19 同型） */
+					organized: { lines: org.lines.length, noise: org.noiseLines.length, dup: org.droppedDup, intent: org.intent },
+					items: readDispatchLog().items.slice(), failedItems: failed,
+					project: project,
+					director: o.director ? { taskType: o.director.taskType, branch: o.director.branch, model: o.director.model } : null,
+					reason: made.length ? "" : (failed.length ? "全部建会话失败：" + failed[0].why : "没有可用维度")
+				};
+			}
+			
+			/**
+			 * 把派发台账挂到 `window.__dshDispatchLog`（**诊断出口**，与 `window.__dshBranchTree`
+			 * / `window.__dshChatBridge` 同性质）。
+			 *
+			 * 🔴 为什么需要它：闸门要断言「台账里 8 条、每条都有 sessionId」——
+			 *    没有出口就只能靠 DOM 读数间接推断，而 DOM 读数**恰好是第 16 批漏掉的那个视角**
+			 *    （`made=8` 曾与「真的建了 8 条」不是一回事）。
+			 *    暴露的是**同一个活对象**（不是拷贝）⇒ 读完即最新，不存在两份真相。
+			 *
+			 * @returns {object} 台账对象
+			 */
+			function installDispatchApi() {
+				if (typeof window !== "undefined") window.__dshDispatchLog = readDispatchLog();
+				return readDispatchLog();
+			}
+			
+			exports.projectOf = projectOf;
+			exports.dispatchBranches = dispatchBranches;
+			exports.installDispatchApi = installDispatchApi;
+		};
+
 		// ── bridge/host-panel-trim.js ──
 		__defs["bridge/host-panel-trim.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -20298,7 +25116,15 @@ window.__ModuleLoader__.load({
 			
 			const MIN_BTN_ID = "dsh-host-col-min";
 			const COL_RESIZER_ID = "dsh-host-col-resizer";
-			const MEM_BAR_ID = "dsh-mem-bar";
+			/* 🔴 `MEM_BAR_ID` / `dp-mem-bar`（「延迟 __ s」横向工具条）**已整条删除**
+			 *    （2026-09-17 第 35 轮 · 用户原话：「对话 tap 的总监页面下面有一个延迟 5 秒的
+			 *     一个横向的控制延迟的元素 去掉」）。
+			 *    该工具条贴在记忆表头正上方，含「延迟」标签 + 秒数输入框 + 锁定按钮。
+			 *    ⇒ 只删**工具条**：延迟能力本身由 store 的 `memoryHoverDelayMs` 承载（默认 500ms），
+			 *      锁定能力本身由 store 的 `memoryLocked` 承载，两者**都还在被使用**
+			 *      （`onDocMouseOverCapture` / `onDocMouseOutCapture` 的闸门 + `toggleMemoryLock`）。
+			 *      ⚠️ 原布局为 `[延迟][输入][s][锁定]`，三者**去掉后表头正上方不再有我们注入的节点** ——
+			 *      记忆块自身（`findHostMemoryBlock`）与高度手柄（`MEM_HEIGHT_HANDLE_ID`）不受影响。 */
 			const MEM_HEIGHT_HANDLE_ID = "dsh-mem-height";
 			
 			/** 我们托管的 CSS 属性清单（备份/还原**严格按这张表**走，不多不少） */
@@ -20321,8 +25147,9 @@ window.__ModuleLoader__.load({
 				minimized: false,
 				/** 几何落地次数 / 还原次数（幂等性判据：无变化不该累加） */
 				geomApplied: 0, geomRestored: 0,
-				/** 最小化按钮 / 拖拽条 / 记忆工具条 / 高度手柄 是否已注入 */
-				minBtn: false, resizer: false, memBar: false, memHeight: false,
+				/** 最小化按钮 / 拖拽条 / 高度手柄 是否已注入
+				 *  （记忆工具条已于第 35 轮整条删除 ⇒ `memBar` 字段随之移除） */
+				minBtn: false, resizer: false, memHeight: false,
 				/** 宿主自带拖拽手柄是否被我们藏起来（缺口："藏"必须能还） */
 				hostHandleHidden: false,
 				/** 记忆面板：延迟开关次数 / 被拦下的 mouseover、mouseout 次数 / 锁定语义修正次数 */
@@ -20702,8 +25529,7 @@ window.__ModuleLoader__.load({
 					hostColumnState.hostHandleHidden = true;
 				}
 			
-				/* ④ 记忆面板工具条（延迟秒数 + 锁定）—— 贴在记忆表头正上方 */
-				syncMemoryBar(col, row);
+				/* ④ 记忆面板：工具条已删（第 35 轮）。高度手柄保留 —— 贴在记忆内容区上沿 */
 				syncMemoryHeightHandle(col, row);
 				return true;
 			}
@@ -20793,7 +25619,7 @@ window.__ModuleLoader__.load({
 				try {
 					const block = findHostMemoryBlock(findHostDirectorColumn());
 					if (block && block.contains(node)) return true;
-					for (const id of [MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID]) {
+					for (const id of [MEM_HEIGHT_HANDLE_ID]) {
 						const el = document.getElementById(id);
 						if (el && el.contains(node)) return true;
 					}
@@ -20995,87 +25821,6 @@ window.__ModuleLoader__.load({
 				} catch (err) { /* ignore */ }
 			}
 			
-			/** 记忆工具条：延迟秒数输入 + 锁定指示（贴在记忆表头正上方，随表头走） */
-			function syncMemoryBar(col, row) {
-				const block = findHostMemoryBlock(col);
-				const header = findMemoryHeader(block);
-				if (!block || !header) return false;
-				const bar = ensureNode(row, MEM_BAR_ID, "dp-mem-bar", "div");
-				if (!bar) return false;
-				let top = 0, left = 0;
-				try {
-					const rr = row.getBoundingClientRect();
-					const hr = header.getBoundingClientRect();
-					top = Math.max(0, Math.round(hr.top - rr.top) - 21);
-					left = Math.max(2, Math.round(hr.left - rr.left));
-				} catch (e) { /* ignore */ }
-				try {
-					Object.assign(bar.style, px({
-						position: "absolute", zIndex: 74, top: top + "px", left: left + "px",
-						display: "flex", alignItems: "center", gap: 4,
-						padding: "0 3px", height: 18, border: "1px solid var(--dp-line, #3d4148)",
-						background: "var(--dp-bg-2, rgba(24,26,30,.94))",
-						borderRadius: "var(--dp-radius-sm, 5px)",
-						font: "600 10px/1 ui-monospace,Consolas,monospace", color: "var(--dp-t3, #8b9199)"
-					}));
-				} catch (e) { /* ignore */ }
-				if (!bar.getAttribute("data-dsh-built")) {
-					bar.setAttribute("data-dsh-built", "1");
-					bar.innerHTML = "";
-					const lab = document.createElement("span");
-					lab.textContent = "延迟";
-					const inp = document.createElement("input");
-					inp.id = "dsh-mem-delay";
-					inp.setAttribute("data-testid", "dp-mem-delay");
-					inp.setAttribute("data-dsh-plugin", "1");
-					inp.type = "number";
-					inp.step = "0.1"; inp.min = "0"; inp.max = "3";
-					Object.assign(inp.style, px({
-						width: 42, height: 14, border: "1px solid var(--dp-line, #3d4148)", borderRadius: 3,
-						background: "transparent", color: "var(--dp-t1, #e8eaed)",
-						font: "600 10px/1 ui-monospace,Consolas,monospace", padding: "0 2px", textAlign: "right"
-					}));
-					const unit = document.createElement("span");
-					unit.textContent = "s";
-					const lock = document.createElement("button");
-					lock.id = "dsh-mem-lock";
-					lock.setAttribute("data-testid", "dp-mem-lock");
-					lock.setAttribute("data-dsh-plugin", "1");
-					Object.assign(lock.style, px({
-						border: "1px solid var(--dp-line, #3d4148)", borderRadius: 3, background: "transparent",
-						color: "var(--dp-t3, #8b9199)", cursor: "pointer", padding: "0 4px",
-						font: "600 10px/1 ui-monospace,Consolas,monospace", height: 14
-					}));
-					/* 输入即生效（`input` 而非 `change`：闸门/probe 直接派发 input 事件就能验） */
-					inp.addEventListener("input", () => {
-						try { directorLayoutStore.setMemoryHoverDelay(Math.round(Number(inp.value) * 1000)); } catch (e) { /* ignore */ }
-						syncMemoryBar(findHostDirectorColumn(), findRow(findHostDirectorColumn()));
-					});
-					/* 表头点击已被我们接管；工具条上的锁按钮走**同一条语义**（同一真相源 `toggleMemoryLock`） */
-					lock.addEventListener("click", (e) => {
-						try { e.preventDefault(); e.stopPropagation(); } catch (err) { /* ignore */ }
-						toggleMemoryLock();
-						syncMemoryBar(findHostDirectorColumn(), findRow(findHostDirectorColumn()));
-					});
-					bar.appendChild(lab); bar.appendChild(inp); bar.appendChild(unit); bar.appendChild(lock);
-				}
-				try {
-					const inp2 = bar.querySelector("#dsh-mem-delay");
-					const lock2 = bar.querySelector("#dsh-mem-lock");
-					const secs = (delayMs() / 1000);
-					if (inp2 && document.activeElement !== inp2) inp2.value = String(Math.round(secs * 10) / 10);
-					if (lock2) {
-						const lk = isMemoryLocked();
-						lock2.textContent = lk ? "🔒" : "🔓";
-						lock2.title = lk ? "已锁定：鼠标移出也不收回。点击解锁并收起" : "未锁定：鼠标移出即收回。点击锁定";
-						lock2.setAttribute("data-locked", lk ? "1" : "0");
-					}
-					bar.setAttribute("data-delay-ms", String(delayMs()));
-					bar.setAttribute("data-locked", isMemoryLocked() ? "1" : "0");
-				} catch (e) { /* ignore */ }
-				hostColumnState.memBar = true;
-				return true;
-			}
 			
 			/** 高度手柄：贴在记忆内容区上沿，向上拖 = 变高 */
 			function syncMemoryHeightHandle(col, row) {
@@ -21242,12 +25987,12 @@ window.__ModuleLoader__.load({
 			
 			function removeChrome() {
 				try {
-					for (const id of [MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID]) {
+					for (const id of [MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID]) {
 						const n = document.getElementById(id);
 						if (n && n.parentElement) n.parentElement.removeChild(n);
 					}
 				} catch (e) { /* ignore */ }
-				hostColumnState.minBtn = hostColumnState.resizer = hostColumnState.memBar = hostColumnState.memHeight = false;
+				hostColumnState.minBtn = hostColumnState.resizer = hostColumnState.memHeight = false;
 			}
 			
 			/**
@@ -21363,7 +26108,7 @@ window.__ModuleLoader__.load({
 			
 			function api() {
 				return {
-					COL_MARK, MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID,
+					COL_MARK, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID,
 					hostColumnState, colWidthMax,
 					findHostDirectorColumn, findHostResizer, findHostMemoryBlock, findMemoryContentWrap,
 					reactPropsOf, callHostHandler,
@@ -21383,7 +26128,6 @@ window.__ModuleLoader__.load({
 			exports.COL_MARK = COL_MARK;
 			exports.MIN_BTN_ID = MIN_BTN_ID;
 			exports.COL_RESIZER_ID = COL_RESIZER_ID;
-			exports.MEM_BAR_ID = MEM_BAR_ID;
 			exports.MEM_HEIGHT_HANDLE_ID = MEM_HEIGHT_HANDLE_ID;
 			exports.COL_WIDTH_MIN = COL_WIDTH_MIN;
 			exports.colWidthMax = colWidthMax;
@@ -21751,176 +26495,393 @@ window.__ModuleLoader__.load({
 			exports.installHostComposerSlotApi = installHostComposerSlotApi;
 		};
 
-		// ── logic/split-dimensions.js ──
-		__defs["logic/split-dimensions.js"] = function (exports) {
+		// ── logic/director-collect.js ──
+		__defs["logic/director-collect.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
-			 * 职责：按维度拆线（**纯函数**：无 DOM、无 store、无副作用）
+			 * 职责：分支产出回收 + 总裁定（第 17 批）
 			 * 引用：—
 			 * 上游：components/DirectorPage.js
-			 * 下游：（无）
+			 * 下游：logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/session-dossier.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
 			/**
-			 * logic/split-dimensions.js — 按维度拆线（**纯函数**：无 DOM、无 store、无副作用）
+			 * logic/director-collect.js — 分支产出回收 + 总裁定（第 17 批）
 			 *
-			 * ═══════════════════════════════════════════════════════════════════
-			 * 需求来源（第 16 批用户原话）
-			 * ───────────────────────────────────────────────────────────────────
-			 *   「按照一个流程跑一遍 写小说吧,调用小说技能」
-			 *   「然后按照世界观剧情等应该自动分到不同的对话分支 然后思维导图应该能看出来」
+			 * ── 数据来源（**不切页签**，实测见 `bridge/session-io.js` 头注释）────────
+			 *   状态：`rawSessionSummaries()`（宿主 `sessions.list` 快照，一次全拿）
+			 *   正文：`conversation.scopedSession().history({})` 的 `events[]`
 			 *
-			 * 🔴 关键判断：**不新造一套维度**。维度来自用户点名的小说技能
-			 *    `multi-agent-novel-brain` 的 **A1–A8 分工表**（该技能的核心就是
-			 *    "8 个智能体 + 各自的文件边界"，见其 SKILL.md「智能体分工与文件边界」）。
-			 *    用户说"世界观剧情等"里的"等"，正对应 A2/A4/A5/A6/A7/A8 —— 一个不落地对应过去，
-			 *    才是"自动分开"；只在插件里凭空列 3 个维度，等于把技能的边界模型丢了。
+			 * ── 🔴 「回收」为什么是**显式动作**而不是自动跑 ──────────────────────
+			 *   8 条分支各读一次事件流 = 8 次 RPC。自动跑会在每条消息后触发 8 次，
+			 *   把一次轻量发送变成 8 倍负载，而且**失败时无人知道是哪一次**。
+			 *   ⇒ 显式动作 + 一次回收整批（`collectBranches` 一次跑完，逐条记原因）。
 			 *
-			 * 🔴 每条维度都带 **files（只读/可写目录）**：技能的关键约束是"每个智能体只读/只写
-			 *    自己的目录"。把这条边界**随简报一起投递**，分支里的智能体才不会越界去写别人的域
-			 *    （越界的后果是静默的：两个分支同时改世界观文件，谁也不报错）。
-			 *
-			 * ═══════════════════════════════════════════════════════════════════
-			 * 契约
-			 * ═══════════════════════════════════════════════════════════════════
-			 *   · `SPLIT_DIMENSIONS` 的 `key` 是**稳定标识**：进 `data-*` 与节点 id，改名即断血缘
-			 *   · `label` 是用户可见名（**分支名与导图标签**都用它开头 ⇒ 导图上一眼看出结构）
-			 *   · 纯函数：同输入必同输出（可离线单测；也是 UI 与闸门共用的**同一份判据**）
+			 * ── 🔴 「读到"」与「跑完了」是两件事 ─────────────────────────────
+			 *   · `state`    来自快照（可靠，但只说"跑没跑/跑完没"）
+			 *   · `say`      来自事件流（说"产出了什么"，但可能读不到）
+			 *   两者**分别记来源与原因**（`stateSource` / `sayReason`）—— 见 `store/dispatch-log.js` 头注释。
 			 */
+			
+			const { rawSessionSummaries, refreshBranchTree, scopedConversationOf, archivedSessionIds } = __m("logic/branch-tree.js");
+			const { findSummary, stateOfSummary, readSessionOutput, probeSessionIo } = __m("bridge/session-io.js");
+			const { readDispatchLog, refreshStates, patchDispatchItem, setDispatchCollect } = __m("store/dispatch-log.js");
+			const { putDossier } = __m("store/session-dossier.js");
 			
 			/**
-			 * 小说场景的八个维度（**逐条对应** `multi-agent-novel-brain` 的 A1–A8）。
-			 * `files` = 该维度**应当只读/只写**的目录（技能的文件边界，随简报投递）。
-			 * `stage` = 工序阶段，用于排序（先设定、后写正文、最后审校）。
+			 * 取一条产出的**摘要**（纯函数）—— 只做截断与空白归一，**不改写内容**。
+			 *
+			 * 🔴 不用宿主自动标题兜底：宿主会自动给会话起标题（`session/title`，
+			 *    来源 `session-title-first-prompt-llm`），那是**模型给会话起的名字**，
+			 *    不是分支的产出。拿它当摘要 ⇒ 界面上"看起来有产出"，实际是幻觉级信息。
+			 *
+			 * @param {string} text
+			 * @param {number} [max=160]
+			 * @returns {string}
 			 */
-			const SPLIT_DIMENSIONS = Object.freeze([
-				{ key: "world", label: "A1 世界观", stage: 1, files: ["01-世界观/"], brief: "搭建世界规则 / 地理 / 历史 / 势力" },
-				{ key: "power", label: "A2 力量体系", stage: 1, files: ["01-世界观/world-rules", "02-力量体系/"], brief: "设计修行 / 等级 / 技能 / 代价" },
-				{ key: "plot", label: "A3 剧情", stage: 2, files: ["01-世界观/", "02-力量体系/", "03-剧情架构/"], brief: "Hook / 分卷 / 章纲 / 支线" },
-				{ key: "chars", label: "A4 人物", stage: 2, files: ["01-世界观/factions", "03-剧情架构/arc-plan", "04-人物档案/"], brief: "角色心理学档案 / 关系网" },
-				{ key: "prose", label: "A5 正文", stage: 3, files: ["03-剧情架构/chapter-outline", "04-人物档案/", "05-正文/"], brief: "按章纲写正文，并保持与前文一致" },
-				{ key: "polish", label: "A6 打磨", stage: 4, files: ["05-正文/", "07-风格语料/"], brief: "润色 / 去 AI 味" },
-				{ key: "review", label: "A7 审查", stage: 4, files: ["03-剧情架构/", "04-人物档案/", "05-正文/", "08-审查/"], brief: "六关一致性审查（剧情 / 人物 / 设定 / 文风 / 推进 / 逻辑）" },
-				{ key: "distill", label: "A8 蒸馏", stage: 5, files: ["_memory/", "08-审查/"], brief: "跨对话记忆蒸馏（把各分支产出汇成一份可复用的记忆）" }
-			]);
-			
-			/** 小说意图关键词（命中任一 ⇒ 判为小说场景）。**全部小写比对**，调用方先归一化。 */
-			const NOVEL_HINTS = Object.freeze([
-				"小说", "世界观", "力量体系", "剧情", "章纲", "章节", "人物档案", "正文", "润色",
-				"novel", "chapter", "worldbuilding", "outline"
-			]);
-			
-			/** 通用场景的兜底维度（识别不到小说意图时**不硬套** A1–A8 —— 那会建出一堆空分支）。 */
-			const GENERIC_DIMENSIONS = Object.freeze([
-				{ key: "plan", label: "方案", stage: 1, files: [], brief: "把需求拆成可执行的方案" },
-				{ key: "build", label: "执行", stage: 2, files: [], brief: "按方案落地" },
-				{ key: "verify", label: "验证", stage: 3, files: [], brief: "验证产出是否达成目标" }
-			]);
-			
-			/** 中文书名号提取：《我的小说》 ⇒ "我的小说"；取不到返回空串（**不编名字**） */
-			function novelNameOf(text) {
-				const s = String(text == null ? "" : text);
-				const m = s.match(/《([^》]{1,40})》/);
-				return m ? m[1] : "";
-			}
-			
-			/** 是否小说意图（纯函数；空文本 ⇒ false，不许"默认当小说"） */
-			function isNovelIntent(text, extraHints) {
-				const s = String(text == null ? "" : text).toLowerCase();
-				if (!s.trim()) return false;
-				const hints = Array.isArray(extraHints) && extraHints.length ? extraHints : NOVEL_HINTS;
-				return hints.some((k) => s.indexOf(String(k).toLowerCase()) >= 0);
+			function digestOf(text, max) {
+				const n = Number.isFinite(Number(max)) && Number(max) > 0 ? Math.round(Number(max)) : 160;
+				const s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+				return s.length <= n ? s : s.slice(0, n - 1) + "…";
 			}
 			
 			/**
-			 * 分支名（纯函数）：**维度名在前** + 书名（有则带上）。
-			 * 为什么维度名必须在前：导图里节点按 `label` 排序阅读时，"A1/A2/A3…"这层结构
-			 * 一眼可见；把书名放前面（"《X》· A1 世界观"）会让八个节点的**共同前缀**占满可视区，
-			 * 反而看不出结构（这也是本项目"路由面只暴露前 29 字符"那条教训的同型问题）。
+			 * 回收全部派发分支的产出。
+			 *
+			 * @param {object} [opts]
+			 * @param {number} [opts.maxChars=160] 每条摘要截断长度
+			 * @param {boolean} [opts.deep=false] 是否附诊断（逐条 `probeSessionIo`，**慢**，仅排障用）
+			 * @returns {Promise<{ok:boolean, at:number, total:number, read:number, unread:number,
+			 *                    counts:object, items:Array, reason:string}>}
 			 */
-			function branchTitle(dim, novelName) {
-				const n = String(novelName == null ? "" : novelName).trim();
-				return "「" + String(dim && dim.label ? dim.label : "维度") + "」" + (n ? "《" + n + "》" : "");
-			}
-			
-			/**
-			 * 生成分流计划（纯函数）。
-			 * @param {string} text 需求原文
-			 * @param {{only?:string[], all?:boolean, max?:number, generic?:boolean}} [opts]
-			 *   `only` 只要这几条维度（key 数组）；`max` 上限（防一次建太多）；
-			 *   `generic: true` 强制走通用维度；`generic: false` **严格模式**（未命中小说意图 ⇒ `none`，不兜底）
-			 * @returns {{kind:"novel"|"generic"|"none", dims:Array, name:string, reason:string}}
-			 */
-			function plan(text, opts = {}) {
+			async function collectBranches(opts = {}) {
 				const o = opts || {};
-				const src = String(text == null ? "" : text).trim();
-				const name = novelNameOf(text);
-				/* 🔴 空需求 ⇒ **不建任何分支**：不猜、也不给"默认三条"。
-				 *    建出来的是**空壳分支**，而且会让导图变脏 —— 用户看到多出 3 个不知道干什么的节点，
-				 *    比"什么都没发生"更糟（纪律 19 的反面：宁可如实说"没识别到"，也不无声造垃圾）。 */
-				if (!src) return { kind: "none", dims: [], name, reason: "需求文本为空 ⇒ 不自动建分支" };
-				const novel = o.generic ? false : isNovelIntent(src);
-				if (o.generic === false && !novel) {
-					return { kind: "none", dims: [], name, reason: "既不是小说意图，也未指定通用维度 —— 不自动建分支" };
+				const dlog = readDispatchLog();
+				const items = dlog.items || [];
+				if (!items.length) {
+					const s = setDispatchCollect({ ok: false, total: 0, read: 0, unread: 0, counts: {}, reason: "台账为空：还没有派发过（先点「按职能派发」）" });
+					return { ok: false, at: s.at, total: 0, read: 0, unread: 0, counts: {}, items: [], reason: "台账为空：还没有派发过" };
 				}
-				const pool = novel ? SPLIT_DIMENSIONS : GENERIC_DIMENSIONS;
-				let dims = pool.slice();
-				if (Array.isArray(o.only) && o.only.length) {
-					const want = o.only.map((k) => String(k));
-					dims = dims.filter((d) => want.indexOf(d.key) >= 0);
+			
+				/* ① 先刷状态（一条 RPC 全拿到，**这一路不该失败**）—— 让界面立刻有反馈 */
+				refreshStates((id) => findSummary(rawSessionSummaries(), id), stateOfSummary);
+				/* 刷新后 items 对象被就地更新，直接引用即可（同源，纪律 22） */
+				const live = readDispatchLog().items;
+			
+				/* ② 逐条读正文 */
+				let read = 0;
+				for (let i = 0; i < live.length; i++) {
+					const it = live[i];
+					if (!it.sessionId) {
+						patchDispatchItem(it.sessionId, { sayReason: "没有会话 id（这条分支没建成）" });
+						continue;
+					}
+					const r = await readSessionOutput(it.sessionId);
+					if (!r.ok) {
+						const why = String(r.reason || "读取失败");
+						patchDispatchItem(it.sessionId, { say: "", sayReason: why });
+						/* 🔴 第 21 批 D3：读失败也要在**会话自己的档案**里留一条**可读原因**。
+						 *    否则档案里 `summary` 是 `null` ⇒「没有总结」与「读不到」不可分（纪律 58）。 */
+						try {
+							putDossier(it.sessionId, {
+								summary: { text: "", at: Date.now(), source: "none", ok: false, reason: why },
+								at: Date.now()
+							});
+						} catch (e) { /* 档案写失败不改回收结论 */ }
+						continue;
+					}
+					/* 🔴 只取**助手**正文作为产出；用户侧那条是本插件投出去的简报，不是产出 */
+					const assistant = r.items.filter((x) => x.role === "assistant");
+					const last = assistant.length ? assistant[assistant.length - 1] : null;
+					if (o.deep) {
+						try { patchDispatchItem(it.sessionId, { io: await probeSessionIo(it.sessionId) }); } catch (e) { /* 诊断失败不改变结论 */ }
+					}
+					if (!last || !String(last.text || "").trim()) {
+						/* 🔴 第 19 批：读不到助手正文时，**先把宿主自己给的失败原因落地**。
+						 *    实测（2026-09-16）：宿主 `turn/end` 的 `reason.error` 里带着
+						 *      `{ message:"Insufficient Balance", code:"QUOTA", status:402 }`
+						 *    —— 简报投到了、运行也**真的启动了**，只是模型侧拒绝。
+						 *    旧代码只写「只有用户侧条目，没有助手回复（跑了但没产出，或还在跑）」：
+						 *    用户看到这句**无从处置**（配额问题会被当成插件坏了）。
+						 *    ⇒ 三类原因必须**可分辨**：无条目 / 宿主报错 / 只有用户侧条目（纪律 18、58）。 */
+						const fail = r.endFailure || null;
+						const failText = fail && fail.message
+							? "宿主本轮运行失败：" + fail.message
+								+ (fail.code ? "（" + fail.code + (fail.status ? " " + fail.status : "") + "）" : "")
+							: null;
+						const noOutReason = r.count === 0
+							? "事件流里还没有对话条目（简报可能还没被处理）"
+							: (failText || "只有用户侧条目，没有助手回复（跑了但没产出，或还在跑）");
+						patchDispatchItem(it.sessionId, {
+							say: "", title: r.title || it.title || null,
+							sayReason: noOutReason,
+							/* 结构化留痕（新增字段，不改已有契约）：供闸门/面板判「环境阻塞」而非「产品失败」 */
+							runFailure: fail,
+							collectedAt: Date.now()
+						});
+						/* 🔴 第 21 批 D3：**读不到就要说为什么**。
+						 *    旧版只在"读到产出"时写 `summary` ⇒ 档案里 `summary` 恒为 `null`，
+						 *    用户原话「存在自己的会话总结文档」在这一档**完全不可见**。
+						 *    `source:"none"` + `ok:false` + `reason` 让"没有总结"变成一个**显式事实**
+						 *    而非缺席（纪律 18：跳过/缺席比红更危险）。 */
+						try {
+							putDossier(it.sessionId, {
+								summary: { text: "", at: Date.now(), source: "none", ok: false, reason: noOutReason },
+								at: Date.now()
+							});
+						} catch (e) { /* 档案写失败不改回收结论 */ }
+						continue;
+					}
+					patchDispatchItem(it.sessionId, {
+						say: digestOf(last.text, o.maxChars),
+						title: r.title || it.title || null,
+						sayReason: "", collectedAt: Date.now(),
+						assistantCount: assistant.length,
+						/* 真读到产出了 ⇒ 上一次的失败留痕必须**清掉**（否则「已产出」与「上轮失败」并存的读数会误导） */
+						runFailure: null
+					});
+					/* 🔴 第 19 批 R3：把该会话**自己的总结**写进**它自己的档案**
+					 *    —— 用户原话「（每个会话）存在自己的会话总结文档」。
+					 *
+					 *    `source:"collect"` = 正文来自**事件流**（真产出）。
+					 *    🔴 绝不拿宿主自动标题（`session/title`）当总结 —— 那是**模型给会话起的名字**，
+					 *    当产出用属幻觉级信息（同 `digestOf` 头注释的理由）。
+					 *    写失败**不改变回收结论**（回收的真相源是台账，档案是它的分会话投影）。 */
+					try {
+						putDossier(it.sessionId, {
+							summary: { text: digestOf(last.text, 200), at: Date.now(), source: "collect", ok: true },
+							at: Date.now()
+						});
+					} catch (e) { /* 档案写失败不改回收结论 */ }
+					read++;
 				}
-				/* 排序：先按工序阶段（设定 → 剧情/人物 → 正文 → 打磨/审查 → 蒸馏），
-				 * 同阶段**按表内原始序**（= A1→A8 的固定次序）。
-				 * 🔴 同阶段**不能用 key 字典序**：那会把 A2 力量体系排到 A1 世界观前面
-				 *    （"power" < "world"），导图第一眼就读成「没有按工序来」。
-				 *    显式用表内下标排序，**不依赖 Array#sort 的稳定性**（少一个隐性前提）。 */
-				const order = new Map(pool.map((d, i) => [d.key, i]));
-				dims.sort((a, b) => (a.stage - b.stage) || (order.get(a.key) - order.get(b.key)));
-				const max = Number.isFinite(Number(o.max)) && Number(o.max) > 0 ? Math.round(Number(o.max)) : 0;
-				if (max && dims.length > max) dims = dims.slice(0, max);
+			
+				/* ③ 用**刚读到的产出**重算状态（`partial` 才能与 `done` 分开，见 stateOfSummary 的 ③④） */
+				refreshStates((id) => findSummary(rawSessionSummaries(), id), stateOfSummary);
+			
+				/* ③′ 把最新状态同步进各会话**自己的档案**。
+				 * 🔴 patch 语义 ⇒ **不传 `summary` 就不动它** —— 本轮读不到的会话，
+				 *    上一次读到的总结**保留**（产出不会因为本次读取失败而消失）。
+				 *    逐条 try：一条写失败不许打断其余（同 `applyDossiers` 的逐条容错）。 */
+				const liveNow = readDispatchLog().items;
+				for (let i = 0; i < liveNow.length; i++) {
+					const it = liveNow[i];
+					if (!it || !it.sessionId) continue;
+					try {
+						putDossier(it.sessionId, {
+							state: String(it.state || "unknown"),
+							turns: typeof it.turns === "number" ? it.turns : null,
+							at: Date.now()
+						});
+					} catch (e) { /* 单条档案写失败不打断整批 */ }
+				}
+			
+				const counts = countStates(readDispatchLog().items);
+				setDispatchCollect({
+					ok: true, total: live.length, read, unread: live.length - read, counts,
+					reason: "", verdict: verdictOf(counts)
+				});
+				const out = readDispatchLog().collect;
+				try { await refreshBranchTree(); } catch (e) { /* 血缘刷新失败不影响产出读数 */ }
 				return {
-					kind: novel ? "novel" : "generic",
-					dims,
-					name,
-					reason: novel ? "命中小说意图 ⇒ 按小说技能的 A1–A8 分工分线" : "未命中小说意图 ⇒ 按通用三段分线"
+					ok: true, at: out.at, total: out.total, read: out.read, unread: out.unread,
+					counts, items: readDispatchLog().items.slice(), reason: ""
 				};
 			}
 			
 			/**
-			 * 每条维度要投递的**简报文本**（纯函数）。
-			 * 🔴 必须显式带上：① 它的角色名 ② 它能读/能写的目录边界 ③ 不要越界的告诫。
-			 *    只发一句"你去写世界观"会让分支里的智能体**去改剧情文件**——而且不报错。
+			 * 状态计数（纯函数）。
+			 * @param {Array} items
+			 * @returns {{done:number,running:number,blank:number,partial:number,unknown:number,failed:number,total:number,say:number}}
 			 */
-			function briefOf(dim, text, novelName) {
-				const name = String(novelName == null ? "" : novelName).trim();
-				const label = String((dim && dim.label) || "");
-				const head = "【" + label + "】" + (name ? "《" + name + "》" : "") + " —— " + String((dim && dim.brief) || "");
-				const files = Array.isArray(dim && dim.files) ? dim.files : [];
-				const bound = files.length
-					? "边界：只读/只写 " + files.join("、") + "；**不要**修改未列出的目录（越界改动在两个分支之间是静默冲突）。"
-					: "边界：无文件域限制（通用维度）。";
-				/* 🔴 用户原话「按照一个流程跑一遍 写小说吧,**调用小说技能**」——
-				 *    插件**不能**替分支加载技能（宿主渲染进程里没有 WorkBuddy 的技能注册表），
-				 *    能做且必须做的是：**把技能名与角色身份写进简报**，让分支里的智能体自己去加载。
-				 *    只发一句"你去写世界观"的后果：分支不会加载技能、也不会读 `_memory/A{N}_MEMORY.md`
-				 *    ⇒ 八个分支各自从零开始，技能里的"Token 最小化 / 记忆蒸馏"整套机制全部落空。
-				 *    没写这行的表现与"写了但分支没照做"在读数上**无法区分** ⇒ 必须先把它送出去。 */
-				const who = (label.match(/^A[1-8]/) || [""])[0];
-				const skill = who
-					? "技能：加载 multi-agent-novel-brain，担任 " + who + "；启动先读 _BRAIN.md §一路由 + §三状态，再读 _memory/" + who + "_MEMORY.md 与 _memory/CHANGE_LOG.md。"
-					: "技能：通用维度，不加载小说技能。";
-				const src = String(text == null ? "" : text).trim();
-				return [head, skill, bound, src ? "需求原文：" + src : ""].filter(Boolean).join("\n");
+			function countStates(items) {
+				const c = { done: 0, running: 0, blank: 0, partial: 0, unknown: 0, failed: 0, total: 0, say: 0,
+					/* 🔴 第 19 批新增：宿主**自报**的运行失败条数 + 一条样例原因。
+					 *    为什么必须单独数：这类"没产出"**不是插件没投出去**，而是模型侧拒绝
+					 *    （实测 `Insufficient Balance / QUOTA / 402`）。把它混进"尚无产出"里
+					 *    ⇒ 用户会去查插件，而真正该做的是充值/换模型（纪律 58：没跑成与失败可分）。 */
+					hostFailed: 0, hostFailWhy: "" };
+				(Array.isArray(items) ? items : []).forEach((it) => {
+					c.total++;
+					const k = String(it.state || "unknown");
+					if (c[k] === undefined) c.unknown++;
+					else c[k]++;
+					if (it.sentOk === false) c.failed++;
+					if (it.say && String(it.say).trim()) c.say++;
+					if (it.runFailure && it.runFailure.message) {
+						c.hostFailed++;
+						if (!c.hostFailWhy) {
+							c.hostFailWhy = String(it.runFailure.message) + (it.runFailure.code ? "（" + it.runFailure.code + "）" : "");
+						}
+					}
+				});
+				return c;
 			}
 			
-			exports.SPLIT_DIMENSIONS = SPLIT_DIMENSIONS;
-			exports.NOVEL_HINTS = NOVEL_HINTS;
-			exports.GENERIC_DIMENSIONS = GENERIC_DIMENSIONS;
-			exports.novelNameOf = novelNameOf;
-			exports.isNovelIntent = isNovelIntent;
-			exports.branchTitle = branchTitle;
-			exports.plan = plan;
-			exports.briefOf = briefOf;
+			/** 一句话总裁定（纯函数，用于界面与消息流）。
+			 *
+			 * 🔴 **口径必须与 `data-say` / `read` 一致**：「已产出」只认 **`c.say`（有正文的条数）**。
+			 *    第 18 轮真机踩到：这里原本用 `c.done`（宿主状态为已完成）⇒ 同一个读数元素里出现
+			 *    「📥 回收 8/8」与「已产出 1/8 条」**互相矛盾**（8 条其实都产出了，只是 7 条状态还是 running）。
+			 *    `done` 是**宿主视角**的"这一轮跑完了"，`say` 才是**我们要的**"拿到产出了" —— 两者不是一个量。 */
+			function verdictOf(counts) {
+				const c = counts || {};
+				if (!c.total) return "无分支（还没派发）";
+				if (c.failed) return c.failed + "/" + c.total + " 条分支简报未送达 —— 先看这一条，其余读数都不作数";
+				if (!c.say) {
+					/* 🔴 第 19 批：把「宿主报错」与「还没跑完」分开说 —— 前者用户**可处置**（配额/模型/网络），
+					 *    后者只能等。旧文案只有后者，真机上把 `Insufficient Balance` 说成了"可能都在跑"。 */
+					if (c.hostFailed) {
+						return "全部 " + c.total + " 条尚无产出 —— 宿主侧报错 " + c.hostFailed + " 条（"
+							+ (c.hostFailWhy || "原因见台账") + "）：简报**已送达**，是模型侧没出结果";
+					}
+					return "全部 " + c.total + " 条尚无产出可回收（可能都在跑，或简报未生效）";
+				}
+				if (c.say === c.total) return c.total + " 条**全部有产出**" + (c.running ? "（其中 " + c.running + " 条仍在跑）" : "");
+				if (c.running) return "已产出 " + c.say + "/" + c.total + " 条；另有 " + c.running + " 条仍在运行";
+				return "已产出 " + c.say + "/" + c.total + " 条（" + (c.partial || 0) + " 条跑过但未拿到回复"
+					+ (c.hostFailed ? "；其中 " + c.hostFailed + " 条宿主报错（" + c.hostFailWhy + "）" : "") + "）";
+			}
+			
+			/**
+			 * 总监的 **next action**（纯函数）。
+			 *
+			 * 🔴 这里**不做自动重试 / 不自动再派发** —— 只给"下一步建议"。
+			 *    理由：第 16 批的教训是"自动动作出错时界面上看不出发生过什么"。
+			 *    next action 由**人**点，点了之后仍是走同一套有读数的路径。
+			 *
+			 * @param {object} counts `countStates()` 结果
+			 * @param {Array} items 台账条目
+			 * @returns {{key:string, label:string, why:string}}
+			 */
+			function nextActionOf(counts, items) {
+				const c = counts || {};
+				const list = Array.isArray(items) ? items : [];
+				if (!c.total) return { key: "dispatch", label: "先派发", why: "台账为空" };
+				if (c.failed) return { key: "inspect-failed", label: "查未送达的分支", why: c.failed + " 条简报未送达" };
+				const partial = list.filter((x) => x.state === "partial");
+				if (partial.length) return { key: "inspect-partial", label: "查" + partial.length + "条空转分支", why: "跑了但没拿到助手回复" };
+				if (c.running) return { key: "wait", label: "等运行中的分支", why: c.running + " 条仍在跑" };
+				if (c.say > 0) return { key: "review", label: "审核并汇总成稿", why: c.say + " 条有产出可汇总" };
+				return { key: "recollect", label: "稍后重回收", why: "尚无产出可读" };
+			}
+			
+			/**
+			 * **项目整体判断**（纯函数）—— 第 23 批新增（用户原话「对于**整个项目把控**都是要有的」）。
+			 *
+			 * 🔴 与 `verdictOf()` 的分工：
+			 *   `verdictOf` 说的是**这一批回收动作**的结果（"已产出 3/8 条"）；
+			 *   `projectVerdict` 说的是**项目现在处在哪**（"本轮未推进，因为环境" / "可进入汇总成稿"）。
+			 *   旧版只有前者，且被逐条罗列淹没了 ⇒ 用户读完一屏不知道"我这个项目到底动了没有"。
+			 *
+			 * @param {object} counts `countStates()` 结果
+			 * @returns {string}
+			 */
+			function projectVerdict(counts) {
+				const c = counts || {};
+				if (!c.total) return "尚无分支（还没派发过）";
+				if (c.failed) return "❗" + c.failed + "/" + c.total + " 条分支简报**未送达** —— 先处理送达，其余读数都不作数";
+				if (!c.say) {
+					if (c.hostFailed) {
+						return "本轮**未推进**：" + c.total + " 条分支**全部**因**宿主侧**原因未产出（" + (c.hostFailWhy || "见台账")
+							+ "）—— 简报**已送达**，是模型侧没出结果；**需先处置环境（配额/模型/网络）再重试**，改代码无用";
+					}
+					return "本轮**未推进**：" + c.total + " 条分支尚无产出（可能都在跑，或简报未生效）";
+				}
+				if (c.say === c.total) {
+					return "推进 " + c.say + "/" + c.total + " 条" + (c.running ? "（其中 " + c.running + " 条仍在跑）" : "")
+						+ " —— **全部维度有产出**，可进入审核与汇总成稿";
+				}
+				return "推进 " + c.say + "/" + c.total + " 条" + (c.running ? "；" + c.running + " 条仍在跑" : "")
+					+ " —— 尚有 " + (c.total - c.say) + " 条待产出";
+			}
+			
+			/**
+			 * 生成**回写给总监**的汇总文本（纯函数）。
+			 *
+			 * 🔴 第 23 批重构（用户原话「**总监对语言的整理，对于文字的描述**」）——
+			 *    旧版是**逐条罗列**：8 条全部无产出时，同一个原因重复印 8 遍（真机实测 822 B，
+			 *    8 行 × 「产出未读到 —— 宿主本轮运行失败：Insufficient Balance（QUOTA 402）」）。
+			 *    用户读完 822 个字，得到的信息量 = 「配额不足」4 个字。
+			 *
+			 *    新版三段式：
+			 *      ① **整体判断**（项目动了没有 / 卡在哪 / 该做什么）
+			 *      ② **有产出的逐条列**（产出是本轮真正要看的，不能合并）
+			 *      ③ **无产出的按原因归并**（同因合并成一条，但**必须列全维度名** ——
+			 *         不能因为"归纳"而让用户看不见是哪几条）
+			 *
+			 * 🔴 归并的纪律：**合并的是"原因"，不是"条目"**。任何一条分支的名字都必须出现在输出里，
+			 *    否则"8 条里成了 3 条"会被读成"只派了 3 条"（与 `verdictOf` 头注释同一条教训）。
+			 *
+			 * @param {Array} items 台账条目
+			 * @param {object} counts
+			 * @returns {string}
+			 */
+			function digestMessage(items, counts) {
+				const list = Array.isArray(items) ? items : [];
+				const c = counts || countStates(list);
+				if (!list.length) return "【总监汇总】尚无分支 —— 先点「按职能派发」建立分支。";
+				const produced = list.filter((it) => it.say && String(it.say).trim());
+				const silent = list.filter((it) => !(it.say && String(it.say).trim()));
+				const out = ["【总监汇总】总评：" + projectVerdict(c)];
+			
+				if (produced.length) {
+					out.push("─ 已产出 " + produced.length + " 条");
+					produced.forEach((it) => {
+						out.push("  · " + it.label + "（" + it.state + "｜" + it.stateSource + "）：" + it.say);
+					});
+				}
+				if (silent.length) {
+					out.push("─ 未产出 " + silent.length + " 条（同因归并，**维度名一条不少**）");
+					const groups = [];
+					const idx = Object.create(null);
+					silent.forEach((it) => {
+						const k = String(it.sayReason || "原因未知");
+						if (idx[k] === undefined) { idx[k] = groups.length; groups.push({ why: k, labels: [] }); }
+						groups[idx[k]].labels.push(it.label);
+					});
+					groups.forEach((g) => {
+						out.push("  · " + g.labels.length + " 条同一原因：" + g.why);
+						out.push("    维度：" + g.labels.join(" / "));
+					});
+				}
+				const nx = nextActionOf(c, list);
+				out.push("下一步建议：" + nx.label + "（" + nx.why + "）");
+				return out.join("\n");
+			}
+			
+			/** 诊断：本模块依赖的两条通道各自是否可用（供探针与降级显示） */
+			async function collectChannels() {
+				const raws = rawSessionSummaries();
+				/* 🔴 第 21 批：口径必须与**树 / 派发**一致（规则 I：同根不得两套口径）。
+				 *    旧版 `count = raws.length` 报的是**快照原始数**（含已归档幽灵）——
+				 *    实测那一刻树只有 1 行、这里却报 126 ⇒ 同一个"有几条会话"有**两个数**。
+				 *    `archivedKnown=false` 表示归档集读不到（此时**不过滤**，与树/派发同处置）。 */
+				let arch = null;
+				try { arch = await archivedSessionIds(); } catch (e) { arch = null; }
+				const aset = Array.isArray(arch) ? new Set(arch) : null;
+				const live = aset ? raws.filter((s) => !aset.has(String(s && s.id))) : raws;
+				return {
+					stateChannel: {
+						ok: live.length > 0,
+						count: live.length,                              // 存活（= 树上会画出来的条数）
+						raw: raws.length,                                // 快照原始（含已归档）
+						archived: aset ? raws.length - live.length : null,
+						archivedKnown: Array.isArray(arch),
+						via: "sessions.list.getSnapshot() − archivedSessionIds()"
+					},
+					outputChannel: { via: "conversation.scopedSession().history({})", scopeAvailable: Boolean(scopedConversationOf(live.length ? String(live[0].id) : "")) }
+				};
+			}
+			
+			exports.digestOf = digestOf;
+			exports.collectBranches = collectBranches;
+			exports.countStates = countStates;
+			exports.verdictOf = verdictOf;
+			exports.nextActionOf = nextActionOf;
+			exports.projectVerdict = projectVerdict;
+			exports.digestMessage = digestMessage;
+			exports.collectChannels = collectChannels;
 		};
 
 		// ── logic/orchestrate.js ──
@@ -23043,522 +28004,6 @@ window.__ModuleLoader__.load({
 			exports.targetOfRole = targetOfRole;
 			exports.auditRoleTargets = auditRoleTargets;
 			exports.installRolesApi = installRolesApi;
-		};
-
-		// ── logic/dag.js ──
-		__defs["logic/dag.js"] = function (exports) {
-			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
-			 * 职责：声明式步骤图
-			 * 引用：—
-			 * 上游：client-entry.js, components/OrchestratorPanel.js
-			 * 下游：（无）
-			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 三（声明式执行图 · 6 类错误校验 · 波浪并行 · 条件与模板）】
-			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
-			 * @map:end */
-			/**
-			 * logic/dag.js — 声明式步骤图
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  为什么需要它
-			 * ══════════════════════════════════════════════════════════════════
-			 *  改之前：执行链是 `director-run.js` 里**写死的 5 个顺序块** ——
-			 *  想调顺序要改代码，想加一步要改代码，想并行**做不到**。
-			 *  agency-orchestrator 的做法是把它变成**一份声明**：
-			 *
-			 *      steps:
-			 *        - id: analyze   role: product/product-manager   output: requirements
-			 *        - id: tech      role: engineering/architect     depends_on: [analyze]
-			 *        - id: design    role: design/ux-researcher      depends_on: [analyze]
-			 *        - id: summary   depends_on: [tech, design]
-			 *
-			 *  引擎从 depends_on 自动构建 DAG，**同层无依赖的自动并行**（官方演示：
-			 *  「市场调研员和用户研究员自动并行执行，从 DAG 依赖关系检测」）。
-			 *
-			 *  ⇒ 本文件只做三件事：**建图、查错、排波次**。它是纯函数，不跑任何步骤。
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  字段口径（逐项对应 agency-orchestrator 的原字段名，便于对照上游文档）
-			 * ══════════════════════════════════════════════════════════════════
-			 *   id              步骤唯一标识
-			 *   role            角色 id（本项目的 Agent Card id，对应上游的 分类/角色名 路径）
-			 *   task            任务描述（支持 {{变量}} 占位）
-			 *   output          输出变量名，供下游 {{}} 引用
-			 *   depends_on[]    依赖的步骤 id
-			 *   depends_on_mode "all"（默认）| "any_completed"
-			 *   condition       条件表达式，不满足则跳过
-			 *   type            "task" | "approval" | "human_input" | "assert"
-			 *   prompt          approval / human_input 节点的提示文本
-			 *   acceptance      验收标准（语义层，交模型评审）
-			 *   assert          机械断言（纯函数层，不过模型）
-			 *   loop            { back_to, max_iterations(1-10), exit_condition }
-			 *
-			 * 🔴 两条与上游**刻意不同**的地方（不照抄，因为上游的写法在本场景会埋雷）：
-			 *   ① 上游 `depends_on_mode: "any_completed"` 在**聚合类步骤**上是陷阱：
-			 *      只等一个上游就开跑，会拿到半份输入。本项目保留该字段但
-			 *      `validateGraph()` 会对它**告警**（而非直接判错），由调用方决定。
-			 *   ② 上游没有「依赖成环」的明确处置。本项目把**环**判为**硬错误**
-			 *      （exit 意义上等价于 FAIL），因为它意味着步骤永远排不出波次。
-			 */
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 一、常量
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/** 步骤类型（agency-orchestrator 的 type 字段 + 本项目补充） */
-			const STEP_TYPE = Object.freeze({
-				TASK: "task",                 // 普通执行步
-				APPROVAL: "approval",         // 人工审批节点（跑到这里暂停，等人点通过）
-				HUMAN_INPUT: "human_input",   // 人工输入节点（跑到这里暂停，读人的输入作为产出注入下游）
-				ASSERT: "assert"              // 纯机械断言步（不过模型）
-			});
-			
-			/** 依赖模式 */
-			const DEP_MODE = Object.freeze({
-				ALL: "all",
-				ANY: "any_completed"
-			});
-			
-			/** 需要人工介入的步骤类型（UI 上要显示闸门） */
-			const GATE_TYPES = Object.freeze([STEP_TYPE.APPROVAL, STEP_TYPE.HUMAN_INPUT]);
-			
-			/** 步骤 id 合法性：与角色 id 同规（便于日志与 URL 化） */
-			const STEP_ID_RE = /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/;
-			
-			/** 默认并行上限（与 agency-orchestrator 一致：concurrency 默认 2） */
-			const DEFAULT_CONCURRENCY = 2;
-			
-			/** 循环上限（上游限定 1 到 10，本项目沿用） */
-			const MAX_LOOP = 10;
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 二、归一化
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 归一化一个步骤：补默认值、修类型、去重依赖。
-			 * 🔴 不猜「缺失的 depends_on」—— 缺就是无依赖（= 第一波），
-			 *    这比按数组顺序推断更安全（顺序推断会把并行悄悄变成串行）。
-			 * @param {object} raw
-			 * @param {number} [index] 数组下标，仅用于给缺 id 的步骤造一个可报错的名字
-			 * @returns {object}
-			 */
-			function normalizeStep(raw, index = 0) {
-				const s = raw && typeof raw === "object" ? raw : {};
-				const deps = Array.isArray(s.depends_on)
-					? [...new Set(s.depends_on.filter((d) => d != null && String(d).trim()).map((d) => String(d).trim()))]
-					: [];
-				const loop = s.loop && typeof s.loop === "object" && s.loop.back_to
-					? {
-						back_to: String(s.loop.back_to),
-						max_iterations: clampInt(s.loop.max_iterations, 1, MAX_LOOP, 3),
-						exit_condition: s.loop.exit_condition ? String(s.loop.exit_condition) : ""
-					}
-					: null;
-			
-				return {
-					id: s.id != null && String(s.id).trim() ? String(s.id).trim() : ("step-" + (index + 1)),
-					role: s.role ? String(s.role) : "",
-					task: s.task != null ? String(s.task) : "",
-					output: s.output ? String(s.output) : "",
-					depends_on: deps,
-					depends_on_mode: s.depends_on_mode === DEP_MODE.ANY ? DEP_MODE.ANY : DEP_MODE.ALL,
-					condition: s.condition ? String(s.condition) : "",
-					type: Object.values(STEP_TYPE).includes(s.type) ? s.type : STEP_TYPE.TASK,
-					prompt: s.prompt != null ? String(s.prompt) : "",
-					acceptance: s.acceptance != null ? String(s.acceptance) : "",
-					assert: s.assert && typeof s.assert === "object" ? { ...s.assert } : null,
-					loop
-				};
-			}
-			
-			function clampInt(v, min, max, dflt) {
-				const n = Number(v);
-				if (!Number.isFinite(n)) return dflt;
-				return Math.max(min, Math.min(max, Math.round(n)));
-			}
-			
-			/** 归一化整张图 */
-			function normalizeGraph(steps) {
-				return (Array.isArray(steps) ? steps : []).map((s, i) => normalizeStep(s, i));
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 三、校验（查错要**点名**，不能只说「图有问题」）
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 校验步骤图。
-			 * @param {Array} steps 原始或已归一化的步骤
-			 * @returns {{ok:boolean, errors:string[], warnings:string[], ids:string[]}}
-			 *   errors   = 硬错误（图不可执行）：重复 id / 悬空依赖 / 依赖成环 / id 非法
-			 *   warnings = 软问题（可执行但有风险）：any_completed 聚合 / 无 output 却被人依赖 /
-			 *              闸门步缺 prompt / 循环缺 exit_condition
-			 */
-			function validateGraph(steps) {
-				const list = normalizeGraph(steps);
-				const errors = [];
-				const warnings = [];
-			
-				if (!list.length) return { ok: false, errors: ["步骤图为空"], warnings, ids: [] };
-			
-				/* ① id 合法且唯一 */
-				const seen = new Set();
-				for (const s of list) {
-					if (!STEP_ID_RE.test(s.id)) errors.push("步骤 id 非法：" + s.id + "（须小写字母数字，可用 _ 或 - 连接）");
-					if (seen.has(s.id)) errors.push("步骤 id 重复：" + s.id);
-					seen.add(s.id);
-				}
-			
-				/* ② 悬空依赖（指向不存在的步骤） */
-				for (const s of list) {
-					for (const d of s.depends_on) {
-						if (!seen.has(d)) errors.push(s.id + " 依赖了不存在的步骤：" + d);
-						if (d === s.id) errors.push(s.id + " 依赖了自己");
-					}
-				}
-			
-				/* ③ 成环（环 = 永远排不出波次，属硬错误） */
-				const cycle = findCycle(list);
-				if (cycle) errors.push("依赖成环：" + cycle.join(" → "));
-			
-				/* ④ 软问题 */
-				for (const s of list) {
-					if (GATE_TYPES.includes(s.type) && !s.prompt.trim()) {
-						warnings.push(s.id + " 是人工闸门但没写 prompt（用户不知道要确认什么）");
-					}
-					if (s.depends_on_mode === DEP_MODE.ANY && s.depends_on.length > 1) {
-						warnings.push(s.id + " 用 any_completed 且有多个上游：只等一个就开跑，会拿到半份输入");
-					}
-					if (s.loop && !s.loop.exit_condition) {
-						warnings.push(s.id + " 有循环但没写 exit_condition（只能靠 max_iterations 兜底）");
-					}
-					if (s.loop && !seen.has(s.loop.back_to)) {
-						errors.push(s.id + " 的 loop.back_to 指向不存在的步骤：" + s.loop.back_to);
-					}
-				}
-			
-				/* ⑤ 被人依赖却没有 output 名（下游无法用 {{}} 引用它） */
-				for (const s of list) {
-					const dependents = list.filter((x) => x.depends_on.includes(s.id));
-					if (dependents.length && !s.output) {
-						warnings.push(s.id + " 没有 output 名，但被 " + dependents.map((x) => x.id).join("、") + " 依赖（下游拿不到它的产出）");
-					}
-				}
-			
-				return { ok: errors.length === 0, errors, warnings, ids: list.map((s) => s.id) };
-			}
-			
-			/**
-			 * 找一条环（DFS 三色标记）。
-			 * @returns {string[]|null} 环上的 id 序列，无环返回 null
-			 */
-			function findCycle(steps) {
-				const list = normalizeGraph(steps);
-				const byId = new Map(list.map((s) => [s.id, s]));
-				const WHITE = 0, GRAY = 1, BLACK = 2;
-				const color = new Map();
-				const stack = [];
-			
-				let found = null;
-				const visit = (id) => {
-					if (found) return;
-					const node = byId.get(id);
-					if (!node) return;
-					const c = color.get(id) || WHITE;
-					if (c === GRAY) {
-						const at = stack.indexOf(id);
-						found = stack.slice(at >= 0 ? at : 0).concat(id);
-						return;
-					}
-					if (c === BLACK) return;
-					color.set(id, GRAY);
-					stack.push(id);
-					for (const d of node.depends_on) visit(d);
-					stack.pop();
-					color.set(id, BLACK);
-				};
-			
-				for (const s of list) if (!color.get(s.id)) visit(s.id);
-				return found;
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 四、拓扑排序与波次
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 拓扑序（Kahn 算法，同层按原数组顺序稳定输出）。
-			 *
-			 * 🔴 成环时**不抛错也不返回半张图** —— 返回 null 并交由 `validateGraph()` 报错。
-			 *    返回半张图会让调用方「看起来跑完了」，那是静默失败。
-			 * @returns {string[]|null}
-			 */
-			function topoSort(steps) {
-				const list = normalizeGraph(steps);
-				if (findCycle(list)) return null;
-			
-				const indeg = new Map(list.map((s) => [s.id, 0]));
-				const outs = new Map(list.map((s) => [s.id, []]));
-				for (const s of list) {
-					for (const d of s.depends_on) {
-						if (!indeg.has(d)) continue;
-						indeg.set(s.id, indeg.get(s.id) + 1);
-						outs.get(d).push(s.id);
-					}
-				}
-			
-				const order = [];
-				let frontier = list.filter((s) => indeg.get(s.id) === 0).map((s) => s.id);
-				while (frontier.length) {
-					for (const id of frontier) order.push(id);
-					const next = [];
-					for (const id of frontier) {
-						for (const o of outs.get(id) || []) {
-							indeg.set(o, indeg.get(o) - 1);
-							if (indeg.get(o) === 0) next.push(o);
-						}
-					}
-					frontier = next;
-				}
-				return order.length === list.length ? order : null;
-			}
-			
-			/**
-			 * 拓扑分层：同层 = 互不依赖 = **可并行**。
-			 * @returns {string[][]} 层数组；成环返回 []
-			 */
-			function topoLevels(steps) {
-				const list = normalizeGraph(steps);
-				if (findCycle(list)) return [];
-			
-				const depth = new Map();
-				const byId = new Map(list.map((s) => [s.id, s]));
-				const depthOf = (id, guard = new Set()) => {
-					if (depth.has(id)) return depth.get(id);
-					if (guard.has(id)) return 0;         // 防御：理论上到不了这里（已查过环）
-					guard.add(id);
-					const n = byId.get(id);
-					if (!n) return 0;
-					let d = 0;
-					for (const p of n.depends_on) d = Math.max(d, depthOf(p, guard) + 1);
-					guard.delete(id);
-					depth.set(id, d);
-					return d;
-				};
-			
-				for (const s of list) depthOf(s.id);
-			
-				const maxD = Math.max(0, ...list.map((s) => depth.get(s.id) || 0));
-				const levels = [];
-				for (let i = 0; i <= maxD; i++) {
-					const ids = list.filter((s) => (depth.get(s.id) || 0) === i).map((s) => s.id);
-					if (ids.length) levels.push(ids);
-				}
-				return levels;
-			}
-			
-			/**
-			 * 排执行波次：把拓扑层按 `concurrency` 上限切成一批批。
-			 *
-			 * 🔴 为什么不能只给「层」：层内 5 个步骤在 concurrency=2 时**不能一次全发**，
-			 *    否则上限形同虚设。故这里切到「每一波内步骤数不超过 concurrency」，
-			 *    并把波次编号一起返回（UI 上直接画进度）。
-			 *
-			 * @param {Array} steps
-			 * @param {object} [opts] { concurrency?:number }
-			 * @returns {Array<{index:number, level:number, ids:string[]}>}
-			 */
-			function planWaves(steps, opts = {}) {
-				const concurrency = Math.max(1, clampInt(opts.concurrency, 1, 64, DEFAULT_CONCURRENCY));
-				const levels = topoLevels(steps);
-				const waves = [];
-				for (let li = 0; li < levels.length; li++) {
-					const ids = levels[li];
-					for (let i = 0; i < ids.length; i += concurrency) {
-						waves.push({ index: waves.length, level: li, ids: ids.slice(i, i + concurrency) });
-					}
-				}
-				return waves;
-			}
-			
-			/**
-			 * 就绪集：依赖已满足、且尚未完成的步骤。
-			 * @param {Array} steps
-			 * @param {string[]} done 已完成的步骤 id
-			 * @param {object} [opts] { concurrency?:number } 本波剩余可发数
-			 * @returns {string[]}
-			 */
-			function readySteps(steps, done = [], opts = {}) {
-				const list = normalizeGraph(steps);
-				const doneSet = new Set(done);
-				const cap = opts.concurrency ? Math.max(1, clampInt(opts.concurrency, 1, 64, DEFAULT_CONCURRENCY)) : Infinity;
-			
-				const ready = [];
-				for (const s of list) {
-					if (doneSet.has(s.id)) continue;
-					if (s.depends_on.length === 0) { ready.push(s.id); continue; }
-					if (s.depends_on_mode === DEP_MODE.ANY) {
-						if (s.depends_on.some((d) => doneSet.has(d))) ready.push(s.id);
-					} else {
-						if (s.depends_on.every((d) => doneSet.has(d))) ready.push(s.id);
-					}
-				}
-				return ready.slice(0, cap === Infinity ? ready.length : cap);
-			}
-			
-			/** 图规模统计（UI 与成本预估共用） */
-			function graphStats(steps) {
-				const list = normalizeGraph(steps);
-				const levels = topoLevels(list);
-				const waves = planWaves(list);
-				return {
-					steps: list.length,
-					edges: list.reduce((n, s) => n + s.depends_on.length, 0),
-					levels: levels.length,
-					waves: waves.length,
-					/* 最大并行度 = 单层最多几个（这才是「并行到底有没有用」的判据） */
-					maxParallel: levels.reduce((m, l) => Math.max(m, l.length), 0),
-					gates: list.filter((s) => GATE_TYPES.includes(s.type)).length,
-					loops: list.filter((s) => s.loop).length
-				};
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 五、条件表达式（极简，刻意不用 eval）
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 求值 `condition`。
-			 * 支持四种最小形式（对应 agency-orchestrator 文档里的 `{{var}} contains 技术`）：
-			 *   {{var}} exists
-			 *   {{var}} contains 子串
-			 *   {{var}} equals 值
-			 *   !{{var}} exists
-			 *
-			 * 🔴 刻意**不用 eval / new Function**：条件字符串来自工作流定义，
-			 *    在插件里它是可被用户编辑的数据 —— 用 eval 等于给这份数据开了执行权限。
-			 * 🔴 变量缺失时返回 `false` 且 `reason` 写明「变量不存在」——
-			 *    静默当 true 会让「本该跳过的步骤」照跑。
-			 *
-			 * @param {string} expr
-			 * @param {object} vars
-			 * @returns {{ok:boolean, reason:string}}
-			 */
-			function evalCondition(expr, vars = {}) {
-				const raw = String(expr || "").trim();
-				if (!raw) return { ok: true, reason: "无条件 → 执行" };
-			
-				const m = raw.match(/^(!?)\s*\{\{\s*([\w.]+)\s*\}\}\s*(exists|contains|equals)?\s*([\s\S]*)$/);
-				if (!m) return { ok: false, reason: "条件语法不支持：" + raw + "（支持 exists / contains / equals）" };
-			
-				const negate = m[1] === "!";
-				const key = m[2];
-				const arg = String(m[4] || "").trim();
-				/* 🔴 没有操作符但尾部还有内容 ⇒ **语法不支持**，不得静默按 exists 处理。
-				 *   实测（2026-09-14）：`{{k}} 大约等于 5` 曾被当成 `exists` 而**返回真**，
-				 *   于是「本该跳过的步骤照跑」且没有任何提示 —— 与纪律 18「跳过比红更危险」同源。 */
-				if (!m[3] && arg) {
-					return { ok: false, reason: "条件语法不支持：" + raw + "（支持 exists / contains / equals）" };
-				}
-				const op = m[3] || "exists";
-			
-				if (!(key in vars) || vars[key] == null) {
-					return { ok: negate, reason: "变量 " + key + " 不存在" };
-				}
-				const val = String(vars[key]);
-			
-				let hit;
-				if (op === "exists") hit = val.trim().length > 0;
-				else if (op === "contains") hit = val.indexOf(arg) >= 0;
-				else hit = val === arg;
-			
-				const ok = negate ? !hit : hit;
-				return { ok, reason: "{{" + key + "}} " + op + (arg ? " " + arg : "") + " → " + (hit ? "真" : "假") };
-			}
-			
-			/** 步骤是否应执行（condition 为空 = 执行） */
-			function shouldRun(step, vars = {}) {
-				const s = normalizeStep(step);
-				if (!s.condition) return { run: true, reason: "无条件" };
-				const r = evalCondition(s.condition, vars);
-				return { run: r.ok, reason: r.reason };
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 六、变量替换与产出引用
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 替换 `task` 里的 {{变量}}。
-			 * 未命中的占位**原样保留**并记进 `missing` —— 替换成空串会让下游看到
-			 * 一句语法通顺但缺了关键输入的指令，比留着一个显眼的 {{x}} 更危险。
-			 * @returns {{text:string, missing:string[]}}
-			 */
-			function fillTemplate(tpl, vars = {}) {
-				const missing = [];
-				const text = String(tpl == null ? "" : tpl).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (all, key) => {
-					if (key in vars && vars[key] != null) return String(vars[key]);
-					missing.push(key);
-					return all;
-				});
-				return { text, missing };
-			}
-			
-			/** 该步骤引用了哪些上游产出（用于上下文装配，防「全量转发」） */
-			function refsOf(step) {
-				const s = normalizeStep(step);
-				const found = new Set();
-				for (const m of s.task.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) found.add(m[1]);
-				if (s.condition) for (const m of s.condition.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) found.add(m[1]);
-				for (const m of String(s.acceptance || "").matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) found.add(m[1]);
-				return [...found];
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 七、全局契约
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
-			function installDagApi() {
-				if (typeof window === "undefined") return null;
-				window.__dshDag = {
-					STEP_TYPE, DEP_MODE, GATE_TYPES, DEFAULT_CONCURRENCY,
-					normalize: normalizeGraph,
-					validate: validateGraph,
-					findCycle,
-					topoSort,
-					topoLevels,
-					planWaves,
-					readySteps,
-					graphStats,
-					evalCondition,
-					shouldRun,
-					fillTemplate,
-					refsOf
-				};
-				return window.__dshDag;
-			}
-			
-			exports.STEP_TYPE = STEP_TYPE;
-			exports.DEP_MODE = DEP_MODE;
-			exports.GATE_TYPES = GATE_TYPES;
-			exports.STEP_ID_RE = STEP_ID_RE;
-			exports.DEFAULT_CONCURRENCY = DEFAULT_CONCURRENCY;
-			exports.MAX_LOOP = MAX_LOOP;
-			exports.normalizeStep = normalizeStep;
-			exports.normalizeGraph = normalizeGraph;
-			exports.validateGraph = validateGraph;
-			exports.findCycle = findCycle;
-			exports.topoSort = topoSort;
-			exports.topoLevels = topoLevels;
-			exports.planWaves = planWaves;
-			exports.readySteps = readySteps;
-			exports.graphStats = graphStats;
-			exports.evalCondition = evalCondition;
-			exports.shouldRun = shouldRun;
-			exports.fillTemplate = fillTemplate;
-			exports.refsOf = refsOf;
-			exports.installDagApi = installDagApi;
 		};
 
 		// ── logic/policy.js ──
@@ -24762,62 +29207,6 @@ window.__ModuleLoader__.load({
 			exports.installVerifyApi = installVerifyApi;
 		};
 
-		// ── logic/director-chain.js ──
-		__defs["logic/director-chain.js"] = function (exports) {
-			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
-			 * 职责：总监五步链的声明式依赖图（纯数据，零依赖）
-			 * 引用：03 号文 §1.2
-			 * 上游：components/OrchestratorPanel.js
-			 * 下游：（无）
-			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 三（五步链的声明式依赖图：纯数据，视图与闸门共用同一份）】
-			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
-			 * @map:end */
-			/**
-			 * logic/director-chain.js — 总监五步链的声明式依赖图（纯数据，零依赖）
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  为什么单独一个模块（而不是写在组件里）
-			 * ══════════════════════════════════════════════════════════════════
-			 *  这份图是「编排」这件事的**核心数据**，不是某一块界面的私产。
-			 *  它原先定义在 `components/OrchestratorPanel.js` 内部，后果是：
-			 *    ① 任何想读它的代码都得先能解析组件 —— 而组件 import react，
-			 *       本仓库按 ADR-001 **不装 node_modules**（react 由平台 factory 提供）
-			 *       ⇒ 离线闸门 `import` 它直接 ERR_MODULE_NOT_FOUND；
-			 *    ② 真机闸门于是只能把节点数/波次**硬编码**，产品一改就假红。
-			 *  提到 `logic/` 后：数据归数据、视图归视图，`dag.js` 的现算能力两边都能用。
-			 *
-			 * ── 图的内容（来源：03 号文 §1.2 的五步）─────────────────────────
-			 *   落地为声明式步骤图后，三件事变成可计算的：
-			 *     ① 依赖关系（谁必须等谁）
-			 *     ② 波次由 `planWaves()` 现算 —— 没有任何写死的顺序数组
-			 *     ③ 「切换分支」与「调整模型」互不依赖 ⇒ 同一波，可并行
-			 *
-			 *   🔴 如实标注现状：`director-run.js` 目前仍是**串行**执行这两步。
-			 *      图上"可并行"是结构事实，运行时"还串行"也是事实 —— 两个都写出来，
-			 *      由面板在 `dp-orch-parallel-note` 明示，不假装已经并行。
-			 *
-			 *  用法：
-			 *    import { DIRECTOR_CHAIN } from "./director-chain.js";
-			 *    const g = normalizeGraph(DIRECTOR_CHAIN);      // 来自 dag.js
-			 *    const waves = planWaves(g, { concurrency: 2 }); // 波次现算
-			 */
-			
-			/** 五步链的声明式步骤（字段语义见 dag.js 的 normalizeStep） */
-			const DIRECTOR_CHAIN = [
-				{ id: "polish", role: "polisher", output: "polished", task: "整理语言：口语 → 精确指令" },
-				{ id: "branch", role: "branch-judge", output: "branch", depends_on: ["polish"], task: "判定话题连续性 / 是否需要新分支" },
-				{ id: "model", role: "model-router", output: "model", depends_on: ["polish"], task: "按任务类型选模型档" },
-				{ id: "context", role: "context-picker", output: "ctx", depends_on: ["branch", "model"], task: "筛选需要传递的上下文片段" },
-				{ id: "review", role: "output-reviewer", output: "verdict", depends_on: ["context"], task: "审核产出是否符合原始需求" }
-			];
-			
-			/** 一条人工闸门的示范（用于展示「闸门长什么样」，不冒充已有数据 —— 故恒为 null） */
-			const GATE_SAMPLE = null;
-			
-			exports.DIRECTOR_CHAIN = DIRECTOR_CHAIN;
-			exports.GATE_SAMPLE = GATE_SAMPLE;
-		};
-
 		// ── components/OrchestratorPanel.js ──
 		__defs["components/OrchestratorPanel.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -25597,60 +29986,68 @@ window.__ModuleLoader__.load({
 			/** 关键文件表（字节降序） */
 			const KEY_FILES = Object.freeze([
 				// prettier-ignore
-				{ f: "src/components/DirectorPage.js", bytes: 162212, lines: 2448, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, store/split-index.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
+				{ f: "src/components/DirectorPage.js", bytes: 192505, lines: 2827, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
 				{ f: "src/components/DesignStudio.js", bytes: 94481, lines: 1407, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
-				{ f: "src/components/MindMap.js", bytes: 70241, lines: 1164, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
+				{ f: "src/components/MindMap.js", bytes: 73831, lines: 1206, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
+				{ f: "src/components/DirectorDialog.js", bytes: 68061, lines: 980, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
 				{ f: "src/store/design.js", bytes: 63926, lines: 1231, duty: "设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）", up: "client-entry.js, components/DesignStudio.js, mount.js", down: "store/design-schema.js, store/plugin-db.js" },
-				{ f: "src/bridge/host-director-column.js", bytes: 57890, lines: 1183, duty: "对话页**宿主左栏（总监列）**的几何接管 + 记忆面板时序", up: "client-entry.js", down: "store/layout.js, util/dom-style.js, bridge/host-panel-trim.js" },
-				{ f: "src/components/DirectorDialog.js", bytes: 55704, lines: 844, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
-				{ f: "src/client-entry.js", bytes: 55687, lines: 846, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
-				{ f: "src/logic/branch-tree.js", bytes: 43917, lines: 833, duty: "分支血缘树（导图态的数据源）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js" },
+				{ f: "src/client-entry.js", bytes: 57486, lines: 870, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
+				{ f: "src/bridge/host-director-column.js", bytes: 54930, lines: 1110, duty: "对话页**宿主左栏（总监列）**的几何接管 + 记忆面板时序", up: "client-entry.js", down: "store/layout.js, util/dom-style.js, bridge/host-panel-trim.js" },
+				{ f: "src/logic/branch-tree.js", bytes: 51821, lines: 967, duty: "分支血缘树（导图态的数据源）", up: "bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js" },
 				{ f: "src/store/layout.js", bytes: 42671, lines: 742, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
 				{ f: "src/logic/roles.js", bytes: 42326, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js", down: "（无）" },
 				{ f: "src/store/design-schema.js", bytes: 42225, lines: 770, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
+				{ f: "src/logic/split-dimensions.js", bytes: 39674, lines: 576, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorDialog.js, components/DirectorPage.js, logic/attribution.js, logic/director-dispatch.js", down: "logic/attribution.js" },
+				{ f: "src/store/personalize.js", bytes: 39417, lines: 702, duty: "个性化设定（右上角「⚙ 个性化」的单一真相源）", up: "client-entry.js, components/DirectorPage.js, components/MindMap.js, components/PersonalizePanel.js", down: "（无）" },
 				{ f: "src/bridge/chat-bridge.js", bytes: 33553, lines: 675, duty: "「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, mount.js", down: "bridge/split.js, util/debug.js" },
 				{ f: "src/bridge/host-panel-trim.js", bytes: 33183, lines: 618, duty: "显示层裁剪宿主残留区块", up: "bridge/host-director-column.js, client-entry.js", down: "（无）" },
 				{ f: "src/components/OrchestratorPanel.js", bytes: 29870, lines: 523, duty: "多智能体编排面板", up: "client-entry.js, components/DirectorPage.js", down: "logic/roles.js, logic/dag.js, logic/policy.js, logic/delegate.js, logic/verify.js, logic/orchestrate.js, logic/director-chain.js" },
 				{ f: "src/store/mindmap-schema.js", bytes: 28381, lines: 435, duty: "思维导图元素库（导图态的「原子词汇表」，纯数据）", up: "components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js", down: "（无）" },
+				{ f: "src/logic/routing.js", bytes: 27973, lines: 498, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
+				{ f: "src/store/plugin-db.js", bytes: 25406, lines: 497, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
+				{ f: "src/logic/director-dispatch.js", bytes: 24445, lines: 380, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
+				{ f: "src/logic/attribution.js", bytes: 22786, lines: 371, duty: "归属判定（19 号文 §3.3 / N1 · **纯函数**）", up: "components/DirectorPage.js, logic/split-dimensions.js", down: "logic/split-dimensions.js" },
+				{ f: "src/logic/director-run.js", bytes: 21909, lines: 454, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js" },
 				{ f: "src/components/DirectorHierarchy.js", bytes: 21623, lines: 381, duty: "多层级总监面板（方案 C：层级树 + 主内容区）", up: "client-entry.js, components/DirectorDialog.js", down: "store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js" },
-				{ f: "src/logic/dag.js", bytes: 21479, lines: 492, duty: "声明式步骤图", up: "client-entry.js, components/OrchestratorPanel.js", down: "（无）" },
+				{ f: "src/logic/dag.js", bytes: 21502, lines: 492, duty: "声明式步骤图", up: "client-entry.js, components/OrchestratorPanel.js, logic/director-run.js", down: "（无）" },
 				{ f: "src/logic/policy.js", bytes: 20333, lines: 407, duty: "执行模式与策略", up: "client-entry.js, components/OrchestratorPanel.js", down: "logic/roles.js" },
 				{ f: "src/components/FloatDock.js", bytes: 20274, lines: 312, duty: "右下角浮动按钮组（全屏能力的统一入口）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, logic/flow.js, util/debug.js" },
 				{ f: "src/logic/verify.js", bytes: 20226, lines: 433, duty: "双层验收与评审去偏", up: "client-entry.js, components/OrchestratorPanel.js", down: "（无）" },
+				{ f: "src/logic/director-collect.js", bytes: 20152, lines: 377, duty: "分支产出回收 + 总裁定（第 17 批）", up: "components/DirectorPage.js", down: "logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/session-dossier.js" },
 				{ f: "src/logic/flow.js", bytes: 20038, lines: 434, duty: "四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, components/NodeDetailPanel.js", down: "（无）" },
-				{ f: "src/store/hierarchy.js", bytes: 19755, lines: 485, duty: "多层级总监结构（对话级 / 文件夹级 / 全局级）", up: "bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/summarize.js, logic/sync.js, store/duty-config.js", down: "store/idb.js, store/plugin-db.js" },
-				{ f: "src/logic/routing.js", bytes: 19734, lines: 379, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
-				{ f: "src/store/personalize.js", bytes: 19509, lines: 355, duty: "个性化设定（右上角「⚙ 个性化」的单一真相源）", up: "client-entry.js, components/DirectorPage.js, components/MindMap.js, components/PersonalizePanel.js", down: "（无）" },
+				{ f: "src/store/hierarchy.js", bytes: 19776, lines: 485, duty: "多层级总监结构（对话级 / 文件夹级 / 全局级）", up: "bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js", down: "store/idb.js, store/plugin-db.js" },
 				{ f: "src/components/NodeDetailPanel.js", bytes: 19144, lines: 331, duty: "导图右侧「该框的对话」面板", up: "client-entry.js, components/MindMap.js", down: "logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, store/mindmap-schema.js" },
+				{ f: "src/logic/director-reuse.js", bytes: 18468, lines: 312, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/store/agent-runs.js", bytes: 17554, lines: 413, duty: "总监执行状态（智能体 / 技能调用）唯一真相源", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "logic/catalog.js" },
 				{ f: "src/components/ModelSeat.js", bytes: 16861, lines: 336, duty: "标准模型选择席位（第 6 批需求 8）", up: "client-entry.js, components/DirectorPage.js", down: "config/model.js" },
-				{ f: "src/logic/director-run.js", bytes: 16783, lines: 368, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, util/debug.js" },
-				{ f: "src/store/plugin-db.js", bytes: 16651, lines: 349, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
+				{ f: "src/logic/lineage.js", bytes: 16773, lines: 372, duty: "上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "（无）" },
 				{ f: "src/store/file-adapter.js", bytes: 16333, lines: 407, duty: "A6 持久化探测 + 文件通道适配器", up: "client-entry.js, store/create-store.js, store/persist.js", down: "（无）" },
+				{ f: "src/components/PersonalizePanel.js", bytes: 16083, lines: 296, duty: "右上角「⚙ 个性化」面板（四个界面共用一个组件）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/personalize.js" },
+				{ f: "src/store/session-dossier.js", bytes: 15657, lines: 326, duty: "会话档案（第 19 批）", up: "client-entry.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
+				{ f: "src/bridge/session-io.js", bytes: 15567, lines: 315, duty: "逐会话读写通道（第 17 批）", up: "logic/director-collect.js, logic/director-dispatch.js", down: "logic/branch-tree.js" },
 				{ f: "src/bridge/host-composer-slot.js", bytes: 15417, lines: 331, duty: "把插件控件注入**宿主底部统计行之前**", up: "client-entry.js, components/DirectorPage.js", down: "util/dom-style.js" },
 				{ f: "src/logic/checkpoint.js", bytes: 15008, lines: 315, duty: "不可变快照链", up: "client-entry.js", down: "（无）" },
 				{ f: "src/mount.js", bytes: 14690, lines: 262, duty: "总监弹窗的挂载层（T-PLUG-015 起：弹窗形态为主通道）", up: "client-entry.js", down: "components/DirectorDialog.js, components/DesignStudio.js, components/MindMap.js, components/FloatDock.js, store/layout.js, store/design.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, util/debug.js, util/bus.js" },
 				{ f: "src/logic/task-state.js", bytes: 14416, lines: 330, duty: "任务状态机", up: "client-entry.js", down: "（无）" },
 				{ f: "src/bridge/split.js", bytes: 14292, lines: 309, duty: "「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）", up: "bridge/chat-bridge.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, mount.js", down: "util/debug.js" },
+				{ f: "src/store/persist.js", bytes: 14181, lines: 321, duty: "A7 + A8 总监 store 的加载与保存", up: "client-entry.js, logic/process.js, store/create-store.js", down: "store/messages.js, store/idb.js, store/cookie.js, store/file-adapter.js" },
 				{ f: "src/components/DirectorWorkbench.js", bytes: 13819, lines: 259, duty: "总监工作台（方案 E · 文档 06 §五）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js", down: "logic/duties.js, store/duty-config.js, logic/director-run.js, store/create-store.js, store/use-store.js, store/hierarchy.js, config/model.js, util/debug.js" },
 				{ f: "src/logic/delegate.js", bytes: 13778, lines: 306, duty: "委派模板与上下文装配", up: "client-entry.js, components/OrchestratorPanel.js", down: "（无）" },
 				{ f: "src/logic/orchestrate.js", bytes: 13606, lines: 285, duty: "总监统筹闭环（纯函数）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js", down: "（无）" },
 				{ f: "src/logic/catalog.js", bytes: 12992, lines: 237, duty: "技能与智能体的**指向表**（单一真相源）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, store/agent-runs.js", down: "（无）" },
-				{ f: "src/store/persist.js", bytes: 12920, lines: 305, duty: "A7 + A8 总监 store 的加载与保存", up: "client-entry.js, logic/process.js, store/create-store.js", down: "store/messages.js, store/idb.js, store/cookie.js, store/file-adapter.js" },
 				{ f: "src/store/branch.js", bytes: 12531, lines: 270, duty: "A4 分支创建与记忆面板交互", up: "client-entry.js", down: "store/idb.js, store/memory.js" },
 				{ f: "src/components/OverviewDialog.js", bytes: 11475, lines: 216, duty: "总览弹窗（R10）", up: "components/MindMap.js", down: "logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/plugin-db.js" },
-				{ f: "src/logic/split-dimensions.js", bytes: 11077, lines: 160, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorPage.js", down: "（无）" },
-				{ f: "src/components/PersonalizePanel.js", bytes: 10954, lines: 209, duty: "右上角「⚙ 个性化」面板（四个界面共用一个组件）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/personalize.js" },
 				{ f: "src/logic/summarize.js", bytes: 10582, lines: 227, duty: "分层总结 + 分梯度调用", up: "client-entry.js, components/DirectorHierarchy.js", down: "config/model.js, store/hierarchy.js, util/debug.js, util/bus.js" },
+				{ f: "src/store/dispatch-log.js", bytes: 10340, lines: 220, duty: "本次「总监派发」台账（第 17 批）", up: "components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/components/DirectorFlow.js", bytes: 9873, lines: 181, duty: "E1 小窗总监对话流组件", up: "client-entry.js", down: "store/create-store.js, store/use-store.js, util/debug.js" },
 				{ f: "src/logic/ledger.js", bytes: 9720, lines: 210, duty: "台账 / 文档树取数", up: "components/DirectorPage.js", down: "store/docs-index-inject.js" },
 				{ f: "src/store/idb.js", bytes: 9626, lines: 218, duty: "IndexedDB 持久化层（主要机制）", up: "logic/discover.js, logic/sync.js, store/branch.js, store/docs.js, store/hierarchy.js, store/memory.js, store/persist.js", down: "（无）" },
 				{ f: "src/store/cookie.js", bytes: 9550, lines: 218, duty: "V10 Cookie 同步存储（分块）", up: "store/persist.js", down: "（无）" },
+				{ f: "src/store/split-index.js", bytes: 9540, lines: 196, duty: "分流标签索引", up: "components/DirectorDialog.js, components/DirectorPage.js, logic/branch-tree.js, logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/store/create-store.js", bytes: 9531, lines: 232, duty: "A9 `createDirectorStore` store 工厂", up: "client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js", down: "store/messages.js, store/persist.js, store/file-adapter.js" },
 				{ f: "src/logic/process.js", bytes: 9494, lines: 172, duty: "D1 总监对话核心处理函数", up: "client-entry.js", down: "config/model.js, store/persist.js, store/memory.js" },
 				{ f: "src/logic/sync.js", bytes: 9226, lines: 226, duty: "自动同步：让**每一个**对话 / 文件夹都拥有总监", up: "client-entry.js, components/DirectorHierarchy.js", down: "store/hierarchy.js, logic/discover.js, store/idb.js, util/debug.js, util/bus.js" },
 				{ f: "src/components/VersionPanel.js", bytes: 8678, lines: 147, duty: "版本历史面板（\"不同版本的选择\"）", up: "components/DesignStudio.js", down: "（无）" },
-				{ f: "src/store/split-index.js", bytes: 8647, lines: 188, duty: "分流标签索引", up: "components/DirectorPage.js, logic/branch-tree.js", down: "（无）" },
 				{ f: "src/logic/branch-focus.js", bytes: 8274, lines: 188, duty: "分支链路聚焦（纯函数）", up: "client-entry.js, components/MindMap.js", down: "（无）" },
 				{ f: "src/util/debug.js", bytes: 8173, lines: 158, duty: "D3 DSH 统一调试日志工具（**A3+D3 合并后的权威实现**）", up: "bridge/chat-bridge.js, bridge/nav-hook.js, bridge/split.js, client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorFlow.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/FloatDock.js, components/MindMap.js, logic/director-run.js, logic/summarize.js, logic/sync.js, mount.js, store/duty-config.js", down: "（无）" },
 				{ f: "src/store/docs.js", bytes: 7949, lines: 205, duty: "A5 总监文档 store（V8）", up: "client-entry.js", down: "store/idb.js" },
@@ -25658,6 +30055,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/mindmap-render.js", bytes: 7470, lines: 135, duty: "导图渲染派生（**纯函数，不依赖 React**）", up: "components/MindMap.js", down: "logic/branch-tree.js, store/mindmap-schema.js" },
 				{ f: "src/logic/discover.js", bytes: 6946, lines: 192, duty: "真实会话 / 文件夹（workspace）数据源发现层", up: "client-entry.js, components/OverviewDialog.js, logic/branch-tree.js, logic/sync.js", down: "store/idb.js" },
 				{ f: "src/logic/duties.js", bytes: 6943, lines: 125, duty: "总监职责配置定义（03号文 §3.1「执行逻辑项」）", up: "components/DirectorWorkbench.js, logic/director-run.js, store/duty-config.js", down: "（无）" },
+				{ f: "src/logic/dim-branch.js", bytes: 6930, lines: 112, duty: "「维度 ↔ 分支节点」绑定的**唯一翻译点**（19 号文 N2 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "store/hierarchy.js" },
 				{ f: "src/config/model.js", bytes: 5879, lines: 127, duty: "C2 配置与本地模型", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/ModelSeat.js, logic/director-run.js, logic/process.js, logic/review.js, logic/summarize.js", down: "（无）" },
 				{ f: "src/bridge/nav-hook.js", bytes: 5825, lines: 134, duty: "「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）", up: "client-entry.js, mount.js", down: "bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js" },
 				{ f: "src/store/memory.js", bytes: 5811, lines: 120, duty: "A2 V9 记忆体系 CRUD", up: "client-entry.js, logic/process.js, store/branch.js", down: "store/idb.js" },
@@ -25670,7 +30068,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/bridge/spike-fs-probe.js", bytes: 3853, lines: 87, duty: "R3 风险验证（T5）", up: "（无：插件入口层）", down: "（无）" },
 				{ f: "src/util/no-drag.js", bytes: 3784, lines: 78, duty: "桌面壳「窗口拖拽带」穿透 —— 把可交互元素从 OS caption area 里救出来", up: "client-entry.js", down: "（无）" },
 				{ f: "src/util/dom-style.js", bytes: 3601, lines: 78, duty: "内联样式的单位归一（**唯一真相源**）", up: "bridge/host-composer-slot.js, bridge/host-director-column.js", down: "（无）" },
-				{ f: "src/logic/director-chain.js", bytes: 3554, lines: 50, duty: "总监五步链的声明式依赖图（纯数据，零依赖）", up: "components/OrchestratorPanel.js", down: "（无）" },
+				{ f: "src/logic/director-chain.js", bytes: 3577, lines: 50, duty: "总监五步链的声明式依赖图（纯数据，零依赖）", up: "components/OrchestratorPanel.js, logic/director-run.js", down: "（无）" },
 				{ f: "src/store/theme.js", bytes: 3417, lines: 77, duty: "A12 V9-Design D-01 主题变量体系", up: "client-entry.js", down: "（无）" },
 				{ f: "src/store/use-store.js", bytes: 3315, lines: 64, duty: "A10 `useDirectorStore` React hook 绑定", up: "client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js", down: "（无）" },
 				{ f: "src/util/log-collector.js", bytes: 2961, lines: 68, duty: "A3 专用 Log 收集器", up: "client-entry.js", down: "（无）" },
@@ -25679,7 +30077,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 79, bytes: 1556198, lines: 28960 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 88, bytes: 1838274, lines: 33614 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -26042,7 +30440,7 @@ window.__ModuleLoader__.load({
 			 * 职责：总监页（宿主原生 tab 环里的第一个视图）
 			 * 引用：—
 			 * 上游：client-entry.js
-			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, store/split-index.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
+			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 九（编排入口按钮 + 与个性化设定互斥）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -26102,11 +30500,25 @@ window.__ModuleLoader__.load({
 			const { directorLayoutStore, TODO_NOTE_MAX_CHARS, todoNoteKey, clampWinPos, snapWinEdge } = __m("store/layout.js");
 			const { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel, SCOPE_KIND, scopeKindOf, scopeKeyOf, scopeHasConversation, findNodeBySessionId, findNodeById, attachSession } = __m("store/hierarchy.js");
 			const { onHierarchyChange } = __m("util/bus.js");
-			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, listTodos, listReviews, clearDirectorMessages } = __m("store/plugin-db.js");
-			const { route, DESTINATION, DESTINATION_LABEL, review6 } = __m("logic/routing.js");
-			const { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession, createSession, hostCapabilities } = __m("logic/branch-tree.js");
-			const { plan: planSplit, branchTitle, briefOf } = __m("logic/split-dimensions.js");
-			const { recordSplits } = __m("store/split-index.js");
+			const { appendDirectorMessage, listDirectorMessages, pluginDbStats, makeId, listTodos, listReviews, clearDirectorMessages, readMessageBackup, restoreDirectorMessages } = __m("store/plugin-db.js");
+			const { route, DESTINATION, DESTINATION_LABEL, review6, dimensionCandidates } = __m("logic/routing.js");
+			const { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession, hostCapabilities, archivedSessionIds } = __m("logic/branch-tree.js");
+			const { plan: planSplit } = __m("logic/split-dimensions.js");
+			/* 🔴 19 号文 **N8**（人可感知层）：归属判定的**一句话读数** —— 纯函数，与判定同源
+			 *    （不是"另算一遍"，见 `attribution.js#attributionSummary` 头注释）。 */
+			const { attributionSummary } = __m("logic/attribution.js");
+			/* 🔴 19 号文 N2/N3（2026-09-17）：维度↔分支节点的翻译**只有一份实现**
+			 * （`logic/dim-branch.js` 纯函数，总监页与总监弹窗共用）—— 两处各写一遍必漂移。 */
+			const { dimBranchContext } = __m("logic/dim-branch.js");
+			const { readSplitIndex } = __m("store/split-index.js");
+			const { makeEnvelope, childEnvelope, VIA } = __m("logic/lineage.js");
+			/* 第 17 批「总监枢纽闭环」：派发（主体是总监）+ 回收（产出回流 + 总裁定 + next action）。
+			 * 🔴 两者都放 `logic/`（不在组件里写业务）—— 组件只负责取输入、落读数、回写消息。
+			 * 🔴 派发路径**不再直接用** `createSession` / `recordSplits` / `briefOf` / `branchTitle`：
+			 *    它们已收进 `logic/director-dispatch.js`（唯一调用点，避免两套实现漂移）。 */
+			const { dispatchBranches } = __m("logic/director-dispatch.js");
+			const { collectBranches, digestMessage, verdictOf } = __m("logic/director-collect.js");
+			const { dispatchLog } = __m("store/dispatch-log.js");
 			const { dshLog } = __m("util/debug.js");
 			const { runDirector } = __m("logic/director-run.js");
 			const { loadDirectorConfig } = __m("config/model.js");
@@ -26369,6 +30781,15 @@ window.__ModuleLoader__.load({
 				 * 闸门与用户都无从判断"建成几条 / 失败几条 / 分别是哪些维度"。
 				 * 故落到这块读数上（`dp-flow-split` 的 data-*），导图另有一份 `mm-node[data-split]`。 */
 				const [splitInfo, setSplitInfo] = react.useState(null);
+				/* 🔴 19 号文 **N8**：归档条数（常驻读数「现存会话 N 条（归档 M）」的右半）。
+				 *    🔴 三态**必须可分**：数字 = 读到了；`null` = **读不到归档集**。
+				 *       把"读不到"显示成 `0` 会让用户以为"没有归档"，而事实是"这一项没读到"
+				 *       （纪律 19/58：降级可以，无声不行 —— 这里用 `—` 而不是 `0`）。 */
+				const [archivedN, setArchivedN] = react.useState(null);
+				/* 回收读数（第 17 批需求「产出回流」）：同样**必须可回读**。
+				 * 🔴 与 `splitInfo` 分开两块而不是并进一块：派发与回收是**两次独立动作**，
+				 *    并进一块会让"派发了还没回收"与"回收了但派发失败"在界面上长得一样。 */
+				const [collectInfo, setCollectInfo] = react.useState(null);
 				/* 清除对话消息的**二次确认**（第 16 批需求 3）：
 				 * 🔴 不用 `window.confirm` —— 它会阻塞主线程，且本项目所有真机闸门都靠
 				 *    `Runtime.evaluate` + 真实鼠标，原生模态框一弹就**卡住整条链路**（读数还会
@@ -26377,6 +30798,11 @@ window.__ModuleLoader__.load({
 				 *    否则「开合型控件被自动化点到必须当场还原」这条纪律会被违反。 */
 				const [clearArm, setClearArm] = react.useState(0);
 				const [clearInfo, setClearInfo] = react.useState(null);
+				/* 第 22 批：备份可见性 + 恢复读数。
+				 * 🔴 缺了这两条，"有没有安全网"就只能靠 `localStorage` 猜 ——
+				 *    用户点了「清除」之后**必须当场看到他还有没有退路**（纪律 57：闸门绿 ≠ 用户能验收）。 */
+				const [bakInfo, setBakInfo] = react.useState(null);
+				const [restoreInfo, setRestoreInfo] = react.useState(null);
 				/* 待确认**自动撤防**：超时未确认就复位。
 				 * 🔴 没有这条，按钮会**永久停在**"再点一次就删"的状态 —— 用户过一会儿回来点一下
 				 *    就真的把消息删了（而他以为那是第一次点）。 */
@@ -26445,6 +30871,10 @@ window.__ModuleLoader__.load({
 				 *     —— 依赖是"什么时候该重跑"（切作用域必须重载，D8/D9 靠它），
 				 *        ref 是"跑的时候用哪个值"。两者职责不同，缺一不可。 */
 				const nodeIdRef = react.useRef(nodeId);
+				/* 🔴 19 号文 N3（2026-09-17）：最近一次"总监处理"的**信封 + 事实**（源侧）。
+				 *    转派时由它 `childEnvelope()` 派生目标信封 ⇒ 上下游同源是结构保证的，
+				 *    而不是"两边各自拼字符串、期望拼得一样"。 */
+				const srcEnvRef = react.useRef(null);
 				nodeIdRef.current = nodeId;
 				const say = (m) => {
 					setToast(m);
@@ -26513,6 +30943,15 @@ window.__ModuleLoader__.load({
 						 * 源 = 未通过的审核 + 节点风险。两个源都取自真实库，不编数。 */
 						setReviews((await listReviews(id)) || []);
 						setStats(await pluginDbStats());
+						/* 备份槽元信息（有/无 + 条数 + 时间）—— 供「恢复」按钮与闸门读数 */
+						setBakInfo(readMessageBackup());
+						/* 🔴 19 号文 N8：归档条数（常驻读数的右半）。
+						 *    读不到 ⇒ `null`（界面显 `—`），**不回落成 0** ——
+						 *    "没有归档"与"没读到归档"必须可分（纪律 58）。 */
+						try {
+							const arch = await archivedSessionIds();
+							setArchivedN(Array.isArray(arch) ? arch.length : null);
+						} catch (e) { setArchivedN(null); }
 					} catch (e) { /* 数据层异常不影响 UI */ }
 				}, [nodeId]);
 			
@@ -26588,6 +31027,20 @@ window.__ModuleLoader__.load({
 				const counts = react.useMemo(() => countByLevel(tree || null), [tree]);
 				const rows = (branch.tree && branch.tree.rows) || [];
 				const activeBranches = rows.filter((r) => r.childrenCount > 0).length;
+				/* 🔴 19 号文 **N8 常驻读数**的**唯一数据源**（第 25 批真因修复 · 纪律 27/79）。
+				 *
+				 *    ⚠️ 本组件里有**两棵不同的树**，名字撞在一起但**不同源**：
+				 *       · `tree`（第 330 行）= **层级树** —— `loadTree()` 返回**根节点**
+				 *         （字段 `childNodes` / `meta`，**没有 `rows`**）；
+				 *       · `branch.tree` = **分支树** —— 宿主会话血缘（字段 `rows`），
+				 *         与 `getBranchSnapshot()` **同一份对象**（纪律 78 单一真相源）。
+				 *    上一版读数写成 `(tree && tree.rows) ? tree.rows.length : ""` ⇒
+				 *    `tree` 是根节点（**恒 truthy**）而 `tree.rows` **恒为 `undefined`**
+				 *    ⇒ `data-alive` **在任何情况下都是空串**、文案**永远**显示「分支树未建立」，
+				 *    而宿主实际有 170 行活会话。**这比原来的 `0 条` 更坏**：原来只在树没建好时错，
+				 *    改完变成"永远错"，且错的方向是"看起来读不到"（纪律 60 的反面）。
+				 *    ⇒ 三态**必须可分**：`null` = 分支树未建立；`[]` = 建立了但确实 0 条（**要显 0**）。 */
+				const liveRows = (branch && branch.tree && Array.isArray(branch.tree.rows)) ? branch.tree.rows : null;
 				const fStats = flowStats(fs.flows);
 				/* ── 作用域（scope）唯一真相源 ────────────────────────────────────────
 				 * 🔴 2026-09-14 第 4 批 · 需求 ②③（用户原话见 store/hierarchy.js 的 scope 注释块）：
@@ -26984,7 +31437,14 @@ window.__ModuleLoader__.load({
 					flowStore.push(String(txt).trim(), { origin: dim, sessionId: liveRef.current.scope, note: "R8 登记" });
 					/* 记下"哪一条是你在原生框里发的" —— 分栏后需要它来区分左右（见 msgRole） */
 					setOnUserText(String(txt).trim());
-					say("已登记流转 · " + String(txt).trim().length + " 字符");
+					/* 🔴 19 号文 §3.5 **P1**（对话持续性）：**登记为流转不写总监消息**，这件事必须**显式标注**。
+					 *    用户原话「总监对话的持续性一直没有看到」有一半出在这里：他在总监页完成了一个
+					 *    "有结果的动作"（登记成功、四维轨迹里确实多了一条），但**总监消息流一条没涨**，
+					 *    而界面**不说为什么** ⇒ 观感就是"持续性坏了"。
+					 *    `T-PLUG-050`（登记该不该产生总监消息）**尚未裁定** —— 写消息属语义扩展，
+					 *    不在本版单方决定；但"**不写**"这件事本身**必须说出来**（纪律 19：降级可以，无声不行）。
+					 *    提示里同时给出**可执行的替代路径**（用右侧「执行」），否则用户只知道"没反应"。 */
+					say("已登记流转 · " + String(txt).trim().length + " 字符（已进四维轨迹；「登记」**不产生总监消息** —— 要总监回应请用右侧「执行」）");
 				}
 			
 				/** `runDirector` 需要的 store 适配器 —— 把 plugin-db 的消息面包装成 {getState,addMessage,setStatus} */
@@ -27072,8 +31532,21 @@ window.__ModuleLoader__.load({
 			
 						/* R2.5 建议去向：原生产者是那份**已删的旧 `deliver`**，删除后该卡片会变成
 						 * 永远不出现的死 UI。此处把生产者接回新版链路（处理完成后给出建议去向，
-						 * 供你改投 / 纠偏）—— 一份数据一个生产者，不留不可达界面。 */
-						setRouteResult(route(t, { nodes: flatNodes(), currentNodeId: curNodeId }));
+						 * 供你改投 / 纠偏）—— 一份数据一个生产者，不留不可达界面。
+						 * 🔴 19 号文 N2（2026-09-17）：候选集改为「层级树拍平 **∪ 维度分支节点**」。
+						 *    收敛前只喂层级树 ⇒ A1–A8 **不在候选里** ⇒ 在 A3 说 A5 的话必然判不出归属，
+						 *    用户第 5 条「跨维度转发」无从发生。 */
+						setRouteResult(route(t, { nodes: routeNodes(t, curNodeId), currentNodeId: curNodeId }));
+						/* 🔴 N3：源信封**只在这里构造一次**（转入派发/回收链时复用同一对象）⇒
+						 *    R1「同一事实同源」与 R4「范围 = 血缘」是结构保证的。
+						 *    `env.id` 必须与消息 `messageId` 同值：血缘回溯全靠 `env.id`/`env.parent`
+						 *    对得上，两者不同值 ⇒ `parent` 永远匹配不上 ⇒ R2 **静默失效**。 */
+						const srcMid = makeId("dm", curNodeId);
+						srcEnvRef.current = {
+							env: makeEnvelope({ id: srcMid, from: curNodeId, to: null, via: VIA.LOCAL, round: 0, root: curNodeId, cause: "" }, { self: curNodeId }),
+							fact: { reqText: t, novelName: "", dims: [] },
+							messageId: srcMid
+						};
 			
 						/* ④ 投递的是**处理后的指令**，不是原文 —— 这正是用户要的"经过处理然后发给对话执行" */
 						const d = await deliverToChat(r.instruction, { sessionId: scope, opener: openSession });
@@ -27158,89 +31631,162 @@ window.__ModuleLoader__.load({
 						from = "总监消息最后一条";
 					}
 					const p = planSplit(idea);
-					if (p.kind === "none" || !p.dims.length) {
-						setSplitInfo({ at: Date.now(), made: 0, failed: 0, dims: [], note: String(p.reason || "没有可用维度") });
-						say("未分流：" + String(p.reason || "没有可用的维度"));
+					/* 🔴 第 23 批（第二十三轮真机驱动）：**噪声 ≠ 没识别到** —— 两者都"不建分支"，
+					 *    但用户接下来要做的**完全相反**：噪声 ⇒ 换个说法重打；none ⇒ 补项目路径/意图。
+					 *    读数必须带 `kind`，否则闸门与用户都分不清（纪律 58：没跑成必须与失败可分）。
+					 *    修复前真机行为：投「今天天气不错 哈哈哈哈」⇒ `made=3`、会话 +3、导图 +3 个空壳框。 */
+					if (p.kind === "none" || p.kind === "noise" || !p.dims.length) {
+						setSplitInfo({ at: Date.now(), made: 0, failed: 0, dims: [], kind: p.kind || "none",
+							note: String(p.reason || "没有可用维度") });
+						say((p.kind === "noise" ? "已分辨为无意义输入，未派发：" : "未派发：") + String(p.reason || "没有可用的维度"));
+						dshLog(p.kind === "noise" ? "split-noise" : "split-none", { kind: p.kind, reason: p.reason, len: idea.length });
 						return;
 					}
-					const made = [];
-					const failed = [];
-					for (const dim of p.dims) {
-						const label = branchTitle(dim, p.name);
-						const brief = briefOf(dim, idea, p.name);
-						const cs = await createSession({});
-						if (!cs.ok || !cs.sessionId) {
-							failed.push({ label, why: "建会话失败：" + String((cs && cs.reason) || "未知") + (cs && cs.raw ? " ｜ 宿主原始返回 " + cs.raw : "") });
-							continue;
-						}
-						/* 先投简报再挂节点：投递决定"这一支能不能自己干起来"，
-						 * 挂节点只影响插件侧层级视图 —— 前者失败才是真失败。 */
-						const d = await deliverToChat(brief, { sessionId: cs.sessionId, autoSend: true });
-						let nodeErr = "";
-						try {
+					/* 🔴 第 17 批：派发**整体搬到 `logic/director-dispatch.js`**（主体是总监 —— 见那里的头注释）。
+					 *    这里只负责三件事：
+					 *      ① 提供挂载钩子（把分支挂到插件自己的层级树 —— 逻辑层不反向依赖组件，故走回调）
+					 *      ② 把读数落到 `dp-flow-split`（**可回读**，不依赖一句会消失的 toast）
+					 *      ③ 把派发结果**回写总监消息流**（"谁派的"必须留在对话里） */
+					const r = await dispatchBranches(idea, {
+						onBranch: async (info) => {
 							await attachSession(nodeId, {
-								sessionId: cs.sessionId, title: label,
-								messageCount: d.ok ? 1 : 0, lastMessage: brief
+								sessionId: info.sessionId, title: info.label,
+								messageCount: info.sentOk ? 1 : 0, lastMessage: info.brief
 							});
-						} catch (e) { nodeErr = String((e && e.message) || e); }
-						made.push({
-							sessionId: cs.sessionId, dim: dim.key, label, name: p.name,
-							delivered: Boolean(d.ok), mode: d.mode, why: d.reason, nodeErr,
-							/* 会话建出但**没挂到工作区**（宿主 code=workspace-attach-failed）：
-							 * 分支是真的、简报也照投，但要**如实标注**，不能悄悄当完全成功。 */
-							attachFail: cs.attached === false, attachWhy: cs.reason || "", via: cs.via || ""
-						});
-					}
-					const sent = made.filter((m) => m.delivered).length;
-					const nodeFail = made.filter((m) => m.nodeErr).length;
-					const attachFail = made.filter((m) => m.attachFail).length;
+						}
+					});
 					/* 🔴 读数**先落地**，再做后面一切可能抛错的事。
-					 *    本轮真机实测的形态：8 条会话**真的建出来了**（分支树净增恰为 8），
-					 *    但读数与索引都没写出来 ⇒ 界面上"什么都没发生"，而宿主里已经多了 8 条会话。
-					 *    ⇒ 顺序必须是「先报账，再善后」；善后出错也要**追加**到同一个读数上（`error`）。 */
+					 *    第 16 批真机实测的形态：8 条会话**真的建出来了**，但读数与索引都没写出来
+					 *    ⇒ 界面上"什么都没发生"，而宿主里已经多了 8 条会话。顺序必须是「先报账，再善后」。 */
 					setSplitInfo({
-						at: Date.now(), made: made.length, failed: failed.length,
-						dims: made.map((m) => m.dim), sent, nodeFail, attachFail, recorded: 0,
-						kind: p.kind, name: p.name, from,
-						via: made.length ? made[0].via : "",
-						/* 🔴 「一条都没建成」必须把**原因**写进读数：否则界面上只剩 `made=0 / failed=8`，
-						 *    与"没有可用维度""宿主没这能力"长得**一模一样**，判不出真因（纪律 18）。 */
-						error: made.length === 0 && failed.length ? "全部建会话失败：" + failed[0].why : "",
-						note: (attachFail ? attachFail + " 条分支已建出但未挂到工作区" : "")
-							+ (made.length && failed.length ? (attachFail ? "；" : "") + failed.length + " 条建会话失败" : "")
+						at: Date.now(), made: r.made, failed: r.failed,
+						dims: r.dims || [],
+						sent: (r.items || []).filter((x) => x.sentOk).length,
+						nodeFail: r.nodeFail || 0, attachFail: r.attachFail || 0, recorded: r.recorded || 0,
+						kind: r.kind, name: r.name, from,
+						confirmed: r.confirmed, unconfirmed: r.unconfirmed,
+						/* 🔴 第 19 批：「复用几条 / 新建几条」是本轮用户**唯一**的诉求
+						 *    （原话：重复创建了一百多个会话 ⇒ 派发前先复用）。只报 `made` 会让
+						 *    "复用 8 条"与"新建 8 条"在界面上**完全一样** —— 那正是上一轮的问题。 */
+						/* 🔴 19 号文 **N8**：归属判定读数（原样带上，渲染时走同一个纯函数） */
+						attribution: r.attribution || null,
+						reused: r.reused || 0, created: r.created == null ? r.made : r.created,
+						orphanForgotten: r.orphanForgotten || 0, reuseNote: String(r.summary || ""),
+						/* 🔴 U10/P9：冷启动标题弱匹配的**三读数**（原样带上 → 闸门可断言、界面可诊断） */
+						/* 🔴 U10/P9：冷启动标题弱匹配的读数（原样带上 → 闸门可断言、界面可诊断）。
+						 *    ⚠️ 它们在 `r.reusePlan` **子对象**里（那里是唯一真相源，不再往顶层抄一份）——
+						 *    第 25 批真机实测踩到：界面按顶层字段读 ⇒ 三个属性**全是空**，
+						 *    而产品侧一切正常（`复用 8`）⇒ 表现成"读数没接线"（纪律 79：写好了 ≠ 接进去了）。 */
+						titleHit: !!(r.reusePlan && r.reusePlan.titleHit),
+						titleMissed: (r.reusePlan && r.reusePlan.titleMissed) ? r.reusePlan.titleMissed.slice() : [],
+						titlePoolN: (r.reusePlan && r.reusePlan.titlePoolN != null) ? Number(r.reusePlan.titlePoolN) : null,
+						/* 靠标题救回来的**条数**（不是布尔）：索引补登记几条要对得上「新建 + 标题命中」 */
+						titleHits: (r.reusePlan && r.reusePlan.titleHits != null) ? Number(r.reusePlan.titleHits) : 0,
+						/* 🔴 第 23 批：语言整理的读数（要点数 / 剔除噪声行 / 合并重复行）——
+						 *    没有它，"整理到底生效了没有"在界面上无从判断（纪律 19 同型）。 */
+						organized: r.organized || null,
+						via: (r.items && r.items.length) ? r.items[0].sentVia : "",
+						error: (r.made === 0 && r.failed)
+							? "全部建会话失败：" + (((r.failedItems || [])[0] || {}).why || "未知")
+							: "",
+						note: String(r.reason || "")
 					});
 					const problems = [];
+					/* 🔴 第 23 批（D10）：**写审计消息必须排在刷新之前**。
+					 *    旧顺序是「refresh() → appendDirectorMessage()」⇒ 刷新读库时这条消息**还没写**，
+					 *    它要等**下一次动作**触发的 refresh 才出现 ⇒ 界面对"刚刚发生的事"**恒定滞后一条**。
+					 *    真机取证（第二十三轮）：库 `directorConversations` **3 条**（182 B 派发 / 822 B 回收 /
+					 *    112 B 派发噪声）vs 界面页签 **2 条**，缺的正是**最新那条**。
+					 *    用户原话「**整个调试的机制也是好用的**」正指这里 —— 点完看不到结果，等于调试机制失效。 */
+					const lines = (r.items || []).map((it) => "· " + it.label
+						+ (it.sentOk ? "" : "（简报未送达：" + String(it.sentReason || "未知") + "）")).join("\n");
+					const failedLines = (r.failedItems || []).map((f) => f.label + "（" + f.why + "）").join("；");
 					try {
-						const n = recordSplits(made.map((m) => ({ sessionId: m.sessionId, dim: m.dim, label: m.label, name: m.name })));
-						setSplitInfo((v) => (v ? { ...v, recorded: n } : v));
-					} catch (e) { problems.push("分流索引写入失败：" + String((e && e.message) || e)); }
+						await appendDirectorMessage(nodeId, {
+							role: "assistant",
+							text: "【总监派发】来源：" + from + " · 场景：" + (r.kind === "novel" ? "小说（A1–A8 分工）" : "通用三段")
+								+ (r.name ? " · 作品：《" + r.name + "》" : "")
+								/* 🔴 第 19 批：复用/新建**必须进审计消息** —— 总监消息流是"谁派的"的
+								 *    唯一留痕处；漏了它，事后翻对话记录只会看到"派发 8 条"，
+								 *    读不出"这 8 条是接上一次的"还是"又建了 8 条"。 */
+								+ "\n复用 " + (r.reused || 0) + " 条 / 新建 " + (r.created == null ? r.made : r.created) + " 条"
+								+ (r.orphanForgotten ? "（并清理索引孤儿 " + r.orphanForgotten + " 条）" : "")
+								/* 🔴 第 23 批：把**语言整理**的结果写进审计消息 —— 用户原话
+								 *    「回复包括总监对语言的整理，对于文字的描述」。没有这一行，
+								 *    用户无法知道"总监到底读懂了我的话没有"。 */
+								+ (r.organized ? "\n需求整理：要点 " + r.organized.lines + " 条"
+									+ (r.organized.noise ? " · 剔除噪声 " + r.organized.noise + " 行" : "")
+									+ (r.organized.dup ? " · 合并重复 " + r.organized.dup + " 行" : "") : "")
+								+ "\n" + lines
+								+ (failedLines ? "\n未建成：" + failedLines : "")
+								+ (r.attachFail ? "\n其中 " + r.attachFail + " 条已建出但未挂到工作区（宿主 workspace-attach-failed，分支仍可用）" : "")
+								+ "\n宿主确认已启动：" + r.confirmed + "/" + r.made
+								+ (r.unconfirmed ? "（" + r.unconfirmed + " 条投递后未在观察窗口内看到启动 —— 点「回收产出」复核，别默认它成了）" : "")
+								+ "\n下一步：点「回收产出」读各分支产出（状态来自宿主快照，正文来自各分支事件流）",
+							parsed: { kind: "director-dispatch", made: r.made, failed: r.failed, dims: r.dims, confirmed: r.confirmed }
+						});
+					} catch (e) { problems.push("落审计消息失败：" + String((e && e.message) || e)); }
+					/* 🔴 第 23 批（D10）：**消息写完之后才刷新** —— 刷出来的列表必定包含**本次**这条。
+					 *    顺序反了的表现与"没写消息"完全一样（都是"点完看不到"），但修法完全相反。 */
 					try { await refreshBranchTree(); }
 					catch (e) { problems.push("血缘刷新失败：" + String((e && e.message) || e)); }
 					try { await refresh(); }
 					catch (e) { problems.push("面板刷新失败：" + String((e && e.message) || e)); }
-					const lines = made.map((m) => "· " + m.label + (m.delivered ? "" : "（简报未送达：" + String(m.why || "未知") + "）")).join("\n");
-					try {
-						await appendDirectorMessage(nodeId, {
-							role: "assistant",
-							text: "【按维度分流】来源：" + from + " · 场景：" + (p.kind === "novel" ? "小说（A1–A8 分工）" : "通用三段")
-								+ "\n" + lines
-								+ (failed.length ? "\n未建成：" + failed.map((f) => f.label + "（" + f.why + "）").join("；") : "")
-							+ (attachFail ? "\n其中 " + attachFail + " 条已建出但未挂到工作区（宿主 workspace-attach-failed，分支仍可用）" : ""),
-							parsed: { kind: "split-branches", made: made.length, failed: failed.length, dims: made.map((m) => m.dim) }
-						});
-					} catch (e) { problems.push("落审计消息失败：" + String((e && e.message) || e)); }
 					if (problems.length) {
 						setSplitInfo((v) => (v ? { ...v, error: problems.join("；") } : v));
 						dshLog("split-partial", problems.join("；"));
 					}
-					dshLog("split", { made: made.length, failed: failed.length, sent, nodeFail, attachFail, via: made.length ? made[0].via : "", dims: made.map((m) => m.dim) });
-					say("已分流 " + made.length + "/" + p.dims.length + " 条"
-						+ (sent !== made.length ? "（简报送达 " + sent + " 条）" : "")
-						+ (nodeFail ? "（层级挂载失败 " + nodeFail + " 条）" : "")
-						+ (attachFail ? "（未挂到工作区 " + attachFail + " 条，分支已建出）" : "")
-						+ (failed.length ? " · 失败 " + failed.length + " 条：" + failed[0].why : "")
+					dshLog("dispatch", { made: r.made, failed: r.failed, confirmed: r.confirmed, unconfirmed: r.unconfirmed, dims: r.dims, kind: r.kind });
+					say("已派发 " + r.made + "/" + (r.made + r.failed) + " 条"
+						+ "（复用 " + (r.reused || 0) + " · 新建 " + (r.created == null ? r.made : r.created)
+						+ " · 宿主确认启动 " + r.confirmed + " 条）"
+						+ (r.orphanForgotten ? " · 清理索引孤儿 " + r.orphanForgotten + " 条" : "")
+						+ (r.failed ? " · 失败 " + r.failed + " 条：" + String((((r.failedItems || [])[0] || {}).why) || "") : "")
 						+ (problems.length ? " · ⚠ " + problems[0] : "")
-						+ " —— 打开分支导图可看到这 " + made.length + " 条分支");
+						+ " —— 打开分支导图可看到派发状态与产出");
+				}
+			
+				/* ══════════════════════════════════════════════════════════════════
+				 * 📥 回收产出（第 17 批需求「然后处理 / 产出回流 / 总监审核」）
+				 *
+				 * 🔴 为什么是**显式动作**、不自动跑：一次回收 = 每条分支一次 `history` RPC。
+				 *    自动跑会让每条消息都背上 N 倍负载，且失败时分不清是哪一次失败。
+				 * 🔴 状态与产出**分开报**（见 `store/dispatch-log.js` 头注释）：
+				 *    状态来自宿主快照（**可靠**，一条 RPC 全拿到），产出来自各分支事件流（**可能读不到**）。
+				 *    合成一个字段 ⇒ 界面只能二选一：把"读不到"显示成"没产出"，或反过来撒谎。
+				 * ══════════════════════════════════════════════════════════════════ */
+				async function collectOutputs() {
+					try {
+						const cr = await collectBranches({});
+						const items = dispatchLog.items || [];
+						const counts = cr.counts || {};
+						setCollectInfo({
+							at: cr.at, total: cr.total, read: cr.read, unread: cr.unread,
+							counts, verdict: verdictOf(counts)
+						});
+						/* 🔴 第 23 批（D10 同型缺陷）：审计消息**先写、再刷新**。
+						 *    旧顺序「refresh() → appendDirectorMessage()」= 刷新读库时消息还没写
+						 *    ⇒ 界面滞后一条（与派发那条同因）。 */
+						if (cr.ok) {
+							try {
+								await appendDirectorMessage(nodeId, {
+									role: "assistant",
+									text: digestMessage(items, counts),
+									parsed: { kind: "collect-branches", read: cr.read, unread: cr.unread, counts }
+								});
+							} catch (e) { /* 落审计消息失败不改变回收结论 */ }
+						}
+						try { await refreshBranchTree(); } catch (e) { /* 血缘刷新失败不影响产出读数 */ }
+						try { await refresh(); } catch (e) { /* 面板刷新失败不影响产出读数 */ }
+						say(cr.ok
+							? "已回收 " + cr.read + "/" + cr.total + " 条分支产出（未读到 " + cr.unread + " 条） · " + verdictOf(counts)
+							: "回收未进行：" + String(cr.reason || "未知"));
+					} catch (e) {
+						const why = String((e && e.message) || e);
+						setCollectInfo({ at: Date.now(), total: 0, read: 0, unread: 0, counts: {}, verdict: "回收中断：" + why });
+						dshLog("collect-error", why);
+						say("回收中断：" + why);
+					}
 				}
 			
 				/* ══════════════════════════════════════════════════════════════════
@@ -27263,11 +31809,46 @@ window.__ModuleLoader__.load({
 					setClearArm(0);
 					const r = await clearDirectorMessages();
 					await refresh();
-					setClearInfo({ at: Date.now(), before: r.before, removed: r.removed, ok: r.ok, hostBoundary: r.hostBoundary, reason: r.reason });
-					dshLog("purge-messages", { before: r.before, removed: r.removed, ok: r.ok });
+					const bk = r.backup || {};
+					setClearInfo({
+						at: Date.now(), before: r.before, removed: r.removed, ok: r.ok,
+						hit: r.hit, noId: r.noId,
+						hostBoundary: r.hostBoundary, reason: r.reason,
+						backupCount: bk.count || 0, backupOk: bk.ok === true, backupReason: bk.reason || ""
+					});
+					dshLog("purge-messages", { before: r.before, removed: r.removed, ok: r.ok, backup: bk.count || 0, backupOk: bk.ok === true });
+					/* 🔴 结果句里**必须带退路**：清了多少 + 备份了几条 + 能不能恢复。
+					 *    只报"已清除 N 条"等于让用户以为数据永久没了（本轮用户看到"消息 0"
+					 *    第一反应就是"没持久化"—— 产品没告诉他退路在哪）。 */
 					say((r.ok ? "已清除总监对话消息 " + r.removed + " 条（原有 " + r.before + " 条）"
 						: "清除未完全成功：删除 " + r.removed + "/" + r.before + " 条" + (r.reason ? "（" + r.reason + "）" : ""))
+						+ (bk.count ? (bk.ok ? " · 已备份 " + bk.count + " 条，可点「↩ 恢复」还原" : " · ⚠ 备份未成功（" + (bk.reason || "未知") + "），本条不可恢复")
+							: " · 本次没有可备份的消息")
+						/* 🔴 第 24 批：**差额必须自己说出来**。真机出现过「备份 123 / 删除 121」，
+						 *    界面只显示"已清 121/121" ⇒ 用户（与闸门）都看不出另有 2 条被备份了
+						 *    （纪律 19：降级可以，无声不行）。多备份是**安全方向**，但必须可解释。 */
+						+ (bk.ok && bk.count > r.removed
+							? "（备份比删除多 " + (bk.count - r.removed) + " 条：清除期间有后台写入者，多备份不丢数据）" : "")
 						+ " · " + r.hostBoundary);
+				}
+			
+				/**
+				 * 从「清除」前的自动备份恢复（第 22 批 D4）。
+				 *
+				 * 🔴 为什么要有这个按钮：清空动作有两个触发者 —— 用户点按钮，**以及验收闸门**。
+				 *    闸门为测「清除」必须真清一次 ⇒ 每跑一轮验收就把用户消息清零一次。
+				 *    有了恢复，无论谁清的，用户都能一键取回（恢复按 `messageId` 幂等，
+				 *    重复点不会把 1 条变成 2 条 —— 这条必须有，否则"多点两次"就是新的数据事故）。
+				 */
+				async function restoreMessages() {
+					const r = await restoreDirectorMessages();
+					await refresh();
+					setRestoreInfo({ at: Date.now(), total: r.total, restored: r.restored, skipped: r.skipped, ok: r.ok, reason: r.reason });
+					dshLog("restore-messages", { total: r.total, restored: r.restored, skipped: r.skipped, ok: r.ok });
+					say(r.ok
+						? ("已从备份恢复 " + r.restored + " 条（备份共 " + r.total + " 条"
+							+ (r.skipped ? "，其中 " + r.skipped + " 条已在库中 ⇒ 跳过（不产生副本）" : "") + "）")
+						: ("恢复未完成：" + String(r.reason || "未知")));
 				}
 			
 				/** 控制台动作：有真接口的做真事，没有的**写明缺什么**（不做假按钮） */
@@ -27334,6 +31915,7 @@ window.__ModuleLoader__.load({
 						return;
 					}
 					if (key === "split") { await splitBranches(); return; }
+					if (key === "collect") { await collectOutputs(); return; }
 					say("未知动作：" + key);
 				}
 			
@@ -27366,6 +31948,30 @@ window.__ModuleLoader__.load({
 					return flat;
 				}
 			
+				/** 🔴 19 号文 **N2**：路由候选 = 层级树拍平 **∪ 维度分支节点**。
+				 *
+				 * 总监页与总监弹窗走**同一份实现**（`dimensionCandidates()` + `dimBranchContext()` 都是
+				 * 共用纯函数）—— 19 号文 N9 的教训正是"两处各写一遍"：`DIRECTOR_CHAIN` 与 `runDirector()`
+				 * 各自维护一份五步，行为不一致而**谁都不报错**。
+				 *
+				 * 🔴 同一节点**只以维度语义出现一次**：维度候选的 id 是**真节点 id**
+				 *    （`findNodeById()` 要能找得到、`scopeKeyOf()` 要能解析出目标会话）⇒
+				 *    必须把 `flat` 里的同 id 项摘掉。否则 `scoreNodes()` 对同一节点出两条候选，
+				 *    层级那条吃到「就近 +1」加权就把归属那条压掉 ⇒ **内容归属又输给位置**。
+				 */
+				function routeNodes(text, curId) {
+					const flat = flatNodes();
+					let dimNodes = [];
+					try {
+						const dc = dimBranchContext(tree, readSplitIndex(), { nodeId: curId, node: node });
+						dimNodes = dimensionCandidates(planSplit(text), {
+							currentNodeId: curId, currentDim: dc.currentDim, branchOf: dc.branchOf
+						});
+					} catch (e) { dimNodes = []; }
+					const dimIds = new Set(dimNodes.map((x) => String(x.id)));
+					return flat.filter((x) => !dimIds.has(String(x.id))).concat(dimNodes);
+				}
+			
 				/**
 				 * 确认路由去向。
 				 *
@@ -27388,11 +31994,20 @@ window.__ModuleLoader__.load({
 					const target = hit ? targetSession : flowSession;
 					const why = !cand ? "无候选（新建对话）"
 						: hit ? "命中会话"
-							: (routeResult.decision.destination === DESTINATION.TRANSFER ? "目标为项目级（无对话）" : "目标无对话");
+							: (routeResult.decision.destination === DESTINATION.LOCAL ? "归属命中当前维度（就地处理，无需目标会话）"
+								: routeResult.decision.destination === DESTINATION.TRANSFER ? "目标为项目级（无对话）" : "目标无对话");
 			
 					/* 投递落点 = 判定出来的目标会话；判据与总监弹窗**同一套**（同源：scopeKeyOf） */
-					let note = "（未投递，未静默改发当前会话）";
+					/* 🔴 N2：维度 key 从**决策**取（`suggestDestination()` 判出的那一个），兜底才看候选 ——
+					 *    决策是"判定的产物"，候选只是它的输入，取候选会失真。 */
+					const dimKey = String((routeResult.decision && routeResult.decision.dimKey) || (cand && cand.dimKey) || "");
+					/* 🔴 N2：`local`（就地）必须与"没判出来"**在文案上可分** ——
+					 *    两者都不投递，但用户接下来要做的事完全相反（前者就该在这里干、后者得补信息）。 */
+					let note = dest === DESTINATION.LOCAL
+						? "（归属命中**当前维度** ⇒ 就地处理，未跨对话投递）"
+						: "（未投递，未静默改发当前会话）";
 					let status = "routed";
+					let recvNote = "";
 					if (hit && (dest === DESTINATION.DIRECT || dest === DESTINATION.TRANSFER)) {
 						const d = await deliverToChat((routeResult.subtasks || []).map((s) => s.text).join("\n"), {
 							sessionId: targetSession, opener: openSession, autoSend: dest === DESTINATION.DIRECT
@@ -27400,6 +32015,29 @@ window.__ModuleLoader__.load({
 						note = d.mode === "sent" ? "（已发送到该对话）"
 							: d.ok ? "（已填入该对话输入框）" : "（投递失败：" + (d.reason || "未知") + "）";
 						status = d.ok ? "running" : "routed";
+						/* 🔴 **N2 判据 3 + F3「接收确认」**：**目标分支**必须留一条可追溯的接收凭证。
+						 *    投递是**宿主动作**（进的是原生对话），在总监消息流里**不留痕** ⇒
+						 *    用户切到目标分支后看不到"谁转来的 / 何时 / 指哪条源消息"。
+						 *    与总监弹窗的 `onConfirmRoute` 行为一致（同一套 `env` 契约、同一个 `childEnvelope`）。 */
+						if (targetNode && String(targetNode.id) !== String(nodeId)) {
+							try {
+								const src = srcEnvRef.current || null;
+								const recvId = makeId("dm", targetNode.id);
+								const recvEnv = childEnvelope((src && src.env) ? src.env : makeEnvelope({ from: nodeId, root: nodeId }, { self: nodeId }), {
+									id: recvId, to: targetNode.id, via: VIA.TRANSFER,
+									ref: (src && src.messageId) ? src.messageId : "",
+									cause: "由总监页按归属判定转派"
+								});
+								const w = await appendDirectorMessage(targetNode.id, {
+									messageId: recvId, kind: "接收 · 转派", role: "director",
+									text: "【总监接收】来自总监页的转派" + (dimKey ? "（维度 " + dimKey + "）" : "") + "："
+										+ String((src && src.fact && src.fact.reqText) || "") + "\n落地：" + note,
+									env: recvEnv,
+									meta: (src && src.fact) ? { fact: src.fact } : {}
+								});
+								recvNote = w ? " · 目标总监已留接收凭证" : " · ⚠️ 接收凭证写入失败";
+							} catch (e) { recvNote = " · ⚠️ 接收凭证未写入（" + String((e && e.message) || e) + "）"; }
+						}
 					}
 					if (latest) {
 						flowStore.move(latest.flowId, DIM.CHAT, "确认去向：" + DESTINATION_LABEL[dest] + " · " + why, { status, target });
@@ -27944,8 +32582,33 @@ window.__ModuleLoader__.load({
 									key: "sp", style: { ...S.muted }, "data-testid": "dp-flow-split",
 									"data-made": splitInfo.made, "data-failed": splitInfo.failed,
 									"data-sent": splitInfo.sent == null ? "" : splitInfo.sent,
+									/* 🔴 第 19 批：复用 / 新建 / 孤儿清理三条读数 ——
+									 *    闸门据此断言「同需求连派两次**会话数不增**」；
+									 *    用户据此看到"这次是接上一次的 8 条，不是又建了 8 条"。 */
+									"data-reused": splitInfo.reused == null ? "" : splitInfo.reused,
+									"data-created": splitInfo.created == null ? "" : splitInfo.created,
+									"data-orphan-forgotten": splitInfo.orphanForgotten == null ? "" : splitInfo.orphanForgotten,
+									/* 🔴 U10/P9 冷启动复用**必须可诊断**（纪律 19/60）：0 命中时靠这三个数分辨
+									 * 「宿主标题形态变了」（pool>0 且 missed>0）与「根本没读到标题」（pool=0）。 */
+									"data-title-hit": splitInfo.titleHit ? "1" : "0",
+									"data-title-hits": splitInfo.titleHits == null ? "" : splitInfo.titleHits,
+									"data-title-missed": (splitInfo.titleMissed || []).join(","),
+									"data-title-pool": splitInfo.titlePoolN == null ? "" : splitInfo.titlePoolN,
 									"data-dims": (splitInfo.dims || []).join(","),
-									"data-kind": splitInfo.kind || "",
+								"data-kind": splitInfo.kind || "",
+								/* 🔴 第 24 批：**分辨原因必须可断言**（第二十四轮 · 40 轮连跑驱动）。
+								 *    旧状态：`kind=noise` 只是"我没派"，**说不出为什么**；
+								 *    界面上有 `title`/toast，但**读数里没有** ⇒ 闸门只能断言"没派"，
+								 *    **断言不了"分辨对了没有"** —— 8 类噪声里哪怕 7 类被误判，
+								 *    只要都返回 `noise`，闸门照样全绿（纪律 23 的反例检查直接落空）。
+								 *    ⇒ 把原因落到 DOM，让「分辨原因与你投的东西对得上」成为可测事实。
+								 *    只在 noise/none 下给值（成功派发时 `note` 另有用途，不混用）。 */
+								"data-reason": (splitInfo.kind === "noise" || splitInfo.kind === "none")
+									? String(splitInfo.note || "") : "",
+								/* 🔴 第 23 批：整理读数（要点数 / 剔除的噪声行 / 合并的重复行） */
+									"data-org-lines": splitInfo.organized ? splitInfo.organized.lines : "",
+									"data-org-noise": splitInfo.organized ? splitInfo.organized.noise : "",
+									"data-org-dup": splitInfo.organized ? splitInfo.organized.dup : "",
 									/* 会话建出但未挂到工作区的条数（宿主 `workspace-attach-failed`）——
 									 * 它不是"失败"（分支确实存在、简报照投），但必须**可断言**，
 									 * 否则"完全成功"与"建出但没挂工作区"在界面上长得一样。 */
@@ -27954,9 +32617,32 @@ window.__ModuleLoader__.load({
 									/* 失败必须**可读**：本轮真机第一次跑就是"建了 8 条但读数没出现"，
 									 * 界面上与"什么都没发生"完全一样。`data-error` 让这种状态可断言。 */
 									"data-error": splitInfo.error || "",
-									title: "最近一次分流：" + (splitInfo.error ? "⚠ " + splitInfo.error
-										: (splitInfo.note || ((splitInfo.dims || []).join(" / ") || "（无维度）")))
-								}, splitInfo.error ? "🌿 分流中断" : ("🌿 分流 " + splitInfo.made + (splitInfo.failed ? " · 失败 " + splitInfo.failed : ""))) : null,
+									/* 第 17 批：**宿主确认**条数（投递 ≠ 启动）。
+									 * 🔴 这两个字段存在的理由就是纪律 30：`sent:8` 看着像成功，
+									 *    但没有任何读数说明"分支真的跑起来了"。 */
+									"data-confirmed": splitInfo.confirmed == null ? "" : splitInfo.confirmed,
+									"data-unconfirmed": splitInfo.unconfirmed == null ? "" : splitInfo.unconfirmed,
+									title: "最近一次派发：" + (splitInfo.error ? "⚠ " + splitInfo.error
+										: (splitInfo.reuseNote || splitInfo.note || ((splitInfo.dims || []).join(" / ") || "（无维度）")))
+								}, splitInfo.error ? "🌿 派发中断"
+									: (splitInfo.made === 0 && (splitInfo.kind === "noise" || splitInfo.kind === "none"))
+										? (splitInfo.kind === "noise" ? "🚫 无意义输入 · 未派发" : "🚫 未识别到意图 · 未派发")
+										: ("🌿 派发 " + splitInfo.made
+											+ (splitInfo.reused ? " · 复用 " + splitInfo.reused : "")
+											+ (splitInfo.created ? " · 新建 " + splitInfo.created : "")
+											+ (splitInfo.failed ? " · 失败 " + splitInfo.failed : ""))) : null,
+								/* 回收读数（第 17 批）：`data-read` / `data-unread` 是**两个不同的数** ——
+								 * 合并成一个 "已回收 N 条"会让"8 条里只读到 3 条"看起来像"8 条都读到了"。 */
+								collectInfo ? h("span", {
+									key: "cp", style: { ...S.muted }, "data-testid": "dp-flow-collect",
+									"data-total": collectInfo.total, "data-read": collectInfo.read, "data-unread": collectInfo.unread,
+									"data-done": (collectInfo.counts || {}).done == null ? 0 : collectInfo.counts.done,
+									"data-running": (collectInfo.counts || {}).running == null ? 0 : collectInfo.counts.running,
+									"data-say": (collectInfo.counts || {}).say == null ? 0 : collectInfo.counts.say,
+									"data-verdict": collectInfo.verdict || "",
+									title: "最近一次回收：" + (collectInfo.verdict || "")
+								}, "📥 回收 " + collectInfo.read + "/" + collectInfo.total
+									+ (collectInfo.unread ? " · 未读到 " + collectInfo.unread : "")) : null,
 								/* 清除对话消息（第 16 批需求 3）：二次确认 + 结果读数。
 								 * `data-armed` 让闸门能**断言撤防真的发生了**（纪律：开合型控件必须当场还原）。 */
 								h("button", {
@@ -27972,14 +32658,102 @@ window.__ModuleLoader__.load({
 									onClick: purgeMessages
 								}, clearArm ? "⚠ 确认清除？" : "🧹 清除消息"),
 								clearInfo ? h("span", {
-									key: "cr", style: { ...S.muted }, "data-testid": "dp-maint-result",
+									key: "cr", style: { ...S.muted }, 						"data-testid": "dp-maint-result",
 									"data-before": clearInfo.before, "data-removed": clearInfo.removed,
-									"data-ok": clearInfo.ok ? "1" : "0", title: clearInfo.hostBoundary
+									/* 🔴 第 24 批：`before`(全表) / `hit`(纳入清除) / `noId`(无主键跳过) 三个口径分开暴露，
+									 *    否则"备份 123 条、删了 121 条"这种差额**无从归因**（纪律 19）。 */
+									"data-hit": clearInfo.hit == null ? "" : clearInfo.hit,
+									"data-noid": clearInfo.noId == null ? "" : clearInfo.noId,
+									"data-ok": clearInfo.ok ? "1" : "0",
+									/* 差额写进 `title` ⇒ 闸门可断言「不许无声」（NS-6l3） */
+									title: clearInfo.hostBoundary + ((clearInfo.backupCount || 0) > (clearInfo.removed || 0)
+										? "（备份比删除多 " + (clearInfo.backupCount - clearInfo.removed) + " 条：清除期间有后台写入者，多备份不丢数据）" : ""),
+									/* 第 22 批只增不改：把"这次清除有没有留下退路"变成可断言读数 */
+									"data-backup-count": clearInfo.backupCount || 0,
+									"data-backup-ok": clearInfo.backupOk ? "1" : "0"
 								}, "已清 " + clearInfo.removed + "/" + clearInfo.before) : null,
+								/* 第 22 批「退路」按钮 —— 清除的第二个触发者是**验收闸门**（为测清除必须真清），
+								 * 故"清完还能不能拿回来"必须是产品自己保证的事，不能靠用户手快。 */
+								h("button", {
+									key: "rs",
+									style: {
+										...S.btn, height: 18, padding: "0 7px", fontSize: "calc(10.5px * var(--dp-font,1))",
+										borderColor: (bakInfo && bakInfo.count) ? "rgba(63,185,80,.6)" : "rgba(150,150,150,.35)",
+										color: (bakInfo && bakInfo.count) ? "#3fb950" : undefined
+									},
+									"data-testid": "dp-maint-restore",
+									"data-has-backup": (bakInfo && bakInfo.count) ? "1" : "0",
+									"data-backup-count": (bakInfo && bakInfo.count) || 0,
+									title: (bakInfo && bakInfo.count)
+										? ("从「清除」前自动落的备份恢复 " + bakInfo.count + " 条（备份于 "
+											+ new Date(bakInfo.at).toLocaleString() + "）· 按 messageId 幂等，可重复点")
+										: "当前没有可恢复的备份（每次「清除」前会自动备份一次）",
+									onClick: restoreMessages
+								}, "↩ 恢复" + ((bakInfo && bakInfo.count) ? " " + bakInfo.count : "")),
+								restoreInfo ? h("span", {
+									key: "rr", style: { ...S.muted }, "data-testid": "dp-restore-result",
+									"data-restored": restoreInfo.restored, "data-total": restoreInfo.total,
+									"data-skipped": restoreInfo.skipped, "data-ok": restoreInfo.ok ? "1" : "0",
+									title: restoreInfo.reason || ""
+								}, "已恢复 " + restoreInfo.restored + "/" + restoreInfo.total) : null,
 								h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.toggleOverlay("mindmap") }, "🧠 打开分支导图"),
 								h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.toggleOverlay("design") }, "🖌 打开设计图"),
 								h("button", { key: "s", style: S.btn, "data-testid": "dp-sync", onClick: () => { refresh(); refreshBranchTree(); say("已刷新数据"); } }, "↻ 同步")
-							])
+							]),
+							/* ════════════════════════════════════════════════════════════
+							 * 🔴 19 号文 **N8**（人可感知验收层 · `T-PLUG-047`）：**常驻读数**
+							 *
+							 *   用户原话「闸门全绿，但我看不出流程通了」—— 缺的就是这一行。
+							 *   格式（§4 N8 判据 1 原文）：
+							 *     现存会话 N 条（归档 M）｜本轮 复用 R · 新建 C ｜ 归属 <维度> · 置信 x.xx ｜ 通道 local/transfer
+							 *
+							 *   🔴 三条纪律都落在这里：
+							 *     ① **每格都有数据源**，不写「暂无」这类占位：
+							 *        N ← **分支树** `rows.length`（= `getBranchSnapshot().tree.rows`，
+							 *            **同一份对象** ⇒ 对账可双向，纪律 78）
+							 *            ⚠️ **不是** `loadTree()` 那棵层级树 —— 两者都叫 tree 但**不同源**
+							 *            （第 25 批踩过：接到层级树 ⇒ 读数恒空，纪律 27）
+							 *        M ← `archivedSessionIds()`（`null` ⇒ 显 `—`，**不是 0**）
+							 *        R/C ← `splitInfo`（派发读数，与 `dp-flow-split` 同源）
+							 *        归属/置信 ← `attributionSummary(splitInfo.attribution)`（与判定同源）
+							 *        通道 ← `routeResult.decision.destination`（`local` / `transfer` 原值）
+							 *     ② **「还没发生」≠「发生了但是 0」**：未派发 / 未路由时显 `—`
+							 *        （把"没派过"显示成"新建 0 条"会让用户以为派过了，纪律 58）。
+							 *     ③ **常驻**：与 `dp-flow-split`/`dp-flow-collect` 不同，本行**永远渲染**
+							 *        —— 那两块只在动作发生后出现，"进门第一眼要能看到现状"是它的职责。
+							 * ════════════════════════════════════════════════════════════ */
+							h("div", {
+								key: "lr", "data-testid": "dp-live-readout",
+								style: { ...S.muted, marginTop: 3, fontSize: "calc(10.5px * var(--dp-font,1))", lineHeight: 1.6 },
+								/* 🔴 「树还没建起来」≠「0 条」（纪律 60）。第 25 批真机实测两轮：
+								 *    ① 分支树未建立时渲染成「现存会话 **0** 条」，而宿主实际有活会话
+								 *       —— 用户照这个数判断"是不是被清空了"（最坏的一类假绿）；
+								 *    ② 改用 `""` 后**又**踩到第二层：取数接到了**层级树** `tree`（见上方
+								 *       `liveRows` 注释）⇒ `data-alive` **恒为空**、文案**恒显示**
+								 *       「分支树未建立」，而同一刻 `getBranchSnapshot()` 有 170 行。
+								 *    ⇒ 取数只认 `liveRows`（分支树 rows 的三态：`null` / `[]` / 非空），
+								 *      三态可分：`null` ⇒ `""` + 写明原因；`[]` ⇒ **显数字 `0`**。 */
+								"data-alive": liveRows ? String(liveRows.length) : "",
+								"data-archived": archivedN == null ? "" : String(archivedN),
+								"data-reused": (splitInfo && splitInfo.reused != null) ? String(splitInfo.reused) : "",
+								"data-created": (splitInfo && splitInfo.created != null) ? String(splitInfo.created) : "",
+								"data-attr": (splitInfo && splitInfo.attribution)
+									? String((splitInfo.attribution.dims || []).map((d) => d.key).join(",")) : "",
+								"data-conf": (splitInfo && splitInfo.attribution)
+									? Number(splitInfo.attribution.confidence || 0).toFixed(2) : "",
+								"data-channel": routeResult ? String(routeResult.decision.destination || "") : "",
+								title: "常驻读数 · 每一格的来源：存活会话=**分支树** rows（`getBranchSnapshot().tree.rows`，"
+									+ "不是层级树的 childNodes）；归档=宿主归档集；复用/新建=最近一次派发；"
+									+ "归属/置信=最近一次归属判定；通道=最近一次路由决策（local 就地 / transfer 转交）"
+							}, [
+								liveRows
+									? "现存会话 " + liveRows.length + " 条（归档 " + (archivedN == null ? "—" : archivedN) + "）"
+									: "现存会话 —（" + (archivedN == null ? "宿主归档集也读不到" : "分支树未建立") + " ｜ 归档 " + archivedN + "）",
+								"｜本轮 复用 " + (splitInfo ? (splitInfo.reused || 0) : "—") + " · 新建 " + (splitInfo ? (splitInfo.created || 0) : "—"),
+								"｜" + (splitInfo && splitInfo.attribution ? attributionSummary(splitInfo.attribution)
+									: (splitInfo && splitInfo.kind === "noise" ? "归属：噪声 ⇒ 未建分支" : "归属 — · 置信 —")),
+								"｜通道 " + (routeResult ? String(routeResult.decision.destination) : "—")
+							].join(" "))
 						]),
 			
 						/* ── R2 项目总览（定位 / 目标 / 当前阶段 + 四指标卡 + 库计数） ──
@@ -28450,7 +33224,9 @@ window.__ModuleLoader__.load({
 				{ key: "close", icon: "🔚", label: "回结", tone: "warn" },
 				{ key: "review", icon: "🎯", label: "审核", tone: "accent2" },
 				{ key: "next", icon: "⏭", label: "继续", tone: "" },
-				{ key: "split", icon: "🌿", label: "分流", tone: "accent2" }
+				{ key: "split", icon: "🌿", label: "派发", tone: "accent2" },
+				/* 第 17 批：回收产出。**与「派发」成对** —— 没有这一步，8 条分支干完什么都没人知道。 */
+				{ key: "collect", icon: "📥", label: "回收", tone: "accent2" }
 			]);
 			
 			/** R2.5 八动作的说明（title 用；写明"能做什么 / 不能做时缺什么"） */
@@ -28462,7 +33238,8 @@ window.__ModuleLoader__.load({
 				close: "回结：把该会话最新流转标记为「已收口」",
 				review: "审核：对抓到的真实文本跑六维规则引擎（空文本会如实报 ❌）",
 				next: "继续：把该会话最新流转送回「对话」维度继续执行",
-				split: "分流：读需求（原生输入框 → 兜底总监消息末条）→ 按维度各建一条**独立**分支并投简报（小说走 A1–A8；建成条数与失败原因都会如实显示）"
+				split: "派发：读需求（原生输入框 → 兜底总监消息末条）→ 总监按职能各建一条**独立**分支并投简报（小说走 A1–A8）；投递后**等宿主确认真的启动**，条数 / 通道 / 失败原因 / 未确认条数都会如实显示",
+				collect: "回收：逐个读各分支的事件流 → 拿到产出摘要与状态 → 总裁定 + 下一步建议（状态来自宿主快照，可能读不到正文的条目会写明原因）"
 			});
 			
 			function buildOptions(tree) {
@@ -29179,7 +33956,7 @@ window.__ModuleLoader__.load({
 			 * 职责：插件浏览器侧入口（批次 1 已落地）
 			 * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
 			 * 上游：（无：插件入口层）
-			 * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
+			 * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 十（7 个内核 API 逐模块 try/catch 挂载）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -29284,6 +34061,9 @@ window.__ModuleLoader__.load({
 			// ── 批次 8 总监逻辑完善：§3.1 五项职责 + §3.2 继承制 + §1.2 五步执行 ──
 			const { installDutyApi, resolveDuties, submitUp } = __m("store/duty-config.js");
 			const { installDirectorRunApi } = __m("logic/director-run.js");
+			const { installDispatchApi } = __m("logic/director-dispatch.js");
+			/* 第 19 批：「每个会话都有自己的总监 + 自己的会话总结文档」⇒ 逐会话档案 */
+			const { installDossierApi } = __m("store/session-dossier.js");
 			const { DirectorWorkbench } = __m("components/DirectorWorkbench.js");
 			// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
 			const { installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME } = __m("store/plugin-db.js");
@@ -29293,7 +34073,7 @@ window.__ModuleLoader__.load({
 			const { installNavHook, installNavHookApi } = __m("bridge/nav-hook.js");
 			// 宿主残留区块的显示层裁剪（2026-09-14 第 4 批 · 需求 ⑤「只在页面上不显示就行」）
 			const { installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, trimState } = __m("bridge/host-panel-trim.js");
-			const { installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID } = __m("bridge/host-director-column.js");
+			const { installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID } = __m("bridge/host-director-column.js");
 			const { installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID } = __m("bridge/host-composer-slot.js");
 			const { DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns } = __m("components/DirectorDialog.js");
 			/* 第 6 批需求 6：执行状态（技能 / 智能体调用）—— **唯一真相源**。
@@ -29320,6 +34100,8 @@ window.__ModuleLoader__.load({
 			const { PersonalizePanel, PERSONALIZE_PANEL_ID } = __m("components/PersonalizePanel.js");
 			const { installFlowApi, flowStore, DIM, DIM_LABEL } = __m("logic/flow.js");
 			const { installBranchFocusApi } = __m("logic/branch-focus.js");
+			const { installLineageApi } = __m("logic/lineage.js");
+			const { installDimBranchApi } = __m("logic/dim-branch.js");
 			const { installOverviewApi } = __m("logic/overview.js");
 			const { installOrchestrateApi } = __m("logic/orchestrate.js");
 			const { NodeDetailPanel, NODE_DETAIL_ID } = __m("components/NodeDetailPanel.js");
@@ -29457,6 +34239,19 @@ window.__ModuleLoader__.load({
 					window.__dshDuties = installDutyApi();
 					window.__dshDirectorRun = installDirectorRunApi();
 			
+					// ── 第 17 批「总监枢纽闭环」──
+					//    window.__dshDispatchLog 派发台账（派给谁 / 走哪条通道 / 现在什么状态 / 产出了什么）
+					//    🔴 闸门要断言"台账 8 条且每条都有 sessionId"，就需要一个**活对象**出口；
+					//       只靠 DOM 读数间接推断正是第 16 批漏掉的视角（made=8 ≠ 真建了 8 条）。
+					installDispatchApi();
+			
+					// ── 第 19 批「会话复用 + 每会话档案」──
+					//    window.__dshDossier 逐会话档案（自己的总监 + 自己的总结文档）
+					//    🔴 与 split-index 分工：split 管**显示标签**（覆盖导图标题），
+					//       dossier 管**会话自己的档案**（角色 + 总结）。两者以 sessionId 关联，
+					//       档案不重复存 label（同一事实只留一份真相源）。
+					window.__dshDossier = installDossierApi();
+			
 					// ── 批次 9 弹窗式总监架构（T-PLUG-015）──
 					//    要求 1 数据元独立  window.__dshPluginDb   → dsh-director-plugin-db@v1（6 store）
 					//    要求 8 智能路由    window.__dshRouter     → route / confirmRoute（五步，不静默分发）
@@ -29503,6 +34298,12 @@ window.__ModuleLoader__.load({
 					//    需求原文：「我点击对话那么只默认显示这个分支的链路」「思维导图最上面加一个弹窗，
 					//              分为左右列」「打分起码三轮多方位评估」「打分标准也需要进行审核」
 					window.__dshBranchFocus = installBranchFocusApi();
+					/* 🔴 19 号文 N2/N3（2026-09-17）：真机对账用的两个契约 —— 让闸门**直接读**映射与血缘，
+					 *    不必从界面上反推（反推得到的不是判据，是猜测）。
+					 *      `__dshLineage`   消息信封 / 血缘分组 / 上下游摘要（纯函数）
+					 *      `__dshDimBranch` 维度 ↔ 分支节点的翻译（唯一实现，总监页与弹窗共用） */
+					window.__dshLineage = installLineageApi();
+					window.__dshDimBranch = installDimBranchApi();
 					window.__dshOverview = installOverviewApi();
 					window.__dshOrchestrate = installOrchestrateApi();
 					// ── 批次 16 多智能体编排内核（2026-09-14 架构补全）──
@@ -29944,7 +34745,7 @@ window.__ModuleLoader__.load({
 				return out;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 startConversationMirror, syncConversationMirror, conversationMirror, // 第 6 批需求 7 对话镜像 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns, // 要求 6/10/11 弹窗本体 // ── 批次 10 设计图工作室 + 分支导图 + 总监 tab（T-PLUG-018）── installDesignApi, DESIGN_KEY,                       // 设计图数据层 DesignStudio, STUDIO_ID,                            // 设计图全屏工作室 installBranchTreeApi, MindMap, MINDMAP_ID,          // 分支血缘导图 FloatDock, FLOATDOCK_ID,                            // 浮动按钮组（设计图 / 导图 / 总监） DirectorPage, DIRECTOR_PAGE_ID,                     // 总监页（R1–R8） // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）── installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID, installFlowApi, flowStore, DIM, DIM_LABEL, NodeDetailPanel, NODE_DETAIL_ID, installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册 // ── 批次 12 · 第 4 批界面调整（2026-09-14）── installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, // 宿主残留区块显示层裁剪 // ── 批次 12 · 第 6 批界面调整（2026-09-14）── installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_BAR_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序 // ── 第 6 批需求 7/9：宿主底部注入条（单按钮视图切换 + 执行/登记流转搬迁）── installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID, // ── 第 6 批需求 6：执行状态（技能 / 智能体调用）数据层 ── installAgentRuns, AGENT_RUNS_KEY, RUN_STATUS, agentRunsState, recordAgentRun, beginChain, fillChainSteps, endChain, listChains, latestChain, activeChain, // ── 第 6 批需求 8：标准模型选择席位 ── installModelSeat, MODEL_SEAT_SLOT, ModelSeat, // ── 第 6 批「完善技能和智能体的指向」── SKILL_CATALOG, CHAIN_STEPS, CHAIN_TARGETS, auditCatalog, installCatalogApi }; 
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 startConversationMirror, syncConversationMirror, conversationMirror, // 第 6 批需求 7 对话镜像 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns, // 要求 6/10/11 弹窗本体 // ── 批次 10 设计图工作室 + 分支导图 + 总监 tab（T-PLUG-018）── installDesignApi, DESIGN_KEY,                       // 设计图数据层 DesignStudio, STUDIO_ID,                            // 设计图全屏工作室 installBranchTreeApi, MindMap, MINDMAP_ID,          // 分支血缘导图 FloatDock, FLOATDOCK_ID,                            // 浮动按钮组（设计图 / 导图 / 总监） DirectorPage, DIRECTOR_PAGE_ID,                     // 总监页（R1–R8） // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）── installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID, installFlowApi, flowStore, DIM, DIM_LABEL, NodeDetailPanel, NODE_DETAIL_ID, installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册 // ── 批次 12 · 第 4 批界面调整（2026-09-14）── installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, // 宿主残留区块显示层裁剪 // ── 批次 12 · 第 6 批界面调整（2026-09-14）── installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序 // ── 第 6 批需求 7/9：宿主底部注入条（单按钮视图切换 + 执行/登记流转搬迁）── installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID, // ── 第 6 批需求 6：执行状态（技能 / 智能体调用）数据层 ── installAgentRuns, AGENT_RUNS_KEY, RUN_STATUS, agentRunsState, recordAgentRun, beginChain, fillChainSteps, endChain, listChains, latestChain, activeChain, // ── 第 6 批需求 8：标准模型选择席位 ── installModelSeat, MODEL_SEAT_SLOT, ModelSeat, // ── 第 6 批「完善技能和智能体的指向」── SKILL_CATALOG, CHAIN_STEPS, CHAIN_TARGETS, auditCatalog, installCatalogApi }; 
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
 			exports.directorLayoutStore = directorLayoutStore;
@@ -30041,7 +34842,6 @@ window.__ModuleLoader__.load({
 			exports.hostColumnState = hostColumnState;
 			exports.MIN_BTN_ID = MIN_BTN_ID;
 			exports.COL_RESIZER_ID = COL_RESIZER_ID;
-			exports.MEM_BAR_ID = MEM_BAR_ID;
 			exports.MEM_HEIGHT_HANDLE_ID = MEM_HEIGHT_HANDLE_ID;
 			exports.installHostComposerSlot = installHostComposerSlot;
 			exports.installHostComposerSlotApi = installHostComposerSlotApi;
@@ -30110,3 +34910,6 @@ window.__ModuleLoader__.load({
 		return module.exports;
 	}
 });
+
+/* dsh-build-stamp: 0b9373e030dcaa04 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="0b9373e030dcaa04";}catch(e){}})();

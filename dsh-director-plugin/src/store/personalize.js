@@ -53,8 +53,22 @@ export const P_DEFAULTS = Object.freeze({
 	motion: true,
 	edge: "curve",
 	minimap: true,
-	legend: true
+	legend: true,
+	/* ── 总监弹窗背景（2026-09-17 新增 · 见下方 P_DIALOG_BG）──
+	 * 需求原文（用户）：「左侧点击总监按钮，总监的弹窗，背景是黑色的。调整下，按照人眼最舒服
+	 *   温馨的风格调整背景和文字的颜色；同时增加自定义背景颜色的选项，可以上传图片作为背景；
+	 *   默认的话可以跟随软件的背景主题」
+	 * ⚠️ 默认档**刻意**不取 follow：宿主当前是深色主题，follow 出来的仍是黑底 ——
+	 *    那等于「用户抱怨什么就保持什么」。「跟随主题」作为**并列可选项**保留（一键可切）。
+	 */
+	dialogBg: "warm",
+	dialogBgColor: "#f7f2e8",
+	dialogBgImage: "",
+	dialogBgDim: 0.72
 });
+
+/** 背景图上限（字符数，≈1.95 MB 二进制）。超限一律丢弃 —— 见 normalizePersonalize。 */
+export const P_IMG_MAX = 2600000;
 
 /** 主色（4 档，全部取宿主暗色系里"能当强调色"的） */
 export const P_ACCENTS = Object.freeze([
@@ -107,6 +121,26 @@ export const P_EDGE = Object.freeze([
 	{ key: "elbow", label: "折线", desc: "直角折线，更工程化" }
 ]);
 
+/**
+ * 总监弹窗底色方案（四档）。
+ *
+ * 🔴 这一档存在的理由：弹窗是**浮层**，按 V16 的设计口径浮层统一走 `:root` 的深色底，
+ *    于是「点左侧总监按钮 → 一片黑」。用户原话就是「背景是黑色的」。
+ *    浮层不能直接抄总监页那套宿主令牌桥接（宿主深色 ⇒ 还是黑），所以给它**自己的一档底色**。
+ *
+ * 四档的差别是"什么时候人眼最舒服"，不是"哪个好看"：
+ *   · follow —— 严格跟随 Harness 主题令牌：宿主换明/暗，弹窗**实时**跟着变（无自定义时最省心）
+ *   · warm   —— 暖白米色：亮环境 / 白天长时间读文字最舒服（默认）
+ *   · dim    —— 暖夜暖褐：暗环境护眼。**刻意不是纯黑** —— #000 上的白字有光晕感，久看发涩
+ *   · custom —— 自选底色；文字深浅由底色**亮度**自动决定（见 relLuma / dialogSkinFor）
+ */
+export const P_DIALOG_BG = Object.freeze([
+	{ key: "follow", label: "跟随主题", desc: "严格跟随 Harness 主题令牌：宿主浅色则浅、宿主深色则深" },
+	{ key: "warm", label: "暖白", desc: "米白暖调 · 亮环境与白天最舒适（默认）" },
+	{ key: "dim", label: "暖夜", desc: "暖褐深色 · 夜间护眼，不刺眼也不是纯黑" },
+	{ key: "custom", label: "自定义", desc: "自选底色；文字按底色亮度自动配深浅" }
+]);
+
 /** 十六进制 → rgba（解析失败回落主色蓝，绝不产出 NaN） */
 export function pHexSoft(hex, alpha) {
 	try {
@@ -115,6 +149,276 @@ export function pHexSoft(hex, alpha) {
 		const n = parseInt(m[1], 16);
 		return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + alpha + ")";
 	} catch (e) { return "rgba(47,111,235," + alpha + ")"; }
+}
+
+/** 十六进制 → [r,g,b]；解析失败返回 null（调用方自行回落，绝不产出 NaN） */
+export function hexToRgb(hex) {
+	try {
+		const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+		if (!m) return null;
+		const n = parseInt(m[1], 16);
+		return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+	} catch (e) { return null; }
+}
+
+/**
+ * 相对亮度（WCAG 2.1 定义，0 = 全黑 / 1 = 全白）。
+ *
+ * 🔴 判断"这个底色上该写深字还是浅字"**只能**用它。
+ *    不能用 `(r+g+b)/3` 这类算术均值：人眼对绿最敏感、对蓝最不敏感
+ *    （系数 0.7152 / 0.0722），算术均值会把深蓝 #1d2739（均值 39）和
+ *    深绿 #27391d（均值 39）判成同一亮度，而后者看起来亮得多。
+ */
+export function relLuma(hex) {
+	const c = hexToRgb(hex);
+	if (!c) return 0;
+	const f = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+	return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+}
+
+/** 两色对比度（WCAG 2.1，1–21）。把"文字够不够清楚"从主观判断变成**可断言的数**。 */
+export function contrastRatio(a, b) {
+	const la = relLuma(a), lb = relLuma(b);
+	const hi = Math.max(la, lb), lo = Math.min(la, lb);
+	return (hi + 0.05) / (lo + 0.05);
+}
+
+/** 该底色算"浅底"吗（阈值 0.42）。只用于**表面/强调色**分档；正文文字方向走对比度择优。 */
+export function isLightHex(hex) { return relLuma(hex) > 0.42; }
+
+/**
+ * 把 `col` 朝 `pole` 推，直到它与 `base` 的对比度**刚好达到** `target`（二分 16 次）。
+ *
+ * 为什么需要它（真机实测暴露的算法缺陷，2026-09-17）：
+ *   自定义底色的文字色原先用**固定比例**混色（`t2 = mixHex(base, ink, 0.72)`）。
+ *   固定比例在**中间色**上必然翻车 —— 实测底色 `#7a7262`（luma 0.17）时
+ *   t2 落到 `rgb(218,216,211)`，对比度只有 **3.34:1**，正文不达标（需 4.5）。
+ *   根因不是"选错了边"（`ink` 方向已按对比度择优），而是**混合强度是个常数、
+ *   而目标是个不等式**。⇒ 改成解这个方程：按目标对比度反解混合比例。
+ *
+ * 边界：连 `pole` 本身都达不到 `target`（极浅/极深两侧夹逼的色域极值）时
+ *   返回 `pole` —— **尽力而为，且绝不产出 NaN / 无限循环**。
+ */
+export function clampToContrast(col, base, pole, target) {
+	if (contrastRatio(col, base) >= target) return col;
+	if (contrastRatio(pole, base) < target) return pole;
+	let lo = 0, hi = 1;
+	for (let i = 0; i < 16; i++) {
+		const mid = (lo + hi) / 2;
+		if (contrastRatio(mixHex(col, pole, mid), base) >= target) hi = mid; else lo = mid;
+	}
+	return mixHex(col, pole, hi);
+}
+
+/**
+ * 挑一个"能真正解决问题"的极端色（黑白二选一）作为钳制方向。
+ *
+ * 🔴 这里踩过一次（2026-09-17 自测抓出）：第一版按"**离原色更远**"选极点，
+ *   结果在浅紫底 `#c8a2c8` 上给白色强调色选了 `#ffffff` ——
+ *   白离原色（深蓝）确实更远，**但白对浅紫底的对比度只有 2.22**，
+ *   钳制完全失效（`clampToContrast` 发现极点也达不到目标 ⇒ 原样返回极点）。
+ *   ⇒ 正确口径：极点必须**对底色**有效（`contrastRatio(pole, base) >= target`）；
+ *     两个都有效时再按"离原色远"选，以尽量少改色相。
+ */
+function poleAwayFrom(col, base, target) {
+	const away = contrastRatio(col, "#000000") >= contrastRatio(col, "#ffffff") ? "#000000" : "#ffffff";
+	const other = away === "#000000" ? "#ffffff" : "#000000";
+	if (contrastRatio(away, base) >= target) return away;
+	if (contrastRatio(other, base) >= target) return other;
+	return contrastRatio(away, base) >= contrastRatio(other, base) ? away : other;
+}
+
+/** 两色线性插值（t=0 取 a，t=1 取 b）。任一解析失败原样返回 a，**不产出 NaN**。 */
+export function mixHex(a, b, t) {
+	const A = hexToRgb(a), B = hexToRgb(b);
+	if (!A || !B) return String(a || b || "#000000");
+	const k = Math.max(0, Math.min(1, Number(t) || 0));
+	const h = (v) => Math.round(v).toString(16).padStart(2, "0");
+	return "#" + h(A[0] + (B[0] - A[0]) * k) + h(A[1] + (B[1] - A[1]) * k) + h(A[2] + (B[2] - A[2]) * k);
+}
+
+/**
+ * 内置两套底色的完整皮肤（follow 档没有色值，故不在此表 —— 它一个变量都不产出）。
+ * 两个原则写死在数值里：
+ *   ① 正文字色**不用纯黑 / 纯白**：暖白底配 `#3a3228`（暖黑）而不是 `#000`，暖夜底配
+ *      `#f3eadd`（暖白）而不是 `#fff` —— 纯黑/纯白对比过刚，长文阅读发涩。
+ *   ② 强调色按底色亮度换一套：浅底上用深紫/深蓝（浅紫在米白上几乎看不见），
+ *      深底上用浅紫/浅蓝。状态色（成功/警告/危险）同理。
+ */
+const DLG_PRESETS = Object.freeze({
+	warm: {
+		bg: "#f7f2e8", bg1: "#fffdf8", bg2: "#efe7d8", line: "#ded2bd", lineSoft: "rgba(120,100,70,0.20)",
+		t1: "#3a3228", t2: "#5d5246", t3: "#8b7f6f",
+		ac: "#1f5fd0", ac2: "#6b3fc4", ok: "#1a7f37", warn: "#8a6100", bad: "#b42318"
+	},
+	dim: {
+		bg: "#262120", bg1: "#2f2825", bg2: "#3a312c", line: "#4d4139", lineSoft: "rgba(255,236,215,0.14)",
+		t1: "#f3eadd", t2: "#cfc1b1", t3: "#9e8f7d",
+		ac: "#9ec1ff", ac2: "#c4a4ff", ok: "#78d18a", warn: "#e5c06a", bad: "#ff9b93"
+	}
+});
+
+/** 自定义底色的强调/状态色（按亮度二选一，与内置两套同源） */
+const DLG_ACCENTS = Object.freeze({
+	light: { ac: "#1f5fd0", ac2: "#6b3fc4", ok: "#1a7f37", warn: "#8a6100", bad: "#b42318" },
+	dark: { ac: "#9ec1ff", ac2: "#c4a4ff", ok: "#78d18a", warn: "#e5c06a", bad: "#ff9b93" }
+});
+
+/**
+ * 设定 → 总监弹窗皮肤（**纯函数**）。
+ *
+ * 返回值约定：
+ *   · `mode === "follow"` ⇒ 除遮罩外**一个色值都不产出**（`bg` 为 undefined）。
+ *     这不是偷懒：follow 必须靠组件内联 fallback 直接读宿主令牌，才能"宿主换主题 ⇒ 弹窗
+ *     **实时**跟着换"。若在这里固化成色值写进 `:root`，既拿不到 body 上的 `--dsw-alias-*`
+ *     （var() 在定义处求值，见下方 pCssText 的长注释），又会在宿主换主题后停在旧值上。
+ *   · 其它档 ⇒ 给全套色值；`image` 非空时把「卡片/标题栏」换成同色半透明（不透明 = 照片被盖死）。
+ *
+ * @param {object} p 个性化设定
+ * @returns {{mode:string,image:string,dim:number,light:boolean,scrim:string,bg?:string,bg1?:string,bg2?:string,line?:string,lineSoft?:string,t1?:string,t2?:string,t3?:string,ac?:string,ac2?:string,ok?:string,warn?:string,bad?:string}}
+ */
+export function dialogSkinFor(p) {
+	const s = normalizePersonalize(p);
+	const img = s.dialogBgImage;
+	const dim = s.dialogBgDim;
+	if (s.dialogBg === "follow") {
+		/* 跟随主题：不产出色值。只有"跟随 + 图片"这一种组合需要遮罩 —— 照片亮度与宿主令牌无关，
+		 * 故用中性黑遮罩；文字仍走宿主令牌（深色宿主上是浅字，天然压得住）。 */
+		return { mode: "follow", image: img, dim: dim, light: false, scrim: img ? "rgba(0,0,0," + dim + ")" : "" };
+	}
+	const preset = s.dialogBg === "custom" ? null : DLG_PRESETS[s.dialogBg];
+	const base = preset ? preset.bg : s.dialogBgColor;
+	const light = isLightHex(base);
+	/* 两个方向**必须分开**（这是自定义底色最容易搞反的一处）：
+	 *   · 表面（bg1/bg2）永远往白推 —— 浅底上卡片比画布更白、深底上卡片比画布更亮，
+	 *     两边都是"抬起来"的效果；
+	 *   · 文字/描边往**文字色**一侧推 —— 浅底往黑（深字 + 深描边），深底往白。
+	 * 若共用一个方向，浅底会得到"比画布更黑的卡片"（压下去），层次整个反了。 */
+	const surfToward = "#ffffff";
+	/* 文字方向**不用"浅底/深底"二分，而是直接按对比度择优** ——
+	 * 二分在中间灰（例 #7a7262，luma 0.17）上会选错边：按 luma 判"深底 ⇒ 白字"，
+	 * 实测白字对比度 4.2 反而**低于**黑字。择优只多两次计算，却在整个色域上都不会选反。
+	 * （t1 的混合强度两侧不同：深底上白字要更实才压得住，浅底上黑字 0.80 已经足够。） */
+	const inkDark = mixHex(base, "#000000", 0.88);
+	const inkLight = mixHex(base, "#ffffff", 0.93);
+	const useDarkInk = contrastRatio(base, inkDark) >= contrastRatio(base, inkLight);
+	const ink = useDarkInk ? "#000000" : "#ffffff";
+	const inkPole = useDarkInk ? "#000000" : "#ffffff";
+	/** 强调/状态色钳制：朝"对底色真正有效"的极端色推到 3:1（非文本 UI 的 WCAG 门槛） */
+	const fixAcc = (c) => clampToContrast(c, base, poleAwayFrom(c, base, 3.0), 3.0);
+	const acc = light ? DLG_ACCENTS.light : DLG_ACCENTS.dark;
+	const skin = preset || {
+		bg: base,
+		bg1: mixHex(base, surfToward, light ? 0.62 : 0.09),
+		bg2: mixHex(base, surfToward, light ? 0.34 : 0.17),
+		line: mixHex(base, ink, light ? 0.28 : 0.22),
+		lineSoft: pHexSoft(useDarkInk ? "#000000" : "#ffffff", 0.10),
+		/* 🔴 文字/强调色一律**按目标对比度反解混合比例**，不拍固定常数 ——
+		 *   固定比例在中间色上必翻车（实测 `#7a7262` 的正文只有 3.34:1，不达 AA 4.5）。
+		 *   目标：正文 t1/t2 = 4.5:1；弱化文字 t3 = 3:1；强调/状态色 = 3:1。 */
+		t1: clampToContrast(useDarkInk ? inkDark : inkLight, base, inkPole, 4.5),
+		t2: clampToContrast(mixHex(base, ink, useDarkInk ? 0.62 : 0.72), base, inkPole, 4.5),
+		t3: clampToContrast(mixHex(base, ink, useDarkInk ? 0.44 : 0.52), base, inkPole, 3.0),
+		ac: fixAcc(acc.ac),
+		ac2: fixAcc(acc.ac2),
+		ok: fixAcc(acc.ok),
+		warn: fixAcc(acc.warn),
+		bad: fixAcc(acc.bad)
+	};
+	return {
+		mode: s.dialogBg, image: img, dim: dim, light: light,
+		scrim: img ? pHexSoft(base, dim) : "",
+		bg: skin.bg,
+		/* 有照片时卡片必须半透明，否则整张照片只在缝隙里露几条纹 = 白买了这张图。
+		 * 透明度取 0.88 / 0.74：既能看见照片，又保证文字对比度（配 dialogBgDim 遮罩）。 */
+		bg1: img ? pHexSoft(base, 0.88) : skin.bg1,
+		bg2: img ? pHexSoft(base, 0.74) : skin.bg2,
+		line: skin.line, lineSoft: skin.lineSoft,
+		t1: skin.t1, t2: skin.t2, t3: skin.t3,
+		ac: skin.ac, ac2: skin.ac2, ok: skin.ok, warn: skin.warn, bad: skin.bad
+	};
+}
+
+/** 弹窗皮肤的变量名全表（**清场用**：切回 follow 时必须逐条 remove，否则残留上一档的色值） */
+export const DIALOG_VAR_KEYS = Object.freeze([
+	"--dp-dlg-bg", "--dp-dlg-bg1", "--dp-dlg-bg2", "--dp-dlg-line", "--dp-dlg-line-soft",
+	"--dp-dlg-t1", "--dp-dlg-t2", "--dp-dlg-t3",
+	"--dp-dlg-ac", "--dp-dlg-ac2", "--dp-dlg-ok", "--dp-dlg-warn", "--dp-dlg-bad",
+	"--dp-dlg-scrim", "--dp-dlg-dim", "--dp-dlg-img"
+]);
+
+/**
+ * 设定 → 弹窗皮肤 CSS 变量表（**纯函数**）。
+ * follow 档返回 `{}`（一个变量都不产出）—— 组件的 `var(--dp-dlg-*, <宿主令牌>)` 于是整条
+ * 落到宿主令牌上，宿主换明暗主题时**无需重新 apply** 就跟着变。
+ * @param {object} p
+ * @returns {Record<string,string>}
+ */
+export function dialogVarsFor(p) {
+	const s = normalizePersonalize(p);
+	const k = dialogSkinFor(s);
+	const img = s.dialogBgImage;
+	if (k.bg === undefined) {
+		return img ? { "--dp-dlg-scrim": k.scrim, "--dp-dlg-dim": String(s.dialogBgDim) } : {};
+	}
+	const out = {
+		"--dp-dlg-bg": k.bg, "--dp-dlg-bg1": k.bg1, "--dp-dlg-bg2": k.bg2,
+		"--dp-dlg-line": k.line, "--dp-dlg-line-soft": k.lineSoft,
+		"--dp-dlg-t1": k.t1, "--dp-dlg-t2": k.t2, "--dp-dlg-t3": k.t3,
+		"--dp-dlg-ac": k.ac, "--dp-dlg-ac2": k.ac2, "--dp-dlg-ok": k.ok,
+		"--dp-dlg-warn": k.warn, "--dp-dlg-bad": k.bad,
+		"--dp-dlg-dim": String(s.dialogBgDim)
+	};
+	if (img) {
+		out["--dp-dlg-scrim"] = k.scrim;
+		out["--dp-dlg-img"] = 'url("' + img + '")';
+	}
+	return out;
+}
+/**
+ * 把用户选的图片文件读成"能直接写进 localStorage 的 dataURL"。
+ *
+ * 🔴 必须先压缩再存：手机直出 3–8 MB，base64 再涨 33% ⇒ 直接塞 localStorage 会**爆配额**，
+ *    而爆配额在 savePersonalize 里是被 catch 掉的静默失败 —— 用户以为换成功了，
+ *    下次打开还是旧图。规格：最长边 ≤ 1920px；JPEG 质量 0.82；仍超上限降到 0.6 再压一次。
+ * 任何一步失败（非图片 / 解码失败 / 无 DOM）一律 resolve("")，不抛。
+ * @param {File|Blob} file
+ * @returns {Promise<string>} dataURL，或 ""（失败）
+ */
+export function readImageAsDataUrl(file) {
+	return new Promise((resolve) => {
+		try {
+			if (typeof document === "undefined" || typeof FileReader === "undefined" || !file) { resolve(""); return; }
+			const fr = new FileReader();
+			fr.onerror = () => resolve("");
+			fr.onload = () => {
+				const raw = String(fr.result || "");
+				if (!/^data:image\//.test(raw)) { resolve(""); return; }
+				/* 小图（且已是 base64）直接用原图，避免多一次有损重编码 */
+				if (raw.length <= P_IMG_MAX && raw.indexOf(";base64,") > 0 && raw.length <= 700000) { resolve(raw); return; }
+				const img = new Image();
+				img.onerror = () => resolve("");
+				img.onload = () => {
+					try {
+						const maxEdge = 1920;
+						const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+						const w = Math.max(1, Math.round((img.width || 1) * scale));
+						const h = Math.max(1, Math.round((img.height || 1) * scale));
+						const cv = document.createElement("canvas");
+						cv.width = w; cv.height = h;
+						const cx = cv.getContext("2d");
+						if (!cx) { resolve(""); return; }
+						cx.drawImage(img, 0, 0, w, h);
+						let out = cv.toDataURL("image/jpeg", 0.82);
+						if (out.length > P_IMG_MAX) out = cv.toDataURL("image/jpeg", 0.6);
+						resolve(out.length > P_IMG_MAX ? "" : out);
+					} catch (e) { resolve(""); }
+				};
+				img.src = raw;
+			};
+			fr.readAsDataURL(file);
+		} catch (e) { resolve(""); }
+	});
 }
 
 /** 数值夹紧（防脏数据把界面搞崩） */
@@ -137,6 +441,15 @@ export function normalizePersonalize(raw) {
 		return keys.indexOf(v) >= 0 ? v : dflt;
 	};
 	const hexOk = (v) => /^#[0-9a-f]{6}$/i.test(String(v || ""));
+	/* 背景图只接受 **内联 dataURL**，且必须真的是图片类型、长度在上限内。
+	 * 🔴 为什么不接受 http(s) 链接或本地路径：这个值会被写进 `--dp-dlg-img: url(...)`。
+	 *    收外链 ⇒ 每次开弹窗都发一次外部请求（离线环境挂住、也泄露"我开了这个界面"）；
+	 *    收 file:// / 相对路径 ⇒ 在不同 origin 下静默 404，用户只看到"我设的图没了"。
+	 *    超长直接丢弃而不是截断：截断出来的 base64 不是合法图片，只会得到一个坏图标。 */
+	const imgOk = (v) => {
+		const s = String(v || "");
+		return s.length <= P_IMG_MAX && /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s);
+	};
 	return {
 		accent: hexOk(r.accent) ? String(r.accent).toLowerCase() : P_DEFAULTS.accent,
 		accent2: hexOk(r.accent2) ? String(r.accent2).toLowerCase() : P_DEFAULTS.accent2,
@@ -147,7 +460,11 @@ export function normalizePersonalize(raw) {
 		edge: pick(P_EDGE, r.edge, P_DEFAULTS.edge),
 		motion: r.motion === undefined ? P_DEFAULTS.motion : Boolean(r.motion),
 		minimap: r.minimap === undefined ? P_DEFAULTS.minimap : Boolean(r.minimap),
-		legend: r.legend === undefined ? P_DEFAULTS.legend : Boolean(r.legend)
+		legend: r.legend === undefined ? P_DEFAULTS.legend : Boolean(r.legend),
+		dialogBg: pick(P_DIALOG_BG, r.dialogBg, P_DEFAULTS.dialogBg),
+		dialogBgColor: hexOk(r.dialogBgColor) ? String(r.dialogBgColor).toLowerCase() : P_DEFAULTS.dialogBgColor,
+		dialogBgImage: imgOk(r.dialogBgImage) ? String(r.dialogBgImage) : P_DEFAULTS.dialogBgImage,
+		dialogBgDim: clampNum(r.dialogBgDim, 0, 0.95, P_DEFAULTS.dialogBgDim)
 	};
 }
 
@@ -254,6 +571,21 @@ export function pCssText() {
 	L.push('html[data-dp-texture="grid"] .dp-textured{background-image:linear-gradient(var(--dp-tex) 1px,transparent 1px),linear-gradient(90deg,var(--dp-tex) 1px,transparent 1px);background-size:22px 22px;}');
 	L.push('html[data-dp-texture="dots"] .dp-textured{background-image:radial-gradient(var(--dp-tex-strong) 1px,transparent 1px);background-size:16px 16px;}');
 	L.push('html[data-dp-texture="glass"] .dp-textured{background-image:linear-gradient(135deg,var(--dp-tex-strong),transparent 40%);backdrop-filter:blur(10px);}');
+	//
+	// ③b 总监弹窗的**图片背景**（只有这一条需要样式表：inline style 写不出"照片 + 遮罩"两层）
+	//
+	//  选择器**刻意**只列弹窗自己的四个壳（面板 / 左右竖条），不用 `.dp-*` 通配：
+	//  写宽了会把总监页、导图、工作室一起铺上照片（它们各有各的宿主桥接与纹理）。
+	//  两个技术点：
+	//   ① 遮罩走 `--dp-dlg-scrim`（= 当前底色 + 用户调的浓度）⇒ 文字对比度由浓度**直接**决定，
+	//      换底色时遮罩自动跟着换，不需要另算一套。
+	//   ② `background-attachment:fixed` 让两块面板共用"一张以视口为坐标系的照片" ——
+	//      否则左右两块各铺各的，中间一条接缝像两张图拼的。
+	L.push('html[data-dp-dlgimg="1"] [data-testid="d-panel"],'
+		+ 'html[data-dp-dlgimg="1"] [data-testid="d-left-rail"],'
+		+ 'html[data-dp-dlgimg="1"] [data-testid="d-right-rail"]{'
+		+ "background-image:linear-gradient(var(--dp-dlg-scrim, rgba(0,0,0,.72)),var(--dp-dlg-scrim, rgba(0,0,0,.72))),var(--dp-dlg-img, none);"
+		+ "background-size:cover,cover;background-position:center,center;background-repeat:no-repeat,no-repeat;background-attachment:fixed,fixed;}");
 	// ④ 动效开关
 	L.push('html[data-dp-motion="0"] .dp-anim,html[data-dp-motion="0"] .dp-pulse,html[data-dp-motion="0"] .dp-rise{animation:none !important;transition:none !important;}');
 	return L.join("\n");
@@ -277,6 +609,16 @@ export function applyPersonalize(p) {
 		// 变量
 		const vars = pVarsFor(s);
 		for (const k of Object.keys(vars)) root.style.setProperty(k, vars[k]);
+		// 总监弹窗皮肤：**先清场、再写本轮**
+		//  🔴 清场不是洁癖：`follow` 档刻意**一个变量都不产出**，靠的就是"属性不存在 ⇒ 组件
+		//     内联 fallback 落到宿主令牌 ⇒ 宿主换明暗主题时弹窗实时跟着变"。
+		//     少了这一步，用户从「暖白」切回「跟随主题」会**残留上一档的米色**，
+		//     而界面上"跟随主题"明明是选中的 —— 典型的静默失效。
+		for (const k of DIALOG_VAR_KEYS) root.style.removeProperty(k);
+		const dvars = dialogVarsFor(s);
+		for (const k of Object.keys(dvars)) root.style.setProperty(k, dvars[k]);
+		root.setAttribute("data-dp-dlgbg", s.dialogBg);
+		root.setAttribute("data-dp-dlgimg", s.dialogBgImage ? "1" : "0");
 		// 纹理 / 动效 / 连线（给 CSS 选择器用；同时给 e2e 提供稳定的读点）
 		root.setAttribute("data-dp-texture", s.texture);
 		root.setAttribute("data-dp-motion", s.motion ? "1" : "0");
@@ -311,18 +653,22 @@ export const personalizeStore = (function () {
 	let state = loadPersonalize();
 	const listeners = new Set();
 	function emit() { for (const fn of listeners) { try { fn(state); } catch (e) { /* 单个订阅者异常不影响其他 */ } } }
+	/** localStorage 是否可用（隐私模式 / SSR 下不可用；此时"存不上"不算失败） */
+	function hasLS() { try { return typeof localStorage !== "undefined" && localStorage !== null; } catch (e) { return false; } }
 	applyPersonalize(state);
 	return {
 		getState: () => state,
 		subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
-		/** 改一项（未知键忽略，保证 store 不会被写脏） */
+		/** 改一项（未知键忽略，保证 store 不会被写脏）。
+		 *  @returns {boolean} false = 未知键**或**未能持久化（典型：背景图太大撑爆配额）。
+		 *    调用方据此把"看起来换了、重启后没了"变成一句可读的提示。 */
 		set: (key, value) => {
 			if (!(key in P_DEFAULTS)) return false;
 			state = normalizePersonalize({ ...state, [key]: value });
-			savePersonalize(state);
+			const saved = savePersonalize(state);
 			applyPersonalize(state);
 			emit();
-			return true;
+			return saved || !hasLS();
 		},
 		patch: (obj) => {
 			state = normalizePersonalize({ ...state, ...(obj || {}) });
@@ -344,9 +690,10 @@ export const personalizeStore = (function () {
 /** 全局契约（调试 / e2e 用） */
 export function installPersonalizeApi() {
 	const api = {
-		PERSONALIZE_KEY, PERSONALIZE_STYLE_ID, P_DEFAULTS,
-		P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE,
+		PERSONALIZE_KEY, PERSONALIZE_STYLE_ID, P_DEFAULTS, P_IMG_MAX,
+		P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DIALOG_BG,
 		normalizePersonalize, pVarsFor, pCssText, applyPersonalize,
+		hexToRgb, relLuma, isLightHex, mixHex, clampToContrast, dialogSkinFor, dialogVarsFor, DIALOG_VAR_KEYS, readImageAsDataUrl,
 		loadPersonalize, savePersonalize, store: personalizeStore
 	};
 	if (typeof window !== "undefined") window.__dshPersonalize = api;

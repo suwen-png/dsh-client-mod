@@ -109,6 +109,28 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify({ id, method, params })); };
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
+
+/* 🔴 真实鼠标的**可见性前提**（第二十四轮统一加装 · 纪律 29/54）
+ *    CDP 的 `mousePressed/Released` 在 `document.visibilityState !== "visible"`
+ *    （Electron 窗口被遮挡/最小化/停在后台）时会被**整条吞掉**，而 `mouseMoved` 照常送达
+ *    ⇒ 表现是「拖不动 / 点了没反应」，读起来完全是**产品坏了**。
+ *    🔴 `document.hasFocus()` 在 hidden 时**仍为 true** ⇒ 不能拿它当判据，只认 `visibilityState`。
+ *    实测对照：hidden ⇒ 只送达 pointermove；visible ⇒ pointerdown/mousedown/pointerup/click 全到。
+ *    不成立 ⇒ 后续鼠标断言**不可信**，应判 INVALID（纪律 24），不判产品红。 */
+const FOCUS_PRE = await (async () => {
+	const { ensurePageFocus } = await import("./_cdp-focus.mjs");
+	const ev = async (e) => {
+		const r = await send("Runtime.evaluate", { expression: e, returnByValue: true });
+		return r && r.result ? r.result.value : undefined;
+	};
+	const fp = await ensurePageFocus({ send, ev, log: (s) => console.log(s) });
+	console.log("  [鼠标前提] visibility=" + JSON.stringify(fp.visibility)
+		+ " ｜ hasFocus=" + JSON.stringify(fp.hasFocus)
+		+ " ｜ bringToFront=" + fp.broughtToFront + " ｜ focusEmulated=" + fp.focusEmulated
+		+ (fp.reasons.length ? " ｜ 降级：" + fp.reasons.join(" / ") : ""));
+	return fp;
+})();
+
 await send("Log.enable");
 
 const J = JSON.stringify;

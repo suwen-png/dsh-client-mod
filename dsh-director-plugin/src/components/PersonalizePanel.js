@@ -35,7 +35,8 @@
 
 import * as react from "react";
 import {
-	personalizeStore, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DEFAULTS
+	personalizeStore, P_ACCENTS, P_ACCENT2, P_DENSITY, P_FONT, P_RADIUS, P_TEXTURES, P_EDGE, P_DIALOG_BG, P_DEFAULTS,
+	readImageAsDataUrl
 } from "../store/personalize.js";
 
 const h = react.createElement;
@@ -66,6 +67,15 @@ const S = {
 	swatch: (on, hex) => ({
 		width: 26, height: 20, borderRadius: "var(--dp-radius-sm, 5px)", background: hex, cursor: "pointer",
 		border: on ? "2px solid var(--dp-t1, #e8eaed)" : "1px solid var(--dp-line, #31343a)", boxSizing: "border-box"
+	}),
+	/* 取色器的一项：外框和 opt 一致，里面塞一个原生 color input（点哪都能开色盘） */
+	pick: (on) => ({
+		display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer",
+		padding: "2px 7px", borderRadius: "var(--dp-radius-sm, 5px)",
+		fontSize: "calc(11px * var(--dp-font, 1))",
+		border: "1px solid " + (on ? "var(--dp-ac-line, rgba(47,111,235,.45))" : "var(--dp-line, #31343a)"),
+		background: on ? "var(--dp-ac-soft, rgba(47,111,235,.16))" : "var(--dp-bg-2, #1c1e23)",
+		color: on ? "var(--dp-t1, #e8eaed)" : "var(--dp-t3, #8b9199)", fontWeight: on ? 600 : 400
 	}),
 	toggle: (on) => ({
 		display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
@@ -100,6 +110,25 @@ export function PersonalizePanel(props = {}) {
 		() => personalizeStore.getState(),
 		() => personalizeStore.getState()
 	);
+
+	/* 背景图：文件选择 → 压缩 → 落库。
+	 * 🔴 必须把"存不上"讲出来（配额满 / 图片过大）：savePersonalize 失败是**静默**的，
+	 *    不讲的话用户会以为换成功了，重启一看还是旧图 —— 本项目纪律 54「静默半成功更坏」。 */
+	const fileRef = react.useRef(null);
+	const [bgMsg, setBgMsg] = react.useState("");
+	const onPickFile = react.useCallback((e) => {
+		const f = e && e.target && e.target.files ? e.target.files[0] : null;
+		if (e && e.target) e.target.value = "";
+		if (!f) return;
+		setBgMsg("正在压缩图片…");
+		readImageAsDataUrl(f).then((url) => {
+			if (!url) { setBgMsg("图片处理失败：换一张 JPG / PNG 再试"); return; }
+			const ok = personalizeStore.set("dialogBgImage", url);
+			setBgMsg(ok
+				? "已应用背景图 · " + Math.round(url.length / 1024) + " KB（仅存本机）"
+				: "保存失败：本地存储空间不足，换一张更小的图");
+		});
+	}, []);
 
 	/* Esc 关闭 —— 与导图/工作室的"逐层退"一致：本面板在最上层，先关它 */
 	react.useEffect(() => {
@@ -151,6 +180,63 @@ export function PersonalizePanel(props = {}) {
 			key: "tx", title: "质感", hint: "背景纹理 —— 这一项就是用户说的「文字背景」",
 			children: optionRow(P_TEXTURES, p.texture, "texture")
 		}),
+		/* ── 总监弹窗背景 ──
+		 * 用户原话：「左侧点击总监按钮，总监的弹窗，背景是黑色的。按人眼最舒服温馨的风格调整
+		 *   背景和文字的颜色；同时增加自定义背景颜色的选项，可以上传图片作为背景；
+		 *   默认的话可以跟随软件的背景主题」
+		 * 四档 + 取色器 + 传图 + 遮罩浓度。**只有弹窗受它影响**，所以 hint 里写明范围，
+		 * 否则用户会以为"改了没生效"（总监页/导图/工作室各有各的宿主桥接，不由这一档管）。 */
+		h(Section, {
+			key: "dlg", title: "总监弹窗背景", hint: "只改总监弹窗（左侧「总监」开的那一扇）· 文字按底色自动配深浅",
+			children: [
+				optionRow(P_DIALOG_BG, p.dialogBg, "dlgbg"),
+				h("label", {
+					key: "col", style: S.pick(p.dialogBg === "custom"), "data-testid": "pp-dlgbg-color-wrap",
+					title: "自选底色；点开色盘即切到「自定义」档（文字深浅按底色亮度自动配，保证看得清）"
+				}, [
+					h("span", { key: "l" }, "底色"),
+					h("input", {
+						key: "i", type: "color", value: p.dialogBgColor, "data-testid": "pp-dlgbg-color",
+						"aria-label": "自定义弹窗底色",
+						style: { width: 26, height: 20, border: "none", background: "transparent", padding: 0, cursor: "pointer" },
+						onChange: (e) => personalizeStore.patch({ dialogBg: "custom", dialogBgColor: e.target.value })
+					})
+				]),
+				h("div", {
+					key: "up", style: S.opt(p.dialogBgImage ? "1" : "0"), "data-testid": "pp-dlgbg-upload",
+					title: "选一张本地图片：自动压到 1920px 内并转 JPEG 后存本机（不上传）；卡片会变半透明让图透出来",
+					onClick: () => { if (fileRef.current) fileRef.current.click(); }
+				}, p.dialogBgImage ? "换一张图" : "上传图片"),
+				p.dialogBgImage ? h("div", {
+					key: "clr", style: S.opt(false), "data-testid": "pp-dlgbg-clear",
+					title: "只移除图片，底色方案保留",
+					onClick: () => { personalizeStore.set("dialogBgImage", ""); setBgMsg("已移除背景图"); }
+				}, "移除图片") : null,
+				h("input", {
+					key: "f", ref: fileRef, type: "file", accept: "image/*",
+					"data-testid": "pp-dlgbg-file", "aria-label": "选择弹窗背景图片",
+					style: { display: "none" }, onChange: onPickFile
+				})
+			]
+		}),
+		/* 遮罩浓度：只在有图时出现 —— 它是"照片与文字"的唯一权衡旋钮，默认 72% 已够读 */
+		p.dialogBgImage ? h("div", { key: "dlgdim", style: { ...S.sec, display: "flex", alignItems: "center", gap: 6 } }, [
+			h("span", { key: "l", style: { ...S.secT, marginBottom: 0, whiteSpace: "nowrap" } }, "图片遮罩"),
+			h("input", {
+				key: "r", type: "range", min: 0, max: 95, step: 1, value: Math.round(p.dialogBgDim * 100),
+				"data-testid": "pp-dlgbg-dimrange", "aria-label": "图片遮罩浓度",
+				style: { flex: 1, minWidth: 60, accentColor: "var(--dp-ac, #2f6feb)" },
+				onChange: (e) => personalizeStore.set("dialogBgDim", Number(e.target.value) / 100)
+			}),
+			h("span", {
+				key: "v", "data-testid": "pp-dlgbg-dimval",
+				style: { ...S.secT, marginBottom: 0, width: 34, textAlign: "right" }
+			}, Math.round(p.dialogBgDim * 100) + "%")
+		]) : null,
+		bgMsg ? h("div", {
+			key: "dlgmsg", "data-testid": "pp-dlgbg-msg",
+			style: { ...S.secT, marginBottom: 6, color: "var(--dp-t2, #c3c8ce)", whiteSpace: "normal" }
+		}, bgMsg) : null,
 		h(Section, {
 			key: "dn", title: "密度", hint: "行高与间距的整体乘数",
 			children: optionRow(P_DENSITY, p.density, "density")
@@ -195,7 +281,8 @@ export function PersonalizePanel(props = {}) {
 			h("span", {
 				key: "n", style: { ...S.secT, marginBottom: 0, flex: 1 },
 				"data-testid": "pp-summary"
-			}, "四处共用 · " + p.texture + " / " + Math.round(p.density * 100) + "% / r" + p.radius),
+			}, "四处共用 · " + p.texture + " / " + Math.round(p.density * 100) + "% / r" + p.radius
+				+ " · 弹窗 " + p.dialogBg + (p.dialogBgImage ? " + 图" : "")),
 			h("button", {
 				key: "r", style: S.opt(false), "data-testid": "pp-reset",
 				title: "恢复默认：" + P_DEFAULTS.texture + " / r" + P_DEFAULTS.radius + " / " + P_DEFAULTS.accent,

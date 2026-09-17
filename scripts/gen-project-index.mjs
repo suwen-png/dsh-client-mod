@@ -1,10 +1,29 @@
 /**
  * 项目全资源索引生成器
  * 扫描所有源码/脚本/文档，提取结构化信息，生成确定索引
- * 用法: node scripts/gen-project-index.mjs
+ * 用法: node scripts/gen-project-index.mjs   —— **只做重生成，没有只读模式**
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+
+/* 🔴 参数契约（纪律 34：脚本不认参数必须 `exit 2` 自诊断）
+ * 历史：本脚本原先**完全不处理 `process.argv`** ⇒ 传 `--check` 会被**静默忽略并照常写盘**
+ * （"以为在做只读检查、实际写了盘"，且 stdout 全是成功字样 ⇒ 不可分辨）。
+ * 2026-09-17 实测踩到 ⇒ 现已补 `--check`（只对账不写），未知参数一律 `exit 2`。
+ *
+ * 🔴 `--check` 的比对口径（纪律 63 的反面：**逐字节不一致 ≠ 内容变了**）
+ * 本索引头部「生成时间」每次必然不同 ⇒ 不能逐字节比，改为比**去掉时间戳行后的正文哈希**。 */
+const ARGV = process.argv.slice(2);
+const CHECK = ARGV.includes('--check');
+const UNKNOWN = ARGV.filter((a) => a !== '--check');
+if (UNKNOWN.length) {
+  console.error('用法: node scripts/gen-project-index.mjs [--check]');
+  console.error('  （无参数 = 生成并写入；--check = 只对账不写）');
+  console.error('退出码: 0 一致 / 1 不一致 / 2 用法错');
+  console.error('收到未知参数: ' + UNKNOWN.join(' '));
+  process.exit(2);
+}
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const OUTPUT = path.join(ROOT, 'docs', '00-统筹入口', '项目全资源确定索引.md');
@@ -13,6 +32,12 @@ const OUTPUT = path.join(ROOT, 'docs', '00-统筹入口', '项目全资源确定
 const EXCLUDE_DIRS = new Set([
   '.git', 'node_modules', 'original', 'workspace', 'patches', 'snapshots',
   '.idea', '.workbuddy', 'backups'
+]);
+
+/* 排除文件：本索引**不得收录自己**（详见头部参数契约处的说明）。
+ * 另排除索引产物本身的两个伴生文件形态，避免自指。 */
+const EXCLUDE_FILES = new Set([
+  '项目全资源确定索引.md',
 ]);
 
 // 源码目录
@@ -185,6 +210,8 @@ function buildDocIndex() {
   for (const { dir, prefix } of docDirs) {
     walkDir(dir, (fullPath, relPath) => {
       if (!/\.(md|html)$/.test(relPath)) return;
+      /* 🔴 不收录自己：索引记录自身行数/字节永远滞后一版，且使 `--check` 假红 */
+      if (EXCLUDE_FILES.has(path.basename(fullPath))) return;
       const content = readFileSafe(fullPath);
       const lines = content.split('\n');
       // 提取第一个标题
@@ -373,8 +400,38 @@ console.log(`   找到 ${docs.length} 个文档文件`);
 
 console.log('📝 生成索引文档...');
 const markdown = generateMarkdown(sources, scripts, docs);
+
+const nSrc = sources.reduce((s, f) => s + f.lines, 0).toLocaleString();
+const nScr = scripts.reduce((s, f) => s + f.lines, 0).toLocaleString();
+const nDoc = docs.reduce((s, f) => s + f.lines, 0).toLocaleString();
+
+if (CHECK) {
+  /* 只对账：比「去掉生成时间行后的正文哈希」（逐字节比会被时间戳必然打断） */
+  const STAMP = /^> \*\*生成时间\*\*: .*$/m;
+  const hashOf = (s) => createHash('sha256').update(s.replace(STAMP, '')).digest('hex').slice(0, 16);
+  if (!fs.existsSync(OUTPUT)) {
+    console.error('❌ 索引尚未生成：' + OUTPUT);
+    process.exit(1);
+  }
+  const disk = fs.readFileSync(OUTPUT, 'utf-8');
+  const hDisk = hashOf(disk);
+  const hNew = hashOf(markdown);
+  console.log('══ 全资源确定索引对账（只读）══');
+  console.log('  磁盘正文指纹: ' + hDisk);
+  console.log('  重算正文指纹: ' + hNew);
+  console.log('  磁盘 ' + docs.length + ' 篇口径 | 源码 ' + sources.length + ' / 脚本 ' + scripts.length + ' / 文档 ' + docs.length);
+  if (hDisk === hNew) {
+    console.log('  ⟹ 一致 ✅');
+    console.log('IS_PASS: TRUE');
+    process.exit(0);
+  }
+  console.error('  ⟹ 不一致 ❌（重跑 `node scripts/gen-project-index.mjs` 刷新）');
+  console.error('IS_PASS: FALSE');
+  process.exit(1);
+}
+
 fs.writeFileSync(OUTPUT, markdown, 'utf-8');
 console.log(`✅ 索引已生成: ${OUTPUT}`);
-console.log(`   源码: ${sources.length} 文件 / ${sources.reduce((s,f)=>s+f.lines,0).toLocaleString()} 行`);
-console.log(`   脚本: ${scripts.length} 文件 / ${scripts.reduce((s,f)=>s+f.lines,0).toLocaleString()} 行`);
-console.log(`   文档: ${docs.length} 文件 / ${docs.reduce((s,f)=>s+f.lines,0).toLocaleString()} 行`);
+console.log(`   源码: ${sources.length} 文件 / ${nSrc} 行`);
+console.log(`   脚本: ${scripts.length} 文件 / ${nScr} 行`);
+console.log(`   文档: ${docs.length} 文件 / ${nDoc} 行`);

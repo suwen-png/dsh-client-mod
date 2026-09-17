@@ -2,7 +2,7 @@
  * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
  * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
  * 上游：client-entry.js, components/DirectorPage.js, mount.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -47,8 +47,12 @@ import { onHierarchyChange } from "../util/bus.js";
 import { applySplit, clearSplit, getSplitRootRect } from "../bridge/split.js";
 import { sendToChat, deliverToChat, observeConversation, readConversation, installChatBridgeApi } from "../bridge/chat-bridge.js";
 import { openSession } from "../logic/branch-tree.js";
-import { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL } from "../logic/routing.js";
-import { appendDirectorMessage, listDirectorMessages, pluginDbStats, PLUGIN_DB_NAME } from "../store/plugin-db.js";
+import { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL, dimensionCandidates } from "../logic/routing.js";
+import { plan as planSplit } from "../logic/split-dimensions.js";
+import { dimBranchContext } from "../logic/dim-branch.js";
+import { readSplitIndex } from "../store/split-index.js";
+import { makeEnvelope, childEnvelope, VIA, summariesFor } from "../logic/lineage.js";
+import { appendDirectorMessage, listDirectorMessages, listAllDirectorMessages, pluginDbStats, makeId, PLUGIN_DB_NAME } from "../store/plugin-db.js";
 import { DirectorWorkbench } from "./DirectorWorkbench.js";
 import { DirectorHierarchy } from "./DirectorHierarchy.js";
 import { dshLog } from "../util/debug.js";
@@ -143,46 +147,46 @@ const S = {
 		position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column",
 		/* 🔴 `backgroundColor` 长写（非 `background` 简写）：简写会把 `background-image` 重置，
 		 *    使 `.dp-textured` 的三档纹理（个性化「质感」）静默失效。四处已统一修正。 */
-		backgroundColor: "var(--dsw-alias-bg-base, #16171a)", color: "var(--dsw-alias-label-primary, #e8eaed)",
+		backgroundColor: "var(--dp-dlg-bg, var(--dsw-alias-bg-overlay, #16171a))", color: "var(--dp-dlg-t1, var(--dsw-alias-label-primary, #e8eaed))",
 		border: "1px solid var(--dp-ac2-line, rgba(137,87,229,.42))", borderRadius: "var(--dp-radius-lg, 10px)", overflow: "hidden",
 		boxShadow: "var(--dp-shadow, 0 24px 70px rgba(0,0,0,.62))", fontFamily: "inherit",
 		fontSize: "calc(12.5px * var(--dp-font, 1))"
 	},
-	head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1c1e22)" },
+	head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1c1e22))" },
 	headTitle: { fontWeight: 620, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
-	lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "#b794f6", whiteSpace: "nowrap" },
+	lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "var(--dp-dlg-ac2, #b794f6)", whiteSpace: "nowrap" },
 	btns: { marginLeft: "auto", display: "flex", gap: 3 },
-	btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
-	seg: { display: "flex", border: "1px solid var(--dsw-alias-border-l2, #3d4148)", borderRadius: 6, overflow: "hidden", margin: "6px 8px 0", flex: "0 0 auto" },
-	segItem: (on) => ({ flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer", border: "none", color: on ? "#c9a9ff" : "var(--dsw-alias-label-tertiary, #8b9199)", background: on ? "rgba(137,87,229,.20)" : "var(--dsw-alias-bg-sunken, #212429)", fontWeight: on ? 600 : 400 }),
+	btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
+	seg: { display: "flex", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", borderRadius: 6, overflow: "hidden", margin: "6px 8px 0", flex: "0 0 auto" },
+	segItem: (on) => ({ flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer", border: "none", color: on ? "var(--dp-dlg-ac2, #c9a9ff)" : "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", backgroundColor: on ? "rgba(137,87,229,.20)" : "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", fontWeight: on ? 600 : 400 }),
 	body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 },
-	blk: { border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 7, background: "var(--dsw-alias-bg-sunken, #1c1e22)", padding: "8px 9px" },
-	blkT: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", letterSpacing: ".4px", marginBottom: 7, display: "flex", alignItems: "center", gap: 6 },
+	blk: { border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 7, backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #1c1e22))", padding: "8px 9px" },
+	blkT: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", letterSpacing: ".4px", marginBottom: 7, display: "flex", alignItems: "center", gap: 6 },
 	kv: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 },
-	kvc: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 5, padding: "5px 7px" },
+	kvc: { backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 5, padding: "5px 7px" },
 	kvV: { fontSize: 14, fontWeight: 650 },
-	kvK: { fontSize: 10.5, color: "var(--dsw-alias-label-tertiary, #8b9199)", marginTop: 1 },
+	kvK: { fontSize: 10.5, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", marginTop: 1 },
 	chips: { display: "flex", flexWrap: "wrap", gap: 5 },
 	chip: (mode, on) => ({
 		fontSize: 11, padding: "3px 8px", borderRadius: 5, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
 		border: "1px solid " + (mode === "auto" ? "rgba(137,87,229,.42)" : "rgba(210,153,34,.42)"),
-		background: on ? "rgba(137,87,229,.16)" : "var(--dsw-alias-bg-base, #212429)",
-		color: mode === "auto" ? "#b794f6" : "#e0b341", fontWeight: on ? 600 : 400
+		backgroundColor: on ? "rgba(137,87,229,.16)" : "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))",
+		color: mode === "auto" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-warn, #e0b341)", fontWeight: on ? 600 : 400
 	}),
 	dot: (c) => ({ width: 5, height: 5, borderRadius: "50%", background: c || "#39c5cf", display: "inline-block" }),
-	input: { flex: 1, minWidth: 0, height: 28, borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #141619)", color: "var(--dsw-alias-label-primary, #e8eaed)", padding: "0 9px", fontSize: 11.5, boxSizing: "border-box" },
+	input: { flex: 1, minWidth: 0, height: 28, borderRadius: 6, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #141619))", color: "var(--dp-dlg-t1, var(--dsw-alias-label-primary, #e8eaed))", padding: "0 9px", fontSize: 11.5, boxSizing: "border-box" },
 	btnPrimary: { height: 28, padding: "0 11px", borderRadius: 6, border: "1px solid #2f6bdd", background: "#2f6bdd", color: "#fff", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" },
-	btnGhost: { height: 24, padding: "0 9px", borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2, #3d4148)", background: "var(--dsw-alias-bg-sunken, #212429)", color: "var(--dsw-alias-label-secondary, #c3c8ce)", cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap" },
+	btnGhost: { height: 24, padding: "0 9px", borderRadius: 6, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))", cursor: "pointer", fontSize: 11.5, whiteSpace: "nowrap" },
 	rail: (side) => ({
 		position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column", alignItems: "center",
 		justifyContent: "flex-start", gap: 8, paddingTop: 10, cursor: "pointer",
-		background: "var(--dsw-alias-bg-sunken, #1b1e23)", border: "1px solid var(--dsw-alias-border-l2, #31343a)",
-		color: side === "left" ? "#b794f6" : "#79a8ff", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
+		backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1b1e23))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))",
+		color: side === "left" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
 	}),
-	muted: { fontSize: 11, color: "var(--dsw-alias-label-tertiary, #8b9199)", lineHeight: 1.6 },
+	muted: { fontSize: 11, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", lineHeight: 1.6 },
 	msg: { display: "flex", gap: 6, marginBottom: 6 },
-	av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "#79a8ff" : "#b794f6", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
-	bub: { background: "var(--dsw-alias-bg-base, #212429)", border: "1px solid var(--dsw-alias-border-l2, #31343a)", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
+	av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" : "var(--dp-dlg-ac2, #b794f6)", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
+	bub: { backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
 };
 
 /* ── 小工具 ── */
@@ -194,7 +198,7 @@ function useStore(store) {
 }
 
 /** 六维状态色 */
-const DIM_COLOR = { ok: "#3fb950", warn: "#d29922", bad: "#f85149" };
+const DIM_COLOR = { ok: "var(--dp-dlg-ok, #3fb950)", warn: "var(--dp-dlg-warn, #d29922)", bad: "var(--dp-dlg-bad, #f85149)" };
 const DIM_MARK = { ok: "✅", warn: "⚠", bad: "❌" };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -209,12 +213,12 @@ function RouteCard({ result, onConfirm, onCancel, busy }) {
 			h("div", { key: "1" }, "意图：" + result.intent.kind + "（置信 " + result.intent.confidence.toFixed(2) + "）"),
 			h("div", { key: "2" }, "候选：" + (result.candidates.length ? result.candidates.slice(0, 3).map((c) => c.name + "(" + c.score + ")").join(" / ") : "无")),
 			h("div", { key: "3" }, "子任务：" + result.subtasks.length + " 个"),
-			h("div", { key: "4", style: { color: "#b794f6" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
+			h("div", { key: "4", style: { color: "var(--dp-dlg-ac2, #b794f6)" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
 			h("div", { key: "5" }, "理由：" + d.reason)
 		]),
 		h("div", { key: "b", style: { display: "flex", gap: 5, flexWrap: "wrap" } }, [
 			h("button", { key: "tr", style: S.btnGhost, "data-testid": "d-route-transfer", disabled: busy, onClick: () => onConfirm(DESTINATION.TRANSFER) }, "转给该对话的总监"),
-			h("button", { key: "di", style: { ...S.btnGhost, borderColor: "#2f6bdd", color: "#79a8ff" }, "data-testid": "d-route-direct", disabled: busy, onClick: () => onConfirm(DESTINATION.DIRECT) }, "直接调用对应对话"),
+			h("button", { key: "di", style: { ...S.btnGhost, borderColor: "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #2f6bdd))", color: "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" }, "data-testid": "d-route-direct", disabled: busy, onClick: () => onConfirm(DESTINATION.DIRECT) }, "直接调用对应对话"),
 			h("button", { key: "cr", style: S.btnGhost, "data-testid": "d-route-new", disabled: busy, onClick: () => onConfirm(DESTINATION.CREATE) }, "新建对话"),
 			h("button", { key: "cx", style: S.btnGhost, "data-testid": "d-route-cancel", disabled: busy, onClick: onCancel }, "取消")
 		])
@@ -233,9 +237,9 @@ function ReviewCard({ result, onRun, busy }) {
 		result
 			? h("div", { key: "b" }, result.dims.map((d) => h("div", { key: d.key, style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 3 }, "data-review-dim": d.key, "data-status": d.status }, [
 				h("span", { key: "m", style: { color: DIM_COLOR[d.status], width: 14, flex: "0 0 14px" } }, DIM_MARK[d.status]),
-				h("span", { key: "l", style: { width: 62, flex: "0 0 62px", color: "#c3c8ce" } }, d.label),
+				h("span", { key: "l", style: { width: 62, flex: "0 0 62px", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))" } }, d.label),
 				h("span", { key: "n", style: { ...S.muted, flex: 1, minWidth: 0 } }, d.note)
-			])).concat([h("div", { key: "s", style: { ...S.muted, marginTop: 5, color: result.pass ? "#6fd388" : "#f0877f" }, "data-testid": "d-review-summary" }, result.summary)]))
+			])).concat([h("div", { key: "s", style: { ...S.muted, marginTop: 5, color: result.pass ? "var(--dp-dlg-ok, #6fd388)" : "var(--dp-dlg-bad, #f0877f)" }, "data-testid": "d-review-summary" }, result.summary)]))
 			: h("div", { key: "e", style: S.muted, "data-testid": "d-review-summary" }, "尚未审核。点「重跑审核」或等待对话产出变化自动触发。")
 	]);
 }
@@ -243,7 +247,7 @@ function ReviewCard({ result, onRun, busy }) {
 /* ══════════════════════════════════════════════════════════════════
  * 子组件：左面板（R2 / R3 / R5 / R6 + 层级管理）
  * ══════════════════════════════════════════════════════════════════ */
-function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg }) {
+function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg }) {
 	const counts = react.useMemo(() => countByLevel(tree), [tree]);
 	const [agentSeg, setAgentSeg] = react.useState("agents");
 	const [called, setCalled] = react.useState({});
@@ -264,7 +268,7 @@ function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns
 				h("div", { key: "k", style: S.kv }, [
 					h("div", { key: "p", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.project)), h("div", { key: "k", style: S.kvK }, "项目 / 文件夹")]),
 					h("div", { key: "s", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.session)), h("div", { key: "k", style: S.kvK }, "对话")]),
-					h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "#e0b341" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
+					h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "var(--dp-dlg-warn, #e0b341)" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
 					h("div", { key: "td", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String((node && node.todos ? node.todos.length : 0))), h("div", { key: "k", style: S.kvK }, "待办")])
 				]),
 				h("div", { key: "m", style: { ...S.muted, marginTop: 6 } }, "阶段：" + ((node && node.meta && node.meta.currentPhase) || "未设置") + " · 目标：" + ((node && node.meta && node.meta.goal) || "未设置"))
@@ -272,16 +276,34 @@ function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns
 
 			/* R5 总监流（只治理不执行） */
 			h("div", { key: "r5", style: S.blk, "data-testid": "d-r5" }, [
-				h("div", { key: "t", style: S.blkT }, ["R5 总监对话区", h("span", { key: "x", style: { marginLeft: "auto", color: "#8b9199" } }, "只治理 · 不执行")]),
+				h("div", { key: "t", style: S.blkT }, ["R5 总监对话区", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "只治理 · 不执行")]),
 				messages.length
 					? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
 						h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 						h("div", { key: "b", style: S.bub }, [
-							m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "#b794f6", marginBottom: 3 } }, m.kind) : null,
+							m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 3 } }, m.kind) : null,
 							h("span", { key: "t2" }, m.text)
 						])
 					]))
-					: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。")
+					: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。"),
+				/* 🔴 19 号文 **N3 · R2**：**上游可见下游摘要**（用户原话「同一个分支上下游的
+				 *    总监消息需要是一致的」）—— 不必点进下游节点就能看到它的产出摘要行。
+				 *    · 判据来自 `logic/lineage.js#summariesFor()`（**纯函数**）⇒
+				 *      界面与闸门 `test-lineage-msg.mjs` 用的是**同一份**判据（不是两套）。
+				 *    · `data-said` = 下游消息 id（可追溯到**具体哪一条**，不是"有摘要"就算过）；
+				 *      `data-from` = 产出节点 id（哪个分支产的，可对账）。
+				 *    · 空 ⇒ **不渲染**该块（不画空壳 —— 空壳会让"没有下游"与"下游没产出"同形）。 */
+				upstream.length ? h("div", {
+					key: "up", "data-testid": "d-upstream-sum", "data-count": String(upstream.length),
+					style: { marginTop: 7, borderTop: "1px dashed var(--dp-dlg-line, var(--dsw-alias-border-l2, #33383f))", paddingTop: 6 }
+				}, [h("div", { key: "t", style: { ...S.muted, marginBottom: 3 } }, "下游产出摘要 · " + upstream.length + " 条（血缘 " + String((upstream[0] && upstream[0].from) || "") + " 内）")]
+					.concat(upstream.slice(-4).map((u) => h("div", {
+						key: u.messageId, "data-said": u.messageId, "data-from": u.from || "",
+						style: {
+							fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
+							color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 2, wordBreak: "break-all"
+						}
+					}, u.line)))) : null
 			]),
 
 			/* 六维审核 */
@@ -307,7 +329,7 @@ function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns
 		/* ── 智能体段（R3：分段切换 + 调用情况 + 手选调用）── */
 		seg === LEFT_TAB.AGENTS ? h("div", { key: "ag", style: { display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "agents" }, [
 			h("div", { key: "r3", style: S.blk, "data-testid": "d-r3" }, [
-				h("div", { key: "t", style: S.blkT }, ["R3 智能体 ｜ 技能", h("span", { key: "x", style: { marginLeft: "auto", color: "#8b9199" } }, "总监自动 / 客户手选")]),
+				h("div", { key: "t", style: S.blkT }, ["R3 智能体 ｜ 技能", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "总监自动 / 客户手选")]),
 				h("div", { key: "seg", style: { ...S.seg, margin: "0 0 7px" } }, [
 					h("button", { key: "a", style: S.segItem(agentSeg === "agents"), "data-testid": "d-agent-seg-agents", onClick: () => setAgentSeg("agents") }, "智能体"),
 					h("button", { key: "s", style: S.segItem(agentSeg === "skills"), "data-testid": "d-agent-seg-skills", onClick: () => setAgentSeg("skills") }, "技能")
@@ -324,14 +346,14 @@ function DirectorPanel({ node, tree, messages, reviewResult, onReview, agentRuns
 							+ (a.noUse ? "｜不适用：" + a.noUse : ""),
 						"data-testid": "d-agent-" + a.key, "data-mode": a.mode,
 						onClick: () => { setCalled((c) => ({ ...c, [a.key]: true })); onCallAgent(a); }
-					}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "#b794f6" : "#e0b341") }), h("span", { key: "l" }, a.label)])
+					}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-warn, #e0b341)") }), h("span", { key: "l" }, a.label)])
 				)
 			)]),
 			h("div", { key: "run", style: S.blk, "data-testid": "d-agent-runs", "data-run-total": agentRuns.length }, [
 				h("div", { key: "t", style: S.blkT }, ["调用情况（最近" + (agentRuns.length > RUNS_SHOWN ? " " + RUNS_SHOWN + "/" + agentRuns.length : "") + "）"]),
 				agentRuns.length
 					? agentRuns.slice(0, RUNS_SHOWN).map((r, i) => h("div", { key: i, style: { ...S.muted, display: "flex", gap: 6 }, "data-run-key": r.key }, [
-						h("i", { key: "d", style: S.dot(r.status === "ok" ? "#3fb950" : "#d29922") }),
+						h("i", { key: "d", style: S.dot(r.status === "ok" ? "var(--dp-dlg-ok, #3fb950)" : "var(--dp-dlg-warn, #d29922)") }),
 						h("span", { key: "k", style: { width: 54, flex: "0 0 54px" } }, r.key),
 						h("span", { key: "s", style: { flex: 1, minWidth: 0 } }, r.status + (r.note ? " · " + r.note : ""))
 					]))
@@ -366,6 +388,15 @@ export function DirectorDialog(props = {}) {
 	const [toast, setToast] = react.useState("");
 	// V17 审校补漏：toast 与导图/设计图一致，约 2.2s 自动消失（原先只靠下一条覆盖，会常驻不消失）
 	const toastTimerRef = react.useRef(null);
+	/* 🔴 19 号文 **N3 · R2**（2026-09-17）：上游应看到的**下游产出摘要行**。
+	 *    判据由 `logic/lineage.js#summariesFor()` 给出（**纯函数**）——
+	 *    界面与闸门用**同一份**判据，避免"界面上看着有、闸门读不到"（本项目反复踩过）。
+	 *    ⚠️ 与 `messages`（本节点单桶）**并列**，不是它的子集：摘要行天然**跨桶**。 */
+	const [upstream, setUpstream] = react.useState([]);
+	/* 🔴 19 号文 **N2**：上一条"需求澄清"的**信封 + 事实**。
+	 *    转派时由它派生目标信封（`childEnvelope` = 血缘内派生的**唯一构造点**）⇒
+	 *    R1「同一事实同源」与 R4「一致性范围 = 血缘」是**结构保证**的，不靠两处各自格式化。 */
+	const srcEnvRef = react.useRef(null);
 	react.useEffect(() => {
 		if (!toast) return undefined;
 		if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -460,6 +491,12 @@ export function DirectorDialog(props = {}) {
 			const [msgs, s] = await Promise.all([listDirectorMessages(nodeId), pluginDbStats()]);
 			setMessages(msgs || []);
 			setStats(s);
+			/* 🔴 N3/R2：跨桶读**全部**消息 → 交给纯函数判"哪些是下游产出摘要"。
+			 *    全量读失败**不影响**主列表（降级可以，无声不行：`catch` 里留 `data-upstream-err`）。 */
+			try {
+				const all = await listAllDirectorMessages();
+				setUpstream(summariesFor(all, nodeId) || []);
+			} catch (e) { setUpstream([]); }
 			setRuns(listAgentRuns());
 		} catch (e) { /* 数据层异常不影响 UI */ }
 	}, [nodeId]);
@@ -564,11 +601,33 @@ export function DirectorDialog(props = {}) {
 	};
 
 	/* ── 行为 ── */
-	const pushMsg = async (kind, text, role) => {
-		const rec = await appendDirectorMessage(nodeId, { kind, text, role: role || "director" });
+	/* 🔴 19 号文 N2/N3：`env`（信封）与 `fact`（事实）是**两个独立可选参数** ——
+	 *    `env` 落 `msg.env`（§3.2 冻结契约，**不得**塞进 `text` / `meta`）；
+	 *    `fact` 落 `msg.meta.fact`（R1 同源的比较载体；全仓唯一格式化点是 `lineage.js#factOf`）。
+	 *    两者缺省 ⇒ 既有调用点**零改动**、旧记录**逐字节不变**。
+	 *
+	 * 🔴 `env.id` 必须与 `messageId` **同值**（这里用同一个 `makeId` 现算）：
+	 *    血缘回溯（`ancestorsOf` / `descendantsOf` / `summariesFor`）全靠 `env.id` 与
+	 *    `env.parent` 的**对得上**；两者不同值 ⇒ `parent` 永远匹配不上 ⇒ R2 静默失效，
+	 *    而表现与"本来就没有下游"完全同形（纪律 36 同型）。 */
+	const pushMsg = async (kind, text, role, env, fact) => {
+		const mid = makeId("dm", nodeId);
+		const extra = {};
+		if (env) extra.env = { ...env, id: env.id || mid };
+		if (fact) extra.meta = { fact: fact };
+		const rec = await appendDirectorMessage(nodeId, { messageId: mid, kind: kind, text: text, role: role || "director", ...extra });
 		await refresh();
 		return rec;
 	};
+
+	/** 🔴 19 号文 **N2**：路由的**维度上下文**（当前维度 + 各维度已有的分支节点）。
+	 *
+	 * 🔴 实现**只有一份** —— `logic/dim-branch.js#dimBranchContext()`（纯函数）。
+	 *    本组件与总监页都调它。两处各写一遍的形态本项目栽过：19 号文 N9 的
+	 *    `DIRECTOR_CHAIN` vs `runDirector()` —— 两份真相源、行为不一致、**谁都不报错**。
+	 * 数据源：分流索引（`dsh.director.split`，**冻结键**）—— 它本来就是
+	 *    "分支会话 ↔ 维度"的既有绑定，不新立映射表（新立必漂移）。 */
+	const dimContext = () => dimBranchContext(tree, readSplitIndex(), { nodeId: nodeId, node: node });
 
 	const doReview = async () => {
 		setBusy(true);
@@ -600,13 +659,41 @@ export function DirectorDialog(props = {}) {
 				setToast(r.mode === "sent" ? "已发送到对话" : "已填入对话输入框");
 			} else {
 				// 目标＝总监：走智能路由（要求 8），先出确认卡，**不静默分发**
-				await pushMsg("需求澄清", text, "user");
+				/* 🔴 19 号文 **N2 接线**（2026-09-17）：候选集 = 层级树拍平节点 **∪ 维度分支节点**。
+				 *    收敛前只喂层级树 ⇒ A1–A8 **根本不在候选里** ⇒ "在 A3 分支说 A5 的话"
+				 *    既判不出归属、也没有可转的目标 ⇒ 用户第 5 条诉求无从发生。
+				 *    维度节点来自 `plan()`（= N1 归属判定），经 `dimensionCandidates()` 翻译成
+				 *    路由候选（`level:"dimension"` + `dimKey`），`scoreNodes()` 已支持该形态。 */
+				const p = planSplit(text);
+				const dc = dimContext();
+				const dimNodes = dimensionCandidates(p, {
+					currentNodeId: nodeId, currentDim: dc.currentDim, branchOf: dc.branchOf
+				});
+				/* 🔴 **R1 同源**：事实**在源头构造一次**，源消息 / 目标接收凭证 / 下游简报
+				 *    全部复用**同一个对象**（`childEnvelope()` 只派生信封，**不重新格式化事实**）
+				 *    ⇒ "上下游一致"是**结构保证**的，而不是靠两处各自拼字符串（那必漂移）。 */
+				const fact = { reqText: text, novelName: String(p.name || ""), dims: (p.dims || []).map((d) => d.key) };
+				const env = makeEnvelope({ from: nodeId, to: null, via: VIA.LOCAL, round: 0, root: nodeId, cause: "" }, { self: nodeId });
+				const srcMsg = await pushMsg("需求澄清", text, "user", env, fact);
+				srcEnvRef.current = {
+					env: (srcMsg && srcMsg.env) ? srcMsg.env : env,
+					fact: fact,
+					messageId: (srcMsg && srcMsg.messageId) || ""
+				};
 				const flat = [];
 				const walk = (n) => { flat.push({ id: n.id, name: n.name, level: n.level, meta: n.meta, conversations: n.conversations }); (n.childNodes || []).forEach(walk); };
 				if (tree) walk(tree);
-				const r = route(text, { nodes: flat, currentNodeId: nodeId });
+				/* 🔴 同一节点**只以维度语义出现一次**：维度候选的 id 用的是**真节点 id**
+				 *    （这样 `findNodeById()` 找得到、`scopeKeyOf()` 解析得出目标会话）⇒
+				 *    必须把 `flat` 里的同 id 项摘掉。否则 `scoreNodes()` 会对同一节点出两条候选，
+				 *    层级那条吃到"就近 +1"加权就把归属那条压掉 —— **内容归属又输给位置**，
+				 *    正是 `RL-6a` 校准要拦的形态。 */
+				const dimIds = new Set(dimNodes.map((x) => String(x.id)));
+				const nodes = flat.filter((x) => !dimIds.has(String(x.id))).concat(dimNodes);
+				const r = route(text, { nodes: nodes, currentNodeId: nodeId });
 				setRouteResult(r);
-				recordAgentRun("doc", "ok", "路由候选 " + r.candidates.length);
+				recordAgentRun("doc", "ok", "路由候选 " + r.candidates.length + "（维度 " + dimNodes.length
+					+ " · 归属 " + String(p.kind || "none") + (dc.currentDim ? " · 当前维度 " + dc.currentDim : "") + "）");
 				setRuns(listAgentRuns());
 				setToast("总监已整理，待你确认去向");
 			}
@@ -624,7 +711,12 @@ export function DirectorDialog(props = {}) {
 			/* 目标会话：只有"真有对话"的节点才有 —— 判据走 store/hierarchy.js 的单一真相源
 			 * （`scopeHasConversation` / `scopeKeyOf`），不在这里各算各的。 */
 			const targetSession = (targetNode && scopeHasConversation(targetNode)) ? scopeKeyOf(targetNode.id, targetNode) : null;
-			const summary = DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : "");
+			/* 🔴 N2：维度 key 优先从**决策**取（`suggestDestination()` 判出的那一个），
+			 *    兜底才看候选 —— 决策是"判定的产物"，候选只是它的输入，取候选会失真。 */
+			const dimKey = String((routeResult.decision && routeResult.decision.dimKey) || (cand && cand.dimKey) || "");
+			const summary = DESTINATION_LABEL[dest] + (cand ? " → " + cand.name : "") + (dimKey ? "（维度 " + dimKey + "）" : "");
+			/* 🔴 N3：源信封/事实从 `srcEnvRef` 取（onSend 写的那一条），转派时**只派生、不重造** */
+			const src = srcEnvRef.current || null;
 			if (dest === DESTINATION.DIRECT || dest === DESTINATION.TRANSFER) {
 				/* 🔴 第 5 批 bug ⑥ 根治：改前无论判到哪个节点一律 `sendToChat`（= 当前会话）
 				 * ⇒ 现象"有流转、但没按消息判定归属对话"。现在按**目标会话**投递；
@@ -637,10 +729,54 @@ export function DirectorDialog(props = {}) {
 					});
 					const how = sent.mode === "sent" ? "已发送到该对话"
 						: sent.ok ? "已填入该对话输入框" : "投递失败：" + (sent.reason || "未知");
-					await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + how + "）");
+					/* 🔴 **N2 判据 3 + F3「接收确认」**：**目标分支**必须留下一条可追溯的接收凭证。
+					 *    为什么不能只靠"投递成功"这个返回值：投递是**宿主动作**（进的是原生对话），
+					 *    在总监消息流里**不留痕** ⇒ 用户切到目标分支后看不到"谁转来的 / 何时 / 指哪条源消息"。
+					 *    `env.ref` → 源消息 id（可追溯）；`env.parent` → 源信封 id（血缘可回溯，
+					 *    由 `childEnvelope()` 派生 ⇒ `root` 继承、`round`+1，**不会自成一条血缘**）。 */
+					let recvEnv = null;
+					if (targetNode && String(targetNode.id) !== String(nodeId)) {
+						try {
+							const recvId = makeId("dm", targetNode.id);
+							recvEnv = childEnvelope(src && src.env ? src.env : makeEnvelope({ from: nodeId, root: nodeId }, { self: nodeId }), {
+								id: recvId,
+								to: targetNode.id,
+								via: VIA.TRANSFER,
+								ref: (src && src.messageId) ? src.messageId : "",
+								cause: "由「" + String((node && node.name) || "总监") + "」按归属判定转派"
+							});
+							await appendDirectorMessage(targetNode.id, {
+								messageId: recvId,
+								kind: "接收 · 转派",
+								role: "director",
+								text: "【总监接收】来自「" + String((node && node.name) || "总监") + "」的转派"
+									+ (dimKey ? "（维度 " + dimKey + "）" : "") + "："
+									+ String((src && src.fact && src.fact.reqText) || "") + "\n落地：" + how,
+								env: recvEnv,
+								meta: (src && src.fact) ? { fact: src.fact } : {}
+							});
+						} catch (e) { recvEnv = null; }
+					}
+					/* 🔴 **源分支本地留痕**（19 号文 §8 v4 追加）：`via="transfer"` + `to=<目标>`
+					 *    ⇒ 源侧也读得出"这条已经转出去了、转给谁"，不是只有目标侧知道。
+					 *    `cause` 在目标侧没落成时**显式说明**（降级可以，无声不行 —— 纪律 19）。 */
+					const ownEnv = makeEnvelope({
+						from: nodeId, to: targetNode ? targetNode.id : null, via: VIA.TRANSFER, round: 0, root: nodeId,
+						ref: (src && src.messageId) ? src.messageId : "",
+						cause: recvEnv ? "" : "目标侧接收凭证未写入（目标节点不存在或写库失败）"
+					}, { self: nodeId });
+					await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + how + "）"
+						+ (recvEnv ? "\n目标总监已留接收凭证（血缘 " + String(recvEnv.root || "") + " · 轮次 " + recvEnv.round + "）"
+							: "\n⚠️ 目标侧接收凭证未写入（原因见该条 cause）"),
+						"assistant", ownEnv, (src && src.fact) ? src.fact : null);
 				}
 			} else {
-				await pushMsg("方案 · 派活", "路由已落实：" + summary + "（由总监新建对话并初始化其总监节点）");
+				/* 🔴 N2：`local`（就地）走这里 —— 与 `create` **同一分支但不是同一件事**：
+				 *   `local` 的语义是"内容属于当前维度 ⇒ **一个字都不用搬**"，必须如实报"未投递"，
+				 *   否则"就地处理"与"压根没判出来"在界面上**同形**（纪律 54：静默半成功更坏）。 */
+				await pushMsg("方案 · 派活", dest === DESTINATION.LOCAL
+					? "路由已落实：" + summary + "（归属命中**当前维度** ⇒ 就地处理，未跨对话投递）"
+					: "路由已落实：" + summary + "（由总监新建对话并初始化其总监节点）");
 			}
 			setRouteResult(null);
 			await refresh();
@@ -667,8 +803,8 @@ export function DirectorDialog(props = {}) {
 			style: {
 				position: "absolute", right: 18, bottom: 18, pointerEvents: "auto", cursor: "pointer",
 				display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 20,
-				background: "var(--dsw-alias-bg-sunken, #23262c)", border: "1px solid rgba(137,87,229,.45)",
-				color: "#b794f6", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
+				backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #23262c))", border: "1px solid rgba(137,87,229,.45)",
+				color: "var(--dp-dlg-ac2, #b794f6)", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
 			}
 		}, [
 			h("span", { key: "i" }, "◆"),
@@ -710,7 +846,7 @@ export function DirectorDialog(props = {}) {
 					 * 但面板本体仍是 `position:fixed` 贴右上角，见文件末尾 PersonalizePanel）。 */
 					h("button", { key: "p", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); setPOpen((v) => !v); } }, "⚙"),
 					h("button", { key: "m", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogCollapsed(true); } }, "–"),
-					h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
+					h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "var(--dp-dlg-bad, #f0877f)" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
 				])
 			])
 			: h("div", {
@@ -730,7 +866,7 @@ export function DirectorDialog(props = {}) {
 						key: "sel", "data-testid": "d-level", "aria-label": "切换层级",
 						value: nodeId,
 						onChange: (e) => directorLayoutStore.setActiveNode(e.target.value),
-						style: { maxWidth: 132, height: 22, fontSize: 11, borderRadius: 5, border: "1px solid #3d4148", background: "#212429", color: "#c3c8ce" }
+						style: { maxWidth: 132, height: 22, fontSize: 11, borderRadius: 5, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))" }
 					}, buildOptions(tree)),
 					h("span", { key: "c", style: S.lvchip, "data-testid": "d-level-chip" }, (node ? (LEVEL_LABEL[node.level] || node.level) : "—")),
 					h("div", { key: "b", style: S.btns }, [
@@ -742,7 +878,7 @@ export function DirectorDialog(props = {}) {
 						 * 本按钮在 `btns`（marginLeft:auto ⇒ 贴面板右上角），展开的面板本体
 						 * 由文件末尾的 PersonalizePanel 以 fixed 定位贴整个窗口右上角。 */
 						h("button", { key: "6", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: () => setPOpen((v) => !v) }, "⚙"),
-						h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "#f0877f" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
+						h("button", { key: "5", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "var(--dp-dlg-bad, #f0877f)" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: () => directorLayoutStore.setDialogOpen(false) }, "✕")
 					])
 				]),
 
@@ -752,7 +888,7 @@ export function DirectorDialog(props = {}) {
 
 				/* 面板主体 */
 				h(DirectorPanel, {
-					key: "body", node, tree, messages, reviewResult, onReview: doReview,
+					key: "body", node, tree, messages, upstream, reviewResult, onReview: doReview,
 					agentRuns: runs, onCallAgent, engineStats: stats,
 					seg, setSeg: (s) => directorLayoutStore.setLeftTab(s)
 				}),
@@ -762,14 +898,14 @@ export function DirectorDialog(props = {}) {
 					h(RouteCard, { result: routeResult, onConfirm: onConfirmRoute, onCancel: () => setRouteResult(null), busy })) : null,
 
 				/* mfoot：R8 全局输入框 + 焦点路由（I3/I7/I10）*/
-				h("div", { key: "f", style: { borderTop: "1px solid var(--dsw-alias-border-l2, #31343a)", background: "var(--dsw-alias-bg-sunken, #1b1e23)", padding: "7px 8px", display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" } }, [
+				h("div", { key: "f", style: { borderTop: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1b1e23))", padding: "7px 8px", display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" } }, [
 					h("span", {
 						key: "fc", "data-testid": "d-focus", "data-target": st.focusTarget,
 						style: {
 							fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
 							border: "1px solid " + (st.focusTarget === "director" ? "rgba(137,87,229,.45)" : "rgba(47,111,235,.5)"),
 							background: st.focusTarget === "director" ? "rgba(137,87,229,.16)" : "rgba(47,111,235,.16)",
-							color: st.focusTarget === "director" ? "#b794f6" : "#79a8ff", cursor: "pointer"
+							color: st.focusTarget === "director" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", cursor: "pointer"
 						},
 						title: "点击切换提交目标",
 						onClick: () => directorLayoutStore.setFocusTarget(st.focusTarget === "director" ? "chat" : "director")
@@ -785,7 +921,7 @@ export function DirectorDialog(props = {}) {
 				]),
 
 				/* 提示条 */
-				toast ? h("div", { key: "toast", style: { ...S.muted, padding: "0 9px 7px", color: "#79a8ff" }, "data-testid": "d-toast", onClick: () => setToast("") }, toast) : null
+				toast ? h("div", { key: "toast", style: { ...S.muted, padding: "0 9px 7px", color: "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" }, "data-testid": "d-toast", onClick: () => setToast("") }, toast) : null
 			]),
 
 		/* 中缝拖拽手柄（双击复位）*/
@@ -812,7 +948,7 @@ export function DirectorDialog(props = {}) {
 		}, h("div", {
 			style: {
 				position: "absolute", right: 8, bottom: 8, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
-				color: "#6fd388", background: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
+				color: "var(--dp-dlg-ok, #6fd388)", backgroundColor: "rgba(22,23,26,.82)", border: "1px solid rgba(63,185,80,.35)", borderRadius: 4, padding: "2px 6px"
 			}
 		}, "● 与「对话 tab」同源（同一渲染节点）")) : null,
 

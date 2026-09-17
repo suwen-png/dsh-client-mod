@@ -42,6 +42,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readd
 import { join, dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+/* 🔴 第十九轮：装机前**必须**先判"产物是不是当前 src 构建出来的"。
+ *    原因：本脚本原来的复判是「仓库产物 ↔ 实体包 逐字节一致」，而**两个旧产物之间也逐字节一致** ——
+ *    那一轮 `DirectorPage.js` 的改动写在 build 之后，装机报 ✅、真机 5 条假红。
+ *    「装对了」与「是新的」是两条判据，缺一条就会漏。 */
+import { checkStale } from "./check-stale-build.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(HERE, "..");
@@ -109,6 +114,18 @@ if (!existsSync(HARNESS_ROOT)) {
 const missingSrc = [...PAYLOAD_FILES, ...PAYLOAD_DIRS].filter((f) => !existsSync(join(PKG_ROOT, f)));
 if (missingSrc.length) bad(`仓库内缺少待安装文件：${missingSrc.join(", ")}（先跑 node build/build.mjs）`);
 else ok(`待安装清单齐全（${PAYLOAD_FILES.length} 个文件 + ${PAYLOAD_DIRS.length} 个目录）`);
+
+/* 🔴 第十九轮新增：**产物新鲜度**（内容指纹）。与上面"清单齐全"是两条独立判据 ——
+ *    文件都在、字节也一致，仍可能是**上一版 src** 构建出来的。 */
+{
+	const s = checkStale(PKG_ROOT);
+	if (s.stale) {
+		if (has("--allow-stale")) ok(`⚠️ 产物陈旧但 --allow-stale 放行：${s.reason}`);
+		else bad(`产物**陈旧**：${s.reason}（先跑 node build/build.mjs；确认要放行才加 --allow-stale）`);
+	} else {
+		ok(`产物新鲜（内容指纹 ${s.artifactStamp}，覆盖 src ${s.srcFiles} 个文件）`);
+	}
+}
 if (fail) { log("\n前置检查未通过，中止。"); process.exit(1); }
 
 /* ══════════════════════════════════════════════════════════════════

@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：声明式步骤图
  * 引用：—
- * 上游：client-entry.js, components/OrchestratorPanel.js
+ * 上游：client-entry.js, components/OrchestratorPanel.js, logic/director-run.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 三（声明式执行图 · 6 类错误校验 · 波浪并行 · 条件与模板）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md

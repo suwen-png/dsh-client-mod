@@ -117,6 +117,24 @@ export function scoreNodes(text, nodes) {
 	const out = [];
 	for (const n of nodes || []) {
 		if (!n || !n.id) continue;
+		/* 🔴 19 号文 N2：**维度节点**的命中由 **N1 归属判定**给出（调用方放进 `n.score`），
+		 *   不走本函数的字面打分。理由是**准不准**，不是**能不能**：
+		 *     · 本函数是"字面二元组匹配"（`tokenize()` **有 bigram 兜底** ⇒ 中文名**会**被命中，
+		 *       见 `pushBigrams`）—— 一句话同时提到两个维度时它**分不出主次**；
+		 *     · 归属判定有信号分级（label 3 / 目录 2.5 / 职责词 1）与 stage 相邻降权
+		 *       ⇒ 能给出"主要属于谁"。
+		 *   ⚠️ 收敛前我曾据此写下"中文维度名恒不命中"的注释 —— 那是**漏读 bigram 兜底**导致的
+		 *      错误结论（真机离线都反证了它）。此处如实记录，避免后人重犯。
+		 *   约定：调用方带 `n.score` ⇒ 本函数**尊重它**；不带 ⇒ 走原字面匹配（既有行为零改动）。 */
+		if (n.level === "dimension" && Number.isFinite(Number(n.score)) && Number(n.score) > 0) {
+			out.push({
+				nodeId: n.id, name: n.name, level: "dimension",
+				score: Math.round(Number(n.score) * 100) / 100,
+				reason: String(n.reason || "归属判定命中该维度"),
+				dimKey: n.dimKey || "", attr: true
+			});
+			continue;
+		}
 		const name = String(n.name || "");
 		const nameLower = name.toLowerCase();
 		let score = 0;
@@ -137,7 +155,12 @@ export function scoreNodes(text, nodes) {
 		// ④ 层级先验：会话级优先被"直调"，项目级优先被"转派"
 		if (n.level === "session") score += 0.3;
 		if (n.level === "project") score += 0.2;
-		if (score > 0) out.push({ nodeId: n.id, name: n.name, level: n.level, score: Math.round(score * 100) / 100, reason: reasons.join("；") || "弱相关" });
+		/* 🔴 19 号文 N2：**维度节点**（`{id,name,level:"dimension",dimKey}`）也进候选。
+		 *   给一点基础分，避免"维度名与用户输入无字面交集"时整条维度路被丢掉；
+		 *   `dimKey` **必须透传** —— 没有它，`suggestDestination` 判出 `transfer` 之后
+		 *   调用方无法知道"要转给哪个维度"（只能再从 name 解析，等于两份真相源）。 */
+		if (n.level === "dimension") score += 0.2;
+		if (score > 0) out.push({ nodeId: n.id, name: n.name, level: n.level, score: Math.round(score * 100) / 100, reason: reasons.join("；") || "弱相关", dimKey: n.dimKey || "" });
 	}
 	out.sort((a, b) => b.score - a.score);
 	return out;
@@ -166,28 +189,117 @@ export function splitTasks(text) {
  * 四、STEP 4 路由决策（**待用户确认，不静默分发**）
  * ══════════════════════════════════════════════════════════════════ */
 
-/** 去向（要求 8 三条） */
+/** 去向（要求 8 三条 + 🔴 19 号文 N2 新增 `local`） */
 export const DESTINATION = Object.freeze({
+	/* 🔴 19 号文 **N2**（2026-09-17）新增：**就地处理**（内容属于当前维度 ⇒ 不跨对话投递）。
+	 *   为什么必须新增而不是复用 `DIRECT`：`DIRECT` 的语义是"直接调用**对应对话**"
+	 *   （仍然换了一个目标会话），而用户要的是"就在这个分支里干，别搬走"。
+	 *   两者在界面上与消息归属上**完全不是一回事**，混用会让"没有投递"与"投递到别处"同形。
+	 *   ⚠️ 冻结契约**只增不改**：既有四处组件判断是
+	 *     `if (dest === DIRECT || dest === TRANSFER)` ⇒ `local` 自然落进 else（**不投递**），
+	 *     无需改动组件即行为正确（全仓 `grep DESTINATION` 已核对：**无 switch 穷举**）。 */
+	LOCAL: "local",         // 就地处理（本维度自己干）
 	TRANSFER: "transfer",   // 转给该对话的总监
 	DIRECT: "direct",       // 直接调用对应对话
 	CREATE: "create"        // 新建对话
 });
 export const DESTINATION_LABEL = Object.freeze({
+	local: "就地处理（本维度）",
 	transfer: "转给该对话的总监",
 	direct: "直接调用对应对话",
 	create: "新建对话"
 });
 
 /**
+ * 🔴 19 号文 **N2**（2026-09-17）：把**归属判定结果**翻译成**路由候选**（纯函数）。
+ *
+ * 它治的是什么：N2 的两条平行通道各自为政 ——
+ *   通道 A（`DirectorPage` 派发）**只认内容**（`plan()` 命中小说即全 8 维）；
+ *   通道 B（`route()`）**只认层级树节点**（`level: "project" | "session"`）。
+ *   而 A1–A8 这些**维度根本不是层级树节点** ⇒ 在 A3 分支里说 A5 的话，
+ *   路由既**判不出**"这属于 A5"，候选里也**没有** A5 ⇒ 用户要的跨维度转发无从发生。
+ * 本函数把「归属判定命中的维度」变成 `{id, name, level:"dimension", dimKey, score}`
+ * 形态的候选，交给 `scoreNodes()`（它已支持维度节点：带 `score` 即**尊重**归属分）。
+ *
+ * ── 三条规则（逐条对应 19 号文 N2 的判据 1/2/4）────────────────────
+ *   ① 命中**当前维度** ⇒ 候选 id = **当前节点** ⇒ `suggestDestination()` 判 `local`
+ *      （就地处理，**零跨会话投递**）
+ *   ② 命中**其他维度**、且该维度**已有分支会话** ⇒ 候选 id = 该分支**节点 id**
+ *      ⇒ 判 `transfer`（目标由 `scopeKeyOf` 解析成该分支会话，**不另建**）
+ *   ③ 命中其他维度但**该维度还没有分支会话** ⇒ **不进候选** ⇒ 候选集退化成既有形态
+ *      ⇒ 自然落到 `create`（"由总监新建对话并初始化其总监节点"，**保留既有语义**）
+ *
+ * ⚠️ 为什么本函数**不**建会话：它是**纯函数**（无 store / 无 DOM / 无时钟）。
+ *    建会话是副作用，属接线层的职责（`confirmRoute` 之后）。
+ * ⚠️ `branchOf` 由调用方从**分流索引**（`dsh.director.split`，冻结键）反查 ⇒
+ *    本模块不读 localStorage ⇒ 离线可单测（`test-routing-local.mjs` RL-2/3/4）。
+ *
+ * @param {{dims?:Array,attribution?:object}} plan `plan()` 的返回值（`plan.attribution` 带分数与理由）
+ * @param {{currentNodeId?:string,currentDim?:string,branchOf?:Object}} [ctx]
+ * @returns {Array<{id:string,name:string,level:string,dimKey:string,score:number,reason:string}>}
+ */
+export function dimensionCandidates(plan, ctx = {}) {
+	const p = plan || {};
+	const c = ctx || {};
+	const list = Array.isArray(p.dims) ? p.dims : [];
+	const ad = (p.attribution && Array.isArray(p.attribution.dims)) ? p.attribution.dims : [];
+	const scored = {};
+	for (const a of ad) { if (a && a.key) scored[String(a.key)] = a; }
+	const curId = c.currentNodeId ? String(c.currentNodeId) : "";
+	const curDim = c.currentDim ? String(c.currentDim) : "";
+	const branchOf = (c.branchOf && typeof c.branchOf === "object") ? c.branchOf : {};
+	const out = [];
+	for (const d of list) {
+		if (!d || !d.key) continue;
+		const key = String(d.key);
+		const label = String(d.label || key);
+		const a = scored[key] || null;
+		/* 🔴 归属分缺省时给**中性 1**、不给 0：`scoreNodes()` 只认 `> 0` 的归属分
+		 *   （`n.score > 0` 才走"尊重归属"分支）⇒ 给 0 会让该维度**静默退出候选**。
+		 *   显式 `only` 路径下 `plan.attribution` 为 `null`，此处即走该兜底。 */
+		const score = (a && Number(a.score) > 0) ? Number(a.score) : 1;
+		const why = (a && a.reason) ? String(a.reason) : "归属判定命中该维度";
+		if (curDim && key === curDim) {
+			if (!curId) continue;
+			out.push({ id: curId, name: label, level: "dimension", dimKey: key, score: score, reason: "命中当前维度（" + why + "）" });
+			continue;
+		}
+		const b = branchOf[key];
+		if (!b || !b.nodeId) continue;
+		out.push({ id: String(b.nodeId), name: label, level: "dimension", dimKey: key, score: score, reason: "命中该维度（" + why + "）" });
+	}
+	return out;
+}
+
+/**
  * 由候选分决定"建议去向"
  * 规则（可解释，非黑箱）：
+ *   - 🔴 **维度节点优先**（N2）：命中 `level==="dimension"` 且 `nodeId === ctx.currentNodeId`
+ *     ⇒ `local`（就地处理，**不投递**）；命中**其他**维度 ⇒ `transfer`（交该维度分支会话）
  *   - 有高分会话候选（≥3）→ 直调（产出型任务直接投给执行对话）
  *   - 有中分项目候选  → 转派（交给该层级总监继续治理）
  *   - 无候选          → 新建
+ * @param {Array} candidates `scoreNodes()` 的输出
+ * @param {{currentNodeId?:string}} [ctx] 当前所在节点（**可选** ⇒ 不传时行为与收敛前**逐字相同**）
  */
-export function suggestDestination(candidates) {
+export function suggestDestination(candidates, ctx) {
 	const top = (candidates || [])[0];
+	const cur = ctx && ctx.currentNodeId ? String(ctx.currentNodeId) : "";
 	if (!top) return { destination: DESTINATION.CREATE, confidence: 0.5, reason: "无匹配节点 → 由总监新建对话并初始化其总监" };
+	if (top.level === "dimension") {
+		if (cur && String(top.nodeId) === cur) {
+			return {
+				destination: DESTINATION.LOCAL, confidence: 0.9,
+				reason: "命中**当前维度**「" + top.name + "」⇒ 就地处理（不跨对话投递）",
+				dimKey: top.dimKey || ""
+			};
+		}
+		return {
+			destination: DESTINATION.TRANSFER, confidence: Math.min(0.9, 0.5 + top.score / 20),
+			reason: "命中**其他维度**「" + top.name + "」（" + top.reason + "）⇒ 转给该维度分支",
+			dimKey: top.dimKey || ""
+		};
+	}
 	if (top.level === "session" && top.score >= 3) return { destination: DESTINATION.DIRECT, confidence: Math.min(0.95, 0.5 + top.score / 20), reason: "命中会话「" + top.name + "」（" + top.reason + "）→ 直接调用该对话" };
 	if (top.level === "project") return { destination: DESTINATION.TRANSFER, confidence: Math.min(0.9, 0.45 + top.score / 20), reason: "命中项目/文件夹「" + top.name + "」→ 转派给该层级总监" };
 	return { destination: DESTINATION.DIRECT, confidence: 0.6, reason: "命中「" + top.name + "」→ 直接调用对应对话" };
@@ -206,15 +318,22 @@ export function route(text, ctx = {}) {
 	// STEP 1
 	const intent = classifyIntent(text);
 	// STEP 2（当前层级节点加权，体现"就近路由"）
+	/* 🔴 19 号文 N2：**维度节点不做「就近」加权**。
+	 *   实测量级冲突：归属分是 0.2~0.9，而这里的 `+1` 会把「当前维度」从 0.2 抬到 1.2，
+	 *   直接压过「内容真正属于的维度」的 0.9 ⇒ **内容归属被位置覆盖**，判据 2 必错。
+	 *   语义上正确的优先级：**内容属于谁 > 我现在在哪** —— 后者只是"还没判出归属时"的兜底。 */
 	const candidates = scoreNodes(text, nodes).map((c) => ({
 		...c,
-		score: c.nodeId === ctx.currentNodeId ? Math.round((c.score + 1) * 100) / 100 : c.score,
-		reason: c.nodeId === ctx.currentNodeId ? (c.reason + "；当前层级" ) : c.reason
+		score: (c.nodeId === ctx.currentNodeId && c.level !== "dimension") ? Math.round((c.score + 1) * 100) / 100 : c.score,
+		reason: (c.nodeId === ctx.currentNodeId && c.level !== "dimension") ? (c.reason + "；当前层级") : c.reason
 	})).sort((a, b) => b.score - a.score);
 	// STEP 3
 	const subtasks = splitTasks(text);
 	// STEP 4
-	const decision = suggestDestination(candidates);
+	/* 🔴 19 号文 N2：把 `ctx` 透进去 —— 维度节点的 `local`/`transfer` 判定
+	 *   **必须**知道"我现在在哪个节点"（无 ctx 时维度候选一律判 `transfer`，
+	 *   那会让"在当前维度就地处理"永远退化成"投出去"）。 */
+	const decision = suggestDestination(candidates, ctx);
 	// 步骤轨迹（供 UI 逐步展示）
 	const steps = [
 		{ n: 1, key: "intent", title: "意图理解", detail: intent.kind + "（置信 " + intent.confidence.toFixed(2) + "）", done: true },
@@ -368,7 +487,7 @@ export function installRoutingApi() {
 	if (typeof window === "undefined") return null;
 	const api = {
 		INTENT, DESTINATION, DESTINATION_LABEL, REVIEW_DIMS,
-		tokenize, classifyIntent, scoreNodes, splitTasks, suggestDestination,
+		tokenize, classifyIntent, scoreNodes, splitTasks, suggestDestination, dimensionCandidates,
 		route, confirmRoute, review6, reviewAndSave,
 		listRouteHistory
 	};

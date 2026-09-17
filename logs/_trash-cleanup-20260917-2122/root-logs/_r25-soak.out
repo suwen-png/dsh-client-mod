@@ -1,0 +1,4 @@
+
+dsh web: http://127.0.0.1:36076
+Checking for update
+Update for version 0.1.0-rc.11 is not available (latest version: 0.1.0-rc.5, downgrade is disallowed).

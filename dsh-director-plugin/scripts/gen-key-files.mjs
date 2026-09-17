@@ -183,7 +183,11 @@ function main() {
 			const curLines = cur.split("\n"), nextLines = next.split("\n");
 			let diff = 0;
 			for (let i = 0; i < Math.max(curLines.length, nextLines.length); i++) {
-				if (curLines[i] !== nextLines[i]) { diff++; if (diff <= 3) console.log("  差异行 " + (i + 1) + ":\n    产物: " + String(curLines[i]).slice(0, 120) + "\n    磁盘: " + String(nextLines[i]).slice(0, 120)); }
+				/* 🔴 标签方向（2026-09-17 修正）：`cur` 是**磁盘上现在这个文件**，
+				 * `next` 是**本次新渲染出来的内容**。旧写法把它们打印反了
+				 * （`磁盘:` 后面挂 `next`），会让排查者以为"产物多了 R7 说明、磁盘少了"，
+				 * 结论与事实颠倒。闸门打印的**证据本身也是证据**，不能自相矛盾。 */
+				if (curLines[i] !== nextLines[i]) { diff++; if (diff <= 3) console.log("  差异行 " + (i + 1) + ":\n    磁盘(现行): " + String(curLines[i]).slice(0, 120) + "\n    产物(新渲染): " + String(nextLines[i]).slice(0, 120)); }
 			}
 			console.log("  ⟹ **不一致**（" + diff + " 行差异）");
 			console.log("    修复：node dsh-director-plugin/scripts/gen-key-files.mjs");

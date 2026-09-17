@@ -1,0 +1,164 @@
+﻿NOW=16:40:43
+--- Get-Process -Id 24224 ---
+NOT FOUND: 找不到进程标识符为 24224 的进程。
+--- tasklist /FI PID eq 24224 ---
+信息: 没有运行的任务匹配指定标准。
+--- 9222 归属 ---
+--- 所有 DeepSeek Harness.exe（Get-Process）---
+--- 全量 node.exe / 可疑进程 ---
+
+
+ProcessId   : 8956
+Name        : WorkBuddy.exe
+CommandLine : D:\软件安装\WorkBuddy\WorkBuddy.exe D:\软件安装\WorkBuddy\resources\app.asar.unpacked\cli\bin\codebuddy --serve -
+              -session-id 2ec7bb79-6454-4282-bb9f-11a4b180530c --permission-mode fullAccess --allowedTools present_file
+              s read_me show_widget connect_cloud_service connect_open_platform WebFetch Bash(mcporter:*) --model deeps
+              eek-v4.1-flash --tools Agent,AskUserQuestion,Bash,Defer(ImageGen),Defer(LSP),Defer(TeamCreate),Defer(Team
+              Delete),Defer(VideoGen),Defer(conversation_search),Defer(workbuddy_cloud_service),Defer(workbuddy_sites_d
+              eploy),DeferExecuteTool,Edit,Glob,Grep,ListMcpResources,MultiEdit,PowerShell,Read,ReadMcpResource,SendMes
+              sage,Skill,SkillManage,TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,ToolSearch,WebFetch,Web
+              Search,Write,automation_update,present_files,read_me,show_widget --settings "{\"conversationTags\":{\"exp
+              ert\":\"SeniorDeveloper\"},\"sandbox\":{\"enabled\":false},\"enabledPlugins\":{\"senior-developer@experts
+              \":true,\"welcomemode-work@workbuddy-builtin\":true,\"interactionmode-expert@workbuddy-builtin\":true,\"p
+              rompt-common@workbuddy-builtin\":true},\"extraKnownMarketplaces\":{\"experts\":{\"source\":{\"source\":\"
+              directory\",\"url\":\"C:\\Users\\15142\\.workbuddy\\plugins\\marketplaces\\experts\"}}},\"env\":{\"CODEBU
+              DDY_CUSTOM_HEADERS\":\"X-Expert-Id: SeniorDeveloper\"},\"language\":\"简体中文\",\"trustedDirectories\":[\"D:
+              \\hermes-data\\dsh-client-mod/**\"],\"permissions\":{\"deny\":[\"Read(C:/Users/15142/.workbuddy/projects)
+              \",\"Read(C:/Users/15142/.workbuddy/projects/**)\",\"Grep(C:/Users/15142/.workbuddy/projects)\",\"Grep(C:
+              /Users/15142/.workbuddy/projects/**)\",\"Glob(C:/Users/15142/.workbuddy/projects)\",\"Glob(C:/Users/15142
+              /.workbuddy/projects/**)\",\"NotebookRead(C:/Users/15142/.workbuddy/projects)\",\"NotebookRead(C:/Users/1
+              5142/.workbuddy/projects/**)\",\"Bash(*C:/Users/15142/.workbuddy/projects*)\",\"Read(~/.workbuddy/project
+              s)\",\"Read(~/.workbuddy/projects/**)\",\"Grep(~/.workbuddy/projects)\",\"Grep(~/.workbuddy/projects/**)\
+              ",\"Glob(~/.workbuddy/projects)\",\"Glob(~/.workbuddy/projects/**)\",\"NotebookRead(~/.workbuddy/projects
+              )\",\"NotebookRead(~/.workbuddy/projects/**)\",\"Bash(*~/.workbuddy/projects*)\",\"Read($HOME/.workbuddy/
+              projects)\",\"Read($HOME/.workbuddy/projects/**)\",\"Grep($HOME/.workbuddy/projects)\",\"Grep($HOME/.work
+              buddy/projects/**)\",\"Glob($HOME/.workbuddy/projects)\",\"Glob($HOME/.workbuddy/projects/**)\",\"Noteboo
+              kRead($HOME/.workbuddy/projects)\",\"NotebookRead($HOME/.workbuddy/projects/**)\",\"Bash(*$HOME/.workbudd
+              y/projects*)\",\"Read(C:/Users/15142/.codebuddy/projects)\",\"Read(C:/Users/15142/.codebuddy/projects/**)
+              \",\"Grep(C:/Users/15142/.codebuddy/projects)\",\"Grep(C:/Users/15142/.codebuddy/projects/**)\",\"Glob(C:
+              /Users/15142/.codebuddy/projects)\",\"Glob(C:/Users/15142/.codebuddy/projects/**)\",\"NotebookRead(C:/Use
+              rs/15142/.codebuddy/projects)\",\"NotebookRead(C:/Users/15142/.codebuddy/projects/**)\",\"Bash(*C:/Users/
+              15142/.codebuddy/projects*)\",\"Read(~/.codebuddy/projects)\",\"Read(~/.codebuddy/projects/**)\",\"Grep(~
+              /.codebuddy/projects)\",\"Grep(~/.codebuddy/projects/**)\",\"Glob(~/.codebuddy/projects)\",\"Glob(~/.code
+              buddy/projects/**)\",\"NotebookRead(~/.codebuddy/projects)\",\"NotebookRead(~/.codebuddy/projects/**)\",\
+              "Bash(*~/.codebuddy/projects*)\",\"Read($HOME/.codebuddy/projects)\",\"Read($HOME/.codebuddy/projects/**)
+              \",\"Grep($HOME/.codebuddy/projects)\",\"Grep($HOME/.codebuddy/projects/**)\",\"Glob($HOME/.codebuddy/pro
+              jects)\",\"Glob($HOME/.codebuddy/projects/**)\",\"NotebookRead($HOME/.codebuddy/projects)\",\"NotebookRea
+              d($HOME/.codebuddy/projects/**)\",\"Bash(*$HOME/.codebuddy/projects*)\"]}}" --mcp-config "{\"mcpServers\"
+              :{\"connector-proxy\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:25316/mcp\",\"headers\":{\"Authorizat
+              ion\":\"Bearer yyDIHH6EPmI1KTjT8Pa8eeB6aFj5wutcxlBMVzx0Gp0\",\"X-WorkBuddy-MCP-Context\":\"eyJzZXNzaW9uSW
+              QiOiIyZWM3YmI3OS02NDU0LTQyODItYmI5Zi0xMWE0YjE4MDUzMGMiLCJ3ZWxjb21lTW9kZSI6IndvcmtpbmciLCJ3b3Jrc3BhY2UiOiJ
+              EOlxcaGVybWVzLWRhdGFcXGRzaC1jbGllbnQtbW9kIiwiYWxsb3dlZEJ1aWx0aW5Ub29scyI6WyJhZ2VudF9tYWlsX2Rvd25sb2FkX2F0
+              dGFjaG1lbnQiLCJhZ2VudF9tYWlsX3VwbG9hZF9hdHRhY2htZW50IiwiYWdlbnRpY19zZWFyY2giLCJhdXRvbWF0aW9uX3VwZGF0ZSIsI
+              mNvbm5lY3RfY2xvdWRfc2VydmljZSIsImNvbm5lY3Rfb3Blbl9wbGF0Zm9ybSIsImNvbnZlcnNhdGlvbl9zZWFyY2giLCJwcmVzZW50X2
+              ZpbGVzIiwicmVhZF9tZSIsInNlYXJjaF9wbHVnaW5zIiwic2hvd193aWRnZXQiLCJzdWdnZXN0X3BsdWdpbl9pbnN0YWxsIiwid29ya2J
+              1ZGR5X2Nsb3VkX3NlcnZpY2UiLCJ3b3JrYnVkZHlfbWFya2V0cGxhY2Vfc2tpbGwiLCJ3b3JrYnVkZHlfc2l0ZXNfZGVwbG95Iiwid29y
+              a2J1ZGR5X3NpdGVzX3VucHVibGlzaCJdfQ.y8VNeqUmpzjdZmzQQCK6qYgMcDVocasVy-_0kS7ua6k\"},\"defer_loading\":false
+              ,\"transparent_proxy\":true,\"builtin_tools\":[\"automation_update\",\"present_files\",\"connect_cloud_se
+              rvice\",\"connect_open_platform\",\"read_me\",\"show_widget\",\"workbuddy_sites_deploy\",\"workbuddy_site
+              s_unpublish\",\"workbuddy_cloud_service\",\"workbuddy_marketplace_skill\",\"agentic_search\",\"conversati
+              on_search\",\"agent_mail_upload_attachment\",\"agent_mail_download_attachment\",\"search_plugins\",\"sugg
+              est_plugin_install\"],\"tools\":{\"automation_update\":{\"bare_name\":true,\"defer_loading\":false},\"pre
+              sent_files\":{\"bare_name\":true,\"defer_loading\":false},\"connect_cloud_service\":{\"bare_name\":true,\
+              "defer_loading\":true},\"connect_open_platform\":{\"bare_name\":true,\"defer_loading\":true},\"read_me\":
+              {\"bare_name\":true,\"defer_loading\":false},\"show_widget\":{\"bare_name\":true,\"defer_loading\":false}
+              ,\"workbuddy_sites_deploy\":{\"bare_name\":true,\"defer_loading\":true},\"workbuddy_sites_unpublish\":{\"
+              bare_name\":true,\"defer_loading\":true},\"workbuddy_cloud_service\":{\"bare_name\":true,\"defer_loading\
+              ":true},\"workbuddy_marketplace_skill\":{\"bare_name\":true,\"defer_loading\":true},\"agentic_search\":{\
+              "bare_name\":true,\"defer_loading\":true},\"conversation_search\":{\"bare_name\":true,\"defer_loading\":t
+              rue},\"agent_mail_upload_attachment\":{\"bare_name\":true,\"defer_loading\":true},\"agent_mail_download_a
+              ttachment\":{\"bare_name\":true,\"defer_loading\":true},\"search_plugins\":{\"bare_name\":true,\"defer_lo
+              ading\":true},\"suggest_plugin_install\":{\"bare_name\":true,\"defer_loading\":true}}},\"agent-mail\":{\"
+              type\":\"http\",\"url\":\"http://127.0.0.1:25316/a9bcc7dd302f2b262507f7590d97b1b4/mcp\",\"headers\":{\"Au
+              thorization\":\"Bearer IqGzRJ7fgiCWyUGAgdOrk0CYY7dI1yDO0bovfYLaJuk\",\"X-WorkBuddy-MCP-Context\":\"eyJzZX
+              NzaW9uSWQiOiIyZWM3YmI3OS02NDU0LTQyODItYmI5Zi0xMWE0YjE4MDUzMGMiLCJ3ZWxjb21lTW9kZSI6IndvcmtpbmciLCJ3b3Jrc3B
+              hY2UiOiJEOlxcaGVybWVzLWRhdGFcXGRzaC1jbGllbnQtbW9kIiwiYWxsb3dlZEJ1aWx0aW5Ub29scyI6WyJhZ2VudF9tYWlsX2Rvd25s
+              b2FkX2F0dGFjaG1lbnQiLCJhZ2VudF9tYWlsX3VwbG9hZF9hdHRhY2htZW50IiwiYWdlbnRpY19zZWFyY2giLCJhdXRvbWF0aW9uX3VwZ
+              GF0ZSIsImNvbm5lY3RfY2xvdWRfc2VydmljZSIsImNvbm5lY3Rfb3Blbl9wbGF0Zm9ybSIsImNvbnZlcnNhdGlvbl9zZWFyY2giLCJwcm
+              VzZW50X2ZpbGVzIiwicmVhZF9tZSIsInNlYXJjaF9wbHVnaW5zIiwic2hvd193aWRnZXQiLCJzdWdnZXN0X3BsdWdpbl9pbnN0YWxsIiw
+              id29ya2J1ZGR5X2Nsb3VkX3NlcnZpY2UiLCJ3b3JrYnVkZHlfbWFya2V0cGxhY2Vfc2tpbGwiLCJ3b3JrYnVkZHlfc2l0ZXNfZGVwbG95
+              Iiwid29ya2J1ZGR5X3NpdGVzX3VucHVibGlzaCJdfQ.y8VNeqUmpzjdZmzQQCK6qYgMcDVocasVy-_0kS7ua6k\"},\"defer_loading
+              \":true},\"genie-baas\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:25316/881f8b0f3d2c03fadb7743e0aaca8
+              a28/mcp\",\"headers\":{\"Authorization\":\"Bearer H11xuBda5Bjdn-gNazdkxNnZpL9G6Zsf2Ly3LPIiEpY\",\"X-WorkB
+              uddy-MCP-Context\":\"eyJzZXNzaW9uSWQiOiIyZWM3YmI3OS02NDU0LTQyODItYmI5Zi0xMWE0YjE4MDUzMGMiLCJ3ZWxjb21lTW9k
+              ZSI6IndvcmtpbmciLCJ3b3Jrc3BhY2UiOiJEOlxcaGVybWVzLWRhdGFcXGRzaC1jbGllbnQtbW9kIiwiYWxsb3dlZEJ1aWx0aW5Ub29sc
+              yI6WyJhZ2VudF9tYWlsX2Rvd25sb2FkX2F0dGFjaG1lbnQiLCJhZ2VudF9tYWlsX3VwbG9hZF9hdHRhY2htZW50IiwiYWdlbnRpY19zZW
+              FyY2giLCJhdXRvbWF0aW9uX3VwZGF0ZSIsImNvbm5lY3RfY2xvdWRfc2VydmljZSIsImNvbm5lY3Rfb3Blbl9wbGF0Zm9ybSIsImNvbnZ
+              lcnNhdGlvbl9zZWFyY2giLCJwcmVzZW50X2ZpbGVzIiwicmVhZF9tZSIsInNlYXJjaF9wbHVnaW5zIiwic2hvd193aWRnZXQiLCJzdWdn
+              ZXN0X3BsdWdpbl9pbnN0YWxsIiwid29ya2J1ZGR5X2Nsb3VkX3NlcnZpY2UiLCJ3b3JrYnVkZHlfbWFya2V0cGxhY2Vfc2tpbGwiLCJ3b
+              3JrYnVkZHlfc2l0ZXNfZGVwbG95Iiwid29ya2J1ZGR5X3NpdGVzX3VucHVibGlzaCJdfQ.y8VNeqUmpzjdZmzQQCK6qYgMcDVocasVy-_
+              0kS7ua6k\"},\"defer_loading\":true},\"sheetagent\":{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"C
+              :\\Users\\15142\\.workbuddy\\plugins\\cache\\workbuddy-builtin\\sheetagent\\5.5.6-wb.38337834.g5f969292.h
+              4918b5ced607/mcp/start.mjs\"],\"env\":{\"SHEETAGENT_MCP_TRANSPORT\":\"stdio\",\"SHEET_MCP_DEBUG\":\"0\",\
+              "SHEETAGENT_LOG_LEVEL\":\"info\",\"SHEET_API_MODE\":\"local\",\"SHEET_REMOTE_MCP_URL\":\"https://docs.qq.
+              com/api/v6/sheet/mcp\",\"CLAUDE_PLUGIN_ROOT\":\"C:\\Users\\15142\\.workbuddy\\plugins\\cache\\workbuddy-b
+              uiltin\\sheetagent\\5.5.6-wb.38337834.g5f969292.h4918b5ced607\",\"CODEBUDDY_PLUGIN_ROOT\":\"C:\\Users\\15
+              142\\.workbuddy\\plugins\\cache\\workbuddy-builtin\\sheetagent\\5.5.6-wb.38337834.g5f969292.h4918b5ced607
+              \",\"CLAUDE_PLUGIN_DATA\":\"C:\\Users\\15142\\.workbuddy\\plugins\\data\\sheetagent-workbuddy-builtin\",\
+              "CODEBUDDY_PLUGIN_DATA\":\"C:\\Users\\15142\\.workbuddy\\plugins\\data\\sheetagent-workbuddy-builtin\",\"
+              CODEBUDDY_PROJECT_DIR\":\"D:\\hermes-data\\dsh-client-mod\",\"CLAUDE_PROJECT_DIR\":\"D:\\hermes-data\\dsh
+              -client-mod\"},\"defer_loading\":true}}}" --strict-mcp-config --prompt-vars-file C:\Users\15142\AppData\L
+              ocal\Temp\workbuddy-prompt-vars\2ec7bb79-6454-4282-bb9f-11a4b180530c.prompt-vars.json --session-id 2ec7bb
+              79-6454-4282-bb9f-11a4b180530c --port 0
+
+ProcessId   : 29980
+Name        : WorkBuddy.exe
+CommandLine : D:\软件安装\WorkBuddy\WorkBuddy.exe D:\软件安装\WorkBuddy\resources\app.asar.unpacked\cli\bin\windows-child-proce
+              ss-containment.cjs --codebuddy-windows-job-launcher --parent-pid 8956 -- C:\Windows\System32\WindowsPower
+              Shell\v1.0\powershell.EXE -NoProfile -NonInteractive -Command "$out = \"D:\hermes-data\dsh-client-mod\log
+              s\_r25-pid24224.txt\"
+              \"NOW=\" + (Get-Date -Format \"HH:mm:ss\") | Out-File $out -Encoding utf8
+              \"--- Get-Process -Id 24224 ---\" | Out-File $out -Append -Encoding utf8
+              try { Get-Process -Id 24224 -ErrorAction Stop | Select-Object Id,ProcessName,StartTime,Path,MainWindowTit
+              le | Format-List | Out-File $out -Append -Encoding utf8 } catch { \"NOT FOUND: \" + $_.Exception.Message 
+              | Out-File $out -Append -Encoding utf8 }
+              \"--- tasklist /FI PID eq 24224 ---\" | Out-File $out -Append -Encoding utf8
+              tasklist /FI \"PID eq 24224\" /FO LIST | Out-File $out -Append -Encoding utf8
+              \"--- 9222 归属 ---\" | Out-File $out -Append -Encoding utf8
+              Get-NetTCPConnection -LocalPort 9222 -ErrorAction SilentlyContinue | Select-Object State,LocalAddress,Loc
+              alPort,OwningProcess,RemoteAddress,RemotePort | Format-Table -AutoSize | Out-File $out -Append -Encoding 
+              utf8
+              \"--- 所有 DeepSeek Harness.exe（Get-Process）---\" | Out-File $out -Append -Encoding utf8
+              Get-Process -Name \"DeepSeek Harness\" -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,MainW
+              indowTitle | Format-Table -AutoSize | Out-File $out -Append -Encoding utf8
+              \"--- 全量 node.exe / 可疑进程 ---\" | Out-File $out -Append -Encoding utf8
+              Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'Harness|dsh|19142' } | Select-Objec
+              t ProcessId,Name,CommandLine | Format-List | Out-File $out -Append -Encoding utf8
+              \"--- DONE ---\" | Out-File $out -Append -Encoding utf8
+              $_codebuddyPsSucceeded = $?
+              $_codebuddyPsLastExitCode = $LASTEXITCODE
+              $_code = if ($null -ne $_codebuddyPsLastExitCode) { $_codebuddyPsLastExitCode } elseif ($_codebuddyPsSucc
+              eeded) { 0 } else { 1 }
+              exit $_code"
+
+ProcessId   : 16412
+Name        : powershell.exe
+CommandLine : C:\Windows\System32\WindowsPowerShell\v1.0\powershell.EXE -NoProfile -NonInteractive -Command "$out = \"D
+              :\hermes-data\dsh-client-mod\logs\_r25-pid24224.txt\"
+              \"NOW=\" + (Get-Date -Format \"HH:mm:ss\") | Out-File $out -Encoding utf8
+              \"--- Get-Process -Id 24224 ---\" | Out-File $out -Append -Encoding utf8
+              try { Get-Process -Id 24224 -ErrorAction Stop | Select-Object Id,ProcessName,StartTime,Path,MainWindowTit
+              le | Format-List | Out-File $out -Append -Encoding utf8 } catch { \"NOT FOUND: \" + $_.Exception.Message 
+              | Out-File $out -Append -Encoding utf8 }
+              \"--- tasklist /FI PID eq 24224 ---\" | Out-File $out -Append -Encoding utf8
+              tasklist /FI \"PID eq 24224\" /FO LIST | Out-File $out -Append -Encoding utf8
+              \"--- 9222 归属 ---\" | Out-File $out -Append -Encoding utf8
+              Get-NetTCPConnection -LocalPort 9222 -ErrorAction SilentlyContinue | Select-Object State,LocalAddress,Loc
+              alPort,OwningProcess,RemoteAddress,RemotePort | Format-Table -AutoSize | Out-File $out -Append -Encoding 
+              utf8
+              \"--- 所有 DeepSeek Harness.exe（Get-Process）---\" | Out-File $out -Append -Encoding utf8
+              Get-Process -Name \"DeepSeek Harness\" -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,MainW
+              indowTitle | Format-Table -AutoSize | Out-File $out -Append -Encoding utf8
+              \"--- 全量 node.exe / 可疑进程 ---\" | Out-File $out -Append -Encoding utf8
+              Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'Harness|dsh|19142' } | Select-Objec
+              t ProcessId,Name,CommandLine | Format-List | Out-File $out -Append -Encoding utf8
+              \"--- DONE ---\" | Out-File $out -Append -Encoding utf8
+              $_codebuddyPsSucceeded = $?
+              $_codebuddyPsLastExitCode = $LASTEXITCODE
+              $_code = if ($null -ne $_codebuddyPsLastExitCode) { $_codebuddyPsLastExitCode } elseif ($_codebuddyPsSucc
+              eeded) { 0 } else { 1 }
+              exit $_code"
+
+
+
+--- DONE ---

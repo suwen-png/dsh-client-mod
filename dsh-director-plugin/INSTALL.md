@@ -132,7 +132,7 @@ node scripts/verify-install-clean.mjs        # 46 项，临时沙箱全生命周
 | 数据安全 | `node scripts/verify-data-safe.mjs` | 42 |
 | **干净部署** | `node scripts/verify-install-clean.mjs` | **46** |
 | 真机契约 | `node scripts/cdp-verify.mjs` | 39 |
-| 真机逐交互 | `node scripts/cdp-click.mjs` | 66 |
+| 真机逐交互 | `node scripts/cdp-click.mjs` | 74 |
 
 ---
 

@@ -35,6 +35,8 @@ import { join, dirname, resolve, relative } from "node:path";
 /* 产物语法自检用（见文件末「语法闸门」）—— 用 vm.Script 只做**语法解析**，
  * 不执行代码，故不会触发 require / module 等运行时依赖。 */
 import { Script } from "node:vm";
+/* 产物内容指纹（第十九轮）：见 build-stamp.mjs 头注释 —— 为什么不使用 mtime 判据 */
+import { computeSrcStamp } from "../scripts/build-stamp.mjs";
 
 const PLUGIN_ROOT = resolve(import.meta.dirname, "..");
 const SRC = join(PLUGIN_ROOT, "src");
@@ -558,7 +560,21 @@ console.log(`[build] 模块图（拓扑序，共 ${order.length} 个）:`);
 order.forEach((abs, i) => console.log(`  ${i + 1}. ${moduleId(abs)}`));
 console.log(`[build] 平台外置（不打包，由 require 提供）: ${externals.size ? [...externals].join(", ") : "（无）"}`);
 
-const bundle = emit();
+const bundle0 = emit();
+/* 🔴 第十九轮：给产物打**内容指纹**（`scripts/build-stamp.mjs`）——
+ *   ① 让 `check-stale-build.mjs` 能判"产物是不是当前 src 构建出来的"（mtime 序在本仓会假阳性）；
+ *   ② 让真机排查能**直接回答"页面加载了哪一版产物"**（读 `window.__dshBuildStamp`），
+ *      这正是本轮 `data-reused` 属性缺失时只能靠"猜新符号"的那一步。
+ *
+ * 🔴 **追加在最末，不能加在首行** —— `verify-dialog.mjs:818` 的 I2 判据要求产物
+ *    `startsWith("window.__ModuleLoader__.load({")`（Harness client bundle 形态）。
+ *    第一版加在首行 ⇒ 该判据报红。**改闸门去迁就改动是错的**（纪律 31：闸门口径不许为
+ *    让改动通过而放松），正确做法是让改动不破坏既有契约。追加同样不影响 `readStampIn`
+ *    （它是全文正则）。赋值语句在 `load()` 之后执行 ⇒ 脚本一装载即可回读，不依赖 factory 被调用。 */
+const SRC_STAMP = computeSrcStamp(PLUGIN_ROOT);
+const bundle = bundle0
+	+ "\n/* dsh-build-stamp: " + SRC_STAMP + " */\n"
+	+ "(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp=" + JSON.stringify(SRC_STAMP) + ";}catch(e){}})();\n";
 if (!existsSync(dirname(OUT))) mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, bundle, "utf8");
 
@@ -595,6 +611,7 @@ let syntaxErr = null;
 try { new Script(bundle, { filename: "lib/client.js" }); } catch (e) { syntaxErr = e; }
 
 console.log(`[build] 产物: ${relative(PLUGIN_ROOT, OUT).split("\\").join("/")}  ${Buffer.byteLength(bundle, "utf8")} B（字符 ${bundle.length}）`);
+console.log(`[build] 内容指纹: ${SRC_STAMP}  ← 与 src/** 一一对应；真机可用 window.__dshBuildStamp 回读`);
 if (syntaxErr) {
 	console.error("");
 	console.error("[build] ❌ 产物语法自检未通过 —— 该产物**不可装机**");

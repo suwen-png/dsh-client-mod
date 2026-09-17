@@ -1,0 +1,33 @@
+﻿=== WER ReportQueue/Archive (DeepSeek) ===
+-- C:\Users\15142\AppData\Local\Microsoft\Windows\WER\ReportQueue exists: False
+-- C:\Users\15142\AppData\Local\Microsoft\Windows\WER\ReportArchive exists: False
+=== Application log errors last 8h (raw) ===
+[09/17/2026 16:00:12] id=3841 lvl=信息 prov=HWVEAudioService :: 3841003 Close HWVEAudioSession.exe ProcessID=12748
+[09/17/2026 16:00:12] id=3841 lvl=信息 prov=HWVEAudioService :: Close Audiodg.exe ProcessID=18960
+[09/17/2026 15:55:12] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:0,PreTime:0,Post
+[09/17/2026 15:55:11] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:2,PreTime:0,Post
+[09/17/2026 15:51:43] id=3001 lvl= prov=stability :: 
+[09/17/2026 15:51:43] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:0,PreTime:0,Post
+[09/17/2026 15:51:42] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:2,PreTime:0,Post
+[09/17/2026 15:51:04] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:0,PreTime:0,Post
+[09/17/2026 15:51:03] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:2,PreTime:0,Post
+[09/17/2026 15:50:38] id=3842 lvl=警告 prov=HWVEAudioSession :: App (Weixin.exe),ProcessID(22732) is not define!
+[09/17/2026 15:50:29] id=3842 lvl=警告 prov=HWVEAudioSession :: App (Weixin.exe),ProcessID(22732) is not define!
+[09/17/2026 15:50:19] id=3842 lvl=警告 prov=HWVEAudioSession :: App (Weixin.exe),ProcessID(22732) is not define!
+[09/17/2026 15:50:12] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:0,PreTime:0,Post
+[09/17/2026 15:50:12] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:2,PreTime:0,Post
+[09/17/2026 15:49:07] id=3842 lvl=警告 prov=HWVEAudioSession :: App (Weixin.exe),ProcessID(22732) is not define!
+[09/17/2026 15:48:34] id=3842 lvl=警告 prov=HWVEAudioSession :: App (Weixin.exe),ProcessID(22732) is not define!
+[09/17/2026 15:46:58] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:0,PreTime:0,Post
+[09/17/2026 15:46:58] id=3841 lvl=信息 prov=HWVEAudioService :: 3841035 Receive Priority mode Message:AudioMode:2,PreTime:0,Post
+[09/17/2026 15:45:41] id=16384 lvl=信息 prov=Microsoft-Windows-Security-SPP :: 安排软件保护服务在 2026-11-22T00:49:41Z 时重新启动成功。原因: RulesEngine。
+[09/17/2026 15:45:40] id=3001 lvl= prov=stability :: 
+=== Kernel/AppCrash ===
+[09/16/2026 05:31:26] 出错应用程序名称： HWVEAudioService.exe，版本： 26.0.1.53，时间戳： 0x6551a1b1 | 出错模块名称： HWVEAudioService.exe， 版本： 26.0.1.53，时间戳： 0x6551a1b1 | 异常代码： 0xc0000005 | 错误偏移： 0x0000000000078513
+[09/15/2026 17:01:36] 出错应用程序名称： PcOptimizationCenter.exe，版本： 14.0.6.105，时间戳： 0x6450ba47 | 出错模块名称： PopUpBlockingMgr.dll， 版本： 14.0.6.105，时间戳： 0x6450ba47 | 异常代码： 0xc0000005 | 错误偏移： 0x0000000000025a32
+[09/15/2026 14:00:04] 出错应用程序名称： SearchHost.exe，版本： 2607.28006.200.0，时间戳： 0x6a6d0c36 | 出错模块名称： combase.dll， 版本： 10.0.26100.9444，时间戳： 0x8c05274d | 异常代码： 0xc0000602 | 错误偏移： 0x00000000000d2200
+[09/15/2026 13:59:58] 出错应用程序名称： PcOptimizationCenter.exe，版本： 14.0.6.105，时间戳： 0x6450ba47 | 出错模块名称： PopUpBlockingMgr.dll， 版本： 14.0.6.105，时间戳： 0x6450ba47 | 异常代码： 0xc0000005 | 错误偏移： 0x0000000000025a32
+[09/15/2026 12:20:14] 出错应用程序名称： clash-verge.exe，版本： 2.4.2.0，时间戳： 0x68bcd7de | 出错模块名称： clash-verge.exe， 版本： 2.4.2.0，时间戳： 0x68bcd7de | 异常代码： 0xc0000409 | 错误偏移： 0x0000000000a44865
+[09/15/2026 10:44:57] 出错应用程序名称： PcOptimizationCenter.exe，版本： 14.0.6.105，时间戳： 0x6450ba47 | 出错模块名称： PopUpBlockingMgr.dll， 版本： 14.0.6.105，时间戳： 0x6450ba47 | 异常代码： 0xc0000005 | 错误偏移： 0x0000000000025a32
+[09/13/2026 09:43:08] 出错应用程序名称： uTools.exe，版本： 7.8.0.0，时间戳： 0x652438a7 | 出错模块名称： win32-uwp-x64.node， 版本： 0.0.0.0，时间戳： 0x691d884d | 异常代码： 0xc0000409 | 错误偏移： 0x000000000000b6b5
+[09/11/2026 23:14:32] 出错应用程序名称： uTools.exe，版本： 7.8.0.0，时间戳： 0x652438a7 | 出错模块名称： win32-uwp-x64.node， 版本： 0.0.0.0，时间戳： 0x691d884d | 异常代码： 0xc0000409 | 错误偏移： 0x000000000000b6b5

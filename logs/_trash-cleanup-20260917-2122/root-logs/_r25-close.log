@@ -1,0 +1,47 @@
+[16:31:15] ==========================================================================
+[16:31:15] PHASE 0 清场前 procs=0
+[16:31:19] PHASE 0 清场后 procs=0
+[16:31:19] PHASE 1 启动 #1
+[16:31:19] c1 spawned pid=17956
+[16:31:22] PHASE 1 窗口={'hwnd': 2494252, 'pid': 17956, 'visible': False, 'class': 'Chrome_WidgetWin_1', 'title': 'DeepSeek Harness'}  耗时=3.4s
+[16:31:22] PHASE 2 向 hwnd=2494252 发 WM_CLOSE（等价用户点 ×）
+[16:31:26] PHASE 2 之后: #1_rc=None procs=5
+[16:31:26]     hwnd=4458236 pid=17956 visible=False class=Chrome_WidgetWin_0 title=''
+[16:31:26]     hwnd=2166592 pid=21092 visible=False class=Chrome_WidgetWin_0 title=''
+[16:31:26]     hwnd=2494252 pid=17956 visible=True class=Chrome_WidgetWin_1 title='DeepSeek Harness'
+[16:31:26]     hwnd=1576762 pid=17956 visible=False class=Electron_NotifyIconHostWindow title=''
+[16:31:26]     hwnd=10358152 pid=17956 visible=False class=Electron_SystemPreferencesHostWindow title=''
+[16:31:26]     hwnd=2625174 pid=17956 visible=False class=Chrome_WidgetWin_0 title=''
+[16:31:26]     hwnd=4523174 pid=17956 visible=False class=Base_PowerMessageWindow title=''
+[16:31:26]     hwnd=11472842 pid=17956 visible=False class=SoPY_Status title=''
+[16:31:26]     hwnd=2690924 pid=21092 visible=False class=IME title='Default IME'
+[16:31:26]     hwnd=2559816 pid=17956 visible=False class=MSCTFIME UI title='MSCTFIME UI'
+[16:31:26]     hwnd=2035496 pid=17956 visible=False class=SoPY_Hint title='HintWnd'
+[16:31:26]     hwnd=4132634 pid=17956 visible=False class=SoPY_UI title=''
+[16:31:26]     hwnd=2166540 pid=17956 visible=False class=Sogou_TSF_UI title='Sogou_TSF_UI'
+[16:31:26]     hwnd=2295038 pid=17956 visible=False class=IME title='Default IME'
+[16:31:26] PHASE 3 启动 #2（等价用户再双击）
+[16:31:26] c2 spawned pid=2728
+[16:31:30] PHASE 3 #2 rc=0 elapsed=4.00s 输出=2字节 b'\r\n'
+[16:31:30] PHASE 4 #2 之后窗口是否恢复
+[16:31:30] PHASE 4 #1_rc=None procs=5
+[16:31:30] PHASE 4 主窗口数=1 [{'hwnd': 2494252, 'pid': 17956, 'visible': True, 'class': 'Chrome_WidgetWin_1', 'title': 'DeepSeek Harness'}]
+[16:31:30]     hwnd=4458236 pid=17956 visible=False class=Chrome_WidgetWin_0 title=''
+[16:31:30]     hwnd=2166592 pid=21092 visible=False class=Chrome_WidgetWin_0 title=''
+[16:31:30]     hwnd=2494252 pid=17956 visible=True class=Chrome_WidgetWin_1 title='DeepSeek Harness'
+[16:31:30]     hwnd=1576762 pid=17956 visible=False class=Electron_NotifyIconHostWindow title=''
+[16:31:30]     hwnd=10358152 pid=17956 visible=False class=Electron_SystemPreferencesHostWindow title=''
+[16:31:30]     hwnd=2625174 pid=17956 visible=False class=Chrome_WidgetWin_0 title=''
+[16:31:30]     hwnd=4523174 pid=17956 visible=False class=Base_PowerMessageWindow title=''
+[16:31:30]     hwnd=11472842 pid=17956 visible=False class=SoPY_Status title=''
+[16:31:30]     hwnd=2690924 pid=21092 visible=False class=IME title='Default IME'
+[16:31:30]     hwnd=2559816 pid=17956 visible=False class=MSCTFIME UI title='MSCTFIME UI'
+[16:31:30]     hwnd=2035496 pid=17956 visible=False class=SoPY_Hint title='HintWnd'
+[16:31:30]     hwnd=4132634 pid=17956 visible=False class=SoPY_UI title=''
+[16:31:30]     hwnd=2166540 pid=17956 visible=False class=Sogou_TSF_UI title='Sogou_TSF_UI'
+[16:31:30]     hwnd=2295038 pid=17956 visible=False class=IME title='Default IME'
+[16:31:30] PHASE 5 再启动 #3 复核（若 #1 仍占锁应同样静默退出）
+[16:31:30] c3 spawned pid=24044
+[16:31:33] PHASE 5 #3 rc=0 elapsed=3.00s
+[16:31:33] PHASE END 收尾清理
+[16:31:36] PHASE END 收尾后 procs=0

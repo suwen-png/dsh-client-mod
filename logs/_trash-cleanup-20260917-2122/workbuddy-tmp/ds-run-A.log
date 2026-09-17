@@ -1,0 +1,235 @@
+════════════════════════════════════════════════════════════
+ 设计图工作室 · 真机逐交互验证（批次 10）
+════════════════════════════════════════════════════════════
+
+【C1】入口按钮（总监页设计图插件 · 按钮形式）
+  ✅ C1.1 设计图入口按钮存在且可见
+      {"txt":"🖌设计图","cx":1381.421875,"cy":695,"w":81,"h":30,"inDock":true,"visible":true}
+  ✅ C1.2 按钮归属总监域浮动按钮组
+      text=🖌设计图
+
+【C2】点击后铺满全屏
+  ✅ C2.1 工作室已挂载
+      {"mounted":true,"x":0,"y":0,"w":1440,"h":920,"vw":1440,"vh":920,"pos":"fixed","z":"2147483200","maxZ":2147483200,"covers":true}
+  ✅ C2.2 position:fixed 且四边贴合视口
+      1440x920 vs 视口 1440x920 · position=fixed · z=2147483200
+  ✅ C2.3 缩放可归一到 1:1（作为位移断言的基准）
+      缩放 = 100%
+  ✅ C2.4 画布有可见网格（网格层未被不透明底层遮死）
+      {"hasRepeating":true,"layerCount":2,"bgColor":"rgb(21, 22, 26)","firstIsOpaque":false}
+  ❌ C2.5 提示浮层不遮挡底栏输入框（且不拦截点击）
+      {"shown":false}
+  ✅ C2.6 提示浮层 2.2s 后自动消失（不长期压住画布）
+      2.2s 后仍存在 = false
+
+【C3】增加元素（工具栏 18 类 → 画布新增）
+  ✅ C3.1 工具栏渲染 18 类元素按钮
+      {"count":18,"kinds":["window","sidebar","tabring","region","panel","canvas","button","input","select","badge","text","icon","list","card","progress","node","edge","overline"]}
+  ✅ C3.2 点击「按钮」类 → 元素数 +1
+      20 → 21
+  ✅ C3.3 新增后自动选中（左栏切到该元素）
+      selected id = el-41-but
+
+【C9】点击元素 → 左侧显示交互逻辑（七元组）
+  ✅ C9.1 左栏逻辑面板已切到选中元素
+      el-41-but
+  ✅ C9.2 七元组字段齐备（触发/行为/状态/数据/退化/快捷键/代码）
+      ["trigger","action","state","data","fallback","shortcut","code"]
+  ✅ C9.3 七元组字段均可编辑 + 名称可改
+      editable=true labelInput=INPUT
+  ✅ C9.4 编辑逻辑字段 → 落库回读一致
+      回读 action = "E2E：点击后打开弹窗"
+
+【C4】拖拽（真实鼠标 按下-移动-抬起）
+  ✅ C4.1 拖拽后**模型**位移符合预期（≈ +120,+70）
+      模型 Δ=(120,70)
+  ✅ C4.2 视图跟随模型（DOM 位移与模型一致）
+      DOM Δ=(120,70) vs 模型 Δ=(120,70)
+  ✅ C4.3 非 1 缩放下：模型位移 = 屏幕位移 ÷ 缩放
+      k=0.8 · 拖(80,40) ⇒ 模型 Δ=(100,50) · 期望≈(100,50)
+  ✅ C4.4 非 1 缩放下：屏幕位移 ≈ 手感位移（视图不背离）
+      屏幕 Δ=(80,40) · 拖了 (80,40)
+
+【C5】缩放（右下把手拖拽）
+  ❌ C5.0 目标元素仍处于选中态（把手才存在）
+      selected = el-2-win · 期望 el-41-but
+  ❌ C5.1 拖把手 → **模型**尺寸变大
+      84x28 → 84x28
+  ✅ C5.2 视图跟随模型（DOM 尺寸与模型一致）
+      DOM 84x28 vs 模型 84x28
+
+【C12】键盘（方向键微移 / Ctrl+D 复制 / Delete 删除）
+  ✅ C12.0 存在选中元素可作键盘作用对象
+      selected = el-2-win
+  ❌ C12.1 Ctrl+D 复制元素（数量 +1）
+      21 → 21
+  ❌ C12.2 → 键**模型**微移 10px
+      Δx=0（el-2-win）
+  ❌ C12.3 Shift+→ **模型**微移 1px（精细档）
+      Δx=0
+  ❌ C12.4 Delete 删除选中元素（数量 -1）
+      21 → 21
+
+【C7】逻辑面板操作按钮（复制 / 删除）
+  ✅ C7.0 恢复选中以便操作按钮可见
+      selected = el-2-win
+  ✅ C7.1 含元素复制 / 删除按钮
+      {"ds-dup":true,"ds-del":true}
+  ✅ C7.2 点击「复制」→ 元素数 +1
+      21 → 22
+
+【C8】底部设计图专用对话（只处理本图修订）
+  ✅ C8.1 底栏对话保留（输入 + 发送）
+      {"bar":true,"input":true,"send":true,"emptyHint":true,"isolation":true,"ph":"说怎么改（引用元素名或 id；**数字=像素**，如「移动 R1 顶部栏 左 30」；多条用「；」分隔）…"}
+  ✅ C8.2 明示「只处理本图 / 三向隔离」
+      isolation note=true
+  ✅ C8.0 存在可被指令指称的目标元素
+      target = el-2-win
+  ✅ C8.0b 目标元素带可读 label（供多词指称）
+      label = Harness 主窗口 / 指令 = 移动 Harness 主窗口 左 30
+  ✅ C8.3 发送指令 → 进入待确认区（不静默改图）
+      {"typed":true,"pending":{"visible":true,"text":"待确认 1 项move → el-2-win应用到图不要","hasApply":true,"hasDrop":true}}
+  ❌ C8.4 确认应用 → 目标元素**模型**左移 30px
+      Δx=-0（目标 el-2-win）
+  ✅ C8.5 修订留痕进对话流
+      thread 含「你：」= true
+
+【C10】标准设计图框架映射
+  ❌ C10.1 载入标准框架 = 20 个预置元素（取自 schema 真值）
+      {"elementCount":22,"stats":"元素 22 · 逻辑缺口 0"}
+  ✅ C10.2 统计条回显「元素 / 逻辑缺口 / 修订记录」
+      元素 22 · 逻辑缺口 0
+  ✅ C10.3 标准框架每元素自带行为与代码指向
+      {"total":22,"withAction":22,"withCode":22,"fullTuple":22}
+  ✅ C10.4 七元组无空字段（schema 侧 20/20）
+      缺口 = 0
+
+【C11】存盘 / 多文档
+  ✅ C11.1 已写入 localStorage 主存
+      {"hasKey":true,"bytes":10359,"docCount":1,"activeId":null,"optionCount":1}
+  ✅ C11.2 新建图 → 文档数 +1（文档选择器同步）
+      1 → 2
+
+【C13】Esc 逐层退（四层栈 · 不清空就关窗）
+  ✅ C13.0 前置：先把个性化 / 版本 / 导出浮层归零（⚙ 面板开着会 stopPropagation 吃掉 Esc，把 C13 变成假红）
+      {"ver":false,"pp":0,"exp":false}
+  ✅ C13.0b 前置：待确认区已建立（否则「第 2 层吃待确认」无从谈起）
+      {"studioOpen":true,"personalize":false,"pzBtn":"0","pending":true,"selected":true}
+  ✅ C13.1n 🔴 正对照：个性化未开时，按 1 次 Esc 待确认**必须**被吃掉（否则 C13.1 的「没动」不可信）
+      {"studioOpen":true,"personalize":false,"pzBtn":"0","pending":false,"selected":true}
+  ✅ C13.0c 前置：待确认 + 个性化面板均已就位（4 层 Esc 栈齐）
+      {"afterPending":{"studioOpen":true,"personalize":false,"pzBtn":"0","pending":true,"selected":true},"afterPersonalize":{"studioOpen":true,"personalize":true,"pzBtn":"1","pending":true,"selected":true}}
+  ✅ C13.1 第 1 层 Esc：只关个性化面板；工作室 / 待确认 / 选中**都没动**（旧版把这一层漏成了假红）
+      {"before":{"studioOpen":true,"personalize":true,"pzBtn":"1","pending":true,"selected":true},"after":{"studioOpen":true,"personalize":false,"pzBtn":"0","pending":true,"selected":true}}
+  ✅ C13.2 第 2 层 Esc：吃掉待确认；工作室仍在、选中仍在
+      {"studioOpen":true,"personalize":false,"pzBtn":"0","pending":false,"selected":true}
+  ❌ C13.3 第 3 层 Esc：清选中；工作室**仍活着**（「不清空就关窗」的正面证据）
+      {"studioOpen":true,"personalize":false,"pzBtn":"0","pending":false,"selected":true}
+  ❌ C13.4 第 4 层 Esc：**才**关工作室
+      {"studioOpen":true,"personalize":false,"pzBtn":"0","pending":false,"selected":true}
+  ❌ C13.5 🔴 反证：工作室不是「一跳关掉」 —— 第 2、3 次 Esc 后它都还活着
+      {"esc2":true,"esc3":true,"esc4":true}
+
+【C14】顶栏功能：保存 / 版本 / 重命名 / 复制 / 删除 / 导出
+  ✅ C14.0 点浮动按钮重新打开工作室（C13 收尾时已关闭）
+      {"reopenPath":"already-open","reopened":true}
+  ✅ C14.0b 前置：重置为**单张**干净标准框架图（每跑一次都从同一状态开始，测试这才可重复）
+      {"resetOk":true,"newDocPath":"clicked","fresh":{"docs":1,"els":"元素 20 · 逻辑缺口 0","save":"● 保存","ver":"版本 0"}}
+  ✅ C14.1 顶栏「保存」按钮存在（原先整条顶栏没有保存入口）
+      ● 保存
+  ✅ C14.1b 新建图未保存 ⇒ 按钮为「● 保存」（脏态）
+      ● 保存
+  ✅ C14.1c 版本角标为「版本 0」
+      版本 0
+  ✅ C14.2 点保存 ⇒ 按钮变为「✓ 已保存 v1」
+      ✓ 已保存 v1
+  ✅ C14.2b 版本角标 +1 ⇒「版本 1」
+      版本 1
+  ✅ C14.3 点「版本 N」拉起版本历史面板且列出 1 个版本
+      {"open":true,"rows":1,"count":"共 1 / 30 个"}
+  ✅ C14.4 改动后按钮回到「● 保存」（元素 20 → 21）
+      {"save":"● 保存","els":21}
+  ✅ C14.5 回滚到 v1 ⇒ 元素数恢复 20
+      {"before":21,"after":20}
+  ❌ C14.5b 回滚后按钮显示「✓ 已保存 v1」而非「● 保存」（提示不骗人）
+      ● 保存
+  ✅ C14.5c 版本面板回滚后自动收起（避免看着旧列表以为没回）
+  ❌ C14.6 重命名生效（文档选择器出现新名）
+      {"typedName":"no-input","options":["设计图 1（20）","设计图 2（20）"]}
+  ❌ C14.7 复制图 ⇒ 文档数 +1 且新图名带「副本」
+      {"before":2,"after":2,"options":["设计图 1（20）","设计图 2（20）"]}
+  ✅ C14.8 🔴 删图需二次点击：首次只上膛（data-armed=1），图仍在
+      {"armed":"1","docs":2,"was":2}
+  ✅ C14.8b 第二次点击才真删 ⇒ 文档数 -1
+      {"before":2,"after":1}
+  ✅ C14.9 导出有入口且点击后给出反馈（成功/失败都不静默）
+      {"expClicked":"clicked","expToast":"已复制 JSON到剪贴板（14457 字符）"}
+
+【C15】窗口控件安全区（✕ 与原生窗口按钮重叠的根治）
+  ✅ C15.1 顶栏右内边距 = 安全区 inset + 10（inset 仅在覆盖层可见时由矩形反推，否则必须是 0）
+      {"w":1440,"inset":137,"src":"wco","overlayVisible":true,"rectW":1303,"boundary":1303,"padRight":147,"topFound":true}
+  ✅ C15.2 🔴 测试面：覆盖层可见且 inset ∈ (0, w) 内 —— C15.3~5 的越界断言才有判别力
+      {"w":1440,"inset":137,"src":"wco","overlayVisible":true,"rectW":1303,"boundary":1303,"padRight":147,"topFound":true}
+  ✅ C15.3 🔴 关闭按钮 ✕ 完全在安全区内（原位置被原生窗口按钮压住）
+      {"closeRight":1293,"boundary":1303}
+  ✅ C15.4 状态文字也未被压（ds-stats 右边界 ≤ 安全区左边界）
+      {"statsRight":1188,"boundary":1303}
+  ✅ C15.5 顶栏**所有**可点元素均不越界（不是只把 ✕ 挪了一下）
+      {"ins":137,"bad":[]}
+  ✅ C15.6 🔴 正负对照：人为把 paddingRight 改成（正确值 + 37）⇒ 判据必须转假；还原 ⇒ 必须回真
+      {"before":true,"during":false,"after":true,"prev":"147px","correctPad":147,"wrongPad":184}
+  ✅ C16.0 前置：工作室已打开（走用户真实入口 dsh-design-studio-launcher）
+  ✅ C16.1 顶栏每个可点元素，鼠标落下时接收事件的必须是自己（命中测试栈位 0 · 排除被遮挡）
+      []
+  ✅ C16.2 🔴 连续点击任一顶栏按钮后，其他按钮的 left **一个都不许变**（抓「按钮跑了 ⇒ 用户点空」）
+      []
+  ✅ C16.2p 🔴 C16.2 逐点顶栏后，开合型按钮（⚙ 设置 / 版本）点开的浮层必须**当场归零**（防跨段 / 跨运行污染）
+      {"topIds":["ds-save","ds-doclist","ds-rename","ds-new","ds-more","ds-del-doc","ds-ver-toggle","ds-zoom-out","ds-zoom-in","ds-zoom-fit","ds-zoom-100","ds-personalize"],"clicks":38}
+  ✅ C16.3 保存按钮「● 保存」/「✓ 已保存 v1」/「✓ 已保存 v30」三者宽度完全一致（minWidth 锁宽）
+      {"now":96,"dirty":96,"saved1":96,"saved30":96}
+  ✅ C16.4 改名时 <select> 与替换它的 <input> 同宽（select 曾被 maxWidth 自适应成 146px）
+      {"select":200,"input":200}
+  ✅ C16.5 导出：剪贴板成功 或 展开可复制文本域（不得停在「复制失败」—— 三级降级兜底）
+      {"toast":"已复制 JSON到剪贴板（14465 字符）","panel":false}
+  ✅ C16.6 点「删除」后按钮自身可见变化（data-armed=1 · 文字变「确认」）
+      {"armed":"1","text":"确认","w":45}
+  ✅ C16.7 上膛后自动泄压回「删除」（带截止期轮询；两态同宽 —— 「确认」曾因 padding 差 1px×2 推动 8 个按钮）
+      {"armed":{"armed":"0","text":"删除","w":45},"起点armed":"1","widthArmed":45,"widthIdle":45,"泄压耗时ms":2194,"截止期ms":6000}
+  ✅ C16.8 🔴 正负对照：人为把保存按钮加宽 44px，「其他按钮 left 不变」的检测器必须报出位移
+      {"movedCount":10,"moved":["ds-doclist","ds-rename","ds-new","ds-more"]}
+  ✅ C16.9 文字会变的按钮（保存/版本/缩放/删除/统计），在极值文案下宽度必须恒定 —— 抓「内容一变长就推移邻居」
+      []
+  ✅ C16.10 🔴 正负对照：解除版本按钮锁宽后，同一测量法必须测出「版本 0」≠「版本 30」（否则 C16.9 是平凡真）
+      {"w0":54,"w30":61,"differs":true}
+  ✅ C16.11p 前置：版本 / 个性化 / 导出浮层均已关闭（否则下面那条是把正确浮层误判成遮挡）
+      {"ver":false,"pp":0,"exp":false}
+  ✅ C16.11 工作室**全部**按钮（含工具栏 18 类 + 画布 + 底栏，浮层关闭后）命中测试栈位 0
+      []
+
+【C17】测试自身可信度：点击落点自检 + 环境复原
+  ✅ C17.1 本脚本全部 43 次点击，落点均在目标元素子树内（不许静默打偏）
+      {"clicks":43}
+  ✅ C17.2 环境复原：跑完把工作室 / 个性化面板 / 版本面板 / 导出面板都关回去（起点等价，杜绝跨运行污染）
+      {"before":{"pp":0,"ver":false,"studioOpen":true},"after":{"ver":false,"pp":0,"exp":false,"studio":false}}
+
+════════════════════════════════════════════════════════════
+ 结果：76 通过 / 15 失败 / 0 跳过 / 共 91 项
+ 未通过项：
+   C2.5 提示浮层不遮挡底栏输入框（且不拦截点击）
+   C5.0 目标元素仍处于选中态（把手才存在）
+   C5.1 拖把手 → **模型**尺寸变大
+   C12.1 Ctrl+D 复制元素（数量 +1）
+   C12.2 → 键**模型**微移 10px
+   C12.3 Shift+→ **模型**微移 1px（精细档）
+   C12.4 Delete 删除选中元素（数量 -1）
+   C8.4 确认应用 → 目标元素**模型**左移 30px
+   C10.1 载入标准框架 = 20 个预置元素（取自 schema 真值）
+   C13.3 第 3 层 Esc：清选中；工作室**仍活着**（「不清空就关窗」的正面证据）
+   C13.4 第 4 层 Esc：**才**关工作室
+   C13.5 🔴 反证：工作室不是「一跳关掉」 —— 第 2、3 次 Esc 后它都还活着
+   C14.5b 回滚后按钮显示「✓ 已保存 v1」而非「● 保存」（提示不骗人）
+   C14.6 重命名生效（文档选择器出现新名）
+   C14.7 复制图 ⇒ 文档数 +1 且新图名带「副本」
+════════════════════════════════════════════════════════════
+
+IS_PASS: FALSE（fail=15）

@@ -1,0 +1,205 @@
+﻿NOW = 2026-09-17 16:28:31.153
+--- 全量进程名统计 ---
+
+Count Name                        
+----- ----                        
+   94 svchost                     
+   19 conhost                     
+   13 msedge                      
+   13 Doubao                      
+   12 WorkBuddy                   
+   10 WeChatAppEx                 
+   10 chrome                      
+    8 DingTalkDoc                 
+    7 DingTalk                    
+    7 RuntimeBroker               
+    6 Weixin                      
+    6 uTools                      
+    6 WUDFHost                    
+    6 cef_server                  
+    6 msedgewebview2              
+    2 crashpad_handler            
+    2 unsecapp                    
+    2 fontdrvhost                 
+    2 explorer                    
+    2 WmiPrvSE                    
+    2 csrss                       
+    1 sandbox-center              
+    1 SDXHelper                   
+    1 SearchIndexer               
+    1 NgcIso                      
+    1 SearchHost                  
+    1 SecurityHealthService       
+    1 Secure System               
+    1 services                    
+    1 SecurityHealthSystray       
+    1 Registry                    
+    1 notepad++                   
+    1 node                        
+    1 PayGuard                    
+    1 OneApp.IGCC.WinService      
+    1 osdservice                  
+    1 PopBlock                    
+    1 powershell                  
+    1 PhoneExperienceHost         
+    1 PcOptimizationCenter        
+    1 OfficeClickToRun            
+    1 SessionService              
+    1 WidgetService               
+    1 wininit                     
+    1 WidgetBoard                 
+    1 TextInputHost               
+    1 UserOOBEBroker              
+    1 winlogon                    
+    1 WUCSProxyService            
+    1 aha_doctor                  
+    1 wsctrlsvc                   
+    1 wlanext                     
+    1 WMIRegistrationService      
+    1 taskhostw                   
+    1 smss                        
+    1 snipaste                    
+    1 sihost                      
+    1 ShellExperienceHost         
+    1 ShellHost                   
+    1 SogouCloud                  
+    1 System                      
+    1 SystemSettings              
+    1 StartMenuExperienceHost     
+    1 SogouImeBroker              
+    1 spoolsv                     
+    1 MSPCManagerService          
+    1 HipsDaemon                  
+    1 HipsTray                    
+    1 HiviewService               
+    1 editor_sdk                  
+    1 fsnotifier                  
+    1 HiConnectivityService       
+    1 HMSCoreContainer            
+    1 HwMdcUI                     
+    1 HwTransferStation           
+    1 HWVEAudioService            
+    1 HMSCoreService              
+    1 HwDistributedMainService    
+    1 HwMdcCenter                 
+    1 ChsIME                      
+    1 clash-verge-service         
+    1 CrossDeviceResume           
+    1 AppActions                  
+    1 ApplicationFrameHost        
+    1 BasicService                
+    1 CrossDeviceService          
+    1 DFSSearchService            
+    1 dingpan_sync                
+    1 dwm                         
+    1 ctfmon                      
+    1 cua-driver                  
+    1 DataExchangeHost            
+    1 LockApp                     
+    1 logi_lamparray_service.AMD64
+    1 LsaIso                      
+    1 jucheck                     
+    1 jusched                     
+    1 LCD_Service                 
+    1 lsass                       
+    1 MessageCenterUI             
+    1 MicrosoftStartFeedProvider  
+    1 MSOfficePLUSService         
+    1 MateBookService             
+    1 MBAMessageCenter            
+    1 Memory Compression          
+    1 IGCC                        
+    1 IGCCTray                    
+    1 Intel_PIE_Service           
+    1 idea64                      
+    1 identity_helper             
+    1 Idle                        
+    1 IntelAudioService           
+    1 ipfsvc                      
+    1 jetbrainsd                  
+    1 jhi_service                 
+    1 IntelCpHDCPSvc              
+    1 ipf_helper                  
+    1 ipf_uf                      
+
+
+--- 含窗口标题的进程 ---
+
+   Id ProcessName          MainWindowTitle                  
+   -- -----------          ---------------                  
+25208 ApplicationFrameHost 设置                               
+13784 cua-driver           Cua.AgentCursorOverlay.default   
+24340 DingTalk             钉钉                               
+31708 Doubao               小说世界基础设定构造 - 豆包                  
+26172 explorer             文档 - 文件资源管理器                     
+ 7336 idea64               SWC_SL_Tes.js – SWC_CS_AutoTax.js
+22012 msedge               俊亿-沙箱                            
+22984 notepad++            *新文件 2 - Notepad++               
+14228 SystemSettings       设置                               
+10272 TextInputHost        Windows 输入体验                     
+22732 Weixin               微信                               
+ 8344 WorkBuddy            WorkBuddy                        
+
+
+--- userData 根目录 ---
+
+Mode   LastWriteTime      Length Name              
+----   -------------      ------ ----              
+d----- 2026/9/17 16:24:52        blob_storage      
+d----- 2026/9/17 15:48:24        Cache             
+d----- 2026/9/14 19:27:06        Code Cache        
+d----- 2026/9/14 19:27:06        DawnGraphiteCache 
+d----- 2026/9/14 19:27:06        DawnWebGPUCache   
+d----- 2026/9/17 16:23:37        File System       
+d----- 2026/9/14 19:27:06        GPUCache          
+d----- 2026/9/17 16:23:37        IndexedDB         
+d----- 2026/9/7 13:13:43         Local Storage     
+d----- 2026/9/17 9:37:28         Network           
+d----- 2026/9/16 10:24:11        plugin-center     
+d----- 2026/9/6 10:58:08         plugin-store      
+d----- 2026/9/17 16:24:54        Session Storage   
+d----- 2026/8/20 14:01:09        Shared Dictionary 
+d----- 2026/8/26 16:04:41        WebStorage        
+-a---- 2026/8/20 14:01:19 36     .updaterId        
+-a---- 2026/8/20 14:03:28 132    appearance.json   
+-a---- 2026/9/17 16:12:03 59     DevToolsActivePort
+-a---- 2026/9/17 16:25:35 36864  DIPS              
+-a---- 2026/8/20 13:12:08 490    Local State       
+-a---- 2026/9/17 16:25:09 54799  Preferences       
+-a---- 2026/8/20 14:03:09 4096   SharedStorage     
+-a---- 2026/9/16 10:34:48 0      SharedStorage-wal 
+
+
+--- Singleton / lock 类文件全盘搜（userData + ~/.dsh + Temp） ---
+
+LastWriteTime      Length FullName                                                                                     
+-------------      ------ --------                                                                                     
+2026/9/6 11:13:29     101 C:\Users\15142\.dsh\task-board\ledger-v2.lock                                                
+2026/9/17 8:35:44       0 C:\Users\15142\AppData\Local\Temp\agent-browser-chrome-c6fbf2d2-3ed1-46f7-984d-712a6986ed0...
+2026/9/17 8:35:44       0 C:\Users\15142\AppData\Local\Temp\agent-browser-chrome-c6fbf2d2-3ed1-46f7-984d-712a6986ed0...
+2026/9/10 9:44:11       0 C:\Users\15142\AppData\Local\Temp\ai\bp\locks\4d9388002bfa63fd.lock                          
+2026/9/11 8:47:14   44872 C:\Users\15142\AppData\Local\Temp\codebuddy-marketplace-install-wGuBoO\extract\plugins\ppt...
+2026/9/13 10:07:38      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\030645744e791518.lock                        
+2026/9/13 12:58:39      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\049b7ce60ed40507.lock                        
+2026/9/13 14:46:17      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\05de3203112198ea.lock                        
+2026/9/13 11:09:56      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\1c3cee0b9ad9f2dd.lock                        
+2026/9/13 14:01:56      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\2a742a1eb33fcb79.lock                        
+2026/9/13 0:53:02       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\36c2797e608b959f.lock                        
+2026/9/13 0:12:20       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\4f41ad612fc54f43.lock                        
+2026/9/13 14:54:19      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\5b379d9df57809ff.lock                        
+2026/9/13 14:37:55      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\7c8f613f303bb01c.lock                        
+2026/9/16 8:51:05       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\817b1f8b5c4f8937.lock                        
+2026/9/13 10:00:12      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\92e972caf69b5c01.lock                        
+2026/9/13 9:55:24       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\93cc1404f0e57783.lock                        
+2026/9/16 9:01:00       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\96eb0fa44b044d57.lock                        
+2026/9/12 4:24:24       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\9db720c4dad265ab.lock                        
+2026/9/13 11:34:47      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\cc87540c561d6ff9.lock                        
+2026/9/13 14:12:26      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\d3d962f82f87cac5.lock                        
+2026/9/13 14:37:36      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\de4c8b70317185b9.lock                        
+2026/9/13 13:36:23      0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\e12b7b2b2fb47cf6.lock                        
+2026/9/12 4:22:18       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\f4499d81a5e6a596.lock                        
+2026/9/16 8:54:08       0 C:\Users\15142\AppData\Local\Temp\dsh-acl-locks\f6766d9a8a5b6a6e.lock                        
+2026/9/17 8:38:50     127 C:\Users\15142\AppData\Local\Temp\openclaw\gateway.5cb0ff06.lock                             
+
+
+--- DONE ---

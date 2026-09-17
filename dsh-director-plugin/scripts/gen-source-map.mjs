@@ -201,8 +201,29 @@ const plateCell = (r) => {
 };
 
 let injected = 0, refreshed = 0;
+/* 🔴 **生成物的头归它自己的生成器所有 —— 本脚本跳过它**（2026-09-17 第二十五轮真因修复）。
+ *
+ *    现象：同一份 src 连续两次 `build` 得到**不同**产物（`2008557 B / 2085f97c…`
+ *    与 `2008511 B / cfd2c7df…`），`check-stale-build` 两次都报 TRUE ⇒
+ *    **在构建面（`src/**`）内部有一个"随跑程变化"的输入**。
+ *
+ *    真因：`src/logic/key-files.js` 是**生成物**，它的 `@map` 头有**两个写者**且口径不同：
+ *      · `gen-key-files.mjs`（第 97 行）写 `设计稿：…V19-界面调整设计稿.html（板块 H / I）`；
+ *      · 本脚本按人工小表回写 `…V16-设计图·需求图·交互逻辑.html（板块 —）`（它不在任何板块）。
+ *    ⇒ 谁最后跑谁赢；两个生成器**互相覆盖同一行** ⇒
+ *       ① `gen-key-files --check` 与 `gen-source-map --check` **永远不可能同时 TRUE**；
+ *       ② `src` 内容指纹在跑程内漂移（离线套件会跑这两个生成器）⇒
+ *          `check-stale-build` 的结论会被"生成器振荡"污染（纪律 99：
+ *          判据的生命周期必须与数据的生命周期一致）。
+ *
+ *    处置：**一个文件的头只由一个生成器写**（纪律 78 单一真相源）。
+ *    `logic/key-files.js` 的头归 `gen-key-files.mjs`，本脚本跳过它 ——
+ *    与 `gen-key-files.mjs` 第 70 行「跳过它自己」正好对称。
+ *    自证：`scripts/test-generators.mjs`（两个 `--check` 必须**同时** TRUE）。 */
+const OWNED_BY_OTHER = new Set(["logic/key-files.js"]);
 for (const abs of files) {
 	const r = rel(abs);
+	if (OWNED_BY_OTHER.has(r)) continue;
 	let src = readFileSync(abs, "utf8");
 	const block = blockOf(r);
 	const re = /\/\* @map:begin[\s\S]*?@map:end \*\/\n?/;
@@ -294,4 +315,23 @@ if (!CHECK) writeFileSync(out, md.join("\n"), "utf8");
 console.log("文件数 " + rows.length + "（新增注入 " + injected + " / 刷新 " + refreshed + "）");
 console.log("索引：" + (changed ? "已更新" : "无变化") + " → " + INDEX_REL);
 if (CHECK) console.log("（--check 模式：未写入任何文件）");
-console.log("IS_PASS: TRUE");
+/* 🔴 `--check` 必须有**分辨力**（2026-09-17 第二十五轮 · 纪律 31「报绿先审口径」）。
+ *    旧版**无条件**打印 `IS_PASS: TRUE` ⇒ 「刷新 1」（有文件需要重写）时也报绿，
+ *    而 `verify-index.mjs` **只看退出码** ⇒ 「两个生成器互相覆盖 `key-files.js` 的头」
+ *    这件事在闸门层面**完全不可见** —— 它最后是以「同一份 src 连续两次 build
+ *    得到不同指纹」的形态炸出来的（白跑一轮，且看起来像"构建不稳定"）。
+ *    ⇒ `--check` 只要发现**任何需要写盘的东西**（注入 / 刷新 / 索引变化）：
+ *       一律 `IS_PASS: FALSE` + `exit 1`，与 `gen-key-files.mjs --check` 的语义对齐。
+ *    ⚠️ 非 `--check` 模式（真写盘）本来就该报 TRUE，不受影响。 */
+const dirty = injected > 0 || refreshed > 0 || changed;
+if (!CHECK) {
+	console.log("IS_PASS: TRUE");
+} else if (dirty) {
+	console.log("IS_PASS: FALSE（--check 发现 " + (injected + refreshed) + " 个文件需要重写"
+		+ (changed ? " + 索引需更新" : "") + "）");
+	console.log("  处置：`node scripts/gen-source-map.mjs` ⇒ **随后**再跑 `node scripts/gen-key-files.mjs`");
+	console.log("  （顺序不可反：key-files 的 `@map` 头由后者生成，前者已跳过该文件）");
+	process.exit(1);
+} else {
+	console.log("IS_PASS: TRUE");
+}
