@@ -1253,6 +1253,11 @@ export function DirectorPage() {
 			titlePoolN: (r.reusePlan && r.reusePlan.titlePoolN != null) ? Number(r.reusePlan.titlePoolN) : null,
 			/* 靠标题救回来的**条数**（不是布尔）：索引补登记几条要对得上「新建 + 标题命中」 */
 			titleHits: (r.reusePlan && r.reusePlan.titleHits != null) ? Number(r.reusePlan.titleHits) : 0,
+			/* 🔴 第 36 轮：**项目级兜底复用的条数**。与 `titleHits` 分列 ——
+			 *    两者可信度不同（title-hit 是同维度精确前缀，project-hit 只是同项目），
+			 *    合在一个数里会让"复用 5 条"看不出其中有 5 条是松匹配（纪律 54：静默半成功更坏）。
+			 *    索引补登记口径随之变为 `created + titleHits + projectHits`。 */
+			projectHits: (r.reusePlan && r.reusePlan.projectHits != null) ? Number(r.reusePlan.projectHits) : 0,
 			/* 🔴 第 23 批：语言整理的读数（要点数 / 剔除噪声行 / 合并重复行）——
 			 *    没有它，"整理到底生效了没有"在界面上无从判断（纪律 19 同型）。 */
 			organized: r.organized || null,
@@ -2163,6 +2168,8 @@ export function DirectorPage() {
 						 * 「宿主标题形态变了」（pool>0 且 missed>0）与「根本没读到标题」（pool=0）。 */
 						"data-title-hit": splitInfo.titleHit ? "1" : "0",
 						"data-title-hits": splitInfo.titleHits == null ? "" : splitInfo.titleHits,
+						/* 🔴 第 36 轮：项目级兜底复用条数（松匹配），与 `data-title-hits` 分列 */
+						"data-project-hits": splitInfo.projectHits == null ? "" : splitInfo.projectHits,
 						"data-title-missed": (splitInfo.titleMissed || []).join(","),
 						"data-title-pool": splitInfo.titlePoolN == null ? "" : splitInfo.titlePoolN,
 						"data-dims": (splitInfo.dims || []).join(","),

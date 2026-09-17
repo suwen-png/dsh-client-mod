@@ -345,6 +345,11 @@ export async function dispatchBranches(text, opts = {}) {
 			/* 🔴 补登记条数（**不是布尔**）：标题命中的那几条**不在索引里** ⇒ 已补进索引。
 			 *    上游据此对账 `索引新增 == created + titleHits`（纪律 78：数出 0 ≠ 没有）。 */
 			titleHits: Number(reusePlan.titleHits) || 0,
+			/* 🔴 第 36 轮：项目级兜底复用条数。**必须在这里显式透传** ——
+			 *    本对象是对 `planReuse()` 返回值的**重新整形**（不是原样转发），
+			 *    漏一个字段 ⇒ 界面与闸门恒读到 0，而产品侧其实完全正常
+			 *    （纪律 79：「写好了」≠「接进去了」；本轮 NS-4c2 就是这么红的）。 */
+			projectHits: Number(reusePlan.projectHits) || 0,
 			recorded: recorded
 		},
 		summary: reuseSummary({

@@ -34,7 +34,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const PORT = Number(process.argv[2] || 9222);
+import { PORT as _CDP_DEFAULT } from "./cdp-port.mjs";
+const PORT = Number(process.argv[2] || _CDP_DEFAULT);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(HERE, "..");
 const REPO_ROOT = join(PLUGIN_ROOT, "..");

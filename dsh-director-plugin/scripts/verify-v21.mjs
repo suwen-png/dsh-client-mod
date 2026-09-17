@@ -26,7 +26,7 @@ const SRC = path.join(HERE, "..", "src");
  *   原写法只认后者 ⇒ 用 `CDP_PORT=9333` 跑时，启动器把 Harness 拉在 9333、
  *   本套件却仍去连 9222 ⇒ 报「连不上 CDP」，看起来像环境坏了，其实是两个名字没对齐。
  *   ⚠️ 顺序必须是 `CDP_PORT` 优先。 */
-const PORT = Number(process.env.CDP_PORT || process.env.DSH_CDP_PORT || 9222);
+import { PORT } from "./cdp-port.mjs";
 
 /* ── 源码常量：**从源码读**，不写死（纪律 29）───────────────────────── */
 const layoutSrc = fs.readFileSync(path.join(SRC, "store", "layout.js"), "utf8");

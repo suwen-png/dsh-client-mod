@@ -24,7 +24,7 @@
  * 用法：node scripts/verify-mindmap.mjs
  * 退出码：0 全绿 / 1 有失败 / 2 INVALID（含 CDP 连不上）
  */
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 
 /* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
  *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */

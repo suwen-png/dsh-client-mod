@@ -69,6 +69,65 @@ function keyOf(name, dim) {
 }
 
 /**
+ * 🔴 第 36 轮：**项目级归一化**（复用兜底的第三层，也是真正止血的一层）
+ *
+ * ── 它治的是什么（用户原话 + 实测数据）────────────────────────────────
+ *   「对话越加越多了，这个不合理，不应该加那么多会话。」
+ *   实测（`_probe-session-census`，只读）：宿主 **26** 条会话、归档 **0** 条
+ *   ⇒ **不是脏数据没清，是 26 条全是真建的**；而复用索引 `splitIndexN = 0`。
+ *   标题样本：`墟海项目分线推进` / `《墟海》项目分线推进` / `《墟海》多维度创作推进`
+ *   / `墟海小说正文写作与多维推进` / `墟海项目多维度推进` —— **同一个项目，因为用户
+ *   每次措辞不同，被逐字匹配判成 5 个不同需求 ⇒ 建了 5 条**。
+ *
+ * ── 为什么前两层救不了 ────────────────────────────────────────────────
+ *   ① 索引层：`dsh.director.split` 在 `localStorage`，而 **origin 含端口**、
+ *      宿主每次启动端口都变 ⇒ 冷启动后索引**必然为空**（这是环境事实，改不掉）。
+ *   ② 标题前缀层：`want = briefTitlePrefix()`（形如 `【A1 世界观】《墟海》`），
+ *      而宿主标题是**用户首条消息**的自由文本 ⇒ 不以该前缀开头 ⇒ 恒 0 命中。
+ *   ⇒ 两层都 miss 就 `create`，于是每派一次就多 N 条。
+ *
+ * ── 判据为什么是「归一化后 contains」而不是别的档位 ──────────────────
+ *   · 全等  ⇒ 回到第 ② 层的死路（措辞一变就不等）。
+ *   · 前缀  ⇒ `墟海项目分线推进` 不以 `墟海` 之外的任何固定前缀开头，同样恒 miss。
+ *   · `includes`（未归一化）⇒ 书名号/全角空格/大小写会让 `《墟海》` 匹配不上 `墟海`。
+ *   ⇒ 先**归一化**（去《》「」【】()与全部标点空白 → 小写），再 `contains`。
+ *   ⚠️ 长度下限 **2**：单字项目名（如「海」）会命中几乎所有标题 ⇒ 误配比新建更糟
+ *      （简报投给无关会话；第 25 批已定性"投错维度比多建一条严重"）。
+ *
+ * 纯函数：无 DOM / 无 store / 无时钟。
+ */
+function normProject(t) {
+	return String(t == null ? "" : t)
+		.replace(/[《》「」『』【】\[\]()（）""'']/g, "")
+		.replace(/[\u3000\s·、,，.。!！?？:：;；~～\-_/\\|]+/g, "")
+		.toLowerCase();
+}
+
+/**
+ * 第三层的**两道安全闸**（🔴 缺一不可，否则会撞翻既有负对照 RU-T2 / RU-T3）
+ *
+ * 松匹配天生有"投错对象"的风险，而本项目已定性：**投错维度比多建一条会话糟得多**。
+ * 所以兜底**不是**"同项目就随便接"，而是只接**没有相反证据**的会话：
+ *
+ *  ① **书名边界闸**：会话标题里若出现《X》，则 `X` 必须与本次作品名**相等**。
+ *     ⇒ `《灵能修仙传》` 不会被当成 `《灵能修仙》`（保住 RU-T3 —— 那是**另一本书**）。
+ *  ② **维度代码闸**：标题里若出现维度代码（`A10` 这类），则必须与本维度一致。
+ *     ⇒ `【A10 配角】…` 不会被当成 `A1 世界观`（保住 RU-T2 —— 那是**另一个维度**）。
+ *
+ * 两条都**只在"标题给了明确证据"时才否决**；标题是自由文本（如 `墟海项目分线推进`）
+ * 时不含相反证据 ⇒ 允许按项目名复用。这正是用户要的"同一项目别再建新的"，
+ * 同时不牺牲"不许投错"这条更硬的原则。
+ */
+function bookOf(t) {
+	const m = /《([^》]*)》/.exec(String(t == null ? "" : t));
+	return m ? normProject(m[1]) : "";
+}
+function dimCodeOf(t) {
+	const m = /(?:^|[^A-Za-z0-9])([Aa]\s?\d{1,2})(?![A-Za-z0-9])/.exec(String(t == null ? "" : t));
+	return m ? m[1].replace(/\s+/g, "").toLowerCase() : "";
+}
+
+/**
  * 派发前的**复用决策**（纯函数）。
  *
  * @param {Array<{key:string,label?:string}>} dims 本次要派的维度（`plan().dims`）
@@ -185,6 +244,10 @@ export function planReuse(dims, ctx) {
 	const surplus = [];
 	const titleMissed = [];
 	const picked = {};
+	/* 第 36 轮：项目级兜底（第三层）。`projectFallback: false` 可显式关掉（闸门负对照用） */
+	const projKey = normProject(name);
+	const projFallback = o.projectFallback !== false && projKey.length >= 2;
+	let projectHits = 0;
 	for (let i = 0; i < list.length; i++) {
 		const d = list[i] && typeof list[i] === "object" ? list[i] : {};
 		const dim = String(d.key == null ? "" : d.key);
@@ -231,12 +294,43 @@ export function planReuse(dims, ctx) {
 					if (h.key.indexOf(want) === 0) { titlePick = h; break; }
 				}
 			}
+			/* ── 第三层：**项目级归一化兜底**（第 36 轮 · 见 `normProject()` 头注）─────
+			 * 只在**前两层都 miss** 时使用（`no-match` 且标题前缀没命中），
+			 * 且不覆盖 `already-used` / `orphan-only` —— 那两类该清索引，不该拿项目名糊过去。
+			 * 命中判据 = 归一化后 `contains`，长度下限 2（单字会误配，见头注）。
+			 * 同会话只接一个维度（`used`），取 `at` 最新（titlePool 已按 at 降序）。 */
+			let projectPick = null;
+			if (!titlePick && why === "no-match" && projFallback) {
+				const wantBook = want ? bookOf(want) : "";
+				const wantCode = want ? dimCodeOf(want) : "";
+				for (let j = 0; j < titlePool.length; j++) {
+					const h = titlePool[j];
+					if (used.has(h.sessionId)) continue;
+					const hk = normProject(h.key);
+					if (!hk || hk.indexOf(projKey) < 0) continue;
+					/* 闸①：标题自带书名 ⇒ 必须与本次作品名**相等**（《灵能修仙传》≠《灵能修仙》） */
+					const hb = bookOf(h.key);
+					if (hb && hb !== projKey) continue;
+					if (wantBook && hb && hb !== wantBook) continue;
+					/* 闸②：标题自带维度代码 ⇒ 必须与本维度一致（A10 ≠ A1） */
+					const hc = dimCodeOf(h.key);
+					if (hc && wantCode && hc !== wantCode) continue;
+					projectPick = h;
+					break;
+				}
+			}
 			if (titlePick) {
 				used.add(titlePick.sessionId);
 				picked[k] = titlePick.sessionId;
 				titleHitAny = true;
 				titleHits += 1;
 				decisions.push({ dim, label, action: "reuse", sessionId: titlePick.sessionId, why: "title-hit", at: titlePick.at });
+			} else if (projectPick) {
+				used.add(projectPick.sessionId);
+				picked[k] = projectPick.sessionId;
+				titleHitAny = true;
+				projectHits += 1;
+				decisions.push({ dim, label, action: "reuse", sessionId: projectPick.sessionId, why: "project-hit", at: projectPick.at });
 			} else {
 				if (why === "no-match" && wantTitles) titleMissed.push(dim);
 				decisions.push({ dim, label, action: "create", sessionId: null, why, at: 0 });
@@ -267,7 +361,11 @@ export function planReuse(dims, ctx) {
 		 * 否则导图拿不到插件侧标签、下次派发还得靠标题兜底（第 25 批实测补的实际缺口）。 */
 		titleHits,
 		titleMissed,
-		titlePoolN: titlePool.length
+		titlePoolN: titlePool.length,
+		/* 第 36 轮：**靠项目名救回来的条数**（第三层）。与 `titleHits` 分列，
+		 * 因为两者的**可信度不同**：title-hit 是同维度精确前缀，project-hit 只是同项目。
+		 * 界面/闸门要能分辨"复用得准"与"复用得松"，否则"复用 5 条"可能全是松匹配。 */
+		projectHits
 	};
 }
 
@@ -304,6 +402,9 @@ export function reuseSummary(plan) {
 	const orphanN = Array.isArray(p.orphans) ? p.orphans.length : 0;
 	const surplusN = Array.isArray(p.surplus) ? p.surplus.length : 0;
 	const parts = ["复用已有 " + reuse + " 条", "新建 " + create + " 条"];
+	/* 第 36 轮：复用的**质量**也要看得见 —— 精确命中 vs 项目级松命中不是一回事 */
+	const projN = Number(p.projectHits) || 0;
+	if (projN) parts.push("（其中 " + projN + " 条为同项目兜底复用）");
 	if (orphanN) parts.push("索引孤儿 " + orphanN + " 条（宿主已无此会话，建议清理索引）");
 	if (surplusN) parts.push("同维度多余 " + surplusN + " 条（可选清理）");
 	if (p.aliveKnown === false) parts.push("⚠ 读不到宿主会话列表 ⇒ 本次全部新建（降级，未做复用判断）");

@@ -285,13 +285,41 @@ t("RU-T7", "不传 `wantTitles` ⇒ **不做**标题匹配（保持旧行为，�
  *    这不是"再测一遍"，而是证明本断言**真的能抓到那个缺陷**：改正之前这里是红的。 */
 const WRONG_WANT = {};
 for (let i = 0; i < DIMS.length; i++) WRONG_WANT[DIMS[i].key] = SD.branchTitle(DIMS[i], NAME2);
+/* 🔴 T8：**植入缺陷校准**（纪律 32）—— 把**上一版的错判据**喂进去，必须精确 0 命中。
+ *    这不是"再测一遍"，而是证明本断言**真的能抓到那个缺陷**：改正之前这里是红的。
+ *
+ *    ⚠️ 第 36 轮**精确化**（不是放宽）：加「项目级兜底」第三层之后，喂错判据也可能
+ *    被第三层救回来 ⇒ 若照旧断言"总数 0 命中"，测的就不是本条要守的那层了。
+ *    ⇒ 用 `projectFallback:false` 把断言**隔离到标题前缀层**，它才仍然在守"判据必须同源"。
+ *    （纪律 92：前提判据要用产品自己的口径；纪律 33：断言不许因别处的改动而失真。） */
 const q8 = planReuse(DIMS, {
 	index: {}, aliveIds: ["h-world", "h-plot", "h-chars"], name: NAME2,
-	hostTitles: pool1, wantTitles: WRONG_WANT
+	hostTitles: pool1, wantTitles: WRONG_WANT, projectFallback: false
 });
-t("RU-T8", "🔴 **植入缺陷校准**：喂 `branchTitle()`（角括号「」）当判据 ⇒ **必须 0 命中**（上一版的真实缺陷；本断言在修正前是红的）",
+t("RU-T8", "🔴 **植入缺陷校准**（隔离到标题前缀层）：喂 `branchTitle()`（角括号「」）当判据 ⇒ **必须 0 命中**（上一版的真实缺陷；本断言在修正前是红的）",
 	q8.reuse === 0 && q8.titleHit === false && q8.titleMissed.length === 3,
 	{ reuse: q8.reuse, hit: q8.titleHit, missed: q8.titleMissed, wrong: WRONG_WANT.world });
+
+/* 🔴 T8b：第三层自身的**负对照** —— 标题自带**冲突的维度代码**时，项目兜底**必须拒绝**。
+ *    否则"同项目就复用"会把 A1 的简报投进 A10 的会话（投错维度比多建一条更糟）。 */
+const poolCode = [{ sessionId: "h-a10", title: "【A10 配角】《灵能修仙》 —— 配角线", at: 900 }];
+const q8b = planReuse(DIMS, {
+	index: {}, aliveIds: ["h-a10"], name: NAME2,
+	hostTitles: poolCode, wantTitles: WANT
+});
+t("RU-T8b", "🔴 **负对照**：会话标题自带**冲突维度代码**（A10 vs A1）⇒ 项目兜底**必须拒绝**",
+	q8b.reuse === 0 && q8b.create === DIMS.length && q8b.projectHits === 0,
+	{ reuse: q8b.reuse, create: q8b.create, projectHits: q8b.projectHits });
+
+/* 🔴 T8c：第三层自身的**负对照** —— 标题自带**另一本书**时，项目兜底**必须拒绝**。 */
+const poolBook = [{ sessionId: "h-other", title: "【A1 世界观】《灵能修仙传》 —— 续作", at: 900 }];
+const q8c = planReuse(DIMS, {
+	index: {}, aliveIds: ["h-other"], name: NAME2,
+	hostTitles: poolBook, wantTitles: WANT
+});
+t("RU-T8c", "🔴 **负对照**：会话标题是**另一本书**（《灵能修仙传》≠《灵能修仙》）⇒ 项目兜底**必须拒绝**",
+	q8c.reuse === 0 && q8c.projectHits === 0,
+	{ reuse: q8c.reuse, projectHits: q8c.projectHits });
 
 /* 🔴 T9：**同源守卫**（纪律 27）—— 匹配串必须是 `briefOf()` head 的**逐字前缀**。
  *    这一条把"两份真相"变成机器可判：以后谁把 head 的括号改了而没改匹配串，这里立刻红。 */
@@ -355,6 +383,82 @@ const liveRowsDef = /const liveRows = \(branch && branch\.tree && Array\.isArray
 t("RU-T15", "🔴 **N8 常驻读数接线自证**：`data-alive` 取**分支树**（`liveRows` 三态），**不是**层级树 `tree.rows`",
 	aliveFromLive && liveRowsDef && !aliveFromHier,
 	{ aliveFromLive: aliveFromLive, liveRowsDef: liveRowsDef, aliveFromHier: aliveFromHier });
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 第 36 轮新增：**项目级归一化兜底**（复用的第三层）
+ * ──────────────────────────────────────────────────────────────────────
+ * 用户原话：「对话越加越多了，这个不合理，不应该加那么多会话。」
+ * 实测（`_probe-session-census`，只读）：宿主 26 条 / 归档 0 条 / 复用索引 0 条，
+ * 标题形如 `墟海项目分线推进` · `《墟海》项目分线推进` · `《墟海》多维度创作推进`
+ * ⇒ **同一个项目因措辞不同被判成不同需求 ⇒ 每次新建**。
+ *
+ * 前两层（索引 / 标题前缀）在冷启动下必然都 miss（索引随 origin 丢失；
+ * 宿主标题是用户自由文本，不以 `【A1 世界观】《墟海》` 开头）⇒ 必须补第三层。
+ *
+ * | 编号 | 被测行为 | 期望 |
+ * |:-----|:---------|:-----|
+ * | RU-17 | 同项目、措辞不同（含书名号） | 复用成功，`why="project-hit"` |
+ * | RU-18 | 🔴 **负对照**：**不同项目** | **不复用**（投错项目比多建一条更糟） |
+ * | RU-19 | 🔴 **校准**：`projectFallback:false` | **不复用**（证明第三层真的在起作用，不是碰巧） |
+ * | RU-20 | 🔴 **负对照**：单字项目名 | 不启用兜底（长度下限 2，否则「海」会命中一切） |
+ * | RU-21 | 读数可见 | `projectHits` 正确 + 摘要**显式**报出"同项目兜底复用" |
+ * ══════════════════════════════════════════════════════════════════════ */
+
+const P_DIMS = [{ key: "a1", label: "A1 世界观" }, { key: "a2", label: "A2 力量体系" }];
+const P_TITLES = [
+	{ sessionId: "s1", title: "墟海项目分线推进", at: 100 },
+	{ sessionId: "s2", title: "《墟海》多维度创作推进", at: 200 }
+];
+const P_BASE = {
+	index: {}, aliveIds: ["s1", "s2"], hostTitles: P_TITLES,
+	wantTitles: { a1: "【A1 世界观】《墟海》", a2: "【A2 力量体系】《墟海》" }
+};
+
+/* RU-17：冷启动（索引空）+ 标题前缀不匹配 ⇒ 第三层必须救回来 */
+const p17 = planReuse(P_DIMS, { ...P_BASE, name: "墟海" });
+const p17why = p17.decisions.map((d) => d.why);
+t("RU-17", "🔴 **同项目、措辞不同（含书名号）** ⇒ 复用（索引空 + 标题前缀 miss 时靠项目名兜底）",
+	p17.reuse === 2 && p17.create === 0 && p17why.every((w) => w === "project-hit"),
+	{ reuse: p17.reuse, create: p17.create, why: p17why, projectHits: p17.projectHits });
+
+/* RU-17b：复用到的是**不同**会话（一次派发 8 维不能全挤在一条上） */
+const p17ids = p17.decisions.map((d) => d.sessionId);
+t("RU-17b", "同批次内**一个会话只接一个维度**（兜底复用也要遵守）",
+	p17ids[0] !== p17ids[1] && p17ids.every(Boolean), { ids: p17ids });
+
+/* RU-18：负对照 —— 不同项目不得互配 */
+const p18 = planReuse(P_DIMS, { ...P_BASE, name: "灵能修仙" });
+t("RU-18", "🔴 **负对照**：**不同项目**不得互配（投错项目比多建一条严重）",
+	p18.reuse === 0 && p18.create === 2 && p18.decisions.every((d) => d.why === "no-match"),
+	{ reuse: p18.reuse, create: p18.create, why: p18.decisions.map((d) => d.why) });
+
+/* RU-19：校准 —— 关掉兜底就必须回到新建（否则说明上面几条是碰巧绿的） */
+const p19 = planReuse(P_DIMS, { ...P_BASE, name: "墟海", projectFallback: false });
+t("RU-19", "🔴 **校准**：`projectFallback:false` ⇒ **必须回到新建**（证明第三层真的在起作用）",
+	p19.reuse === 0 && p19.create === 2 && p19.projectHits === 0,
+	{ reuse: p19.reuse, create: p19.create, projectHits: p19.projectHits });
+
+/* RU-20：负对照 —— 单字项目名不启用兜底 */
+const p20 = planReuse(P_DIMS, { ...P_BASE, name: "海" });
+t("RU-20", "🔴 **负对照**：单字项目名**不启用**兜底（长度下限 2，「海」会命中几乎所有标题）",
+	p20.reuse === 0 && p20.create === 2, { reuse: p20.reuse, create: p20.create });
+
+/* RU-21：读数必须可见（纪律 19：降级可以，无声不行） */
+const p21sum = reuseSummary(p17);
+t("RU-21", "🔴 **读数可见**：`projectHits` 正确计数，且摘要**显式**区分「精确复用」与「同项目兜底复用」",
+	p17.projectHits === 2 && /同项目兜底复用/.test(p21sum),
+	{ projectHits: p17.projectHits, summary: p21sum });
+
+/* 🔴 T16：**接线自证**（纪律 79「写好了 ≠ 接进去了」）—— 本轮 NS-4c2 真红的根因：
+ *   `director-dispatch.js` 把 `planReuse()` 的返回值**重新整形**成 `reusePlan` 再交界面，
+ *   而整形时**漏了 `projectHits`** ⇒ 界面与闸门恒读到 0，产品侧其实完全正常（`复用 8`）。
+ *   ⇒ 钉成源码断言：三个字段都必须在**整形对象**里出现，且与 `planReuse` 同源同名。 */
+const srcDispatchWire = FS.readFileSync(new URL("../src/logic/director-dispatch.js", import.meta.url), "utf8");
+const wireTitle = /titleHits:\s*Number\(reusePlan\.titleHits\)/.test(srcDispatchWire);
+const wireProj = /projectHits:\s*Number\(reusePlan\.projectHits\)/.test(srcDispatchWire);
+const wirePool = /titlePoolN:\s*Number\(reusePlan\.titlePoolN\)/.test(srcDispatchWire);
+t("RU-T16", "🔴 **接线自证**：`director-dispatch.js` 的 `reusePlan` 整形对象显式透传 `titleHits` / `projectHits` / `titlePoolN`",
+	wireTitle && wireProj && wirePool, { titleHits: wireTitle, projectHits: wireProj, titlePoolN: wirePool });
 
 console.log("\n═══════════════════════════════════════════════════════════");
 console.log("  PASS " + pass + " / FAIL " + fail + " / 总计 " + (pass + fail));

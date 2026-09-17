@@ -23332,6 +23332,65 @@ window.__ModuleLoader__.load({
 			}
 			
 			/**
+			 * 🔴 第 36 轮：**项目级归一化**（复用兜底的第三层，也是真正止血的一层）
+			 *
+			 * ── 它治的是什么（用户原话 + 实测数据）────────────────────────────────
+			 *   「对话越加越多了，这个不合理，不应该加那么多会话。」
+			 *   实测（`_probe-session-census`，只读）：宿主 **26** 条会话、归档 **0** 条
+			 *   ⇒ **不是脏数据没清，是 26 条全是真建的**；而复用索引 `splitIndexN = 0`。
+			 *   标题样本：`墟海项目分线推进` / `《墟海》项目分线推进` / `《墟海》多维度创作推进`
+			 *   / `墟海小说正文写作与多维推进` / `墟海项目多维度推进` —— **同一个项目，因为用户
+			 *   每次措辞不同，被逐字匹配判成 5 个不同需求 ⇒ 建了 5 条**。
+			 *
+			 * ── 为什么前两层救不了 ────────────────────────────────────────────────
+			 *   ① 索引层：`dsh.director.split` 在 `localStorage`，而 **origin 含端口**、
+			 *      宿主每次启动端口都变 ⇒ 冷启动后索引**必然为空**（这是环境事实，改不掉）。
+			 *   ② 标题前缀层：`want = briefTitlePrefix()`（形如 `【A1 世界观】《墟海》`），
+			 *      而宿主标题是**用户首条消息**的自由文本 ⇒ 不以该前缀开头 ⇒ 恒 0 命中。
+			 *   ⇒ 两层都 miss 就 `create`，于是每派一次就多 N 条。
+			 *
+			 * ── 判据为什么是「归一化后 contains」而不是别的档位 ──────────────────
+			 *   · 全等  ⇒ 回到第 ② 层的死路（措辞一变就不等）。
+			 *   · 前缀  ⇒ `墟海项目分线推进` 不以 `墟海` 之外的任何固定前缀开头，同样恒 miss。
+			 *   · `includes`（未归一化）⇒ 书名号/全角空格/大小写会让 `《墟海》` 匹配不上 `墟海`。
+			 *   ⇒ 先**归一化**（去《》「」【】()与全部标点空白 → 小写），再 `contains`。
+			 *   ⚠️ 长度下限 **2**：单字项目名（如「海」）会命中几乎所有标题 ⇒ 误配比新建更糟
+			 *      （简报投给无关会话；第 25 批已定性"投错维度比多建一条严重"）。
+			 *
+			 * 纯函数：无 DOM / 无 store / 无时钟。
+			 */
+			function normProject(t) {
+				return String(t == null ? "" : t)
+					.replace(/[《》「」『』【】\[\]()（）""'']/g, "")
+					.replace(/[\u3000\s·、,，.。!！?？:：;；~～\-_/\\|]+/g, "")
+					.toLowerCase();
+			}
+			
+			/**
+			 * 第三层的**两道安全闸**（🔴 缺一不可，否则会撞翻既有负对照 RU-T2 / RU-T3）
+			 *
+			 * 松匹配天生有"投错对象"的风险，而本项目已定性：**投错维度比多建一条会话糟得多**。
+			 * 所以兜底**不是**"同项目就随便接"，而是只接**没有相反证据**的会话：
+			 *
+			 *  ① **书名边界闸**：会话标题里若出现《X》，则 `X` 必须与本次作品名**相等**。
+			 *     ⇒ `《灵能修仙传》` 不会被当成 `《灵能修仙》`（保住 RU-T3 —— 那是**另一本书**）。
+			 *  ② **维度代码闸**：标题里若出现维度代码（`A10` 这类），则必须与本维度一致。
+			 *     ⇒ `【A10 配角】…` 不会被当成 `A1 世界观`（保住 RU-T2 —— 那是**另一个维度**）。
+			 *
+			 * 两条都**只在"标题给了明确证据"时才否决**；标题是自由文本（如 `墟海项目分线推进`）
+			 * 时不含相反证据 ⇒ 允许按项目名复用。这正是用户要的"同一项目别再建新的"，
+			 * 同时不牺牲"不许投错"这条更硬的原则。
+			 */
+			function bookOf(t) {
+				const m = /《([^》]*)》/.exec(String(t == null ? "" : t));
+				return m ? normProject(m[1]) : "";
+			}
+			function dimCodeOf(t) {
+				const m = /(?:^|[^A-Za-z0-9])([Aa]\s?\d{1,2})(?![A-Za-z0-9])/.exec(String(t == null ? "" : t));
+				return m ? m[1].replace(/\s+/g, "").toLowerCase() : "";
+			}
+			
+			/**
 			 * 派发前的**复用决策**（纯函数）。
 			 *
 			 * @param {Array<{key:string,label?:string}>} dims 本次要派的维度（`plan().dims`）
@@ -23448,6 +23507,10 @@ window.__ModuleLoader__.load({
 				const surplus = [];
 				const titleMissed = [];
 				const picked = {};
+				/* 第 36 轮：项目级兜底（第三层）。`projectFallback: false` 可显式关掉（闸门负对照用） */
+				const projKey = normProject(name);
+				const projFallback = o.projectFallback !== false && projKey.length >= 2;
+				let projectHits = 0;
 				for (let i = 0; i < list.length; i++) {
 					const d = list[i] && typeof list[i] === "object" ? list[i] : {};
 					const dim = String(d.key == null ? "" : d.key);
@@ -23494,12 +23557,43 @@ window.__ModuleLoader__.load({
 								if (h.key.indexOf(want) === 0) { titlePick = h; break; }
 							}
 						}
+						/* ── 第三层：**项目级归一化兜底**（第 36 轮 · 见 `normProject()` 头注）─────
+						 * 只在**前两层都 miss** 时使用（`no-match` 且标题前缀没命中），
+						 * 且不覆盖 `already-used` / `orphan-only` —— 那两类该清索引，不该拿项目名糊过去。
+						 * 命中判据 = 归一化后 `contains`，长度下限 2（单字会误配，见头注）。
+						 * 同会话只接一个维度（`used`），取 `at` 最新（titlePool 已按 at 降序）。 */
+						let projectPick = null;
+						if (!titlePick && why === "no-match" && projFallback) {
+							const wantBook = want ? bookOf(want) : "";
+							const wantCode = want ? dimCodeOf(want) : "";
+							for (let j = 0; j < titlePool.length; j++) {
+								const h = titlePool[j];
+								if (used.has(h.sessionId)) continue;
+								const hk = normProject(h.key);
+								if (!hk || hk.indexOf(projKey) < 0) continue;
+								/* 闸①：标题自带书名 ⇒ 必须与本次作品名**相等**（《灵能修仙传》≠《灵能修仙》） */
+								const hb = bookOf(h.key);
+								if (hb && hb !== projKey) continue;
+								if (wantBook && hb && hb !== wantBook) continue;
+								/* 闸②：标题自带维度代码 ⇒ 必须与本维度一致（A10 ≠ A1） */
+								const hc = dimCodeOf(h.key);
+								if (hc && wantCode && hc !== wantCode) continue;
+								projectPick = h;
+								break;
+							}
+						}
 						if (titlePick) {
 							used.add(titlePick.sessionId);
 							picked[k] = titlePick.sessionId;
 							titleHitAny = true;
 							titleHits += 1;
 							decisions.push({ dim, label, action: "reuse", sessionId: titlePick.sessionId, why: "title-hit", at: titlePick.at });
+						} else if (projectPick) {
+							used.add(projectPick.sessionId);
+							picked[k] = projectPick.sessionId;
+							titleHitAny = true;
+							projectHits += 1;
+							decisions.push({ dim, label, action: "reuse", sessionId: projectPick.sessionId, why: "project-hit", at: projectPick.at });
 						} else {
 							if (why === "no-match" && wantTitles) titleMissed.push(dim);
 							decisions.push({ dim, label, action: "create", sessionId: null, why, at: 0 });
@@ -23530,7 +23624,11 @@ window.__ModuleLoader__.load({
 					 * 否则导图拿不到插件侧标签、下次派发还得靠标题兜底（第 25 批实测补的实际缺口）。 */
 					titleHits,
 					titleMissed,
-					titlePoolN: titlePool.length
+					titlePoolN: titlePool.length,
+					/* 第 36 轮：**靠项目名救回来的条数**（第三层）。与 `titleHits` 分列，
+					 * 因为两者的**可信度不同**：title-hit 是同维度精确前缀，project-hit 只是同项目。
+					 * 界面/闸门要能分辨"复用得准"与"复用得松"，否则"复用 5 条"可能全是松匹配。 */
+					projectHits
 				};
 			}
 			
@@ -23567,6 +23665,9 @@ window.__ModuleLoader__.load({
 				const orphanN = Array.isArray(p.orphans) ? p.orphans.length : 0;
 				const surplusN = Array.isArray(p.surplus) ? p.surplus.length : 0;
 				const parts = ["复用已有 " + reuse + " 条", "新建 " + create + " 条"];
+				/* 第 36 轮：复用的**质量**也要看得见 —— 精确命中 vs 项目级松命中不是一回事 */
+				const projN = Number(p.projectHits) || 0;
+				if (projN) parts.push("（其中 " + projN + " 条为同项目兜底复用）");
 				if (orphanN) parts.push("索引孤儿 " + orphanN + " 条（宿主已无此会话，建议清理索引）");
 				if (surplusN) parts.push("同维度多余 " + surplusN + " 条（可选清理）");
 				if (p.aliveKnown === false) parts.push("⚠ 读不到宿主会话列表 ⇒ 本次全部新建（降级，未做复用判断）");
@@ -24252,6 +24353,11 @@ window.__ModuleLoader__.load({
 						/* 🔴 补登记条数（**不是布尔**）：标题命中的那几条**不在索引里** ⇒ 已补进索引。
 						 *    上游据此对账 `索引新增 == created + titleHits`（纪律 78：数出 0 ≠ 没有）。 */
 						titleHits: Number(reusePlan.titleHits) || 0,
+						/* 🔴 第 36 轮：项目级兜底复用条数。**必须在这里显式透传** ——
+						 *    本对象是对 `planReuse()` 返回值的**重新整形**（不是原样转发），
+						 *    漏一个字段 ⇒ 界面与闸门恒读到 0，而产品侧其实完全正常
+						 *    （纪律 79：「写好了」≠「接进去了」；本轮 NS-4c2 就是这么红的）。 */
+						projectHits: Number(reusePlan.projectHits) || 0,
 						recorded: recorded
 					},
 					summary: reuseSummary({
@@ -29986,7 +30092,7 @@ window.__ModuleLoader__.load({
 			/** 关键文件表（字节降序） */
 			const KEY_FILES = Object.freeze([
 				// prettier-ignore
-				{ f: "src/components/DirectorPage.js", bytes: 192505, lines: 2827, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
+				{ f: "src/components/DirectorPage.js", bytes: 193206, lines: 2834, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
 				{ f: "src/components/DesignStudio.js", bytes: 94481, lines: 1407, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
 				{ f: "src/components/MindMap.js", bytes: 73831, lines: 1206, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
 				{ f: "src/components/DirectorDialog.js", bytes: 68061, lines: 980, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
@@ -30005,7 +30111,8 @@ window.__ModuleLoader__.load({
 				{ f: "src/store/mindmap-schema.js", bytes: 28381, lines: 435, duty: "思维导图元素库（导图态的「原子词汇表」，纯数据）", up: "components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js", down: "（无）" },
 				{ f: "src/logic/routing.js", bytes: 27973, lines: 498, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
 				{ f: "src/store/plugin-db.js", bytes: 25406, lines: 497, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
-				{ f: "src/logic/director-dispatch.js", bytes: 24445, lines: 380, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
+				{ f: "src/logic/director-reuse.js", bytes: 24946, lines: 413, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "（无）" },
+				{ f: "src/logic/director-dispatch.js", bytes: 24879, lines: 385, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 				{ f: "src/logic/attribution.js", bytes: 22786, lines: 371, duty: "归属判定（19 号文 §3.3 / N1 · **纯函数**）", up: "components/DirectorPage.js, logic/split-dimensions.js", down: "logic/split-dimensions.js" },
 				{ f: "src/logic/director-run.js", bytes: 21909, lines: 454, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js" },
 				{ f: "src/components/DirectorHierarchy.js", bytes: 21623, lines: 381, duty: "多层级总监面板（方案 C：层级树 + 主内容区）", up: "client-entry.js, components/DirectorDialog.js", down: "store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js" },
@@ -30017,7 +30124,6 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/flow.js", bytes: 20038, lines: 434, duty: "四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, components/NodeDetailPanel.js", down: "（无）" },
 				{ f: "src/store/hierarchy.js", bytes: 19776, lines: 485, duty: "多层级总监结构（对话级 / 文件夹级 / 全局级）", up: "bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js", down: "store/idb.js, store/plugin-db.js" },
 				{ f: "src/components/NodeDetailPanel.js", bytes: 19144, lines: 331, duty: "导图右侧「该框的对话」面板", up: "client-entry.js, components/MindMap.js", down: "logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, store/mindmap-schema.js" },
-				{ f: "src/logic/director-reuse.js", bytes: 18468, lines: 312, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/store/agent-runs.js", bytes: 17554, lines: 413, duty: "总监执行状态（智能体 / 技能调用）唯一真相源", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "logic/catalog.js" },
 				{ f: "src/components/ModelSeat.js", bytes: 16861, lines: 336, duty: "标准模型选择席位（第 6 批需求 8）", up: "client-entry.js, components/DirectorPage.js", down: "config/model.js" },
 				{ f: "src/logic/lineage.js", bytes: 16773, lines: 372, duty: "上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "（无）" },
@@ -30077,7 +30183,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 88, bytes: 1838274, lines: 33614 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 88, bytes: 1845887, lines: 33727 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -31682,6 +31788,11 @@ window.__ModuleLoader__.load({
 						titlePoolN: (r.reusePlan && r.reusePlan.titlePoolN != null) ? Number(r.reusePlan.titlePoolN) : null,
 						/* 靠标题救回来的**条数**（不是布尔）：索引补登记几条要对得上「新建 + 标题命中」 */
 						titleHits: (r.reusePlan && r.reusePlan.titleHits != null) ? Number(r.reusePlan.titleHits) : 0,
+						/* 🔴 第 36 轮：**项目级兜底复用的条数**。与 `titleHits` 分列 ——
+						 *    两者可信度不同（title-hit 是同维度精确前缀，project-hit 只是同项目），
+						 *    合在一个数里会让"复用 5 条"看不出其中有 5 条是松匹配（纪律 54：静默半成功更坏）。
+						 *    索引补登记口径随之变为 `created + titleHits + projectHits`。 */
+						projectHits: (r.reusePlan && r.reusePlan.projectHits != null) ? Number(r.reusePlan.projectHits) : 0,
 						/* 🔴 第 23 批：语言整理的读数（要点数 / 剔除噪声行 / 合并重复行）——
 						 *    没有它，"整理到底生效了没有"在界面上无从判断（纪律 19 同型）。 */
 						organized: r.organized || null,
@@ -32592,6 +32703,8 @@ window.__ModuleLoader__.load({
 									 * 「宿主标题形态变了」（pool>0 且 missed>0）与「根本没读到标题」（pool=0）。 */
 									"data-title-hit": splitInfo.titleHit ? "1" : "0",
 									"data-title-hits": splitInfo.titleHits == null ? "" : splitInfo.titleHits,
+									/* 🔴 第 36 轮：项目级兜底复用条数（松匹配），与 `data-title-hits` 分列 */
+									"data-project-hits": splitInfo.projectHits == null ? "" : splitInfo.projectHits,
 									"data-title-missed": (splitInfo.titleMissed || []).join(","),
 									"data-title-pool": splitInfo.titlePoolN == null ? "" : splitInfo.titlePoolN,
 									"data-dims": (splitInfo.dims || []).join(","),
@@ -34911,5 +35024,5 @@ window.__ModuleLoader__.load({
 	}
 });
 
-/* dsh-build-stamp: 0b9373e030dcaa04 */
-(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="0b9373e030dcaa04";}catch(e){}})();
+/* dsh-build-stamp: a21e0464632bbff5 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="a21e0464632bbff5";}catch(e){}})();

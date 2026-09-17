@@ -48,7 +48,7 @@
  * 用法：node scripts/verify-flow.mjs        # 需要 Harness 已启动且开着 --remote-debugging-port=9222
  * 退出码：0 全绿 / 1 有失败 / 2 INVALID（含 CDP 连不上 —— 判目标错，不判产品错）
  */
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 const WAIT = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ══ CDP 连接 ══

@@ -19,7 +19,7 @@
  *
  * 用法：node scripts/verify-walk.mjs   （前置：Harness 已启动且 CDP 9222，最好已打开一个会话）
  */
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ── CDP 连接（与其它真机脚本同构：零依赖原生 fetch+WebSocket，硬超时防主线程挂死拖垮脚本）── */

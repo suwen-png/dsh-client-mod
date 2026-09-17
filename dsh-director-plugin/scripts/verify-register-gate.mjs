@@ -27,7 +27,7 @@
  * 用法：node scripts/verify-register-gate.mjs   （需 Harness 开着 --remote-debugging-port=9222）
  * 退出码：0 全绿 / 1 真失败 / 2 INVALID（用错用法或目标 —— 含"CDP 连不上"）
  */
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 const WAIT = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* 2026-09-14 补（纪律 43：用法陷阱必须自诊断）：

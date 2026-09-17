@@ -39,7 +39,7 @@ import { MODES } from "../src/logic/policy.js";
 import { ASSERT_KEYS, LABEL } from "../src/logic/verify.js";
 import { DIRECTOR_CHAIN } from "../src/logic/director-chain.js";
 
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 
 /* ── 期望值：全部从源码算，不写死 ── */
 const EXP_LAYERS = LAYERS.map((x) => x.key).sort();

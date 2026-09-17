@@ -31,7 +31,7 @@
 import { buildStandardFrame, ELEMENT_KINDS, LOGIC_FIELDS } from "../src/store/design-schema.js";
 const FRAME_ELEMENTS = buildStandardFrame("threeTab");
 
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 
 /* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
  *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */

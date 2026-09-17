@@ -71,7 +71,7 @@ import { caseAt, caseById } from "./_corpus-director.mjs";
 	console.log("  [自检] 断言编号唯一：" + ids.length + " 条，零重号");
 }
 
-const PORT = Number(process.env.CDP_PORT || 9222);
+import { PORT } from "./cdp-port.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* ── 用例装载（第二十四轮） ──────────────────────────────────────────
  * `DL_CASE` 支持两种写法：`C6`（用例 id）或 `5`（下标）。未给 ⇒ 默认 C1。

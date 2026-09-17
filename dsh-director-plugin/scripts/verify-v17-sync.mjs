@@ -16,7 +16,7 @@
  * 退出码：0 全绿 / 1 真失败 / 2 INVALID（CDP 连不上）
  * 用法：node scripts/verify-v17-sync.mjs
  */
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0, skip = 0; const failures = [];
 function t(id, name, cond, detail) {

@@ -32,7 +32,7 @@
  *   ⇒ 读数 `INVALID：连不上 CDP 9222`（**看起来像产品/环境坏，其实是两个名字没对齐**）。
  *   ⚠️ 顺序必须是 `CDP_PORT` 优先：它是启动器真正用的那个。
  *   完整排查见 §八 纪律 126（同一语义两个标识符 = 隐式断链）。 */
-const PORT = Number(process.env.CDP_PORT || process.env.DSH_CDP_PORT || 9222);
+import { PORT } from "./cdp-port.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ══════════ 结果记账 ══════════ */

@@ -32,7 +32,7 @@
 import { ensureDirectorPage, waitCdpPage } from "./_cdp-startup.mjs";
 import { makeClicker } from "./_cdp-click-until.mjs";
 
-const PORT = Number(process.env.CDP_PORT || 9222);
+import { PORT } from "./cdp-port.mjs";
 const RUN = String(process.env.E2E_RUN || "") === "1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

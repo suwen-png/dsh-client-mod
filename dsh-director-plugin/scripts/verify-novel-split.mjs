@@ -139,7 +139,7 @@ if (WANT_N !== DIM_KEYS.length) {
 
 /* 🔴 端口可由 `CDP_PORT` 覆盖：重启 Harness 时端口会换（纪律 12：判"是否新实例"看端口），
  *    写死 9222 会在"起在 9228、连 9222"时静默报 INVALID，读起来像"Harness 没起来"。 */
-const PORT = Number(process.env.CDP_PORT || 9222);
+import { PORT } from "./cdp-port.mjs";
 
 /* 🔴 **有界等待 page 目标**（纪律 55）—— 唯一实现 `_cdp-startup.mjs#waitCdpPage`（纪律 98）。
  *    实测（第十九批 · 冷启动）：CDP 端口就绪 ≈2.0s，而 `/json/list` 里**出现 page 目标还要更晚**
@@ -772,11 +772,17 @@ const splitRead = await js(`(function(){ var e=document.querySelector('[data-tes
            created: e.getAttribute('data-created'), orphan: e.getAttribute('data-orphan-forgotten'),
            /* 第 25 批（U10/P9）：标题弱匹配读数 —— 0 命中时必须能分辨"读不到"与"形态变了" */
            titleHit: e.getAttribute('data-title-hit'), titleMissed: e.getAttribute('data-title-missed'),
-           titlePool: e.getAttribute('data-title-pool'), titleHits: e.getAttribute('data-title-hits') }; })()`);
+           titlePool: e.getAttribute('data-title-pool'), titleHits: e.getAttribute('data-title-hits'),
+           /* 第 36 轮：项目级兜底复用条数（松匹配），与 titleHits 分列 */
+           projectHits: e.getAttribute('data-project-hits') }; })()`);
 const reusedN = splitRead && splitRead.reused !== null && splitRead.reused !== "" ? Number(splitRead.reused) : -1;
 const createdN = splitRead && splitRead.created !== null && splitRead.created !== "" ? Number(splitRead.created) : -1;
 const orphanN = splitRead && splitRead.orphan ? Number(splitRead.orphan) : 0;
 const titleHitN = splitRead && splitRead.titleHits ? Number(splitRead.titleHits) : 0;
+/* 第 36 轮：**项目级兜底复用**条数。它和 `titleHits` 一样「不在索引里、必须补登记」，
+ * 所以索引新增的不变式随之变为 `新建 + 标题命中 + 项目命中`（纪律 99：改口径不掰产品）。
+ * ⚠️ 必须**分列**读：合进 `titleHits` 会让"复用 5 条"看不出其中有几条是松匹配。 */
+const projectHitN = splitRead && splitRead.projectHits ? Number(splitRead.projectHits) : 0;
 console.log("  派发读数（DOM `dp-flow-split`）：" + J(splitRead));
 
 /* 🔴 **口径更正（第 25 批 · 纪律 99）**：旧判据写的是「新增只许 0（全复用）或 8（全新建）」，
@@ -789,11 +795,11 @@ console.log("  派发读数（DOM `dp-flow-split`）：" + J(splitRead));
  *    ⇒ 判据改为**真正的不变式**：`索引新增 == 新建 + 标题命中`，且新增的都属本次那 8 条。
  *    ⚠️ 前提变了就改口径，**不许**把产品掰回"全有/全无"（纪律 99）。 */
 const newRunIds = thisRun.filter((id) => !beforeLedgerIds.has(id));
-t("NS-4c2", "🔴 交叉：台账本次新增恰 8 条；`dsh.director.split` 新增 key 数 **== 新建 + 标题命中**，且新增的都属本次那 8 条",
-	ledgerAdded.length === WANT_N && addedSplit.length === createdN + titleHitN
+t("NS-4c2", "🔴 交叉：台账本次新增恰 8 条；`dsh.director.split` 新增 key 数 **== 新建 + 标题命中 + 项目命中**，且新增的都属本次那 8 条",
+	ledgerAdded.length === WANT_N && addedSplit.length === createdN + titleHitN + projectHitN
 	&& addedSplit.every((k) => newRunIds.indexOf(k) >= 0),
 	{ ledgerAdded: ledgerAdded.length, splitAdded: addedSplit.length, reused: reusedN,
-		created: createdN, titleHits: titleHitN, newRunIds: newRunIds.length });
+		created: createdN, titleHits: titleHitN, projectHits: projectHitN, newRunIds: newRunIds.length });
 
 
 /* 新行的标题必须带维度名（走插件侧标签覆盖，不是宿主默认标题） */

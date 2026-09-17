@@ -48,7 +48,7 @@ if (![RAIL_MIN, RAIL_MAX, DEF_M4, DEF_M7].every((n) => Number.isFinite(n) && n >
 console.log("开场：源码常量 RAIL MIN=" + RAIL_MIN + " MAX=" + RAIL_MAX + " 默认 r4=" + DEF_M4 + " r7=" + DEF_M7);
 
 /* ── ② CDP 骨架（与 verify-v17-sync 同套路）──────────────────────────────── */
-const PORT = 9222;
+import { PORT } from "./cdp-port.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0, skip = 0; const failures = [];
 function t(id, name, cond, detail) {
