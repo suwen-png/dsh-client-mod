@@ -75,12 +75,12 @@ if (NEG) console.log("  🧪 校准模式 OS_NEG=" + NEG + "（期望**仅目标
 const POLITE_PROBE = /请您|请帮忙|麻烦您|麻烦你|建议您|希望你|希望您|烦请|劳驾/;
 
 /* ══════════════ OS-1 · 输出契约 ══════════════ */
-const R1 = SPEC("请您帮我把《墟海》的世界观补完\n不要写第 3 章\n项目根在 D:\\workspace\\novels\\墟海\n验收标准：术语一致", null);
+const R1 = SPEC("请您帮我把《虚海》的世界观补完\n不要写第 3 章\n项目根在 D:\\workspace\\novels\\虚海\n验收标准：术语一致", null);
 t("OS-1a", "返回 `" + SPEC_KEYS.join("/") + "` + origin/dim/lines 等字段",
 	SPEC_KEYS.every((k) => R1[k] !== undefined) && R1.origin !== undefined && R1.lines !== undefined,
 	Object.keys(R1));
 t("OS-1b", "🔴 `origin` **逐字**等于原文（整理不得改写语义 —— 判据 1 的后半）",
-	R1.origin === "请您帮我把《墟海》的世界观补完\n不要写第 3 章\n项目根在 D:\\workspace\\novels\\墟海\n验收标准：术语一致",
+	R1.origin === "请您帮我把《虚海》的世界观补完\n不要写第 3 章\n项目根在 D:\\workspace\\novels\\虚海\n验收标准：术语一致",
 	R1.origin);
 t("OS-1c", "`lines` 与实际收录条数一致（= 各类之和；防「字段有值但没进任何类」）",
 	R1.lines === R1.scope.length + R1.outOfScope.length + R1.acceptance.length + R1.forbidden.length + R1.refs.length,
@@ -100,9 +100,9 @@ t("OS-2d", "`outOfScope` 收录「本期不做」类表述",
 
 /* ══════════════ OS-3 · 判据 2：refs 认路径、**不认裸斜杠** ══════════════ */
 {
-	const r = SPEC("项目根在 D:\\workspace\\novels\\墟海，参考 docs/19-规格.md", null);
+	const r = SPEC("项目根在 D:\\workspace\\novels\\虚海，参考 docs/19-规格.md", null);
 	t("OS-3a", "🔴 判据2：含盘符路径 ⇒ `refs` 收录该路径",
-		r.refs.some((x) => x.indexOf("D:\\workspace\\novels\\墟海") >= 0), r.refs);
+		r.refs.some((x) => x.indexOf("D:\\workspace\\novels\\虚海") >= 0), r.refs);
 }
 {
 	/* 负对照：中文里「A/B」极常见（世界观/力量体系），**认裸斜杠会把整句误判成路径** */

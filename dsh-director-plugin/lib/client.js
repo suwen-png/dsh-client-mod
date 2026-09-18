@@ -25574,6 +25574,13 @@ window.__ModuleLoader__.load({
 			 *    实测用户原话形如：「…你读取"D:\workspace\novels\墟海"这个文件的信息作为填充」
 			 *    ⇒ 从原文里**找绝对路径**即可，找不到就不带（简报里少一段，不是错）。
 			 *
+			 * ⚠️ **命名更正（2026-09-18 实测 · 纪律 130）**：`墟海` 是 **2026-09-10 之前的旧名**，
+			 *    项目现名《**虚海**》，磁盘目录 = `D:\workspace\novels\虚海`（`墟海` 目录**已不存在**）。
+			 *    ① 上文引用的用户原话录于**旧名时期** ⇒ **保留原字**（改字等于伪造记录）；
+			 *    ② 但代码/语料里的**路径字面量必须用现名**，否则是死链 —— 语料侧已更正
+			 *       （`scripts/_corpus-director.mjs` 的 `REAL_PROJECTS.xuhai`，此前令 `CP-1d` 长期误红）。
+			 *    教训：**拿错别字当检索键去证否真实项目名**，会得到"不存在"的假结论。
+			 *
 			 * 识别形态（真机原话覆盖）：
 			 *   · `"D:\workspace\novels\墟海"`（引号包裹）
 			 *   · `D:\workspace\novels\墟海`（裸路径）
@@ -25588,9 +25595,9 @@ window.__ModuleLoader__.load({
 				 *
 				 * 🔴 第 18 批修正：**终止条件必须含中文标点**（由 `scripts/test-director-dispatch.mjs`
 				 *    的 `DD-1` 抓出）。原字符类只排除空白与英式引号/通配符 ⇒
-				 *    「项目根 D:\workspace\novels\墟海，先搭世界观」会把「，先搭世界观」**一起吞进 `root`**；
-				 *    真机原话里恰好是 `"…墟海"`（带引号）才没踩到 —— 属**运气**不是正确性。
-				 *    中文**字**仍允许（目录名可能就是中文，如 `墟海`），只排除中文**标点**。 */
+				 *    「项目根 D:\workspace\novels\虚海，先搭世界观」会把「，先搭世界观」**一起吞进 `root`**；
+				 *    真机原话里恰好是 `"…墟海"`（带引号 · 旧名时期）才没踩到 —— 属**运气**不是正确性。
+				 *    中文**字**仍允许（目录名可能就是中文，如 `虚海`），只排除中文**标点**。 */
 				const STOP = "\\s\"'“”‘’<>|?*，。；：、（）()【】《》！？!";
 				const m = s.match(new RegExp("[A-Za-z]:[\\\\/][^" + STOP + "]*[^" + STOP + "\\\\/]"));
 				if (!m) return { root: null, name: null };
@@ -31628,9 +31635,9 @@ window.__ModuleLoader__.load({
 				{ f: "src/components/OrchestratorPanel.js", bytes: 29870, lines: 523, duty: "多智能体编排面板", up: "client-entry.js, components/DirectorPage.js", down: "logic/roles.js, logic/dag.js, logic/policy.js, logic/delegate.js, logic/verify.js, logic/orchestrate.js, logic/director-chain.js" },
 				{ f: "src/store/mindmap-schema.js", bytes: 28381, lines: 435, duty: "思维导图元素库（导图态的「原子词汇表」，纯数据）", up: "components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js", down: "（无）" },
 				{ f: "src/logic/routing.js", bytes: 27973, lines: 498, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
+				{ f: "src/logic/director-dispatch.js", bytes: 25571, lines: 392, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 				{ f: "src/store/plugin-db.js", bytes: 25406, lines: 497, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
 				{ f: "src/logic/director-reuse.js", bytes: 25342, lines: 410, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "logic/grouping.js" },
-				{ f: "src/logic/director-dispatch.js", bytes: 24879, lines: 385, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 				{ f: "src/logic/attribution.js", bytes: 22786, lines: 371, duty: "归属判定（19 号文 §3.3 / N1 · **纯函数**）", up: "components/DirectorPage.js, logic/split-dimensions.js", down: "logic/split-dimensions.js" },
 				{ f: "src/logic/director-run.js", bytes: 21909, lines: 454, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js" },
 				{ f: "src/components/DirectorHierarchy.js", bytes: 21623, lines: 381, duty: "多层级总监面板（方案 C：层级树 + 主内容区）", up: "client-entry.js, components/DirectorDialog.js", down: "store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js" },
@@ -31705,7 +31712,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 92, bytes: 1935057, lines: 35203 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 92, bytes: 1935749, lines: 35210 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -36546,5 +36553,5 @@ window.__ModuleLoader__.load({
 	}
 });
 
-/* dsh-build-stamp: e5980d010d6d88f8 */
-(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="e5980d010d6d88f8";}catch(e){}})();
+/* dsh-build-stamp: fa8be859d8223488 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="fa8be859d8223488";}catch(e){}})();

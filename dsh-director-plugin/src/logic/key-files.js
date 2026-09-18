@@ -47,9 +47,9 @@ export const KEY_FILES = Object.freeze([
 	{ f: "src/components/OrchestratorPanel.js", bytes: 29870, lines: 523, duty: "多智能体编排面板", up: "client-entry.js, components/DirectorPage.js", down: "logic/roles.js, logic/dag.js, logic/policy.js, logic/delegate.js, logic/verify.js, logic/orchestrate.js, logic/director-chain.js" },
 	{ f: "src/store/mindmap-schema.js", bytes: 28381, lines: 435, duty: "思维导图元素库（导图态的「原子词汇表」，纯数据）", up: "components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js", down: "（无）" },
 	{ f: "src/logic/routing.js", bytes: 27973, lines: 498, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
+	{ f: "src/logic/director-dispatch.js", bytes: 25571, lines: 392, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 	{ f: "src/store/plugin-db.js", bytes: 25406, lines: 497, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
 	{ f: "src/logic/director-reuse.js", bytes: 25342, lines: 410, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "logic/grouping.js" },
-	{ f: "src/logic/director-dispatch.js", bytes: 24879, lines: 385, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 	{ f: "src/logic/attribution.js", bytes: 22786, lines: 371, duty: "归属判定（19 号文 §3.3 / N1 · **纯函数**）", up: "components/DirectorPage.js, logic/split-dimensions.js", down: "logic/split-dimensions.js" },
 	{ f: "src/logic/director-run.js", bytes: 21909, lines: 454, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js" },
 	{ f: "src/components/DirectorHierarchy.js", bytes: 21623, lines: 381, duty: "多层级总监面板（方案 C：层级树 + 主内容区）", up: "client-entry.js, components/DirectorDialog.js", down: "store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js" },
@@ -124,6 +124,6 @@ export const KEY_FILES = Object.freeze([
 ]);
 
 /** 合计（闸门据此对账，避免各自为政） */
-export const KEY_FILES_TOTAL = Object.freeze({ modules: 92, bytes: 1935057, lines: 35203 });
+export const KEY_FILES_TOTAL = Object.freeze({ modules: 92, bytes: 1935749, lines: 35210 });
 
 export default KEY_FILES;

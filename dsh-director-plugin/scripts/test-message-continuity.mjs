@@ -127,7 +127,7 @@ t("MC-1f", "🔴 R3（上游约束）与 P3（上一轮结论）**同时给** �
 	&& bBoth.indexOf(UP) >= 0 && bBoth.indexOf(PREV) >= 0, bBoth.length);
 
 /* 向后兼容：旧调用点（只传 5 参）产出必须**逐字不变** —— 否则既有判据会假红。 */
-const legacy = briefOf(DIM2, "给主角写人物档案", "墟海", { root: "D:\\workspace\\novels\\墟海" }, null);
+const legacy = briefOf(DIM2, "给主角写人物档案", "虚海", { root: "D:\\workspace\\novels\\虚海" }, null);
 t("MC-1g", "向前兼容：只传 5 参的旧调用点 ⇒ 不含上一轮段，但需求原文/技能/项目把控三段**照旧**",
 	legacy.indexOf("上一轮结论") < 0 && legacy.indexOf("需求原文：给主角写人物档案") >= 0
 	&& legacy.indexOf("加载 multi-agent-novel-brain") >= 0 && legacy.indexOf("项目把控") >= 0,

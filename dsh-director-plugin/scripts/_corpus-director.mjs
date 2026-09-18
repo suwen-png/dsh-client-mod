@@ -6,7 +6,7 @@
  * 为什么要语料池（这是本轮"哪里还可以优化"的第一条答案）
  * ──────────────────────────────────────────────────────────────────
  * 上一轮 `verify-director-logic.mjs` 的输入是**写死的两句话**：
- *   噪声 = "今天天气不错 哈哈哈哈"；真实 = '读"D:\workspace\novels\墟海"…'
+ *   噪声 = "今天天气不错 哈哈哈哈"；真实 = '读"D:\workspace\novels\虚海"…'
  *
  * ⇒ 连跑 40 次 = **同一组输入跑 40 遍**，只能证明"这一条不崩"，
  *    **证不了**用户真正要的能力：
@@ -63,7 +63,7 @@
 
 /** 真实项目根（**均已核实存在**，不用虚构路径 —— 编的路径会让"项目把控"失去意义） */
 export const REAL_PROJECTS = Object.freeze({
-	xuhai: "D:\\workspace\\novels\\墟海",
+	xuhai: "D:\\workspace\\novels\\虚海",
 	seaTycoon: "D:\\workspace\\sea-tycoon",
 	dshClient: "D:\\hermes-data\\dsh-client-mod",
 	divination: "D:\\workspace\\divination-engine"

@@ -95,7 +95,7 @@ import { plan } from "../src/logic/split-dimensions.js";
 /* ── 需求文本：**含书名号**，以便顺带验"书名被带进分支名" ──
  * 🔴 第 17 批：可由 `HUB_REQ` 覆盖（**不写死用户数据**）。
  *    默认串是闸门基线（每次跑都一致，便于负向校准）；
- *    真实验收用 `HUB_REQ='…"D:\workspace\novels\墟海"…' node scripts/verify-novel-split.mjs`
+ *    真实验收用 `HUB_REQ='…"D:\workspace\novels\虚海"…' node scripts/verify-novel-split.mjs`
  *    —— 那条串会命中「项目根提取」，简报里会多出「项目根 / 落点」一段。 */
 const NOVEL_REQ = process.env.HUB_REQ
 	/* 🔴 **19 号文 N1 规格演进（2026-09-17）**

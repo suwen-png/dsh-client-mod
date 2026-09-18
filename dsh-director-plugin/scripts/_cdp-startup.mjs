@@ -34,9 +34,11 @@
  * @param {Function} [io.log]
  * @param {number} [io.tabBudgetMs] 等页签环的总预算（默认 120000 —— 冷启动实测可到 120s）
  * @param {boolean} [io.useRealUi=true] 是否允许"真实 UI 点侧栏会话"自举（默认允许，这是正解）
- * @param {number} [io.stabilizeMs=6000] 起点建立后的**就绪稳定期**预算 —— 判据是
- *   "连续两次读数完全一致"（几何 + 覆盖物命中 + busy/ledger），不是固定 sleep；
- *   一致即提前结束。见 ⑤（`T-PLUG-067` 第二层：起点立起来了 ≠ 页面已经不动了）
+ * @param {number} [io.stabilizeMs=18000] 起点建立后的**就绪稳定期**预算（可用环境变量
+ *   `DSH_STABILIZE_MS` 覆盖）—— 判据是"连续两次读数完全一致"**且**"读数满足就绪契约"
+ *   （`hit` 全 `@in` + `data-busy=0` + `data-ledger-ok=1`），不是固定 sleep；满足即提前结束。
+ *   见 ⑤（`T-PLUG-067` 第二层：起点立起来了 ≠ 页面已经不动了；`T-PLUG-070` 补：
+ *   **"稳定" ≠ "就绪"** —— 页面**稳定地**被遮罩时，只判"一致"的旧版照样放行 ⇒ 下游假红）
  * @returns {Promise<{ok:boolean, dpRoot:boolean, tabRing:string[], reason:string, steps:string[]}>}
  */
 import { pressEsc } from "./_cdp-click-until.mjs";
@@ -134,18 +136,45 @@ export async function ensureDirectorPage(io) {
 			+ "return t+(inR?'@in':'@out');});"
 			+ "return JSON.stringify({w:Math.round(b.width),h:Math.round(b.height),hit:hit,"
 			+ "busy:r.getAttribute('data-busy'),ledger:r.getAttribute('data-ledger-ok')});})()";
+		/* 🔴 **就绪契约**（`T-PLUG-070`）：**"连续两次一致"只说明"不动了"，不说明"可以测了"。**
+		 *    实测（2026-09-18 真机）：`verify-v20` 那次稳定期末次 =
+		 *    `hit:["DIV@out","DIV@out"]` —— 两个采样点**都被外部元素盖住**，
+		 *    而 stabilize **照样判 ✅**（因为两次读数一致）⇒ 下游 `V-S3` 报
+		 *    "覆盖层前提不成立"，读起来像产品坏了。
+		 *    ⇒ 退出条件补一条：读数必须**同时满足就绪契约**
+		 *    （`hit` 全 `@in` + `data-busy=0` + `data-ledger-ok=1` —— 与 `v20` 的 `V-S4` 闲态同口径）。
+		 *    达不到就**继续等**（仍有界）；耗尽预算则**如实报"未稳定"**，不判 ✅。 */
+		const readyOf = (s) => {
+			if (s == null || s === "no-root") return false;
+			try {
+				const o = JSON.parse(s);
+				if (!Array.isArray(o.hit) || !o.hit.length) return false;
+				if (!o.hit.every((h) => /@in$/.test(String(h)))) return false;
+				if (String(o.busy) !== "0") return false;
+				if (String(o.ledger) !== "1") return false;
+				return true;
+			} catch (e) { return false; }
+		};
 		const stabilize = async () => {
-			const budget = Number(io.stabilizeMs == null ? 6000 : io.stabilizeMs);
+			/* 默认 **18000**（2026-09-18 实测）：冷启动后**首个自举套件**的"遮罩期" **> 6s** ——
+			 *    6s 预算下 `verify-v20` 的 `V-S3`（覆盖层前提）**稳定红**、`V-S5` 也红；
+			 *    调到 18s 后**两条同时转绿**（`logs/_r39d-live.out`）。
+			 *  ⚠️ 调大**不拖慢正常路径** —— 契约一满足就立刻返回（正常第 **2** 次采样 ≈450ms）；
+			 *    只有异常场景才等到预算上限，且耗尽后**如实报"未稳定"**、不判 ✅。
+			 *  可用 `DSH_STABILIZE_MS` 临时覆盖（诊断用）或 `io.stabilizeMs` 精确指定。 */
+			const budget = Number(io.stabilizeMs == null ? (Number(process.env.DSH_STABILIZE_MS) || 18000) : io.stabilizeMs);
 			const t5 = Date.now();
 			let prev = null, stable = false, n = 0;
 			while (Date.now() - t5 < budget) {
 				const cur = await js(PROBE);
 				n++;
-				if (prev !== null && cur === prev) { stable = true; break; }
+				if (prev !== null && cur === prev && readyOf(cur)) { stable = true; break; }
 				prev = cur;
 				await sleep(450);
 			}
-			note("  [起点] 就绪稳定期：" + (stable ? "✅ 连续两次读数一致（第 " + n + " 次采样）" : "⚠️ " + budget + "ms 内未稳定")
+			note("  [起点] 就绪稳定期：" + (stable
+					? "✅ 连续两次读数一致 **且** 满足就绪契约（第 " + n + " 次采样）"
+					: "⚠️ " + budget + "ms 内未同时满足「读数一致 + 就绪契约」（末次就绪=" + (readyOf(prev) ? "通过" : "**未通过**") + "）")
 				+ " ｜ 末次=" + String(prev).slice(0, 220));
 			return stable;
 		};
