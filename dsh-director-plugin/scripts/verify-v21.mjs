@@ -27,6 +27,10 @@ const SRC = path.join(HERE, "..", "src");
  *   本套件却仍去连 9222 ⇒ 报「连不上 CDP」，看起来像环境坏了，其实是两个名字没对齐。
  *   ⚠️ 顺序必须是 `CDP_PORT` 优先。 */
 import { PORT } from "./cdp-port.mjs";
+/* 🔴 `T-PLUG-067`：起点自举**只允许一个实现**（`_cdp-startup.mjs#ensureDirectorPage`）——
+ *    本套件原先自己手写了一份简版，全批时因"前序套件没建起点"而必然 INVALID。 */
+import { makeClicker } from "./_cdp-click-until.mjs";
+import { ensureDirectorPage } from "./_cdp-startup.mjs";
 
 /* ── 源码常量：**从源码读**，不写死（纪律 29）───────────────────────── */
 const layoutSrc = fs.readFileSync(path.join(SRC, "store", "layout.js"), "utf8");
@@ -182,19 +186,22 @@ async function ensurePage(tag) {
 	return false;
 }
 
-/* ── 起点：唤醒会话 → 点总监 tab → 等页面可用 ─────────────────────── */
-await ev(`(function(){var e=[...document.querySelectorAll('[role=treeitem]')].find(x=>/分钟|小时|天|刚刚/.test(x.textContent));if(e)e.click();return 1;})()`);
-let dpReady = false;
-for (let k = 1; k <= 12 && !dpReady; k++) {
-	/* 唤醒方式：直接派发页签点击（不经坐标）—— 起跑阶段页面还在排版，
-	 * 坐标点击的命中不可靠，而这一段只是"把页签点出来"，不判产品。 */
-	await ev(`(function(){var t=[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent.trim()==='总监');if(t)t.click();return 1;})()`);
-	await sleep(900);
-	dpReady = await exists("[data-testid=dp-root]");
-}
-console.log("开场：总监页挂载=" + dpReady);
+/* ── 起点：**统一自举**（唯一实现 `_cdp-startup.mjs#ensureDirectorPage` —— 纪律 98 / 126）──
+ *   🔴 `T-PLUG-067`：本套件原先自己手写了一份**只判不建**的起点（点树节点 → 点总监 tab
+ *      → 等 `dp-root`）。全批运行时前序套件未必已建起起点 ⇒ 这里必然 INVALID，
+ *      而读数长得像"总监页坏了" —— 实际是**依赖顺序**（纪律 58：没跑成 ≠ 失败）。
+ *      ⚠️ 同族隐患（纪律 126）：同一语义**两处实现** ⇒ 一处改了另一处不跟，且**不报错**。
+ *   ⇒ 改为复用唯一实现：无页签环时它会走**真实 UI 侧栏自举**（展开工作区根 / 点会话行 /
+ *      「新会话」），这才是冷启动的正解（该实现已在 `verify-novel-split` 上跨重启验证）。
+ *   🔴 `CL` 必须是 `makeClicker()` 返回体 —— 传 `console.log` 之类会在需要真实 UI 自举时抛
+ *      `CL.clickAt is not a function` ⇒ `dp-root` 不出现 ⇒ **整片假红**（`link-shots` 同款前科）。 */
+const CL = makeClicker({ send: send, js: ev, sleep: sleep });
+const BOOT = await ensureDirectorPage({ CL: CL, js: ev, send: send, sleep: sleep, log: (s) => console.log(s) });
+console.log("开场：总监页挂载=" + BOOT.ok + (BOOT.ok ? "" : " ｜ 归因：" + BOOT.reason));
+const dpReady = BOOT.ok;
 if (!dpReady) {
 	console.error("IS_PASS: FALSE（INVALID：总监页未挂载，A–E 段全部无法判定）");
+	console.error("  自举归因：" + BOOT.reason);
 	console.error("  排查：node scripts/probe-render-errors.mjs");
 	console.error("  重跑：node scripts/verify-v21.mjs");
 	process.exit(2);

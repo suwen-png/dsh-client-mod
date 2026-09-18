@@ -34,6 +34,9 @@
  * @param {Function} [io.log]
  * @param {number} [io.tabBudgetMs] 等页签环的总预算（默认 120000 —— 冷启动实测可到 120s）
  * @param {boolean} [io.useRealUi=true] 是否允许"真实 UI 点侧栏会话"自举（默认允许，这是正解）
+ * @param {number} [io.stabilizeMs=6000] 起点建立后的**就绪稳定期**预算 —— 判据是
+ *   "连续两次读数完全一致"（几何 + 覆盖物命中 + busy/ledger），不是固定 sleep；
+ *   一致即提前结束。见 ⑤（`T-PLUG-067` 第二层：起点立起来了 ≠ 页面已经不动了）
  * @returns {Promise<{ok:boolean, dpRoot:boolean, tabRing:string[], reason:string, steps:string[]}>}
  */
 import { pressEsc } from "./_cdp-click-until.mjs";
@@ -110,9 +113,47 @@ export async function ensureDirectorPage(io) {
 		}
 		note("  [起点] 浮层清理后残留：" + JSON.stringify(await js(OVERLAY)));
 
+		/* ── ⑤ 就绪**稳定期**（`T-PLUG-067` 的第二层：起点立起来了 ≠ 页面已经不动了）──────
+		 *  🔴 实测（v19 首套不建起点 ⇒ v20 是**首个真正拉起页面**的套件）：
+		 *     `dp-root` 已挂载、`data-busy=0` 也已自报，但**覆盖物探针还在变**
+		 *     （同一采样点先后命中 `DIV` → `LI`），且 CDP 派发的 `mouseMoved` **收不到**
+		 *     ⇒ 下游的「覆盖层前提 / 输入通道前提」判红，读起来完全是产品坏了：
+		 *     `verify-v20` 一次红 6 条 + 跳过 16 条（`V-S3` / `V-S5` / `V-B0b` / `V-E0b` / `V-B0` / `V-F1`），
+		 *     `verify-v21` 首条 `V21-S0` 也红 —— 全靠**一个时序问题**级联产生。
+		 *  ⇒ 判据不是"再睡一会儿"（固定 sleep 在慢机器上照样不够、快机器上白等），
+		 *     而是**连续两次读数完全一致**（与 `verify-v20` 的 `V-S4` 闲态同口径）：
+		 *     采样 = `dp-root` 几何 + 两个覆盖物探针的命中元素特征 + `data-busy`/`data-ledger-ok`。
+		 *     有界（默认 **6s**，可用 `io.stabilizeMs` 覆盖）；仍未稳定也**如实回报**
+		 *     （`stable:false` 进 steps），**不静默**、也不改写 `ok`（纪律 19/58）。 */
+		const PROBE = "(function(){var r=document.querySelector('[data-testid=\"dp-root\"]');if(!r)return 'no-root';"
+			+ "var b=r.getBoundingClientRect();"
+			+ "var ps=[[b.x+b.width*0.35,b.y+b.height*0.35],[b.x+b.width*0.75,b.y+b.height*0.55]];"
+			+ "var hit=ps.map(function(p){var e=document.elementFromPoint(Math.round(p[0]),Math.round(p[1]));"
+			+ "if(!e)return 'null';var t=e.tagName||'?';"
+			+ "var inR=!!(e===r||(e.closest&&e.closest('[data-testid=\"dp-root\"]')));"
+			+ "return t+(inR?'@in':'@out');});"
+			+ "return JSON.stringify({w:Math.round(b.width),h:Math.round(b.height),hit:hit,"
+			+ "busy:r.getAttribute('data-busy'),ledger:r.getAttribute('data-ledger-ok')});})()";
+		const stabilize = async () => {
+			const budget = Number(io.stabilizeMs == null ? 6000 : io.stabilizeMs);
+			const t5 = Date.now();
+			let prev = null, stable = false, n = 0;
+			while (Date.now() - t5 < budget) {
+				const cur = await js(PROBE);
+				n++;
+				if (prev !== null && cur === prev) { stable = true; break; }
+				prev = cur;
+				await sleep(450);
+			}
+			note("  [起点] 就绪稳定期：" + (stable ? "✅ 连续两次读数一致（第 " + n + " 次采样）" : "⚠️ " + budget + "ms 内未稳定")
+				+ " ｜ 末次=" + String(prev).slice(0, 220));
+			return stable;
+		};
+
 		let ring = await ringOf();
 		if (await hasRoot()) {
 			note("  [起点] `dp-root` 已在 DOM（起点已立，无需自举）· 环=" + JSON.stringify(ring));
+			await stabilize();
 			return { ok: true, dpRoot: true, tabRing: ring, reason: "", steps: steps };
 		}
 
@@ -230,7 +271,7 @@ export async function ensureDirectorPage(io) {
 			if (c2.ok) ok = await waitRoot(6000, 400);
 		}
 
-		if (ok) return { ok: true, dpRoot: true, tabRing: ring, reason: "", steps: steps };
+		if (ok) { await stabilize(); return { ok: true, dpRoot: true, tabRing: ring, reason: "", steps: steps }; }
 		/* ── 失败必须**可分辨**（纪律 58）：三种归因修法完全不同 ── */
 		const diag = await js("(function(){var ts=[].slice.call(document.querySelectorAll('[role=tab]'));"
 			+ "return JSON.stringify({ring:ts.map(function(e){return String(e.textContent||'').trim();}),"

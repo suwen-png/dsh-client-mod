@@ -27,7 +27,7 @@
  * 退出码：0 全绿 / 1 有红 / 2 环境不可用（起不来 / 无法判定）
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, openSync, closeSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { PLUGIN_ROOT, listSuites, artifactStamp, srcStamp, loadLedger, saveLedger, record } from "./_test-ledger.mjs";
 
@@ -146,21 +146,42 @@ for (let i = 0; i < 20; i++) {
 /* ── 3. 依次跑完（首套自举后 dp-root 已在 DOM，后续套件起点判定秒过） ── */
 console.log("\n════ 依次执行（首套负责自举起点）════");
 const results = [];
+/* 🔴 子进程输出**直写文件**（`T-PLUG-066`）—— 两条独立理由，**都不是"防 EPIPE"**：
+ *   ① **保留完整证据**（纪律 57）：原先只打印 tail 3 行 ⇒ 套件一旦崩，当场**没有任何上下文**可查。
+ *      `T-PLUG-066` 那次的栈只剩 3 行（`at onwrite` / `at Zlib.cb` / `Node.js`），
+ *      连"崩在哪一步、跑了几秒"都还原不出来 —— **这正是它变成悬案的原因**。
+ *   ② **归因更正（重要）**：原写"一次跑写 486 KB 截图、被本脚本捕获输出时触发 EPIPE" ——
+ *      已被**对照实验证伪**：5 MB stdout 经 `pipe` 同步捕获**正常返回**（`status=0` / 5,120,026 B / 157ms），
+ *      读端提前关闭同样不崩。且那次崩溃 `exit=1` 只跑 **4s**，而正常跑 **66s**、截图在**最后一步** ⇒ 时间线对不上。
+ *      ⇒ 真因**未定位**；本改动是"**让下一次可定位**"，不是"修好了它"。
+ *   ③ 附带：大输出不再进内存，也不再依赖 pipe 行为。 */
+const LOG_DIR = join(PLUGIN_ROOT, "logs");
+try { mkdirSync(LOG_DIR, { recursive: true }); } catch (e) { /* 已存在 */ }
+
 for (const n of suites) {
 	const fp = join(PLUGIN_ROOT, "scripts", n);
+	const outFile = join(LOG_DIR, "_run-live-" + n.replace(/\.mjs$/, "") + ".out");
 	const t0 = Date.now();
-	const r = spawnSync(process.execPath, [fp], {
-		cwd: PLUGIN_ROOT, encoding: "utf8", timeout: 600000, maxBuffer: 64 * 1024 * 1024,
-		env: { ...process.env, CDP_PORT: String(PORT) }
-	});
-	const out = (r.stdout || "") + "\n" + (r.stderr || "");
+	let fd = -1;
+	try { fd = openSync(outFile, "w"); } catch (e) { fd = -1; }
+	/* 打不开就退回 pipe 捕获 —— **降级不静默**，把原因打出来（纪律 19） */
+	if (fd < 0) console.log("  ⚠️ 日志文件打不开（" + outFile + "）⇒ 本次退回 pipe 捕获");
+	const r = spawnSync(process.execPath, [fp], fd >= 0
+		? { cwd: PLUGIN_ROOT, stdio: ["ignore", fd, fd], timeout: 600000, env: { ...process.env, CDP_PORT: String(PORT) } }
+		: { cwd: PLUGIN_ROOT, encoding: "utf8", timeout: 600000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, CDP_PORT: String(PORT) } });
+	if (fd >= 0) { try { closeSync(fd); } catch (e) { /* 已关 */ } }
+	let out = "";
+	if (fd >= 0) { try { out = readFileSync(outFile, "utf8"); } catch (e) { out = ""; } }
+	else { out = (r.stdout || "") + "\n" + (r.stderr || ""); }
 	const code = r.status == null ? -1 : r.status;
 	const isPass = /IS_PASS:?\s*TRUE/.test(out);
 	const invalid = code === 2 || /INVALID/.test(out.slice(-600));
 	const okFlag = code === 0;
 	const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-3).join(" ｜ ");
 	console.log("  " + (okFlag ? "OK     " : invalid ? "INVALID" : "FAIL   ") + " " + n.padEnd(30)
-		+ " exit=" + String(code).padEnd(2) + " " + String(isPass ? "IS_PASS" : "-").padEnd(8) + Math.round((Date.now() - t0) / 1000) + "s ｜ " + tail.slice(0, 120));
+		+ " exit=" + String(code).padEnd(2) + " " + String(isPass ? "IS_PASS" : "-").padEnd(8) + Math.round((Date.now() - t0) / 1000) + "s ｜ " + tail.slice(0, 110));
+	/* 非绿时把**完整输出**的位置直接指出来（查的时候才有用；绿的时候不必占一行） */
+	if (!okFlag) console.log("          └ 完整输出：" + outFile + "（" + out.length + " B）");
 	results.push({ name: n, code: code, ok: okFlag, invalid: invalid });
 	if (has("--record") && !invalid) record(ledger, n, okFlag, stamp);
 }

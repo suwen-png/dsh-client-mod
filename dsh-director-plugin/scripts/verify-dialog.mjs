@@ -41,6 +41,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
+/* 🔴 `T-PLUG-068`：收尾对账的**唯一实现**（重号自检 + 声明面提示 + 显式下限）。 */
+import { tallyCheck } from "./_test-tally.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const SRC = join(ROOT, "src");
@@ -50,6 +52,11 @@ const BUNDLE_PATH = join(ROOT, "lib", "client.js");
  * 0. 断言框架
  * ══════════════════════════════════════════════════════════════════ */
 let TOTAL = 0, PASS = 0, FAIL = 0;
+/* 🔴 `T-PLUG-068`：断言数**下限**（对账逻辑见 `scripts/_test-tally.mjs`，唯一实现）。
+ *  取**实测值**：本套件静态只有 191 处 `ok(`，但大量断言写在**循环**里 ⇒ 实跑 **279** 条。
+ *  ⇒ 下限只能来自**实跑读数**，**不许**拿静态枚举数来钉（那会把正常情况判红 —— 纪律 126 的反面）。
+ *  ⚠️ 新增断言**必须**同步抬高它（不抬 = 把新段落的沉默合法化）。 */
+const MIN_ASSERTIONS = 279;
 const FAILS = [];
 function ok(name, cond, evidence) {
 	TOTAL++;
@@ -967,6 +974,11 @@ ok("K6 🔴 真机脚本含「左栏折叠后控制簇仍在」的缺陷回归�
 console.log("\n" + "=".repeat(64));
 console.log(`批次 9 弹窗式总监架构 离线验证：PASS ${PASS} / FAIL ${FAIL} / 总计 ${TOTAL}`);
 if (FAIL) { console.log("失败清单："); FAILS.forEach((f) => console.log("  ✗ " + f)); }
+/* 🔴 `T-PLUG-068` 收尾对账 —— **必须排在打印 `IS_PASS` 之前**：
+ *    INVALID（有段落静默没跑 / 判据自己坏了）与"产品坏"要在**结论行**上就分开，
+ *    否则报告会先亮一句 `IS_PASS: TRUE` 再 exit 2 —— 读的人只看第一眼就误判（纪律 54 同族）。 */
+const tally = tallyCheck(import.meta.url, { fn: "ok", ran: TOTAL, min: MIN_ASSERTIONS, label: "批次 9 弹窗式总监架构（离线）" });
+if (!tally.ok) { console.log("=".repeat(64)); process.exit(2); }
 console.log(`IS_PASS: ${FAIL === 0 ? "TRUE" : "FALSE"}`);
 console.log("=".repeat(64));
 process.exit(FAIL === 0 ? 0 : 1);

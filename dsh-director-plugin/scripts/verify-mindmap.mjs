@@ -25,6 +25,8 @@
  * 退出码：0 全绿 / 1 有失败 / 2 INVALID（含 CDP 连不上）
  */
 import { PORT } from "./cdp-port.mjs";
+/* 🔴 `T-PLUG-068`：收尾对账的**唯一实现**（重号自检 + 声明面提示 + 显式下限）。 */
+import { tallyCheck } from "./_test-tally.mjs";
 
 /* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
  *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */
@@ -320,7 +322,10 @@ function section(s) { console.log("\n" + s); }
  * ══════════════════════════════════════════════════════════════════════════ */
 /** 末段是否跑到（正常路径在汇总前把它置 true）。若为 false，任何"绿/红"都不可信。 */
 let reachedFinal = false;
-/** 断言数下限（**下限**而非精确值：加了断言就该同时抬高它，但漏抬不会造成假红）。 */
+/** 断言数下限（**下限**而非精确值：加了断言就该同时抬高它，但漏抬不会造成假红）。
+ *  🔴 `T-PLUG-068`：对账**逻辑**已收进 `scripts/_test-tally.mjs`（唯一实现）。
+ *     本常量仍归本套件所有 ——「下限值是多少」是**套件自己的事实**，不该被抽走；
+ *     但"怎么判 / 报什么 / 哪个退出码"只允许那一处实现（纪律 126）。 */
 /* 🔴 第 38 轮：100 → **110**（新增【13.9】3 条 + 可能 skip 的 3 条、【13.10】2 条、【13.11】2 条）。
  *    这个下限的作用是"有没有段落静默没跑"—— 加了断言却不抬下限，等于把新段落的沉默合法化。
  *    **同轮追加 +1**（110 → 111）：【15】新增 `C-M21b`（记名册类型自检）。
@@ -1712,11 +1717,15 @@ const ran = pass + fail + skip;
 console.log("\n───────────────────────────────────────────────");
 console.log(` 通过 ${pass} / 失败 ${fail} / 跳过 ${skip}（合计 ${ran}）`);
 if (failures.length) console.log(" 失败项：\n   - " + failures.join("\n   - "));
-/* 收尾对账（技能 §2.6）：跑到的段落数对不上 ⇒ INVALID（脚本问题），不是产品问题。 */
-const tallyOk = reachedFinal && ran >= MIN_ASSERTIONS;
+/* 收尾对账 —— 实现收在 `_test-tally.mjs`（唯一真相源 · `T-PLUG-068`）。
+ *  `reachedFinal` 是本套件**独有**的末段哨兵：它比"数够没数够"更早、更准地回答
+ *  "有没有段落静默没跑"，所以**保留**，与计数下限**并列**判定（两条都必须过）。 */
+const tally = tallyCheck(import.meta.url, { fn: "t", ran: ran, min: MIN_ASSERTIONS, label: "verify-mindmap（真机）" });
+const tallyOk = reachedFinal && tally.ok;
 if (!tallyOk) {
-	console.log(` ❌ INVALID：断言总数对账不通过（实跑 ${ran} < 下限 ${MIN_ASSERTIONS}，或未到达末段）`);
-	console.log("    ⇒ 说明有段落**静默没跑**，本次结果不可用作产品判定。");
+	if (!reachedFinal) {
+		console.log(" ❌ INVALID：**未到达末段**（【15】点击质量）⇒ 说明有段落静默没跑，本次结果不可用作产品判定。");
+	}
 	ws.close();
 	process.exit(2);
 }

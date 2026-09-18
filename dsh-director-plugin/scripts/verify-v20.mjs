@@ -28,6 +28,11 @@
  */
 import fs from "node:fs";
 import { ensurePageFocus } from "./_cdp-focus.mjs";
+/* 🔴 `T-PLUG-067`：起点自举**只允许一个实现**（`_cdp-startup.mjs#ensureDirectorPage`）——
+ *    本套件原先只有"点总监 tab 等 dp-root"的有限重试（**只判不建**），
+ *    全批时因"前序套件没建起点"而必然 INVALID。 */
+import { makeClicker } from "./_cdp-click-until.mjs";
+import { ensureDirectorPage } from "./_cdp-startup.mjs";
 
 /* ── ① 源码常量（不写死）───────────────────────────────────────────────────── */
 const SRC_URL = new URL("../src/store/layout.js", import.meta.url);
@@ -375,6 +380,16 @@ const REASON = `(function(){
 		tabs: tab.slice(0,8), treeitems: tree,
 		body_len: (document.body&&document.body.textContent)?document.body.textContent.length:0
 	};})()`;
+/* ── ③-0′ 起点**统一自举**（唯一实现 `_cdp-startup.mjs#ensureDirectorPage`）──────
+ *   🔴 `T-PLUG-067`：本闸门原先只有下面那段"派 Esc → 点总监 tab → 等 `dp-root`"的
+ *      **有限重试**，它**只判不建**（不会去打开一个会话）⇒ 全批里前序套件没建起起点时
+ *      必然 INVALID，而读数长得像"总监页坏了"（纪律 58：没跑成 ≠ 失败）。
+ *   ⇒ 先调唯一实现把起点**建**起来（无环时走真实 UI 侧栏自举），再保留下面的重试作第二保险。
+ *   🔴 `CL` 必须是 `makeClicker()` 返回体 —— 传 `console.log` 之类会在需要真实 UI 自举时抛
+ *      `CL.clickAt is not a function` ⇒ `dp-root` 不出现 ⇒ **整片假红**。 */
+const CL = makeClicker({ send: send, js: ev, sleep: sleep });
+const BOOT = await ensureDirectorPage({ CL: CL, js: ev, send: send, sleep: sleep, log: (s) => console.log(s) });
+console.log("  [起点] 统一自举：" + (BOOT.ok ? "✅ `dp-root` 已挂载" : "❌ " + BOOT.reason));
 let dpReady = false;
 const rounds = [];
 for (let r = 1; r <= 3 && !dpReady; r++) {

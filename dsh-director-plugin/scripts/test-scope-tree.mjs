@@ -19,6 +19,8 @@ import {
 	__LEVEL_SESSION_FOR_TEST as ST_SESSION
 } from "../src/logic/scope-tree.js";
 import { LEVEL } from "../src/store/hierarchy.js";
+/* 🔴 `T-PLUG-068`：收尾对账的**唯一实现**（重号自检 + 声明面提示 + 显式下限）。 */
+import { staticAssertIds, tallyCheck } from "./_test-tally.mjs";
 
 let pass = 0, fail = 0;
 function t(id, desc, cond, ev) {
@@ -198,20 +200,58 @@ t("ST-17", "scopeStats：total=3 / roots=1 / 有子者=1 / maxDepth=1",
 	st.total === 3 && st.roots === 1 && st.branched === 1 && st.maxDepth === 1,
 	{ st });
 
+/* ── ST-18 对账模块**自身**的植入缺陷校准（纪律 ⑥/⑫/32：新检查必须能"必然红"）──────
+ *  为什么不另开一个临时校准脚本：`_test-tally.mjs` 的判据一旦坏了**不会自己报错** ——
+ *  它只会"什么都查不出来"，而那与"一切正常"**长得一模一样**（纪律 128 同族）。
+ *  ⇒ 用三份人造样本把它钉住（写在系统临时目录，`finally` 里删）。
+ *  🔴 **特别要守的是 18b**：默认模式**不许**判红 —— 硬判会把正常套件判死（纪律 132）。 */
+{
+	const { tmpdir } = await import("node:os");
+	const { writeFileSync, unlinkSync } = await import("node:fs");
+	const { join } = await import("node:path");
+	const { pathToFileURL } = await import("node:url");
+	const tmp = join(tmpdir(), "_dsh-tally-cal-" + process.pid + ".mjs");
+	/* ⚠️ 样本里的断言函数名用 **`q`** 而不是 `t` —— 否则这些**字面量本身**会被
+	 *    本文件自己的静态枚举扫到（**自指误报**：实测改名前 `声明面 36 / 实跑 34`，
+	 *    还凭空多报一个「编号复用 `X1` ×2」）。 */
+	writeFileSync(tmp, [
+		"function q(id) { return id; }",
+		'q("X1 第一条");',
+		'q("X2 第二条");',
+		'q("X1 又一个重的");',
+		'// q("COMMENTED 注释里的不该被数到");',
+		"",
+	].join("\n"), "utf8");
+	try {
+		const u = pathToFileURL(tmp);
+		const stx = staticAssertIds(u, "q");
+		t("ST-18a", "🔴 静态枚举：去重正确（2 个）· 识别编号复用（X1）· **注释里的假断言未被数到**",
+			!!stx && stx.ids.length === 2 && stx.dup.length === 1 && stx.dup[0] === "X1"
+			&& stx.ids.indexOf("COMMENTED") < 0, stx ? { ids: stx.ids, dup: stx.dup } : null);
+		const lax = tallyCheck(u, { fn: "q", ran: 3, min: 1, label: "ST-18 校准·默认" });
+		t("ST-18b", "🔴 **默认模式**：编号复用**只报告、不判红**（`verify-mindmap` 有 11 例合法复用 ⇒ 硬判会把正常套件判死）",
+			lax.ok === true && lax.dup.length === 1, { ok: lax.ok, dup: lax.dup });
+		const strict = tallyCheck(u, { fn: "q", ran: 3, min: 1, dupIsError: true, label: "ST-18 校准·严格" });
+		t("ST-18c", "严格模式（`dupIsError:true`）仍能判红 —— 防「过度修正把判据改成永远绿」",
+			strict.ok === false, { ok: strict.ok });
+		const low = tallyCheck(u, { fn: "q", ran: 2, min: 30, label: "ST-18 校准·下限" });
+		t("ST-18d", "实跑 < 下限 ⇒ 判红（这是**唯一的硬判据**）", low.ok === false, { ok: low.ok });
+	} finally {
+		try { unlinkSync(tmp); } catch (e) { /* 已删 */ }
+	}
+}
+
 console.log("\n═══════════════════════════════════════════════════════════");
-/* 🔴 收尾对账（纪律「跳过比红更危险」+「加了断言却不抬下限 = 把沉默合法化」）：
+/* 🔴 收尾对账 —— 实现收在 `_test-tally.mjs`（唯一真相源 · `T-PLUG-068`）：
  *  本套件是**纯离线**（不碰 CDP、没有 skip 分支），所以唯一能让它"静默少跑"的形态
  *  就是**中途抛穿** —— 那时 Node 打印一个裸栈退出，报告读起来只是"跑到这里就没了"。
- *  ⇒ 用一个总数下限把它钉住：实跑 < 下限 ⇒ **INVALID（exit 2）**，
- *    与"产品坏"（exit 1）在**退出码层面**就分开（本项目退出码约定 0/1/2）。
- *  ⚠️ 下限是**下限**不是精确值：以后新增断言**必须**同步抬高它。 */
+ *  ⚠️ 下限是**下限**不是精确值：以后新增断言**必须**同步抬高它（不抬 = 把沉默合法化）。 */
 const ran = pass + fail;
-const MIN_ASSERTIONS = 30;
-if (ran < MIN_ASSERTIONS) {
-	console.log("  ❌ INVALID：断言总数对账不通过（实跑 " + ran + " < 下限 " + MIN_ASSERTIONS + "）");
-	console.log("     ⇒ 有段落**静默没跑**（多半是中途抛穿），本次结果不可用作产品判定。");
-	process.exit(2);
-}
+/* 🔴 第 39 轮：30 → **34**（新增 `ST-18a`~`ST-18d` —— 对账模块**自身**的植入缺陷校准）。
+ *    这正是"新增断言**必须**同步抬高下限"的现场演示：不抬 = 把新段落的沉默合法化。 */
+const MIN_ASSERTIONS = 34;
+const tally = tallyCheck(import.meta.url, { fn: "t", ran: ran, min: MIN_ASSERTIONS, label: "test-scope-tree（纯离线）" });
+if (!tally.ok) process.exit(2);
 console.log("  PASS " + pass + " / FAIL " + fail + " / 总计 " + (pass + fail));
 console.log("═══════════════════════════════════════════════════════════");
 process.exit(fail ? 1 : 0);
