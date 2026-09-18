@@ -321,7 +321,11 @@ function section(s) { console.log("\n" + s); }
 /** 末段是否跑到（正常路径在汇总前把它置 true）。若为 false，任何"绿/红"都不可信。 */
 let reachedFinal = false;
 /** 断言数下限（**下限**而非精确值：加了断言就该同时抬高它，但漏抬不会造成假红）。 */
-const MIN_ASSERTIONS = 100;
+/* 🔴 第 38 轮：100 → **110**（新增【13.9】3 条 + 可能 skip 的 3 条、【13.10】2 条、【13.11】2 条）。
+ *    这个下限的作用是"有没有段落静默没跑"—— 加了断言却不抬下限，等于把新段落的沉默合法化。
+ *    **同轮追加 +1**（110 → 111）：【15】新增 `C-M21b`（记名册类型自检）。
+ *    **同轮再追加 +2**（111 → 113）：【0】新增 `C-M1e`（上溯真生效 / 或跳过）+ `C-M1f`（作用域归一建前提）。 */
+const MIN_ASSERTIONS = 113;
 const dieReport = (why) => {
 	console.error("\n───────────────────────────────────────────────");
 	console.error(" ❌ INVALID：脚本异常终止 —— " + why);
@@ -423,6 +427,121 @@ if (!lineageBefore) {
 }
 t("C-M1c", "🔴 血缘前提**已实体化**（宿主有父子会话：复用已有 或 本次 fork 成功）—— 否则连线/血缘段无从检验",
 	lineageBuilt === "reused" || lineageBuilt === "forked", lineageBuilt);
+
+/* ── 🔴 2026-09-18（第 38 轮）新增：**血缘前提的机械诊断**（常驻，不是一次性探针）──
+ *  为什么必须常驻：本轮新增「作用域过滤」（需求 18：默认只显示**当前文件夹下面**的对话）之后，
+ *  冒出一种新的、**看起来像产品坏**的形态 —— 数据层 `lineage=true`（宿主确有父子会话），
+ *  而画布上 `data-depth` 全是 0、一条连线都画不出。**两种完全不同的原因长得一模一样**：
+ *    ① 作用域生效 ⇒ 作用域内**没有「父子都在」的配对** ⇒ 各自成根、无边（**按设计**）；
+ *    ② 渲染层把 depth 写错、或边被逻辑丢掉（**真缺陷**）。
+ *  没有这份并排读数就只能猜 —— 而"猜"在本项目已三次把环境问题记成产品缺陷（纪律 31 / 23）。
+ *  故把**数据层血缘**与**画布层血缘**并排打出来，一眼分清是谁的问题。 */
+console.log("  [血缘前提诊断] " + await js(`(function(){
+  try{
+    var s = window.__dshBranchTree.getBranchSnapshot();
+    var rows = (s.tree&&s.tree.rows)||[]; var edges = (s.tree&&s.tree.edges)||[];
+    var ns = Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
+    var dist = {}; for (var i=0;i<ns.length;i++){var d=ns[i].getAttribute('data-depth');dist[String(d)]=(dist[String(d)]||0)+1;}
+    var chip = document.querySelector('[data-testid="mm-scope-chip"]');
+    return JSON.stringify({
+      dataLayer:{lineage:s.lineage, rows:rows.length, withParent:rows.filter(function(r){return r.parentSessionId;}).length, edges:edges.length},
+      canvasLayer:{nodes:ns.length, depthDist:dist, drawnEdges:document.querySelectorAll('[data-testid="mm-edges"] path').length},
+      scope: chip ? {scoped:chip.getAttribute('data-scoped'), total:chip.getAttribute('data-total'),
+        dropped:chip.getAttribute('data-dropped'), up:chip.getAttribute('data-scope-up'),
+        text:(chip.textContent||'').trim().slice(0,70)} : null
+    });
+  }catch(e){return '__exc ' + e.message;}
+})()`));
+
+/* ── 🔴 2026-09-18（第 38 轮）：**作用域归一**（给「连线语义」「折叠/展开」两段建前提）──
+ *
+ *  为什么必须加这一段：
+ *    本轮新增「作用域过滤」（需求 6/18：默认只显示**当前文件夹下面**的对话）。
+ *    于是「画布上看得到什么」不再只由宿主血缘决定，还由**当前作用域**决定。
+ *    实测（本机冷启动，本文件配套的 `[血缘前提诊断]` 逐字读数）：
+ *      dataLayer {rows:30, withParent:2, edges:2} ｜ canvasLayer {nodes:2, depthDist:{"0":2}, drawnEdges:0}
+ *      scope     {"total":"2","dropped":"28","text":"📁 工作区 a11caaed（项目总监） · 2 节点（滤掉 28）"}
+ *    ⇒ 数据层血缘**完好**（30 行 / 2 条边），但作用域把这 28 行滤掉，画布只剩 2 个
+ *      **互不相干**的节点 ⇒ 连一条线都画不出、depth 全是 0。
+ *    ⇒ 后续两段"没有对象可测"，报出来是 6 条红，**读起来像产品坏了**（纪律 31：先审口径）。
+ *
+ *  ⇒ 按纪律 80「起点必须实体化」：**模拟用户点「上一级」**把作用域放大到看得见血缘。
+ *    🔴 这不是"绕过问题"，而是**用户原话里的动作** ——「除非我点击**上一级**才由上一级的显示」。
+ *       顺带把「上一级」这项新功能**真机验掉**：每上溯一次都断言
+ *       `scope-up` **递增**（真换了作用域，不是只换了个字）
+ *       且 `total` **单调不减**（语义：上一级只会看到更多，不会更少）。
+ *
+ *  ⚠️ 上溯到顶仍看不见血缘 ⇒ 如实记 `status="top"`，由 `C-M1f` 报出来。
+ *     此时后续段落红属**前提缺失**，不得算到产品头上（纪律 58：没跑成 ≠ 失败）。
+ *  ⚠️ 作用域内本来就够 ⇒ `did=0` ⇒ `C-M1e` 记为**跳过并说明原因**（纪律 18），
+ *     改由【13.9】段去验上溯（那时若还有级可上，就会真点）。
+ *
+ *  🔴 **必须做成幂等函数**（照本文件 `ensureOpen()` 的惯例）—— 为什么：
+ *     `setScopeUp(0)` 是**产品侧的正确行为**（用户需求 17/18：每次打开导图默认回到
+ *     「当前文件夹」），而本脚本中段有 `ensureOpen()`（上一段可能把导图关了 ⇒ 走用户路径重开）
+ *     ⇒ 重开一次 ⇒ **作用域被打回「当前文件夹」** ⇒ 画布从 30 个节点变回 2 个
+ *     ⇒ 【13.5】聚焦段 /【13.8】拖拽段**又没有对象**了。
+ *     实测（本批 `_r38-mm4.out` 第 130 行有「导图未打开 → 走用户路径重新打开」）：
+ *       C-M19b {"bar":false,...,"rows":2} · C-M23a 红 —— 而**上一次没有 `setScopeUp(0)` 时是绿的**，
+ *       因为那时靠 `scopeUp` 的**残留值**（=1，每帧都是全局）蒙对了。
+ *     ⇒ 结论：**"绿"必须由本段自己建立，不能靠上一段漏下来的状态。**
+ *       凡需要血缘的段落，调用本函数兜底（幂等：已有配对则零开销直接返回）。 */
+async function scopeHasPair() {
+	return await js(`(function(){
+  var ns = Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
+  for (var i = 0; i < ns.length; i++) { if (ns[i].getAttribute('data-depth') !== '0') return true; }
+  return false;
+})()`);
+}
+async function scopeUpUsable() {
+	return await js(`(function(){
+  var u = document.querySelector('[data-testid="mm-scope-up"]');
+  return !!u && u.disabled !== true;
+})()`);
+}
+/**
+ * 作用域归一（**幂等**）
+ * @param {string} tag 诊断标签（进日志，便于分辨是谁触发的）
+ * @param {boolean} assert 是否由调用方产出断言（**只有【0】段为 true** —— 断言编号必须唯一）
+ * @returns {Promise<{did:number,upOk:boolean,monotonic:boolean,status:string,trail:object[]}>}
+ */
+async function ensureScopeLineage(tag, assert) {
+	const norm = { tag: tag, did: 0, upOk: true, monotonic: true, status: "reused", trail: [] };
+	if (await scopeHasPair()) return norm;
+	let prev = await readScopeChip();   // 函数声明提升：readScopeChip 定义在本文件【13.9】段
+	if (!prev) { norm.status = "top"; norm.note = "chip 不在 DOM"; return norm; }
+	if (!(await scopeUpUsable())) {
+		norm.status = "top"; norm.note = "已在最高一级";
+		norm.trail.push({ up: prev.up, total: prev.total });
+		return norm;
+	}
+	norm.trail.push({ up: prev.up, total: prev.total });
+	for (let i = 0; i < 6; i++) {
+		await clickSel('[data-testid="mm-scope-up"]', tag + " 上溯一级");
+		await sleep(460);
+		const now = await readScopeChip();
+		if (!now) { norm.upOk = false; break; }
+		if (!(now.up > prev.up)) norm.upOk = false;
+		if (!(now.total >= prev.total)) norm.monotonic = false;
+		prev = now; norm.did += 1;
+		if (norm.trail.length < 6) norm.trail.push({ up: now.up, total: now.total });
+		if (await scopeHasPair()) break;
+		if (!(await scopeUpUsable())) break;
+	}
+	norm.status = (await scopeHasPair()) ? "ok" : "top";
+	/* 非首次调用 ⇒ 只打诊断（不产出断言：同一编号第二次出现会让"编号唯一"失效） */
+	if (!assert) console.log("  · [" + tag + "] 作用域重归一：上溯 " + norm.did + " 级 ⇒ " + norm.status);
+	return norm;
+}
+const scopeNorm = await ensureScopeLineage("【0】", true);
+if (scopeNorm.did > 0) {
+	t("C-M1e", "🔴 点「上一级」上溯**真生效**：`scope-up` 递增 且 `total` 单调不减（上一级只会看到更多）",
+		scopeNorm.upOk && scopeNorm.monotonic, scopeNorm);
+} else {
+	sk("C-M1e", "「上一级」上溯真生效", "当前作用域内本来就有血缘配对 ⇒ 无需上溯（【13.9】段仍会验）");
+}
+t("C-M1f", "🔴 作用域已归一为「**看得见血缘**」——给连线 / 折叠两段建前提（否则那两段无对象可测）",
+	scopeNorm.status === "ok" || scopeNorm.status === "reused", scopeNorm);
 
 /* 🔴 折叠/展开段还需要「**非根且有子**」的节点 ⇒ 血缘至少 **3 层**（根 → 子 → 孙）。
  *   只 fork 一次只到 2 层：根(depth0) → 子(depth1，无子) ⇒ 没有「非根且有子」的对象
@@ -1122,6 +1241,11 @@ t("C-M17d", "取消后路由卡收起", await js(`!!document.querySelector('[dat
 
 /* ══════════ 13.5 分支链路聚焦（R9）══════════ */
 section("【13.5】分支链路聚焦（点会话 → 只看该链路 · 含上一层 · 退出）");
+/* 🔴 本段之前有 `ensureOpen()`（中段可能把导图关掉再走用户路径重开）——
+ *    而产品"每次打开都回到**当前文件夹**"（需求 18 的正确行为）会把作用域打回小集合
+ *    ⇒ 画布节点骤减，本段就没有「非根」的框可点（实测 `rows:2`）。
+ *    这里**兜底重归一**（幂等：已有配对则零开销直接返回）。 */
+await ensureScopeLineage("【13.5】", false);
 /* 🔴 前置**归零**而不是"断言进来时没在聚焦态"（2026-09-12 实测改法）：
  *   前面几段会真实点节点（选中即进聚焦），所以进本段时**通常已经处于聚焦态**。
  *   旧写法 `t("C-M19a", ..., focusbar === false)` 于是必红，而且更坏的是——
@@ -1342,6 +1466,8 @@ t("C-M22g", "再打开 ⇒ 分区回来（开关可逆，不留半开态）", on
  * 🔴 真实鼠标对 `visibilityState` 极敏感（hidden 时 press/release 被整条吞掉，
  *    读起来像"拖不动"= 产品坏了）⇒ 前提不成立时**跳过**，不判产品红（纪律 90/112）。 */
 section("【13.8】所有节点可拖（真实鼠标）");
+/* 同【13.5】：兜底重归一（幂等），保证「所有节点」这句话有足够多的节点可验。 */
+await ensureScopeLineage("【13.8】", false);
 
 async function realDrag(sel, dx, dy) {
 	/* 🔴 落空要**先滚到位再拖**，不是"重试兜底"（与 `clickSel` 同范式）：
@@ -1436,6 +1562,121 @@ if (FOCUS_PRE.visibility !== "visible") {
 }
 
 /* ══════════ 14. 关闭 ══════════ */
+/* ══════════ 13.9 作用域过滤（R12 · 用户 2026-09-18）══════════
+ *  用户原话：「只显示**当前文件夹下面的**这些对话的导图 除非我点击上一级 才由上一级的显示」
+ *            「按照点击的文件夹下的对话信息整理出的思维导图」
+ *
+ *  ⚠️ 判据**不写死节点条数**（会话数随使用变化 ⇒ 钉一个数就必然过期，纪律 14/103）：
+ *     改为三条**与规模无关**的关系判据：
+ *       ① chip 四个可读字段齐备（scoped / total / dropped / scope-up）
+ *       ② 画布节点数 == `data-total`（**作用域与画布同源** —— 两个数不等说明过滤算了两遍）
+ *       ③ 上溯后 total **单调不减**（上一级只会看到更多，这是作用域的**语义**断言） */
+section("【13.9】作用域过滤 + 上一级");
+
+async function readScopeChip() {
+	return await js(`(function(){
+	  var c=document.querySelector('[data-testid="mm-scope-chip"]');
+	  if(!c) return null;
+	  var ns=document.querySelectorAll('[data-testid="mm-node"]');
+	  var up=document.querySelector('[data-testid="mm-scope-up"]');
+	  return {text:(c.textContent||'').trim(), scoped:c.getAttribute('data-scoped'),
+	    total:Number(c.getAttribute('data-total')), dropped:Number(c.getAttribute('data-dropped')),
+	    up:Number(c.getAttribute('data-scope-up')), nodes:ns.length,
+	    hasUp: !!up, upDisabled: up ? !!up.disabled : null};})()`);
+}
+
+const sc1 = await readScopeChip();
+t("C-M24a", "作用域 chip 在 DOM 且四个字段齐备（scoped / total / dropped / scope-up）",
+	!!sc1 && Number.isFinite(sc1.total) && Number.isFinite(sc1.dropped) && Number.isFinite(sc1.up), sc1);
+t("C-M24b", "🔴 画布节点数 == chip 的 total（**作用域与画布同源**；不等即过滤算了两遍）",
+	!!sc1 && sc1.nodes === sc1.total, sc1 ? { nodes: sc1.nodes, total: sc1.total } : null);
+t("C-M24c", "「上一级」按钮存在（到顶时 disabled 且写明原因，而不是凭空消失）",
+	!!sc1 && sc1.hasUp === true, sc1);
+
+/* 只有"还能上溯"时才真点 —— 到顶了还去点，会把"设计如此"读成"点了没反应" */
+if (sc1 && sc1.hasUp && sc1.upDisabled === false) {
+	/* 🔴 2026-09-18（第 38 轮）修正：这里原写作 `clickMisses.push(await clickSel(...))` ——
+	 *   `clickSel` 返回的是 **boolean**（点中/落空），而它**落空时自己已经 push 过一个对象**。
+	 *   把 boolean 再 push 一次 ⇒ `clickMisses` 恒非空 ⇒ **C-M21 恒红**，且从此**再也看不出真打偏**
+	 *   （判据坏掉 = 永久假红 + 永久失明，比不写这条更糟）。正确用法：只传 `tag`，记名交给 clickSel。 */
+	await clickSel('[data-testid="mm-scope-up"]', "C-M24d");
+	await sleep(460);
+	const sc2 = await readScopeChip();
+	t("C-M24d", "点「上一级」⇒ scope-up 递增（真的换了作用域，不是只改了个字）",
+		!!sc2 && sc2.up > sc1.up, { before: sc1.up, after: sc2 && sc2.up });
+	t("C-M24e", "🔴 上溯后可见节点数**单调不减**（语义：上一级只会看到更多，不会更少）",
+		!!sc2 && sc2.total >= sc1.total, { before: sc1.total, after: sc2 && sc2.total });
+	t("C-M24f", "上溯后画布仍与 chip 同源",
+		!!sc2 && sc2.nodes === sc2.total, sc2 ? { nodes: sc2.nodes, total: sc2.total } : null);
+} else {
+	sk("C-M24d", "点「上一级」换作用域", "已在最高一级（或当前会话未挂到文件夹）⇒ 无上级可点，非失败");
+	sk("C-M24e", "上溯后节点数单调不减", "同上");
+	sk("C-M24f", "上溯后画布与 chip 同源", "同上");
+}
+
+/* ══════════ 13.10 Ctrl + 滚轮缩放（R12 · 用户原话：「ctrl 加鼠标中键 无法放大缩小」）══════════
+ *  🔴 判据取**计数**（`window.__mmStats.wheel.zoomed`）而不是"缩放读数的具体数值"：
+ *     起始 k 受"打开时自动 fit"影响（长树会 fit 到 30%），数值不稳定；
+ *     计数单调递增，不受起点影响 —— 与 `navHookStats` 同一手法。
+ *  `modifiers: 2` = Ctrl（CDP 定义 Alt=1 / Ctrl=2 / Meta=4 / Shift=8）—— 与真按 Ctrl 等价。 */
+section("【13.10】Ctrl + 滚轮缩放");
+
+const zoomText = async () => await js(`(function(){var v=document.querySelector('[data-testid="mm-zoom"]');return v?(v.textContent||'').trim():null;})()`);
+const wheelN = async () => await js(`(function(){var s=window.__mmStats;return (s&&s.wheel)?s.wheel.zoomed:-1;})()`);
+const canvasPt = await js(`(function(){var r=document.getElementById('dsh-mindmap');if(!r)return null;var b=r.getBoundingClientRect();if(!b.width||!b.height)return null;return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};})()`);
+
+const wc0 = await wheelN();
+/* 🔴 2026-09-18（第 38 轮）修正：**先把缩放归位到 1:1**，再滚。
+ *
+ *  为什么必须归位（本轮全批实测到的**假红**）：
+ *    原判据是"Ctrl+滚轮**放大**两次 ⇒ `mm-zoom` 读数必须变"。
+ *    但缩放有上下限，而本套件前面【7】段已经连点过 `mm-zoom-in`
+ *    ⇒ 到本段时 `k` 可能**已经在放大上限** ⇒ 再放大被 clamp ⇒ 读数不变
+ *    ⇒ `C-M25b` 红，而 `C-M25a`（计数）照样绿 —— 读起来像"缩放坏了一半"。
+ *    单跑时前面段落的状态不同 ⇒ 是绿的；全批里就红。
+ *    ⇒ 这正是**判据建在会漂的量上**（纪律 14/103）的标准形态。
+ *
+ *  ⇒ 先点「1:1」把 `k` 钉到 100%（与任何前序状态无关），再**向下滚（缩小）**：
+ *    从 100% 往下必然有空间（下限 30%），读数**必定**变化 ⇒ 与起点无关。
+ */
+await clickSel('[data-testid="mm-zoom-100"]', "C-M25b 归位 1:1");
+await sleep(260);
+const wz0 = await zoomText();
+if (canvasPt && wc0 >= 0) {
+	emit("Input.dispatchMouseEvent", { type: "mouseWheel", x: canvasPt.x, y: canvasPt.y, deltaX: 0, deltaY: 120, modifiers: 2 });
+	await sleep(240);
+	emit("Input.dispatchMouseEvent", { type: "mouseWheel", x: canvasPt.x, y: canvasPt.y, deltaX: 0, deltaY: 120, modifiers: 2 });
+	await sleep(320);
+}
+const wc1 = await wheelN();
+const wz1 = await zoomText();
+
+t("C-M25a", "🔴 Ctrl+滚轮 ⇒ 缩放**执行计数递增**（`window.__mmStats.wheel.zoomed`）",
+	wc1 > wc0, { before: wc0, after: wc1 });
+t("C-M25b", "缩放读数随之变化（真的改了 k，不是只记了个数 —— 已先归位 1:1，故与起点无关）",
+	wz1 !== wz0, { before: wz0, after: wz1 });
+/* 收尾复原：把缩放还给「适应」，免得把 1:1 态留给下一段（纪律：收尾必复原）。 */
+await clickSel('[data-testid="mm-fit"]', "C-M25b 收尾复原");
+await sleep(260);
+
+/* ══════════ 13.11 默认定位到当前会话（R12 · 用户原话：「默认定位到当前会话」）══════════
+ *  ⚠️ 前提守卫：冷启动没有"当前会话"（宿主不给 curId）⇒ 定位**按设计不执行**，
+ *     此时跳过而不是判红（把"前提不成立"读成"功能坏了"是纪律 90/112 同族）。
+ *  ⚠️ 判据取**执行次数**：滚动位置受布局时序（字体加载 / 分组重排 / fit 延迟）影响，
+ *     阈值会过期；计数则不受起点影响，且能区分"没执行"与"执行了但没找到节点"。 */
+section("【13.11】默认定位到当前会话");
+
+const hasCurChip = await js(`(function(){return !!document.querySelector('[data-testid="mm-current-chip"]');})()`);
+const ctr = await js(`(function(){var s=window.__mmStats;return (s&&s.center)?{auto:s.center.auto,done:s.center.done,missed:s.center.missed}:null;})()`);
+if (hasCurChip) {
+	t("C-M26a", "🔴 打开导图时执行过「默认定位」（计数 > 0）", !!ctr && ctr.auto > 0, ctr);
+	t("C-M26b", "定位有**明确结果**：命中（done>0）或如实记 miss（missed>0），不许两者皆 0 却记过 auto",
+		!!ctr && (ctr.done > 0 || ctr.missed > 0), ctr);
+} else {
+	sk("C-M26a", "打开导图时执行「默认定位」", "当前无宿主会话（冷启动 / 未建立起点）⇒ 按设计不执行，非失败");
+	sk("C-M26b", "定位有明确结果", "同上");
+}
+
 section("【14】关闭");
 await clickSel('[data-testid="mm-close"]');
 await sleep(400);
@@ -1446,8 +1687,24 @@ t("C-M18", "点 ✕ 关闭导图层（DOM 移除）", await js(`!!document.getEl
  * R8 登记键 23px 漂移、本脚本 C-M19b）。把落空记名并**显式断言为 0**，
  * 才能在下一次红的时候一眼分清"产品坏了"还是"这一击打偏了"。 */
 section("【15】点击质量（真实鼠标落点自检）");
+/* 🔴 2026-09-18（第 38 轮）加固：**先分拣"闸门自己写坏的记名"**。
+ *   `clickMisses` 的契约是**只装对象**（由 `clickSel` 内部在两次尝试后仍落空时 push）。
+ *   若里面出现非对象项，说明有调用方把 `clickSel` 的 **boolean 返回值**又 push 了一遍 ——
+ *   那是**闸门缺陷**，会制造恒假红并同时**掩盖真打偏**。
+ *   把它单列一条（`C-M21b`）且**判 INVALID**（exit 2），与"产品真打偏"（`C-M21` 红）彻底分开。
+ *   来源：本轮实测 —— `mm-scope-up` 那一击写成了 `push(await clickSel(...))`。 */
+const badMissEntries = clickMisses.filter((m) => !(m && typeof m === "object" && typeof m.sel === "string"));
+const realMisses = clickMisses.filter((m) => m && typeof m === "object" && typeof m.sel === "string");
 t("C-M21", `本脚本全部点击，落点均在目标元素子树内（不许静默打偏）`,
-	clickMisses.length === 0, clickMisses.length ? clickMisses : { misses: 0 });
+	realMisses.length === 0, realMisses.length ? realMisses : { misses: 0 });
+t("C-M21b", "记名册只装对象（**闸门自检**：无调用方把 `clickSel` 的 boolean 返回值误 push）",
+	badMissEntries.length === 0, { bad: badMissEntries.length });
+if (badMissEntries.length) {
+	console.log(` ❌ INVALID：点击质量记名册里有 ${badMissEntries.length} 条非对象项 —— **闸门自身写坏了**，`);
+	console.log("    本套件的 C-M21 结论不可用（恒假红且掩盖真打偏），请修 `clickMisses.push(...)` 的调用方。");
+	ws.close();
+	process.exit(2);
+}
 
 /* ══════════ 汇总 ══════════ */
 reachedFinal = true; // 🔴 必须先置位：它是"有没有段静默没跑"的唯一凭据（见上方崩溃兜底）

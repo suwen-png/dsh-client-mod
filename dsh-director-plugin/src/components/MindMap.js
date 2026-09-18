@@ -2,7 +2,7 @@
  * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
  * 引用：—
  * 上游：client-entry.js, mount.js
- * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+ * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -66,6 +66,12 @@ import {
 	hostCapabilities, openSession, forkBranch, watchCurrentSession
 } from "../logic/branch-tree.js";
 import { focusRows, hasDownstream } from "../logic/branch-focus.js";
+/* ── 第 38 轮：**作用域**（文件夹）过滤 ─────────────────────────────
+ *  用户需求 18：「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+ *  判据走 `logic/scope-tree.js`（**总监侧与导图侧共用同一份** —— 不各写一套，纪律 126）。 */
+import { findInTree, scopeSessionIdSet, filterRowsByScope, scopeStats } from "../logic/scope-tree.js";
+import { loadTree, findNodeBySessionId, LEVEL_LABEL } from "../store/hierarchy.js";
+import { onHierarchyChange } from "../util/bus.js";
 import { OverviewDialog } from "./OverviewDialog.js";
 import { route, review6, DESTINATION, DESTINATION_LABEL } from "../logic/routing.js";
 import { edgePathFor, edgeStyleOf, metaLineOf, stateTitleOf, kindLabelOf, nodeBtnStyle } from "../logic/mindmap-render.js";
@@ -115,6 +121,24 @@ const ZOOM_MAX = 3;
 const FIT_MIN = 0.3;
 /** 判定"这是在拖，不是在点"的位移阈值（px）—— 低于它仍算点击（打开右侧对话） */
 const DRAG_SLOP = 4;
+
+/** 第 38 轮：Ctrl+滚轮缩放的**可观测计数**。
+ *  存在的唯一理由是**让闸门能验它真的发生过** —— 缩放结果（`mm-zoom` 的文字）会因
+ *  起始 k 不同而看不出"是滚轮导致的还是别处改的"；计数则**单调递增**，不受起点影响。
+ *  与 `navHookStats` 同一手法（桥上露统计，闸门读统计）。 */
+export const mmWheelStats = { zoomed: 0, lastDelta: 0 };
+
+/** 第 38 轮：默认定位的执行计数（闸门判据）。
+ *  🔴 为什么不用"滚动条位置"当判据：滚动位置受布局时序（字体加载 / 分组重排 / fit 延迟）
+ *     影响，同一次行为两跑可能不同 ⇒ 阈值会过期（纪律 14/103）。
+ *     **执行次数**则不受起点影响，且能区分"没执行"与"执行了但没找到节点"。 */
+export const mmCenterStats = { auto: 0, done: 0, missed: 0, last: "" };
+
+/* 第 38 轮：把两份统计挂到 window，供真机套件读（**只读**口径，与 `navHookStats` 同一手法）。
+ * 挂的是**同一对象引用** ⇒ 组件里的 `+=` 会立刻反映到这里，无需同步。 */
+if (typeof window !== "undefined") {
+	window.__mmStats = { wheel: mmWheelStats, center: mmCenterStats };
+}
 
 const S = {
 	root: {
@@ -215,6 +239,19 @@ export function MindMap({ open, onClose }) {
 	/* 分支链路聚焦（R9）：focusId=被聚焦的会话；focusUp=「含上一层」（祖先层全景） */
 	const [focusId, setFocusId] = react.useState(null);
 	const [focusUp, setFocusUp] = react.useState(false);
+	/* ── 第 38 轮：**作用域（文件夹）过滤** ────────────────────────────
+	 *  用户需求 6/13/18：「仅显示这个文件夹中的作用」「按照点击的文件夹下的对话信息整理出的
+	 *  思维导图」「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+	 *
+	 *  · `hier` = **层级树**（文件夹/项目/会话的归属关系）—— 与血缘树是两个正交维度：
+	 *      血缘树答"谁 fork 了谁"，层级树答"谁属于哪个文件夹"。要按文件夹过滤，
+	 *      就必须把两者**交叉**（`logic/scope-tree.js` 就是干这个的）。
+	 *  · `scopeUp` = 从"当前会话所属文件夹"往上走几级（用户点「上一级」+1）。
+	 *      0 = 当前文件夹（**默认**）；到不了更多级时按钮自动禁用（不假装能点）。
+	 *  ⚠️ 加载失败 ⇒ `hier` 保持 null ⇒ 下游判为"不限作用域"⇒ **显示全部**。
+	 *     绝不因为"读不到层级"就把画布清空（那看起来像导图坏了）。 */
+	const [hier, setHier] = react.useState(null);
+	const [scopeUp, setScopeUp] = react.useState(0);
 	/* 总览弹窗（R10）：挂在导图最上面，独立 fixed 层 */
 	const [ovOpen, setOvOpen] = react.useState(false);
 	const [hov, setHov] = react.useState(null);
@@ -254,6 +291,18 @@ export function MindMap({ open, onClose }) {
 	const dragPosRef = react.useRef(null);
 	/** 「刚拖过」标记：拖动结束时置位一拍，避免拖完又被当成点击而弹出右侧面板 */
 	const justDraggedRef = react.useRef(false);
+	/** 第 38 轮：持有最新的 `zoom()`（它定义在早退之后、每次渲染都是新引用）。
+	 *  Ctrl+滚轮的监听只依赖 `[open]`，通过本 ref 取最新实现 ⇒ 不会每帧重挂。 */
+	const zoomRef = react.useRef(null);
+	/** 第 38 轮：持有**最新的缩放值 k**，并在 `setK` 的同时**立即**同步。
+	 *  🔴 为什么不能直接读闭包里的 `k`：「打开时定位到当前会话」发生在 `doFit()` **之后**
+	 *     （同一 tick），那时 `k` 的闭包值还是**适应前的**（可能 1.0 而实际已 0.3）
+	 *     ⇒ 按错误的 k 算滚动位置，会定位到画布**错误的**地方（看起来像"定位不生效"）。
+	 *     故 `setK` 处一并写 ref，读端永远拿到刚算出来的那个值。 */
+	const kRef = react.useRef(1);
+	/** 第 38 轮：「本次打开是否已经做过默认定位」——一次足够，避免 curId 每次变化都把
+	 *  用户的视野**拽回去**（用户自己滚开之后，再被拉回当前会话是很烦的）。 */
+	const centeredRef = react.useRef(false);
 
 	react.useEffect(() => {
 		if (!open) return undefined;
@@ -276,6 +325,73 @@ export function MindMap({ open, onClose }) {
 		return watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); });
 	}, [open]);
 
+	/* ── 第 38 轮：加载**层级树**（作用域过滤的输入）────────────────────
+	 *  与血缘树**不同源**：血缘树来自宿主 `ctx.sessions`（谁 fork 了谁），
+	 *  层级树来自插件自己的 store（谁属于哪个文件夹）。按文件夹过滤必须把两者交叉。
+	 *  · 打开时拉一次 + 订阅 `onHierarchyChange`（用户在总监里"挂载会话/新建文件夹"
+	 *    之后，导图的作用域集合要跟着变，否则会按**旧归属**过滤 —— 看起来像"少显示了几个"）。
+	 *  ⚠️ 失败**不阻断**导图：`hier` 保持 null ⇒ 下游判为"不限作用域" ⇒ **显示全部**。
+	 *     绝不因"读不到层级"就把画布清空（那看起来像导图坏了 —— 纪律 58 同族）。 */
+	react.useEffect(() => {
+		if (!open) return undefined;
+		/* 🔴 第 38 轮：**每次打开都把本轮的开关归位**。
+		 *  为什么必须显式归位：`MindMap` 在 `!open` 时只是 `return null` ——
+		 *  **组件实例并不卸载**，`useState` / `useRef` 会跨"关 → 开"**原样保留**。
+		 *  后果有二（本机实测，都已现形过）：
+		 *    ① `scopeUp` 残留 ⇒ 用户第二次打开看到的是**上一次上溯后的层级**，
+		 *       而用户原话是「只显示**当前文件夹**下面的这些对话，除非我点击上一级」
+		 *       —— 默认口径被悄悄改掉了（用户没点任何东西，作用域却变了）。
+		 *    ② `centeredRef` 残留 ⇒ 「默认定位到当前会话」**只生效一次**，
+		 *       之后再打开就不再定位（用户需求 17 失效，且看起来像"定位偶尔不灵"）。
+		 *  ⚠️ 闸门侧同因：第二次跑会因"上溯已经做过"而**跳过** `C-M1e`，
+		 *     两跑读数不一致 —— 正是本项目"跨运行残留"那一族纪律的形态。 */
+		setScopeUp(0);
+		centeredRef.current = false;
+		let alive = true;
+		const pull = () => {
+			Promise.resolve(loadTree())
+				.then((tr) => { if (alive) setHier(tr); })
+				.catch(() => { /* 静默保持 null（= 不过滤）—— 但**不**把画布清空 */ });
+		};
+		pull();
+		const off = typeof onHierarchyChange === "function" ? onHierarchyChange(pull) : null;
+		return () => { alive = false; if (typeof off === "function") off(); };
+	}, [open]);
+
+	/* ── 第 38 轮：**Ctrl / ⌘ + 滚轮缩放**（用户：「思维导图的 ctrl 加鼠标中键 无法放大缩小」）
+	 *
+	 * ── 为什么用原生 `addEventListener` 而不是 React 的 `onWheel` ────────────────
+	 *   React 把事件委托挂在 root 上，而浏览器把 **root 级 wheel 视为 passive**
+	 *   ⇒ `e.preventDefault()` 在里面**无效**（控制台只会给一句"Unable to preventDefault"，
+	 *   页面照旧缩放）。要拦住浏览器缩放，必须自己挂 **`{ passive: false }`** 的原生监听。
+	 *
+	 * ── 交互约定（与主流画布工具一致）────────────────────────────────
+	 *   · `Ctrl/⌘ + 滚轮` ⇒ **缩放**（并 `preventDefault`，否则会连带缩放整个宿主页面）
+	 *   · 裸滚轮 ⇒ **平移**（不拦截，交还给滚动容器 —— 这是既有行为，本轮到为止不改）
+	 *
+	 * ── `zoomRef` 的存在理由 ────────────────────────────────────────────
+	 *   `zoom()` 定义在渲染函数尾部（早退之后），每次渲染都是**新引用**；
+	 *   若把它写进 effect 依赖，监听会被反复解绑重挂（每帧一次）。
+	 *   故用 ref 持有最新引用，effect 只依赖 `[open]`。
+	 *   ⚠️ 这是本文件既有的同类手法（见 `dragPosRef` / `justDraggedRef` 的注释）。 */
+	react.useEffect(() => {
+		if (!open) return undefined;
+		const onWheel = (e) => {
+			const root = document.getElementById(MINDMAP_ID);
+			if (!root) return;
+			const t = e.target;
+			if (!(t === root || (t && root.contains && root.contains(t)))) return;
+			/* 只看 Ctrl/⌘ —— 其它修饰键（Shift/Alt）保留给浏览器/系统，不抢 */
+			if (!(e.ctrlKey || e.metaKey)) return;
+			e.preventDefault();
+			if (typeof zoomRef.current === "function") zoomRef.current(e.deltaY > 0 ? -0.08 : 0.08);
+			mmWheelStats.zoomed += 1;
+			mmWheelStats.lastDelta = e.deltaY;
+		};
+		document.addEventListener("wheel", onWheel, { passive: false });
+		return () => document.removeEventListener("wheel", onWheel, { passive: false });
+	}, [open]);
+
 	/* 打开时自动适应一次（幂等：同一次打开只做一次，避免与用户的缩放打架） */
 	react.useEffect(() => {
 		if (!open) { fittedRef.current = false; return undefined; }
@@ -284,6 +400,27 @@ export function MindMap({ open, onClose }) {
 		const t = setTimeout(() => { doFit(true); }, 60);
 		return () => clearTimeout(t);
 	}, [open]);
+
+	/* ── 第 38 轮：**默认定位到当前会话**（用户需求 17）────────────────────
+	 *  「点击会话之后进入的导图，默认定位到当前会话」
+	 *
+	 *  ⚠️ 为什么单独一个 effect，而不是并进上面的 fit effect：
+	 *     `curId` 由 `watchCurrentSession` **轮询**得到 —— 导图打开的那一帧它往往还是 null。
+	 *     若并进 fit effect（只依赖 `[open]`），定位会**因为"当时没有 curId"而整体跳过**，
+	 *     且此后不再重试（用户看到的就是"没定位"，而且**看不出为什么**）。
+	 *     ⇒ 拆开，依赖 `[open, curId]`：id 一到就开始。
+	 *  ⚠️ 延迟 160ms > fit 的 60ms：必须**等适应完成**再算滚动位置，
+	 *     否则按适应前的 k 滚，会定位到画布的错误位置。
+	 *  ⚠️ `centeredRef` 保证**每次打开只定位一次**：此后 curId 再变（用户在宿主切会话）
+	 *     不会把视野拽回去 —— 那会打断正在看图的用户。 */
+	react.useEffect(() => {
+		if (!open) { centeredRef.current = false; return undefined; }
+		if (centeredRef.current) return undefined;
+		if (!curId) return undefined;
+		centeredRef.current = true;
+		const t = setTimeout(() => { centerOn(curId); mmCenterStats.auto += 1; }, 160);
+		return () => clearTimeout(t);
+	}, [open, curId]);
 
 	/* 视口尺寸变化时刷新 view（驱动 stageWrap 的居中 margin 跟随重算），不依赖用户滚动/再点适应 */
 	react.useEffect(() => {
@@ -402,6 +539,36 @@ export function MindMap({ open, onClose }) {
 	/* ── 数据派生（纯计算，非 hooks，可安全放在早退之后） ── */
 	const tree = snap.tree || { rows: [], edges: [], byId: {} };
 	const baseRows = tree.rows || [];
+
+	/* ── 第 38 轮：**作用域（文件夹）过滤**（用户需求 6 / 13 / 18）────────
+	 *  「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+	 *
+	 *  ⚠️ 刻意**不用 `useMemo`**：本文件既有铁律 ——
+	 *     hooks 绝不能排在 `if (!open) return null` 之后（本项目在 DesignStudio 上
+	 *     吃过一次"整层崩溃"）。而 `curId` / `hier` / `scopeUp` 都已在上方就绪，
+	 *     就地算即可。数据规模是"会话条数"级（数十~数百），重算代价可接受。
+	 *
+	 *  🔴 找不到所属文件夹 ⇒ `scopeSet = null` ⇒ **不过滤**（显示全部）。
+	 *     把"我不知道当前在哪"当成"作用域是空的"会**把画布清空** ——
+	 *     用户看到的是"导图坏了"，而不是"这个会话还没挂到任何文件夹"（纪律 58）。 */
+	let scopeNode = null;
+	if (hier && curId) {
+		const sessNode = findNodeBySessionId(hier, curId);
+		if (sessNode && sessNode.parentId) {
+			let cur = findInTree(hier, sessNode.parentId);
+			for (let i = 0; i < scopeUp && cur && cur.parentId; i++) {
+				const up = findInTree(hier, cur.parentId);
+				if (!up) break;
+				cur = up;
+			}
+			scopeNode = cur || null;
+		}
+	}
+	const scopeSet = scopeSessionIdSet(hier, scopeNode && scopeNode.id);
+	const scopedRes = filterRowsByScope(baseRows, scopeSet);
+	const scopedRows = scopedRes.rows;
+	const scopeStat = scopeStats(scopedRows);
+	const canScopeUp = Boolean(scopeNode && scopeNode.parentId && findInTree(hier, scopeNode.parentId));
 	/* 位置叠加：store 里存的（用户拖过的）+ 拖动中的实时位置。
 	 * ⚠️ 这里**故意不用 useMemo**：它必须与 `if (!open) return null` 的相对位置保持一致，
 	 *    而 hooks 绝不能排在早退之后（本项目在 DesignStudio 上吃过一次整层崩溃）。
@@ -424,11 +591,11 @@ export function MindMap({ open, onClose }) {
 	 *    分区框也因此只按自动布局算 ⇒ 框整齐稳定；被拖出框外的节点**如实显示在框外**
 	 *    （回答"为什么它在框外面"：因为是你拖的），整体归位是「▦ 自动布局」的职责。 */
 	let rawMaxX = 0;
-	for (const rr of baseRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
+	for (const rr of scopedRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
 	const gres = lay.mmGroup
-		? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH, dimLabels: DIM_LABELS })
+		? buildGroups(scopedRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH, dimLabels: DIM_LABELS })
 		: null;
-	const rows = applyUserPos(gres ? gres.rows : baseRows, posMap);
+	const rows = applyUserPos(gres ? gres.rows : scopedRows, posMap);
 	const sections = gres ? gres.sections : [];
 
 	/* ── 折叠计数：必须按**当前树里真的存在**的节点算 ────────────────────
@@ -515,10 +682,11 @@ export function MindMap({ open, onClose }) {
 	function zoom(delta, absolute) {
 		const el = bodyRef.current;
 		const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, absolute !== undefined ? absolute : k + delta));
-		if (!el) { setK(next); return; }
+		if (!el) { setK(next); kRef.current = next; return; }
 		const cx = (el.scrollLeft + el.clientWidth / 2) / k;
 		const cy = (el.scrollTop + el.clientHeight / 2) / k;
 		setK(next);
+		kRef.current = next; // ← 立即同步（见 kRef 注释：读端不等渲染）
 		requestAnimationFrame(() => {
 			const e2 = bodyRef.current;
 			if (!e2) return;
@@ -527,6 +695,9 @@ export function MindMap({ open, onClose }) {
 			syncView();
 		});
 	}
+	/* 第 38 轮：把最新实现交给 `zoomRef`，供 Ctrl+滚轮监听取用（见上方 effect 的说明）。
+	 * 🔴 必须在 `zoom` **定义之后**赋值 —— 否则拿到的是上一轮的旧闭包（`k` 会慢一拍）。 */
+	zoomRef.current = zoom;
 
 	/* ── 适应屏幕（对**可见行**的包围盒，幂等 —— 已在视野内时只回文案） ── */
 	function doFit(silent) {
@@ -538,6 +709,7 @@ export function MindMap({ open, onClose }) {
 		// 但不低于 FIT_MIN：超长链保留可读性，放不下的方向滚动而非无限缩小。
 		const next = Math.max(FIT_MIN, Math.min(1.4, Math.min(cw / contentW, ch / contentH) * 0.96));
 		setK(next);
+		kRef.current = next; // ← 立即同步：紧随其后的 `centerOn()` 要用它算滚动位置
 		requestAnimationFrame(() => {
 			const e2 = bodyRef.current;
 			if (!e2) return;
@@ -546,6 +718,33 @@ export function MindMap({ open, onClose }) {
 			e2.scrollTop = contentH * next <= ch ? 0 : Math.max(0, bounds.y * next - 8);
 			syncView();
 			if (!silent) say("已适应：可见 " + winRows.length + " 个节点 · " + Math.round(next * 100) + "%");
+		});
+	}
+
+	/* ── 第 38 轮：**把某个节点滚到视口中央** ────────────────────────────
+	 *  用户需求 17：「点击会话之后进入的导图，**默认定位到当前会话**」
+	 *
+	 *  · 单靠 `doFit()` 不够：它是"把**整棵**可见树缩进视野"，长树会缩到 30%
+	 *    （真机实测 28 节点时就是 0.3）—— 当前会话可能仍在视野外，
+	 *    用户点进来第一眼**找不到自己在哪**，这正是要治的点。
+	 *  · 找不到该节点（不在当前作用域内 / 不在快照里）⇒ **什么都不做**，
+	 *    不报错、不改选中 —— "没定位"不等于"定位失败"（纪律 58）。
+	 *  · 统计量 `mmCenterStats` 供闸门验"真的执行过"（滚动位置本身受布局时序影响，
+	 *    不是稳定判据；**执行次数**是）。 */
+	function centerOn(id) {
+		const el = bodyRef.current;
+		if (!el || !id) return;
+		const r = winRows.find((x) => x.sessionId === id);
+		if (!r) { mmCenterStats.missed += 1; return; }
+		mmCenterStats.done += 1;
+		mmCenterStats.last = String(id);
+		const kk = kRef.current || k || 1;
+		requestAnimationFrame(() => {
+			const e2 = bodyRef.current;
+			if (!e2) return;
+			e2.scrollLeft = Math.max(0, (r.x + LAYOUT.nodeW / 2) * kk - e2.clientWidth / 2);
+			e2.scrollTop = Math.max(0, (r.y + LAYOUT.nodeH / 2) * kk - e2.clientHeight / 2);
+			syncView();
 		});
 	}
 
@@ -731,6 +930,34 @@ export function MindMap({ open, onClose }) {
 		h("div", { key: "tl", style: { ...S.tools, paddingRight: padRight }, "data-testid": "mm-tools" }, [
 			h("span", { key: "t0", style: { fontSize: "calc(11.5px * var(--dp-font,1))", fontWeight: 600, color: "var(--dp-ac2, #c9b0ff)" }, "data-testid": "mm-tree-title" },
 				"⑂ 分支树 · " + (rows[0] ? rows[0].title : "（无会话）")),
+
+			/* ── 第 38 轮：**作用域指示 + 上一级**（用户需求 18）────────────────
+			 *  「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+			 *
+			 *  🔴 必须**显式显示当前范围**：否则用户看到节点变少时，无法区分
+			 *     "作用域过滤生效了"与"我的数据丢了" —— 这正是用户上一轮投诉过的形态
+			 *     （"是不是数据没有清理"）。同理，滤掉几个也写出来，不做静默收缩。
+			 *  🔴 `disabled` 与 `opacity` 同时表达"到顶了"，并且 title 写明**为什么**不可用
+			 *     （纪律 19：能力不可用可以，但不能无声）。 */
+			h("span", {
+				key: "scope", style: S.muted, "data-testid": "mm-scope-chip",
+				"data-scope-up": String(scopeUp), "data-scoped": scopeSet ? "1" : "0",
+				"data-total": String(scopeStat.total), "data-dropped": String(scopedRes.dropped)
+			},
+				(scopeSet
+					? "📁 " + String((scopeNode && scopeNode.name) || "文件夹")
+						+ (scopeNode && LEVEL_LABEL[scopeNode.level] ? "（" + LEVEL_LABEL[scopeNode.level] + "）" : "")
+					: "🌐 全部作用域")
+				+ " · " + scopeStat.total + " 节点"
+				+ (scopedRes.dropped ? "（滤掉 " + scopedRes.dropped + "）" : "")),
+			h("button", {
+				key: "sup", style: { ...S.btn, opacity: canScopeUp ? 1 : 0.45 },
+				"data-testid": "mm-scope-up", disabled: !canScopeUp,
+				title: canScopeUp
+					? "上一级：显示更大范围（" + String((findInTree(hier, scopeNode.parentId) || {}).name || "上级") + "）"
+					: "已经是最高一级（或当前会话未挂到任何文件夹）",
+				onClick: () => { if (canScopeUp) { setScopeUp((v) => v + 1); say("作用域已上溯一级"); } }
+			}, "⬆ 上一级"),
 
 			h("button", {
 				key: "fork", style: { ...S.btn, opacity: caps.fork ? 1 : 0.5 }, "data-testid": "mm-new-fork",

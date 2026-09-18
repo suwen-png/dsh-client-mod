@@ -327,7 +327,26 @@ eq("A24 pluginDbStats.ok = false（离线无 IndexedDB）", pdbStat.ok, false);
  * ══════════════════════════════════════════════════════════════════ */
 sec("B. 三态（展开 / 最小化 / 关闭）与拖拽边界吸附 —— 要求 6");
 
-eqArr("B1 LEFT_TAB 三段", Object.values(LAYOUT.LEFT_TAB), ["director", "levels", "agents"]);
+/* 🔴 第 38 轮：分段由「总监 / 层级 / 智能体」改为「总监 / **导图** / 智能体」
+ *    （用户：「层级 tap 感觉没什么用, 隐藏掉, 现在层级部分加上思维导图」）。
+ *    ⚠️ 不能再用 `Object.values(LEFT_TAB)` 断言 —— `LEVELS` 常量**被刻意保留**
+ *       （存量 `leftTab:"levels"` 的迁移需要它），它仍在对象里但**不是合法分段值**
+ *       ⇒ 旧写法会要求一个"已撤除的段"继续存在。改为断言**合法集合** `LEFT_TABS_VALID`。 */
+eqArr("B1 合法分段三段 = 总监 / 导图 / 智能体（原「层级」位换成「导图」）",
+	LAYOUT.LEFT_TABS_VALID, ["director", "mindmap", "agents"]);
+ok("B1b `LEFT_TAB.LEVELS` 常量仍保留，但**不是**可设置的分段（存量数据迁移用）",
+	LAYOUT.LEFT_TAB.LEVELS === "levels" && LAYOUT.LEFT_TABS_VALID.indexOf("levels") < 0,
+	JSON.stringify({ levels: LAYOUT.LEFT_TAB.LEVELS, valid: LAYOUT.LEFT_TABS_VALID }));
+ok("B1c normalizeLeftTab：存量 levels → mindmap；非法值 → director；合法值原样",
+	LAYOUT.normalizeLeftTab("levels") === "mindmap"
+	&& LAYOUT.normalizeLeftTab("nonsense") === "director"
+	&& LAYOUT.normalizeLeftTab("mindmap") === "mindmap"
+	&& LAYOUT.normalizeLeftTab(undefined) === "director",
+	JSON.stringify({
+		levels: LAYOUT.normalizeLeftTab("levels"),
+		bad: LAYOUT.normalizeLeftTab("nonsense"),
+		okv: LAYOUT.normalizeLeftTab("mindmap")
+	}));
 eq("B2 PANEL_RAIL_WIDTH = 40", LAYOUT.PANEL_RAIL_WIDTH, 40);
 eq("B3 PANEL_MIN_WIDTH = 180", LAYOUT.PANEL_MIN_WIDTH, 180);
 eq("B4 PANEL_DEFAULT_WIDTH = 300", LAYOUT.PANEL_DEFAULT_WIDTH, 300);
@@ -747,14 +766,31 @@ DIALOG.recordAgentRun("test", "ok", "离线自检");
 ok("H24 调用记录可回读", DIALOG.listAgentRuns().some((r) => r.key === "test"), JSON.stringify(DIALOG.listAgentRuns()[0]));
 const dlgSrc = src("components/DirectorDialog.js");
 const REQUIRED_TID = ["d-dialog", "d-hole", "d-panel", "d-level", "d-crumb", "d-body",
-	"d-seg-director", "d-seg-levels", "d-seg-agents", "d-r2", "d-r5", "d-review", "d-review-run",
+	/* 🔴 第 38 轮：`d-seg-levels` → **`d-seg-mindmap`**（用户：「层级 tap 感觉没什么用,
+	 *    隐藏掉, 现在层级部分加上思维导图」）。撤除是**预期**，不是回归 ——
+	 *    负向守据见下方 H25b（只删清单项会把"撤错了/删过头了"放过去）。 */
+	"d-seg-director", "d-seg-mindmap", "d-seg-agents", "d-r2", "d-r5", "d-review", "d-review-run",
 	"d-r6", "d-memo-core", "d-memo-decision", "d-memo-risk", "d-dbstats", "d-r3",
 	"d-agent-seg-agents", "d-agent-seg-skills", "d-agent-runs", "d-route-card",
 	"d-route-transfer", "d-route-direct", "d-route-new", "d-route-cancel",
 	"d-focus", "d-input", "d-send", "d-toast", "d-collapse-left", "d-collapse-right",
-	"d-min", "d-reset", "d-close", "d-split", "d-left-rail", "d-right-rail", "d-right", "d-chip"];
+	"d-min", "d-reset", "d-close", "d-split", "d-left-rail", "d-right-rail", "d-right", "d-chip",
+	/* ── 第 38 轮新增：固定（d-pin）· 作用域概况（d-scope-brief）· 作用域导图（d-scope-map）── */
+	"d-pin", "d-scope-brief", "d-scope-map"];
 const missingTid = REQUIRED_TID.filter((t) => !dlgSrc.includes(`"data-testid": "${t}"`));
 eqArr("H25 交互元素 testid 零缺失（真机逐交互脚本据此定位）", missingTid, []);
+ok("H25b 第 38 轮：「层级」段已撤除（`d-seg-levels` 在源码中零出现）",
+	!dlgSrc.includes('"data-testid": "d-seg-levels"'), "零命中");
+ok("H25c 第 38 轮：`LEFT_TAB.LEVELS` 常量**保留**（存量 leftTab 迁移 + 不静默砍能力）",
+	has(dlgSrc, /LEFT_TAB\.(MINDMAP|DIRECTOR|AGENTS)/), "命中分段常量用法");
+/* 🔴 r2/r5/r6 的折叠头 testid 是**拼接**出来的（`"d-sec-" + k + "-head"`），
+ *    源码里不存在 `"data-testid": "d-sec-r2-head"` 这个字面量 ⇒ 不能进上面的清单
+ *    （放进去了就会**假红**）。这里改为断言"拼接模式存在"，并另断言白名单只认三个键。 */
+ok("H25d r2/r5/r6 折叠头按统一模式拼接（d-sec-<k>-head）",
+	has(dlgSrc, /"data-testid":\s*"d-sec-"\s*\+\s*k\s*\+\s*"-head"/), "命中拼接模式");
+ok("H25e 弹窗折叠白名单只认 r2/r5/r6（写别的键一律拒绝 —— 不产生静默垃圾字段）",
+	has(src("store/layout.js"), /\[\s*"r2"\s*,\s*"r5"\s*,\s*"r6"\s*\]\.indexOf\(k\)\s*<\s*0\)\s*return\s*false/, "命中白名单"),
+	"命中白名单（位于 store/layout.js#setDialogSection）");
 ok("H26 spotlight 遮罩用超大 boxShadow 表达层次（不拦截点击）", has(dlgSrc, /boxShadow:\s*"0 0 0 9999px rgba\(0,0,0,\.34\)"/), "命中遮罩");
 ok("H27 遮罩层 pointerEvents:none（洞内保持可交互）", has(dlgSrc, /pointerEvents:\s*"none"/), "命中 pointerEvents");
 ok("H28 焦点路由用捕获阶段 pointerdown 且不拦截原生交互", (() => {

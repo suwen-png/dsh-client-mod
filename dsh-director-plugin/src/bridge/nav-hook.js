@@ -2,7 +2,7 @@
  * 职责：「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
  * 引用：要求 7/9
  * 上游：client-entry.js, mount.js
- * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js
+ * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js, logic/nav-intent.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -32,6 +32,12 @@ import { getSplitRootRect } from "./split.js";
 import { loadTree } from "../store/hierarchy.js";
 import { directorLayoutStore } from "../store/layout.js";
 import { dshLog } from "../util/debug.js";
+/* 🔴 第 38 轮：判定"点侧栏会怎样"的**纯函数**搬到了 `logic/`。
+ *    理由：留在本文件（bridge 层，带副作用）就只能靠真机验；而这条判据最容易写错
+ *    （"该缩不缩 / 点了没反应"都是这一族）。搬走后**离线闸门与真机用同一份实现**。
+ *    这里 `export` 一次，保持既有 `window.__dshNavApi.navIntent` 契约逐字不变。 */
+import { navIntent } from "../logic/nav-intent.js";
+export { navIntent };
 
 const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 
@@ -102,16 +108,47 @@ export function installNavHook(opts = {}) {
 			if (e.target && e.target.closest && e.target.closest("#dsh-director-dialog")) return;
 			if (e.clientX < 0 || e.clientX > (window.innerWidth || 1440)) return;
 
+			/* ── 固定态：**判据同源**的短路 ────────────────────────────────
+			 *  用户原话「总监跳出来之后，我在点击左侧的对话，这个总监页面不会变化」。
+			 *  🔴 这里**不另写** if (pinned) return —— 那样会变成"两处判据"：
+			 *     一处 `navIntent`、一处短路，日后改一处必然漏另一处（纪律 126 同族）。
+			 *     改为**先问 navIntent，再由它决定**；`pinned` 为真时它返回 `hold`，
+			 *     于是连 `loadTree()` 都不必调用（省掉一次可能读盘的操作）。 */
+			const pinnedNow = typeof directorLayoutStore.isDialogPinned === "function"
+				&& directorLayoutStore.isDialogPinned();
+			if (navIntent({ pinned: pinnedNow }) === "hold") { navHookStats.held++; return; }
+
 			const { text } = extractRowText(e.target);
-			if (!text) return;
-			const tree = await loadTree();
-			const hit = matchRowToNode(text, flattenTree(tree));
-			if (!hit) return; // ③ 无匹配 → 不打扰宿主导航
-			navHookStats.matched++;
-			navHookStats.lastMatch = { text, nodeId: hit.id, name: hit.name, level: hit.level };
-			directorLayoutStore.setActiveNode(hit.id);
-			directorLayoutStore.setDialogOpen(true);
-			dshLog("nav", "侧栏点击 → 打开总监：" + hit.name + "（" + hit.level + "）");
+			const openNow = typeof directorLayoutStore.isDialogOpen === "function"
+				&& directorLayoutStore.isDialogOpen();
+			/* 取不到行文本（点到侧栏空隙）⇒ 不读树，直接按"无命中"判 */
+			const tree = text ? await loadTree() : null;
+			const hit = text ? matchRowToNode(text, flattenTree(tree)) : null;
+
+			const intent = navIntent({
+				pinned: pinnedNow, hasMatch: Boolean(hit),
+				level: hit ? hit.level : "", dialogOpen: openNow
+			});
+
+			if (intent === "refresh") {
+				navHookStats.matched++;
+				navHookStats.lastMatch = { text, nodeId: hit.id, name: hit.name, level: hit.level, intent };
+				directorLayoutStore.setActiveNode(hit.id);
+				directorLayoutStore.setDialogOpen(true);
+				// 刷新作用域的同时**解除缩回** —— 点文件夹的语义是"我要看这个文件夹"
+				directorLayoutStore.setDialogCollapsed(false);
+				dshLog("nav", "侧栏点击 → 打开总监：" + hit.name + "（" + hit.level + "）");
+				return;
+			}
+
+			if (intent === "collapse") {
+				navHookStats.collapsed++;
+				navHookStats.lastCollapse = { text, nodeId: hit ? hit.id : "", reason: hit ? "session" : "no-match" };
+				directorLayoutStore.setDialogCollapsed(true);
+				dshLog("nav", "侧栏点击对话 → 总监缩回" + (hit ? "（" + hit.name + "）" : "（无匹配行）"));
+				return;
+			}
+			// intent === "none"：弹窗本来就没开 ⇒ 什么都不做，**绝不误开**（保持原三级匹配策略的克制）
 		} catch (err) {
 			navHookStats.errors++;
 		}
@@ -123,11 +160,16 @@ export function installNavHook(opts = {}) {
 }
 
 /** 统计（供验证脚本断言"真的命中过"） */
-export const navHookStats = { matched: 0, errors: 0, lastMatch: null };
+export const navHookStats = { matched: 0, collapsed: 0, held: 0, errors: 0, lastMatch: null, lastCollapse: null };
 
 /** 安装全局契约 */
 export function installNavHookApi() {
 	if (!hasDom()) return null;
-	window.__dshNavApi = { extractRowText, flattenTree, matchRowToNode, installNavHook, navHookStats };
+	window.__dshNavApi = {
+		extractRowText, flattenTree, matchRowToNode, navIntent, installNavHook, navHookStats,
+		/* 第 38 轮：给真机套件一个**免猜测**的固定态读写口（不是新功能，是让闸门能设前提） */
+		setPinned: (v) => directorLayoutStore.setDialogPinned(v),
+		isPinned: () => Boolean(directorLayoutStore.isDialogPinned && directorLayoutStore.isDialogPinned())
+	};
 	return window.__dshNavApi;
 }

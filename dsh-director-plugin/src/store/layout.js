@@ -78,8 +78,36 @@ export function todoNoteKey(scopeKey, taskId) {
 	return s + "::" + t;
 }
 
-/** 左面板分段（单一真相源，勿另写字面量） */
-export const LEFT_TAB = Object.freeze({ DIRECTOR: "director", LEVELS: "levels", AGENTS: "agents" });
+/** 左面板分段（单一真相源，勿另写字面量）
+ *
+ * ── 第 38 轮：`LEVELS` → `MINDMAP`（用户原话：「**层级 tap 感觉没什么用, 隐藏掉,
+ *    现在层级部分加上思维导图**」「按照点击的文件夹下的对话信息整理出的思维导图」）
+ *
+ * 🔴 `LEVELS` 常量**保留、不删**，理由二：
+ *   ① 存量 localStorage 里可能有 `leftTab: "levels"` —— 删常量会让归一化无处可比；
+ *   ② 层级管理（`DirectorHierarchy`：同步真实会话 / 整树分层总结 / 节点增删改）
+ *      **是有真实能力的**，用户要的是"隐藏这个 tap"，不是"砍掉能力"（纪律 54）。
+ *      它的入口降级到**导图段内的二级视图**，组件与 testid 全套保留。
+ *   ⇒ 三段新序：**总监 / 导图 / 智能体**。`levels` 不是合法分段值了，读入时迁移。 */
+export const LEFT_TAB = Object.freeze({
+	DIRECTOR: "director", MINDMAP: "mindmap", AGENTS: "agents",
+	/** @deprecated 仅用于**存量数据迁移**与旧闸门取值，不再是可设置的分段 */
+	LEVELS: "levels"
+});
+
+/** 合法的分段值（`LEVELS` 不在其中 —— 它只作为迁移输入存在） */
+export const LEFT_TABS_VALID = Object.freeze([LEFT_TAB.DIRECTOR, LEFT_TAB.MINDMAP, LEFT_TAB.AGENTS]);
+
+/**
+ * 分段值归一化（**纯函数**，读入与写入共用同一份判据）
+ * @param {string} t
+ * @returns {string} 合法分段值；`levels` 迁移为 `mindmap`；其余非法值退 `director`
+ */
+export function normalizeLeftTab(t) {
+	const s = String(t == null ? "" : t);
+	if (s === LEFT_TAB.LEVELS) return LEFT_TAB.MINDMAP; // 存量迁移
+	return LEFT_TABS_VALID.indexOf(s) >= 0 ? s : LEFT_TAB.DIRECTOR;
+}
 
 /** 视口宽度（SSR / 测试环境兜底 1440） */
 function viewportWidth() {
@@ -231,6 +259,23 @@ const DEFAULTS = Object.freeze({
 	dialogCollapsed: false,
 	activeNodeId: null,
 	leftTab: LEFT_TAB.DIRECTOR,
+	/* ── 第 38 轮新增：「固定」钉住态（用户：「总监页面增加固定」+「总监跳出来之后，
+	 *    我在点击左侧的对话，这个总监页面不会变化」）────────────────────────
+	 *  语义 = **锁定作用域 + 不缩回**（两件事都要，缺一不成立）：
+	 *    · `pin=false`（默认）：侧栏点**文件夹/项目** → 刷新作用域并展开；
+	 *                            侧栏点**对话** → 缩回（`dialogCollapsed=true`，作用域保留）。
+	 *    · `pin=true`：侧栏点什么**都不动**（作用域逐字不变，也不缩回）。
+	 *  ⚠️ 固定态下**弹窗内的作用域下拉照常可用** —— 用户要的是"侧栏点击不改我"，不是
+	 *     "我再也没法换作用域"。把两者都锁死会把用户关在里面（死状态）。
+	 *  ⚠️ 与 `railPinned`（R4/R7 的钉住）**是两件事**：那个管"面板要不要缩回成竖条"，
+	 *     这个管"弹窗要不要跟着侧栏换作用域"。同名不同物 ⇒ 不复用字段（纪律 126 同族）。 */
+	dialogPinned: false,
+	/* ── 第 38 轮新增：弹窗内三个区块的折叠态（用户：「r2,r5,r6 都加上最小化窗口的功能」）──
+	 *  形如 `{ r2:false, r5:false, r6:false }`。
+	 *  🔴 与 `sectionCollapsed`（**总监页** R2/R4）**不是同一份** —— 两者是不同界面上的
+	 *     不同区块（弹窗左栏 vs 总监页三栏），共用一份会让"在弹窗收起 R2"顺带把总监页的
+	 *     R2 也收起来（用户没要求，且看起来像 bug）。故单开一份，键名也取得不一样。 */
+	dialogSections: { r2: false, r5: false, r6: false },
 	// ── 本轮新增（设计图工作室 · T-PLUG-018）──
 	//  📐 设计图是**全屏覆盖层**（用户：「点击铺满全屏」），与弹窗三态无关，
 	//     故单开一个布尔。打开时弹窗前端的浮层会让位（避免两层浮层叠着打架）。
@@ -347,6 +392,14 @@ export function createDirectorLayoutStore() {
 	// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
 	state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
 	state.railPinned = { ...DEFAULTS.railPinned, ...(state.railPinned || {}) };
+	/* 第 38 轮：弹窗固定态 + 弹窗内三区块折叠（同策略：嵌套合并 + 布尔值域兜底） */
+	state.dialogSections = { ...DEFAULTS.dialogSections, ...(state.dialogSections || {}) };
+	if (typeof state.dialogPinned !== "boolean") state.dialogPinned = DEFAULTS.dialogPinned;
+	/* 🔴 第 38 轮：`leftTab` 必须**迁移**而不是原样读入。
+	 *    存量值 `"levels"` 在新 UI 里**没有对应按钮** ⇒ 原样读入会让用户一打开就停在
+	 *    一个"切不回去也点不到"的分段上（死状态，且看起来像坏了）。
+	 *    `normalizeLeftTab` 是**纯函数**，读写两侧共用 ⇒ 不会出现两套判据。 */
+	state.leftTab = normalizeLeftTab(state.leftTab);
 	/* 布尔字段的值域兜底：上面的通用合并**不校验类型**，而 `"false"` 是**真值**
 	 * ⇒ 被写坏成字符串的存量数据会让分组开关"打开着却读到开"，且**不报错**（纪律 19）。 */
 	if (typeof state.mmGroup !== "boolean") state.mmGroup = DEFAULTS.mmGroup;
@@ -414,9 +467,43 @@ export function createDirectorLayoutStore() {
 		toggleDialogCollapsed: () => { state = { ...state, dialogCollapsed: !state.dialogCollapsed, dialogOpen: true }; notify(); },
 		/** 切换当前层级节点（要求 7 / 9） */
 		setActiveNode: (nodeId) => { state = { ...state, activeNodeId: nodeId || null }; notify(); },
+
+		/* ── 第 38 轮新增：弹窗固定态 + 弹窗内区块折叠 ─────────────────────── */
+
+		/** 固定 / 取消固定（用户：「总监页面增加固定」）。
+		 *  返回写入后的**实际值**，便于调用方与闸门回读（不假设写成功 —— 纪律 4）。 */
+		setDialogPinned: (v) => {
+			const next = Boolean(v);
+			if (state.dialogPinned === next) return next;
+			state = { ...state, dialogPinned: next };
+			notify();
+			if (typeof window !== "undefined") window.__directorDialogPinned = next;
+			return next;
+		},
+		/** 固定 ⇄ 取消固定（同一个开关，与 `railPinned` 的交互语言一致：点一下切一次）。 */
+		toggleDialogPinned: () => {
+			const next = !state.dialogPinned;
+			state = { ...state, dialogPinned: next };
+			notify();
+			if (typeof window !== "undefined") window.__directorDialogPinned = next;
+			return next;
+		},
+		/** 第 38 轮：弹窗内 r2 / r5 / r6 三区块折叠（用户：「都加上最小化窗口的功能」）。
+		 *  🔴 白名单只认这三个键；与总监页的 `setSectionCollapsed` 是**两份独立状态**
+		 *     （见 DEFAULTS.dialogSections 的注释）。返回实际值供回读。 */
+		setDialogSection: (key, v) => {
+			const k = String(key || "");
+			if (["r2", "r5", "r6"].indexOf(k) < 0) return false;
+			const prev = state.dialogSections || {};
+			const next = Boolean(v);
+			if (prev[k] === next) return next;
+			state = { ...state, dialogSections: { ...prev, [k]: next } };
+			notify();
+			return next;
+		},
 		/** 切换左面板分段 */
 		setLeftTab: (t) => {
-			state = { ...state, leftTab: Object.values(LEFT_TAB).indexOf(t) >= 0 ? t : LEFT_TAB.DIRECTOR };
+			state = { ...state, leftTab: normalizeLeftTab(t) };
 			notify();
 		},
 		/** 拖拽调宽（带吸附：过窄自动折叠）。返回是否触发吸附 */
@@ -530,6 +617,17 @@ export function createDirectorLayoutStore() {
 		},
 		/** 读取某侧是否钉住（读端兜底：老数据缺该键 ⇒ false） */
 		isRailPinned: (side) => Boolean((state.railPinned || {})[String(side || "")]),
+
+		/* ── 第 38 轮：弹窗状态读取口 ──────────────────────────────────────
+		 *  🔴 存在的理由不是"方便"，而是**让判据只有一份**：`nav-hook` 的 `navIntent()`
+		 *     需要知道 pinned / dialogOpen，若从 `window` 或 DOM 属性反推，
+		 *     就会长出第二套"当前是不是固定/开着"的判据 —— 那正是纪律 126 的形态
+		 *     （同一语义两个标识符 ⇒ 隐式断链，且**不报错**）。 */
+		isDialogPinned: () => Boolean(state.dialogPinned),
+		isDialogOpen: () => Boolean(state.dialogOpen),
+		isDialogCollapsed: () => Boolean(state.dialogCollapsed),
+		/** 读某区块是否折叠（读端兜底：未知键 ⇒ false，不抛） */
+		isDialogSectionCollapsed: (key) => Boolean((state.dialogSections || {})[String(key || "")]),
 
 		/* ── 第 6 批：R4 / R7 宽度（V20 需求 5）───────────────────────────
 		 *  🔴 只接受 r4 / r7 两个键（同 `setRailPinned` 的口径）：写进别的键会让

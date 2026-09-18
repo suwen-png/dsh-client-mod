@@ -431,8 +431,36 @@ window.__ModuleLoader__.load({
 				return s + "::" + t;
 			}
 			
-			/** 左面板分段（单一真相源，勿另写字面量） */
-			const LEFT_TAB = Object.freeze({ DIRECTOR: "director", LEVELS: "levels", AGENTS: "agents" });
+			/** 左面板分段（单一真相源，勿另写字面量）
+			 *
+			 * ── 第 38 轮：`LEVELS` → `MINDMAP`（用户原话：「**层级 tap 感觉没什么用, 隐藏掉,
+			 *    现在层级部分加上思维导图**」「按照点击的文件夹下的对话信息整理出的思维导图」）
+			 *
+			 * 🔴 `LEVELS` 常量**保留、不删**，理由二：
+			 *   ① 存量 localStorage 里可能有 `leftTab: "levels"` —— 删常量会让归一化无处可比；
+			 *   ② 层级管理（`DirectorHierarchy`：同步真实会话 / 整树分层总结 / 节点增删改）
+			 *      **是有真实能力的**，用户要的是"隐藏这个 tap"，不是"砍掉能力"（纪律 54）。
+			 *      它的入口降级到**导图段内的二级视图**，组件与 testid 全套保留。
+			 *   ⇒ 三段新序：**总监 / 导图 / 智能体**。`levels` 不是合法分段值了，读入时迁移。 */
+			const LEFT_TAB = Object.freeze({
+				DIRECTOR: "director", MINDMAP: "mindmap", AGENTS: "agents",
+				/** @deprecated 仅用于**存量数据迁移**与旧闸门取值，不再是可设置的分段 */
+				LEVELS: "levels"
+			});
+			
+			/** 合法的分段值（`LEVELS` 不在其中 —— 它只作为迁移输入存在） */
+			const LEFT_TABS_VALID = Object.freeze([LEFT_TAB.DIRECTOR, LEFT_TAB.MINDMAP, LEFT_TAB.AGENTS]);
+			
+			/**
+			 * 分段值归一化（**纯函数**，读入与写入共用同一份判据）
+			 * @param {string} t
+			 * @returns {string} 合法分段值；`levels` 迁移为 `mindmap`；其余非法值退 `director`
+			 */
+			function normalizeLeftTab(t) {
+				const s = String(t == null ? "" : t);
+				if (s === LEFT_TAB.LEVELS) return LEFT_TAB.MINDMAP; // 存量迁移
+				return LEFT_TABS_VALID.indexOf(s) >= 0 ? s : LEFT_TAB.DIRECTOR;
+			}
 			
 			/** 视口宽度（SSR / 测试环境兜底 1440） */
 			function viewportWidth() {
@@ -584,6 +612,23 @@ window.__ModuleLoader__.load({
 				dialogCollapsed: false,
 				activeNodeId: null,
 				leftTab: LEFT_TAB.DIRECTOR,
+				/* ── 第 38 轮新增：「固定」钉住态（用户：「总监页面增加固定」+「总监跳出来之后，
+				 *    我在点击左侧的对话，这个总监页面不会变化」）────────────────────────
+				 *  语义 = **锁定作用域 + 不缩回**（两件事都要，缺一不成立）：
+				 *    · `pin=false`（默认）：侧栏点**文件夹/项目** → 刷新作用域并展开；
+				 *                            侧栏点**对话** → 缩回（`dialogCollapsed=true`，作用域保留）。
+				 *    · `pin=true`：侧栏点什么**都不动**（作用域逐字不变，也不缩回）。
+				 *  ⚠️ 固定态下**弹窗内的作用域下拉照常可用** —— 用户要的是"侧栏点击不改我"，不是
+				 *     "我再也没法换作用域"。把两者都锁死会把用户关在里面（死状态）。
+				 *  ⚠️ 与 `railPinned`（R4/R7 的钉住）**是两件事**：那个管"面板要不要缩回成竖条"，
+				 *     这个管"弹窗要不要跟着侧栏换作用域"。同名不同物 ⇒ 不复用字段（纪律 126 同族）。 */
+				dialogPinned: false,
+				/* ── 第 38 轮新增：弹窗内三个区块的折叠态（用户：「r2,r5,r6 都加上最小化窗口的功能」）──
+				 *  形如 `{ r2:false, r5:false, r6:false }`。
+				 *  🔴 与 `sectionCollapsed`（**总监页** R2/R4）**不是同一份** —— 两者是不同界面上的
+				 *     不同区块（弹窗左栏 vs 总监页三栏），共用一份会让"在弹窗收起 R2"顺带把总监页的
+				 *     R2 也收起来（用户没要求，且看起来像 bug）。故单开一份，键名也取得不一样。 */
+				dialogSections: { r2: false, r5: false, r6: false },
 				// ── 本轮新增（设计图工作室 · T-PLUG-018）──
 				//  📐 设计图是**全屏覆盖层**（用户：「点击铺满全屏」），与弹窗三态无关，
 				//     故单开一个布尔。打开时弹窗前端的浮层会让位（避免两层浮层叠着打架）。
@@ -700,6 +745,14 @@ window.__ModuleLoader__.load({
 				// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
 				state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
 				state.railPinned = { ...DEFAULTS.railPinned, ...(state.railPinned || {}) };
+				/* 第 38 轮：弹窗固定态 + 弹窗内三区块折叠（同策略：嵌套合并 + 布尔值域兜底） */
+				state.dialogSections = { ...DEFAULTS.dialogSections, ...(state.dialogSections || {}) };
+				if (typeof state.dialogPinned !== "boolean") state.dialogPinned = DEFAULTS.dialogPinned;
+				/* 🔴 第 38 轮：`leftTab` 必须**迁移**而不是原样读入。
+				 *    存量值 `"levels"` 在新 UI 里**没有对应按钮** ⇒ 原样读入会让用户一打开就停在
+				 *    一个"切不回去也点不到"的分段上（死状态，且看起来像坏了）。
+				 *    `normalizeLeftTab` 是**纯函数**，读写两侧共用 ⇒ 不会出现两套判据。 */
+				state.leftTab = normalizeLeftTab(state.leftTab);
 				/* 布尔字段的值域兜底：上面的通用合并**不校验类型**，而 `"false"` 是**真值**
 				 * ⇒ 被写坏成字符串的存量数据会让分组开关"打开着却读到开"，且**不报错**（纪律 19）。 */
 				if (typeof state.mmGroup !== "boolean") state.mmGroup = DEFAULTS.mmGroup;
@@ -767,9 +820,43 @@ window.__ModuleLoader__.load({
 					toggleDialogCollapsed: () => { state = { ...state, dialogCollapsed: !state.dialogCollapsed, dialogOpen: true }; notify(); },
 					/** 切换当前层级节点（要求 7 / 9） */
 					setActiveNode: (nodeId) => { state = { ...state, activeNodeId: nodeId || null }; notify(); },
+			
+					/* ── 第 38 轮新增：弹窗固定态 + 弹窗内区块折叠 ─────────────────────── */
+			
+					/** 固定 / 取消固定（用户：「总监页面增加固定」）。
+					 *  返回写入后的**实际值**，便于调用方与闸门回读（不假设写成功 —— 纪律 4）。 */
+					setDialogPinned: (v) => {
+						const next = Boolean(v);
+						if (state.dialogPinned === next) return next;
+						state = { ...state, dialogPinned: next };
+						notify();
+						if (typeof window !== "undefined") window.__directorDialogPinned = next;
+						return next;
+					},
+					/** 固定 ⇄ 取消固定（同一个开关，与 `railPinned` 的交互语言一致：点一下切一次）。 */
+					toggleDialogPinned: () => {
+						const next = !state.dialogPinned;
+						state = { ...state, dialogPinned: next };
+						notify();
+						if (typeof window !== "undefined") window.__directorDialogPinned = next;
+						return next;
+					},
+					/** 第 38 轮：弹窗内 r2 / r5 / r6 三区块折叠（用户：「都加上最小化窗口的功能」）。
+					 *  🔴 白名单只认这三个键；与总监页的 `setSectionCollapsed` 是**两份独立状态**
+					 *     （见 DEFAULTS.dialogSections 的注释）。返回实际值供回读。 */
+					setDialogSection: (key, v) => {
+						const k = String(key || "");
+						if (["r2", "r5", "r6"].indexOf(k) < 0) return false;
+						const prev = state.dialogSections || {};
+						const next = Boolean(v);
+						if (prev[k] === next) return next;
+						state = { ...state, dialogSections: { ...prev, [k]: next } };
+						notify();
+						return next;
+					},
 					/** 切换左面板分段 */
 					setLeftTab: (t) => {
-						state = { ...state, leftTab: Object.values(LEFT_TAB).indexOf(t) >= 0 ? t : LEFT_TAB.DIRECTOR };
+						state = { ...state, leftTab: normalizeLeftTab(t) };
 						notify();
 					},
 					/** 拖拽调宽（带吸附：过窄自动折叠）。返回是否触发吸附 */
@@ -883,6 +970,17 @@ window.__ModuleLoader__.load({
 					},
 					/** 读取某侧是否钉住（读端兜底：老数据缺该键 ⇒ false） */
 					isRailPinned: (side) => Boolean((state.railPinned || {})[String(side || "")]),
+			
+					/* ── 第 38 轮：弹窗状态读取口 ──────────────────────────────────────
+					 *  🔴 存在的理由不是"方便"，而是**让判据只有一份**：`nav-hook` 的 `navIntent()`
+					 *     需要知道 pinned / dialogOpen，若从 `window` 或 DOM 属性反推，
+					 *     就会长出第二套"当前是不是固定/开着"的判据 —— 那正是纪律 126 的形态
+					 *     （同一语义两个标识符 ⇒ 隐式断链，且**不报错**）。 */
+					isDialogPinned: () => Boolean(state.dialogPinned),
+					isDialogOpen: () => Boolean(state.dialogOpen),
+					isDialogCollapsed: () => Boolean(state.dialogCollapsed),
+					/** 读某区块是否折叠（读端兜底：未知键 ⇒ false，不抛） */
+					isDialogSectionCollapsed: (key) => Boolean((state.dialogSections || {})[String(key || "")]),
 			
 					/* ── 第 6 批：R4 / R7 宽度（V20 需求 5）───────────────────────────
 					 *  🔴 只接受 r4 / r7 两个键（同 `setRailPinned` 的口径）：写进别的键会让
@@ -1122,6 +1220,8 @@ window.__ModuleLoader__.load({
 			exports.TODO_NOTE_MAX_CHARS = TODO_NOTE_MAX_CHARS;
 			exports.todoNoteKey = todoNoteKey;
 			exports.LEFT_TAB = LEFT_TAB;
+			exports.LEFT_TABS_VALID = LEFT_TABS_VALID;
+			exports.normalizeLeftTab = normalizeLeftTab;
 			exports.maxPanelWidth = maxPanelWidth;
 			exports.clampPanelWidth = clampPanelWidth;
 			exports.RUNNING_WIN_MODE = RUNNING_WIN_MODE;
@@ -4849,7 +4949,7 @@ window.__ModuleLoader__.load({
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：多层级总监结构（对话级 / 文件夹级 / 全局级）
 			 * 引用：要求 1 · 17 号文 §2.1 · T-PLUG-009
-			 * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js
+			 * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/MindMap.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js
 			 * 下游：store/idb.js, store/plugin-db.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -5359,7 +5459,7 @@ window.__ModuleLoader__.load({
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：层级数据变更事件总线（极简，零依赖）
 			 * 引用：—
-			 * 上游：components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, logic/summarize.js, logic/sync.js, mount.js
+			 * 上游：components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/MindMap.js, logic/summarize.js, logic/sync.js, mount.js
 			 * 下游：（无）
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -9140,6 +9240,194 @@ window.__ModuleLoader__.load({
 			exports.forkBranch = forkBranch;
 			exports.createSession = createSession;
 			exports.installBranchTreeApi = installBranchTreeApi;
+		};
+
+		// ── logic/scope-tree.js ──
+		__defs["logic/scope-tree.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：**作用域**（文件夹 / 项目 / 全局）与血缘树的交叉运算（纯函数）
+			 * 引用：—
+			 * 上游：components/DirectorDialog.js, components/MindMap.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/scope-tree.js — **作用域**（文件夹 / 项目 / 全局）与血缘树的交叉运算（纯函数）
+			 *
+			 * ── 为什么单开一个模块 ─────────────────────────────────────────────
+			 *   第 38 轮两条需求都落在"**只看这个文件夹里的东西**"上：
+			 *     · 需求 6 「如果文件夹的嵌套, 仅显示这个文件夹中的作用」
+			 *     · 需求 18「只显示当前文件夹下面的这些对话的导图 除非我点击上一级」
+			 *   两处若各写一遍过滤，就是纪律 126 的形态（同一语义两个标识符 ⇒ 隐式断链，
+			 *   且**不报错**）。故把判据收在这一份纯函数里，总监侧与导图侧**共用**。
+			 *
+			 * ── 零依赖契约 ─────────────────────────────────────────────────────
+			 *   本模块**不 import 任何东西**（含 store / bridge）：
+			 *     · 要它 Node 里能直接跑（离线闸门的前提）；
+			 *     · 要它不被 `store/hierarchy.js` ↔ `logic/*` 的循环牵连。
+			 *   故节点形状用**结构约定**而不是 import 来的常量 —— 见下方 `LEVEL_SESSION`。
+			 */
+			
+			/** 会话级节点名（与 `store/hierarchy.js#LEVEL.SESSION` **同值**）。
+			 *  ⚠️ 这里写死字面量是为了保住零依赖契约；值的一致性由离线闸门 `test-scope-tree.mjs`
+			 *     的 `SC-1` 断言守着（它会 import store 侧常量做对拍 ⇒ 两处不等就红）。
+			 *     这比"import 进来"更好：import 会让本模块**依赖 store**，从而在 Node 里跑不起来。 */
+			const LEVEL_SESSION = "session";
+			
+			/** 取节点 id（容错：不同来源的节点可能叫 id / nodeId） */
+			function idOf(n) { return n && (n.id || n.nodeId) ? String(n.id || n.nodeId) : ""; }
+			
+			/**
+			 * 在树里按 id 找节点（返回节点**引用**，便于取子树）
+			 * @param {object|object[]} root 根节点或根数组
+			 * @param {string} id
+			 * @returns {object|null}
+			 */
+			function findInTree(root, id) {
+				const want = String(id == null ? "" : id);
+				if (!want) return null;
+				let found = null;
+				const walk = (n) => {
+					if (!n || found) return;
+					if (idOf(n) === want) { found = n; return; }
+					for (const c of (n.childNodes || [])) walk(c);
+				};
+				for (const r of (Array.isArray(root) ? root : [root])) walk(r);
+				return found;
+			}
+			
+			/**
+			 * 取某节点**及其子树**下的所有会话节点（DFS 前序 —— 父在子前，与渲染序一致）
+			 * @param {object} node
+			 * @returns {object[]}
+			 */
+			function scopeSessions(node) {
+				const out = [];
+				const walk = (n) => {
+					if (!n) return;
+					if (n.level === LEVEL_SESSION) out.push(n);
+					for (const c of (n.childNodes || [])) walk(c);
+				};
+				walk(node);
+				return out;
+			}
+			
+			/**
+			 * 作用域内的**真实会话 id 集合**
+			 *
+			 * 取会话节点挂载的 `conversations[].conversationId`（与宿主 sessionId 同值）。
+			 * ⚠️ 节点自身的 `id` **不是**宿主会话 id —— 用它去比血缘 `sessionId` 会**恒不命中**，
+			 *    且**不报错**（正是纪律 126 的形态）。故这里只认 `conversations[]`。
+			 * @param {object|object[]} root
+			 * @param {string} scopeId 作用域节点 id；空/找不到 ⇒ 返回 `null`（**表示"不限"**，不是"空集"）
+			 * @returns {Set<string>|null}
+			 */
+			function scopeSessionIdSet(root, scopeId) {
+				if (!scopeId) return null;
+				const node = findInTree(root, scopeId);
+				if (!node) return null;
+				const set = new Set();
+				for (const s of scopeSessions(node)) {
+					const convs = Array.isArray(s.conversations) ? s.conversations : [];
+					for (const c of convs) {
+						const cid = c && (c.conversationId || c.sessionId);
+						if (cid) set.add(String(cid));
+					}
+				}
+				return set;
+			}
+			
+			/**
+			 * 按作用域过滤血缘行，并**重算 depth**
+			 *
+			 * ── 这是"多层结构"的关键（用户原话：「注意多层结构的实现」）────────────
+			 *   不能简单地"父不在集合里就把 depth 归零"。反例（三层）：
+			 *     A → B → C，若集合 = {C}（只留 C），把 C 的 depth 归零是对的；
+			 *     但集合 = {A, C}（B 被排除）时，C 的**最近在集合内的祖先**是 A ⇒ depth 应为 1；
+			 *     若按"看直接父"算，C 的直接父 B 不在集合 ⇒ depth 归零 ⇒ C 与 A **同级**，
+			 *     画面上 C 会脱离 A 的支链，用户看到"父子关系断了"。
+			 *   ⇒ 故用**递归求最近保留祖先**：不命中就往上看，直到命中或到顶。
+			 *
+			 * @param {object[]} rows 血缘行（至少含 `sessionId` 与 `parentSessionId`）
+			 * @param {Set<string>|null} idSet 保留集合；`null` ⇒ 原样返回（"不限"，不是"全滤掉"）
+			 * @returns {{rows:object[], kept:number, dropped:number, depthFixed:number}}
+			 */
+			function filterRowsByScope(rows, idSet) {
+				const list = Array.isArray(rows) ? rows : [];
+				if (!idSet) return { rows: list, kept: list.length, dropped: 0, depthFixed: 0 };
+			
+				const byId = new Map();
+				for (const r of list) if (r && r.sessionId) byId.set(String(r.sessionId), r);
+			
+				const kept = list.filter((r) => r && r.sessionId && idSet.has(String(r.sessionId)));
+				const keptIds = new Set(kept.map((r) => String(r.sessionId)));
+			
+				/**
+				 * 求"**过滤后**子图里，自己上面还有几层保留祖先"（= 重算后的 depth）
+				 *
+				 * 🔴 这里**不能用行上原有的 `depth`**（第一版就是这么写的，被闸门 `ST-10` 抓到）：
+				 *    原 depth 是**未过滤**时的层号。反例 A→B→C→D，集合 = {A,C,D}：
+				 *      · C 的父 B 被滤 ⇒ 往上找到 A ⇒ C.depth = 1 ✅
+				 *      · D 的父 C **保留** ⇒ 若取"C 的**原** depth（2）再 +1" ⇒ 3 ❌
+				 *        正确是 **C 重算后的 depth（1）+ 1 = 2**。
+				 *    ⇒ 两个分支都必须**递归**：被滤的父不增加层数，保留的父加 1。
+				 *    （这也是"多层结构"与"两层结构"唯一的实质差别 —— 只测两层看不出这个错。）
+				 */
+				const walkUp = (r, guard) => {
+					const g = guard || 0;
+					if (g > 40) return 0;                       // 环 / 异常链兜底
+					const pid = r && r.parentSessionId ? String(r.parentSessionId) : "";
+					if (!pid) return 0;                          // 到顶 ⇒ 自己是根
+					const p = byId.get(pid);
+					if (!p) return 0;                            // 父不在本批数据里 ⇒ 同样视作到顶
+					if (!keptIds.has(pid)) return walkUp(p, g + 1);        // 父**被滤掉** ⇒ 不增加层数
+					return walkUp(p, g + 1) + 1;                            // 父**保留** ⇒ 层数 +1
+				};
+			
+				let depthFixed = 0;
+				const out = kept.map((r) => {
+					const nd = walkUp(r, 0);
+					const changed = !Number.isFinite(r.depth) || Number(r.depth) !== nd;
+					if (changed) depthFixed += 1;
+					return { ...r, depth: nd, scopeRoot: r.depth !== nd || !r.parentSessionId };
+				});
+			
+				return { rows: out, kept: out.length, dropped: list.length - out.length, depthFixed };
+			}
+			
+			/**
+			 * 概况统计（需求 5 的"快速了解"用）
+			 * @param {object[]} rows 血缘行
+			 * @returns {{total:number, roots:number, branched:number, maxDepth:number, byRoot:object[]}}
+			 */
+			function scopeStats(rows) {
+				const list = (Array.isArray(rows) ? rows : []).filter((r) => r && r.sessionId);
+				const roots = list.filter((r) => !r.parentSessionId || !list.some((x) => String(x.sessionId) === String(r.parentSessionId)));
+				let maxDepth = 0;
+				for (const r of list) maxDepth = Math.max(maxDepth, Number.isFinite(r.depth) ? Number(r.depth) : 0);
+				return {
+					total: list.length,
+					roots: roots.length,
+					branched: list.filter((r) => list.some((x) => String(x.parentSessionId) === String(r.sessionId))).length,
+					maxDepth,
+					byRoot: roots.map((r) => ({
+						sessionId: String(r.sessionId),
+						title: String(r.title || r.sessionId),
+						descendants: list.filter((x) => String(x.parentSessionId) === String(r.sessionId)).length
+					}))
+				};
+			}
+			
+			/** 供离线闸门做"同值对拍"用（见模块头注的零依赖说明） */
+			const __LEVEL_SESSION_FOR_TEST = LEVEL_SESSION;
+			
+			exports.findInTree = findInTree;
+			exports.scopeSessions = scopeSessions;
+			exports.scopeSessionIdSet = scopeSessionIdSet;
+			exports.filterRowsByScope = filterRowsByScope;
+			exports.scopeStats = scopeStats;
+			exports.__LEVEL_SESSION_FOR_TEST = __LEVEL_SESSION_FOR_TEST;
 		};
 
 		// ── logic/routing.js ──
@@ -15687,7 +15975,7 @@ window.__ModuleLoader__.load({
 			 * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
 			 * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
 			 * 上游：client-entry.js, components/DirectorPage.js, mount.js
-			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
+			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/scope-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -15726,7 +16014,9 @@ window.__ModuleLoader__.load({
 			const { onHierarchyChange } = __m("util/bus.js");
 			const { applySplit, clearSplit, getSplitRootRect } = __m("bridge/split.js");
 			const { sendToChat, deliverToChat, observeConversation, readConversation, installChatBridgeApi } = __m("bridge/chat-bridge.js");
-			const { openSession } = __m("logic/branch-tree.js");
+			const { openSession, getBranchSnapshot, subscribeBranch } = __m("logic/branch-tree.js");
+			/* 第 38 轮：**作用域 ∩ 血缘**的纯函数（总监段与导图段共用一份判据 —— 封死纪律 126） */
+			const { findInTree, scopeSessions, scopeSessionIdSet, filterRowsByScope, scopeStats } = __m("logic/scope-tree.js");
 			const { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL, dimensionCandidates } = __m("logic/routing.js");
 			const { plan: planSplit } = __m("logic/split-dimensions.js");
 			const { dimBranchContext } = __m("logic/dim-branch.js");
@@ -15835,8 +16125,34 @@ window.__ModuleLoader__.load({
 				lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "var(--dp-dlg-ac2, #b794f6)", whiteSpace: "nowrap" },
 				btns: { marginLeft: "auto", display: "flex", gap: 3 },
 				btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
-				seg: { display: "flex", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", borderRadius: 6, overflow: "hidden", margin: "6px 8px 0", flex: "0 0 auto" },
-				segItem: (on) => ({ flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer", border: "none", color: on ? "var(--dp-dlg-ac2, #c9a9ff)" : "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", backgroundColor: on ? "rgba(137,87,229,.20)" : "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", fontWeight: on ? 600 : 400 }),
+				/* ── 分段条（第 38 轮**视觉重做** —— 用户：「总监插件对的 <层级> tap 的背景颜色和文字
+				 *    进行调整」）────────────────────────────────────────────────────
+				 *  改前的问题（逐条对应用户的"背景颜色和文字"）：
+				 *   ① 未选中态是**实心深块**（`bg1`）+ 三级灰字（`t3` `#8b9199`）⇒ 三个平分的小块
+				 *      看起来像"三个都是按钮"，选中/未选中只差一点明度，**一眼看不出现在在哪**；
+				 *   ② 选中态只加 20% 透明紫底 ⇒ 在深底上几乎看不出边界；
+				 *   ③ 文字 11.5px 半粗，在深底上偏糊。
+				 *  改后：**胶囊组**（容器留 3px 内边距 + 段间 3px 间隙），未选 = **透明底 + 二级字色**
+				 *  （轻量、不抢视线），选中 = **半透明紫实心 + 1px 亮紫描边 + 白字 + 微投影**
+				 *  （三重信号：底色 / 描边 / 字重色）。三段之间不再靠 `overflow:hidden` 切边。
+				 *  ⚠️ 颜色**不新增硬编码主题色**：全部沿用既有 CSS 变量（`--dp-dlg-*`）与其兜底色，
+				 *     免得在浅色/高对比主题下变成"深字配深底"。 */
+				seg: {
+					display: "flex", gap: 3, padding: 3,
+					border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))",
+					borderRadius: 7, margin: "6px 8px 0", flex: "0 0 auto",
+					backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #1c1e22))"
+				},
+				segItem: (on) => ({
+					flex: 1, textAlign: "center", fontSize: 11.5, padding: "5px 0", cursor: "pointer",
+					borderRadius: 4,
+					border: "1px solid " + (on ? "rgba(167,120,255,.85)" : "transparent"),
+					color: on ? "#ffffff" : "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))",
+					backgroundColor: on ? "rgba(137,87,229,.52)" : "transparent",
+					fontWeight: on ? 600 : 400,
+					transition: "background-color .12s ease, color .12s ease, border-color .12s ease",
+					boxShadow: on ? "0 1px 2px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.10)" : "none"
+				}),
 				body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 },
 				blk: { border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 7, backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #1c1e22))", padding: "8px 9px" },
 				blkT: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", letterSpacing: ".4px", marginBottom: 7, display: "flex", alignItems: "center", gap: 6 },
@@ -15923,47 +16239,240 @@ window.__ModuleLoader__.load({
 			}
 			
 			/* ══════════════════════════════════════════════════════════════════
+			 * 子组件：**作用域概况**（第 38 轮 · 需求 5）
+			 *
+			 * 用户原话：「点击文件夹的总监 需要在总监 tap 中，显示这个文件夹中的所有对话在做什么
+			 * 就是总结，和最后一个我发送对话的消息和结果，这样我能从总监快速了解每一个对话现有的情况」
+			 *
+			 * ── 🔴 数据来源与**能力边界**（如实标注，不编）────────────────────
+			 *   宿主侧 `bridge/chat-bridge.js#readConversationItems()` 只能读**当前打开的那个会话**
+			 *   （它读的是 DOM 里的消息列表）。⇒ **无法**批量实时读所有会话的最后一条消息。
+			 *   故这里只用**插件侧已持久化的**三份数据（都能问到，且都带来源）：
+			 *     ① 节点挂载快照 `conversations[0]`（`attachSession` 时写入：title / lastMessage /
+			 *        messageCount / lastTime）—— 来源标 `快照`
+			 *     ② 节点 `meta.summary`（做过「生成本级总结」才有）—— 来源标 `总结`
+			 *     ③ 总监自己的流转记录 `flowStore.ofSession()` 最近一条 —— 来源标 `流转`
+			 *   **一条都没有** ⇒ 显示「未采集」并说明怎么采（点一下打开对话即可刷新），
+			 *   **不显示空白**（空白会让"没数据"与"数据是空"同形 —— 纪律 19/58 同族）。
+			 */
+			function ScopeBrief({ tree, scope, onOpen }) {
+				const list = react.useMemo(() => {
+					const node = scope ? findInTree(tree, scope.id) : null;
+					const sessions = node ? scopeSessions(node) : [];
+					return sessions.map((s) => {
+						const c = (Array.isArray(s.conversations) && s.conversations[0]) || {};
+						const sid = c.conversationId ? String(c.conversationId) : "";
+						const meta = s.meta || {};
+						let flowLine = "";
+						try {
+							const fl = sid ? flowStore.ofSession(sid) : [];
+							flowLine = fl.length ? String(fl[fl.length - 1].text || "").slice(0, 46) : "";
+						} catch (e) { flowLine = ""; }
+						return {
+							nodeId: String(s.id || ""), sessionId: sid,
+							title: String(c.title || s.name || sid || "未命名"),
+							summary: String(meta.summary || ""),
+							lastMessage: String(c.lastMessage || ""),
+							lastTime: Number(c.lastTime || 0),
+							count: Number(c.messageCount || 0),
+							flowLine
+						};
+					});
+				}, [tree, scope && scope.id]);
+			
+				const fmt = (t) => {
+					if (!t) return "";
+					const d = new Date(t);
+					if (Number.isNaN(d.getTime())) return "";
+					const p = (n) => (n < 10 ? "0" + n : String(n));
+					return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+				};
+			
+				return h("div", {
+					key: "brief", style: S.blk, "data-testid": "d-scope-brief",
+					"data-scope-id": (scope && scope.id) || "", "data-count": String(list.length)
+				}, [
+					h("div", { key: "t", style: S.blkT }, [
+						"本作用域对话概况",
+						h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } },
+							list.length ? list.length + " 个对话" : "无对话")
+					]),
+					/* 作用域说明（需求 6：嵌套时"仅显示这个文件夹中的作用"）—— 把"范围是什么"写出来，
+					 * 否则用户看到 0 条时无法区分"这个文件夹真的没有"与"我点错了节点"。 */
+					h("div", { key: "s", style: { ...S.muted, marginBottom: 5 }, "data-testid": "d-scope-note" },
+						"范围：" + ((scope && scope.name) || "全局总管") + "（含其子文件夹）"),
+					list.length ? list.map((it) => h("div", {
+						key: it.nodeId || it.sessionId, "data-testid": "d-brief-item", "data-sid": it.sessionId,
+						style: {
+							borderTop: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #33383f))",
+							padding: "6px 0 5px", cursor: it.sessionId ? "pointer" : "default"
+						},
+						onClick: () => { if (it.sessionId && onOpen) onOpen(it.sessionId); }
+					}, [
+						h("div", { key: "h", style: { display: "flex", gap: 6, alignItems: "baseline", marginBottom: 2 } }, [
+							h("span", { key: "n", style: { fontWeight: 600, fontSize: "calc(11.5px * var(--dp-font,1))" } }, it.title),
+							h("span", { key: "c", style: { ...S.muted, marginLeft: "auto" } },
+								(it.count ? it.count + " 条" : "") + (it.lastTime ? " · " + fmt(it.lastTime) : ""))
+						]),
+						it.summary
+							? h("div", { key: "sm", style: { ...S.muted, marginBottom: 2 }, "data-kind": "summary" }, "总结：" + it.summary)
+							: null,
+						it.lastMessage
+							? h("div", { key: "lm", style: { ...S.muted, marginBottom: 2, wordBreak: "break-all" }, "data-kind": "last" }, "最后：" + it.lastMessage)
+							: null,
+						it.flowLine
+							? h("div", { key: "fl", style: { ...S.muted, color: "var(--dp-dlg-ac2, #b794f6)", wordBreak: "break-all" }, "data-kind": "flow" }, "流转：" + it.flowLine)
+							: null,
+						(!it.summary && !it.lastMessage && !it.flowLine)
+							? h("div", { key: "nv", style: { ...S.muted, color: "var(--dp-dlg-warn, #e0b341)" }, "data-kind": "none" },
+								"未采集 —— 点此行打开该对话即可刷新快照")
+							: null
+					])) : h("div", { key: "e", style: S.muted, "data-testid": "d-brief-empty" },
+						scope ? "这个时点还没有挂载到本文件夹的对话。点左侧文件夹里的对话，或到「导图」段点「同步真实会话」。" : "当前是全局作用域 —— 显示全部。")
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 子组件：**作用域导图**（第 38 轮 · 需求 12 / 13，取代原「层级」段）
+			 *
+			 * 用户原话：「按照点击的文件夹下的对话信息整理出的思维导图」
+			 *
+			 * ── 与全屏导图（`MindMap.js`）的分工 ────────────────────────────
+			 *   全屏导图 = 血缘树**画布**（可拖拽 / 缩放 / 分组 / 编辑），适合"看清全貌"；
+			 *   本段 = 同一条血缘由**该作用域过滤**后的**缩进树**，适合"在总监里一眼看清
+			 *          这个文件夹有哪几个对话、各自分了几支"。
+			 *   ⇒ 数据源**同一份**（`getBranchSnapshot()`），判据**同一份**
+			 *     （`logic/scope-tree.js#filterRowsByScope`）—— 不是两套实现。
+			 */
+			function ScopeMap({ tree, scope, onOpen }) {
+				const [snap, setSnap] = react.useState(() => {
+					try { return getBranchSnapshot() || { rows: [] }; } catch (e) { return { rows: [] }; }
+				});
+				react.useEffect(() => subscribeBranch(setSnap), []);
+			
+				const idSet = react.useMemo(() => scopeSessionIdSet(tree, scope && scope.id), [tree, scope && scope.id]);
+				const res = react.useMemo(
+					() => filterRowsByScope((snap && snap.rows) || [], idSet),
+					[snap, idSet]
+				);
+				const stats = react.useMemo(() => scopeStats(res.rows), [res]);
+			
+				/* 按 depth 缩进渲染（多层结构 ⚠️：depth 由 `filterRowsByScope` 重算过，
+				 * 保证"中间层被滤掉时，孙节点仍挂在最近保留祖先之下"，而不是全部拍平成一层）。 */
+				const ordered = res.rows.slice().sort((a, b) => (a.depth - b.depth) || (a.y - b.y) || String(a.sessionId).localeCompare(String(b.sessionId)));
+			
+				return h("div", { key: "map", style: S.blk, "data-testid": "d-scope-map", "data-total": String(stats.total), "data-dropped": String(res.dropped) }, [
+					h("div", { key: "t", style: S.blkT }, [
+						"本作用域导图",
+						h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } },
+							stats.total + " 节点 · " + stats.roots + " 根 · 最深 " + stats.maxDepth)
+					]),
+					h("div", { key: "s", style: { ...S.muted, marginBottom: 5 } },
+						"范围：" + ((scope && scope.name) || "全局总管") + "（含子文件夹）"
+						+ (idSet ? " · 过滤掉 " + res.dropped + " 个域外节点" : " · 未限定作用域")),
+					ordered.length ? ordered.map((r) => h("div", {
+						key: r.sessionId, "data-testid": "d-map-row", "data-sid": r.sessionId,
+						"data-depth": String(r.depth),
+						style: {
+							display: "flex", gap: 6, alignItems: "baseline",
+							paddingLeft: 2 + Math.min(r.depth, 8) * 12, padding: "2px 0",
+							cursor: "pointer"
+						},
+						title: (r.parentSessionId ? "父：" + r.parentSessionId + " · " : "根节点 · ") + "点一下在右手边打开",
+						onClick: () => onOpen && onOpen(r.sessionId)
+					}, [
+						/* 缩进 + 连线感：非根画 `└`，根画 `●` —— 用字符而不是 CSS 伪元素，
+						 * 因为宿主是编译后 `createElement` 形态，伪元素类名不可控。 */
+						h("span", { key: "g", style: { color: "var(--dp-dlg-ac2, #b794f6)", flex: "0 0 auto" } }, r.depth > 0 ? "└─" : "●"),
+						h("span", { key: "n", style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+							String(r.title || r.sessionId).slice(0, 28)),
+						r.childrenCount ? h("span", { key: "c", style: { ...S.muted, flex: "0 0 auto" } }, "⑂" + r.childrenCount) : null,
+						r.isCurrent ? h("span", { key: "cur", style: { color: "var(--dp-dlg-ok, #6fd388)", flex: "0 0 auto" } }, "◉") : null
+					])) : h("div", { key: "e", style: S.muted, "data-testid": "d-map-empty" },
+						"本作用域下暂无可显示的对话。点左侧文件夹里的对话，或先在宿主里建立会话。"),
+					/* 层级管理（原「层级」段的完整能力）降级到这里当二级入口 —— 见 I4：
+					 * 用户要"隐藏这个 tap"，不是"砍掉同步/总结/增删改这些能力"（纪律 54）。 */
+					h("div", { key: "lv", style: { marginTop: 8, borderTop: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #33383f))", paddingTop: 6 } },
+						h(DirectorHierarchy, { compact: true }))
+				]);
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
 			 * 子组件：左面板（R2 / R3 / R5 / R6 + 层级管理）
 			 * ══════════════════════════════════════════════════════════════════ */
-			function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg }) {
+			function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg, secs, onToggleSec, scopeNode, onOpenSession }) {
 				const counts = react.useMemo(() => countByLevel(tree), [tree]);
 				const [agentSeg, setAgentSeg] = react.useState("agents");
 				const [called, setCalled] = react.useState({});
+				/** 第 38 轮：读折叠态（读端兜底 —— 老数据缺键、或父组件没传时按"展开"处理） */
+				const sec = (k) => Boolean(secs && secs[k]);
+				/* 🔴 箭头**不复用 `S.segItem`**：那是"分段按钮"的样式（第 38 轮起带描边/过渡/圆角），
+				 *    拿来当三角箭头会带进一堆无关属性，改分段样式时箭头跟着变（隐式耦合）。 */
+				const caretStyle = {
+					display: "inline-block", minWidth: 12, marginRight: 3, textAlign: "center",
+					color: "var(--dp-dlg-ac2, #b794f6)", fontSize: 10.5
+				};
+				/** 折叠区块的统一头部：整行可点，左右两端都表明"能收起/能展开" */
+				const secHead = (k, title, right) => h("div", {
+					key: "t", style: { ...S.blkT, cursor: "pointer" }, role: "button",
+					"aria-expanded": !sec(k), "data-testid": "d-sec-" + k + "-head",
+					onClick: () => onToggleSec && onToggleSec(k)
+				}, [
+					h("span", { key: "c", style: caretStyle }, sec(k) ? "▶" : "▼"),
+					title,
+					right || null,
+					h("span", { key: "h", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, sec(k) ? "已收起" : "点击收起")
+				]);
 			
 				return h("div", { style: S.body, "data-testid": "d-body" }, [
-					/* 分段：总监 / 层级 / 智能体 */
+					/* 分段：总监 / 导图 / 智能体
+					 * ── 第 38 轮：原「层级」段**撤除**（用户：「层级 tap 感觉没什么用, 隐藏掉」），
+					 *    原位换成「导图」（用户：「现在层级部分加上思维导图」）。
+					 *    🔴 `d-seg-levels` 从 DOM 中**消失**是**预期**（判据 J6），不是回归；
+					 *       层级能力降级到导图段内的二级视图，组件与 `h-*` testid 全套保留（I4）。 */
 					h("div", { key: "seg", style: { ...S.seg, margin: "0 0 2px" }, role: "tablist" }, [
 						h("button", { key: "d", role: "tab", style: S.segItem(seg === LEFT_TAB.DIRECTOR), "data-testid": "d-seg-director", "aria-selected": seg === LEFT_TAB.DIRECTOR, onClick: () => setSeg(LEFT_TAB.DIRECTOR) }, "总监"),
-						h("button", { key: "l", role: "tab", style: S.segItem(seg === LEFT_TAB.LEVELS), "data-testid": "d-seg-levels", "aria-selected": seg === LEFT_TAB.LEVELS, onClick: () => setSeg(LEFT_TAB.LEVELS) }, "层级"),
+						h("button", { key: "m", role: "tab", style: S.segItem(seg === LEFT_TAB.MINDMAP), "data-testid": "d-seg-mindmap", "aria-selected": seg === LEFT_TAB.MINDMAP, title: "本作用域（文件夹 / 项目）的对话地图", onClick: () => setSeg(LEFT_TAB.MINDMAP) }, "导图"),
 						h("button", { key: "a", role: "tab", style: S.segItem(seg === LEFT_TAB.AGENTS), "data-testid": "d-seg-agents", "aria-selected": seg === LEFT_TAB.AGENTS, onClick: () => setSeg(LEFT_TAB.AGENTS) }, "智能体")
 					]),
 			
 					/* ── 总监段 ── */
 					seg === LEFT_TAB.DIRECTOR ? h("div", { key: "dir", style: { display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "director" }, [
 						/* R2 项目总览 */
-						h("div", { key: "r2", style: S.blk, "data-testid": "d-r2" }, [
-							h("div", { key: "t", style: S.blkT }, ["R2 项目总览"]),
-							h("div", { key: "k", style: S.kv }, [
-								h("div", { key: "p", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.project)), h("div", { key: "k", style: S.kvK }, "项目 / 文件夹")]),
-								h("div", { key: "s", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.session)), h("div", { key: "k", style: S.kvK }, "对话")]),
-								h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "var(--dp-dlg-warn, #e0b341)" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
-								h("div", { key: "td", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String((node && node.todos ? node.todos.length : 0))), h("div", { key: "k", style: S.kvK }, "待办")])
-							]),
-							h("div", { key: "m", style: { ...S.muted, marginTop: 6 } }, "阶段：" + ((node && node.meta && node.meta.currentPhase) || "未设置") + " · 目标：" + ((node && node.meta && node.meta.goal) || "未设置"))
+						h("div", { key: "r2", style: S.blk, "data-testid": "d-r2", "data-collapsed": sec("r2") ? "1" : "0" }, [
+							secHead("r2", "R2 项目总览"),
+							h("div", { key: "b", style: { display: sec("r2") ? "none" : "block" } }, [
+								h("div", { key: "k", style: S.kv }, [
+									h("div", { key: "p", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.project)), h("div", { key: "k", style: S.kvK }, "项目 / 文件夹")]),
+									h("div", { key: "s", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String(counts.session)), h("div", { key: "k", style: S.kvK }, "对话")]),
+									h("div", { key: "r", style: S.kvc }, [h("div", { key: "v", style: { ...S.kvV, color: "var(--dp-dlg-warn, #e0b341)" } }, String((node && node.risks ? node.risks.length : 0))), h("div", { key: "k", style: S.kvK }, "风险")]),
+									h("div", { key: "td", style: S.kvc }, [h("div", { key: "v", style: S.kvV }, String((node && node.todos ? node.todos.length : 0))), h("div", { key: "k", style: S.kvK }, "待办")])
+								]),
+								h("div", { key: "m", style: { ...S.muted, marginTop: 6 } }, "阶段：" + ((node && node.meta && node.meta.currentPhase) || "未设置") + " · 目标：" + ((node && node.meta && node.meta.goal) || "未设置"))
+							])
 						]),
 			
+						/* ── 第 38 轮新增：**本作用域的对话概况**（需求 5）────────────────────
+						 *  用户原话：「点击文件夹的总监 需要在总监 tap 中，显示这个文件夹中的所有对话
+						 *  在做什么就是总结，和最后一个我发送对话的消息和结果，这样我能从总监快速了解
+						 *  每一个对话现有的情况」+「如果文件夹的嵌套，仅显示这个文件夹中的作用」。 */
+						h(ScopeBrief, {
+							key: "brief", tree, scope: scopeNode, onOpen: onOpenSession
+						}),
+			
 						/* R5 总监流（只治理不执行） */
-						h("div", { key: "r5", style: S.blk, "data-testid": "d-r5" }, [
-							h("div", { key: "t", style: S.blkT }, ["R5 总监对话区", h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "只治理 · 不执行")]),
-							messages.length
-								? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
-									h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
-									h("div", { key: "b", style: S.bub }, [
-										m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 3 } }, m.kind) : null,
-										h("span", { key: "t2" }, m.text)
-									])
-								]))
-								: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。"),
+						h("div", { key: "r5", style: S.blk, "data-testid": "d-r5", "data-collapsed": sec("r5") ? "1" : "0" }, [
+							secHead("r5", "R5 总监对话区", h("span", { key: "x", style: { marginLeft: 6, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "只治理 · 不执行")),
+							h("div", { key: "b", style: { display: sec("r5") ? "none" : "block" } }, [
+								messages.length
+									? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
+										h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
+										h("div", { key: "b", style: S.bub }, [
+											m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 3 } }, m.kind) : null,
+											h("span", { key: "t2" }, m.text)
+										])
+									]))
+									: h("div", { key: "e", style: S.muted, "data-testid": "d-r5-empty" }, "尚无总监消息。在下方输入框输入，由总监整理并确认去向。"),
 							/* 🔴 19 号文 **N3 · R2**：**上游可见下游摘要**（用户原话「同一个分支上下游的
 							 *    总监消息需要是一致的」）—— 不必点进下游节点就能看到它的产出摘要行。
 							 *    · 判据来自 `logic/lineage.js#summariesFor()`（**纯函数**）⇒
@@ -15982,27 +16491,37 @@ window.__ModuleLoader__.load({
 										color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 2, wordBreak: "break-all"
 									}
 								}, u.line)))) : null
+								])
 						]),
 			
 						/* 六维审核 */
 						h(ReviewCard, { key: "rv", result: reviewResult, onRun: onReview }),
 			
 						/* R6 记忆面板 */
-						h("div", { key: "r6", style: S.blk, "data-testid": "d-r6" }, [
-							h("div", { key: "t", style: S.blkT }, ["R6 总监记忆面板"]),
-							h("div", { key: "m", style: S.muted }, [
-								h("div", { key: "1", "data-testid": "d-memo-core" }, "核心记忆 · 双层数据元独立（" + PLUGIN_DB_NAME + " v1）"),
-								h("div", { key: "2", "data-testid": "d-memo-decision" }, "决策记录 · " + (engineStats && engineStats.decisions ? engineStats.decisions + " 条" : "0 条")),
-								h("div", { key: "3", "data-testid": "d-memo-risk" }, "审核记录 · " + (engineStats && engineStats.reviews ? engineStats.reviews + " 条" : "0 条") + " · 总监消息 · " + (engineStats && engineStats.conversations ? engineStats.conversations : 0) + " 条")
-							]),
-							engineStats ? h("div", { key: "st", style: { ...S.muted, marginTop: 5, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5 }, "data-testid": "d-dbstats" },
-								"自有库 " + PLUGIN_DB_NAME + "：" + engineStats.nodes + " 节点 / " + engineStats.conversations + " 消息 / " + engineStats.reviews + " 审核 / " + engineStats.decisions + " 决策") : null
+						h("div", { key: "r6", style: S.blk, "data-testid": "d-r6", "data-collapsed": sec("r6") ? "1" : "0" }, [
+							secHead("r6", "R6 总监记忆面板"),
+							h("div", { key: "b", style: { display: sec("r6") ? "none" : "block" } }, [
+								h("div", { key: "m", style: S.muted }, [
+									h("div", { key: "1", "data-testid": "d-memo-core" }, "核心记忆 · 双层数据元独立（" + PLUGIN_DB_NAME + " v1）"),
+									h("div", { key: "2", "data-testid": "d-memo-decision" }, "决策记录 · " + (engineStats && engineStats.decisions ? engineStats.decisions + " 条" : "0 条")),
+									h("div", { key: "3", "data-testid": "d-memo-risk" }, "审核记录 · " + (engineStats && engineStats.reviews ? engineStats.reviews + " 条" : "0 条") + " · 总监消息 · " + (engineStats && engineStats.conversations ? engineStats.conversations : 0) + " 条")
+								]),
+								engineStats ? h("div", { key: "st", style: { ...S.muted, marginTop: 5, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5 }, "data-testid": "d-dbstats" },
+									"自有库 " + PLUGIN_DB_NAME + "：" + engineStats.nodes + " 节点 / " + engineStats.conversations + " 消息 / " + engineStats.reviews + " 审核 / " + engineStats.decisions + " 决策") : null
+							])
 						])
 					]) : null,
 			
-					/* ── 层级段（复用 DirectorHierarchy，compact 形态；保留 h-* testid 全套）── */
-					seg === LEFT_TAB.LEVELS ? h("div", { key: "lv", style: { minHeight: 0 }, "data-panel": "levels" },
-						h(DirectorHierarchy, { compact: true })) : null,
+					/* ── 导图段（第 38 轮：**取代原「层级」段**）──────────────────────────
+					 *  用户原话：「层级 tap 感觉没什么用, 隐藏掉, 现在层级部分加上思维导图」
+					 *            「按照点击的文件夹下的对话信息整理出的思维导图」
+					 *  🔴 层级能力（`DirectorHierarchy`）**不删**，降级为本段内的二级视图（I4）——
+					 *     它承载「同步真实会话 / 整树分层总结 / 节点增删改」等真实能力，
+					 *     用户要的是"隐藏这个 tap"，不是"砍掉这些能力"（纪律 54 双向）。 */
+					seg === LEFT_TAB.MINDMAP ? h("div", { key: "mm", style: { minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "mindmap" },
+						h(ScopeMap, {
+							scope: scopeNode, tree, onOpen: onOpenSession
+						})) : null,
 			
 					/* ── 智能体段（R3：分段切换 + 调用情况 + 手选调用）── */
 					seg === LEFT_TAB.AGENTS ? h("div", { key: "ag", style: { display: "flex", flexDirection: "column", gap: 8 }, "data-panel": "agents" }, [
@@ -16523,6 +17042,17 @@ window.__ModuleLoader__.load({
 								/* 个性化：折叠左栏后此处是**唯一**入口，故与右栏同一组按钮并列（不是"右上角"布局，
 								 * 但面板本体仍是 `position:fixed` 贴右上角，见文件末尾 PersonalizePanel）。 */
 								h("button", { key: "p", style: S.btn, "data-on": pOpen ? "1" : "0", title: "个性化设定（与总监页 / 设计图 / 导图共用同一份）", "aria-label": "个性化设定", "data-testid": "d-personalize", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); setPOpen((v) => !v); } }, "⚙"),
+								/* 第 38 轮：固定态在**折叠左栏后仍要可达** —— 与上面三个按钮同理（同一 testid `d-pin`，
+								 * 与标题栏那份互斥渲染 ⇒ 同一时刻 DOM 里只有一个，闸门取值不歧义）。 */
+								h("button", {
+									key: "pin", "aria-label": "固定总监面板", "data-testid": "d-pin",
+									"aria-pressed": st.dialogPinned ? "true" : "false", "data-on": st.dialogPinned ? "1" : "0",
+									title: st.dialogPinned ? "已固定（点此取消）" : "固定：点左侧不改变本页",
+									style: st.dialogPinned
+										? { ...S.btn, borderColor: "rgba(137,87,229,.75)", color: "var(--dp-dlg-ac2, #b794f6)" }
+										: S.btn,
+									onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.toggleDialogPinned(); }
+								}, "📌"),
 								h("button", { key: "m", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogCollapsed(true); } }, "–"),
 								h("button", { key: "c", style: { ...S.btn, borderColor: "rgba(248,81,73,.4)", color: "var(--dp-dlg-bad, #f0877f)" }, title: "关闭（Esc）", "aria-label": "关闭总监", "data-testid": "d-close", onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.setDialogOpen(false); } }, "✕")
 							])
@@ -16550,6 +17080,25 @@ window.__ModuleLoader__.load({
 								h("div", { key: "b", style: S.btns }, [
 									h("button", { key: "1", style: S.btn, title: "折叠左栏（Alt+1）", "aria-label": "折叠左栏", "data-testid": "d-collapse-left", onClick: () => directorLayoutStore.toggleDirectorCollapsed() }, "⇤"),
 									h("button", { key: "2", style: S.btn, title: "折叠右栏（Alt+2）", "aria-label": "折叠右栏", "data-testid": "d-collapse-right", onClick: () => directorLayoutStore.toggleChatCollapsed() }, "⇥"),
+									/* ── 第 38 轮：「固定」（用户：「总监页面增加固定」+「总监跳出来之后，我在点击左侧的
+									 *    对话，这个总监页面不会变化」）────────────────────────────────
+									 *  🔴 语义 = **锁定作用域 + 不缩回**（两件事都要；缺一"不会变化"就不成立）。
+									 *     · 开：侧栏点对话/文件夹**都不动**本页（`nav-hook` 的 `navIntent` 返回 hold）
+									 *     · 关：侧栏点对话 → 缩回；点文件夹 → 换作用域
+									 *  ⚠️ 固定**不锁**弹窗内的作用域下拉 —— 否则用户被关在里面出不来（死状态）。
+									 *  `aria-pressed` 与 `data-on` 双写：前者给无障碍，后者给闸门（不靠视觉判断）。 */
+									h("button", {
+										key: "pin", "aria-label": "固定总监面板", "data-testid": "d-pin",
+										"aria-pressed": st.dialogPinned ? "true" : "false",
+										"data-on": st.dialogPinned ? "1" : "0",
+										title: st.dialogPinned
+											? "已固定：点左侧对话 / 文件夹都不会改变本页 · 点此取消固定"
+											: "固定：点左侧对话 / 文件夹都不改变本页（不缩回、不换作用域）",
+										style: st.dialogPinned
+											? { ...S.btn, borderColor: "rgba(137,87,229,.75)", color: "var(--dp-dlg-ac2, #b794f6)" }
+											: S.btn,
+										onClick: () => directorLayoutStore.toggleDialogPinned()
+									}, "📌"),
 									h("button", { key: "3", style: S.btn, title: "整窗最小化（Alt+3）", "aria-label": "整窗最小化", "data-testid": "d-min", onClick: () => directorLayoutStore.setDialogCollapsed(true) }, "–"),
 									h("button", { key: "4", style: S.btn, title: "复位栏宽（双击中缝同效）", "aria-label": "复位栏宽", "data-testid": "d-reset", onClick: () => directorLayoutStore.resetPanelWidths() }, "▢"),
 									/* 右上角个性化（需求原文：「同时都在右上角加自定义个性化设定」）。
@@ -16568,7 +17117,19 @@ window.__ModuleLoader__.load({
 							h(DirectorPanel, {
 								key: "body", node, tree, messages, upstream, reviewResult, onReview: doReview,
 								agentRuns: runs, onCallAgent, engineStats: stats,
-								seg, setSeg: (s) => directorLayoutStore.setLeftTab(s)
+								seg, setSeg: (s) => directorLayoutStore.setLeftTab(s),
+								/* 第 38 轮：三区块折叠（r2/r5/r6）+ 作用域概况 / 导图所需的两个入口 */
+								secs: st.dialogSections,
+								onToggleSec: (k) => directorLayoutStore.setDialogSection(k, !((st.dialogSections || {})[k])),
+								scopeNode: findNodeById(tree, nodeId),
+								/* 「点对话 → 在右手边打开」—— 走宿主 sessions.open（与导图菜单同一个入口，不另造通道）。
+								 * ⚠️ 失败必须**可见地失败**：宿主没暴露接口时 openSession 会抛/返回失败，
+								 *    这里不能静默吞掉（纪律 19），故 `.catch` 里往总监小结里说一句。 */
+								onOpenSession: (sid) => {
+									try {
+										Promise.resolve(openSession(sid)).catch(() => say("打开该对话失败：宿主未接受（sessions.open）"));
+									} catch (e) { say("打开该对话失败：" + ((e && e.message) || "未知错误")); }
+								}
 							}),
 			
 							/* 路由确认卡（要求 8 STEP4）*/
@@ -21832,7 +22393,7 @@ window.__ModuleLoader__.load({
 			 * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
 			 * 引用：—
 			 * 上游：client-entry.js, mount.js
-			 * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+			 * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -21892,6 +22453,12 @@ window.__ModuleLoader__.load({
 			const react = require("react");
 			const { LAYOUT, subscribeBranch, getBranchSnapshot, refreshBranchTree, visibleRows, ancestorChain, treeBounds, matchRows, degradationReason, hostCapabilities, openSession, forkBranch, watchCurrentSession } = __m("logic/branch-tree.js");
 			const { focusRows, hasDownstream } = __m("logic/branch-focus.js");
+			/* ── 第 38 轮：**作用域**（文件夹）过滤 ─────────────────────────────
+			 *  用户需求 18：「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+			 *  判据走 `logic/scope-tree.js`（**总监侧与导图侧共用同一份** —— 不各写一套，纪律 126）。 */
+			const { findInTree, scopeSessionIdSet, filterRowsByScope, scopeStats } = __m("logic/scope-tree.js");
+			const { loadTree, findNodeBySessionId, LEVEL_LABEL } = __m("store/hierarchy.js");
+			const { onHierarchyChange } = __m("util/bus.js");
 			const { OverviewDialog } = __m("components/OverviewDialog.js");
 			const { route, review6, DESTINATION, DESTINATION_LABEL } = __m("logic/routing.js");
 			const { edgePathFor, edgeStyleOf, metaLineOf, stateTitleOf, kindLabelOf, nodeBtnStyle } = __m("logic/mindmap-render.js");
@@ -21941,6 +22508,24 @@ window.__ModuleLoader__.load({
 			const FIT_MIN = 0.3;
 			/** 判定"这是在拖，不是在点"的位移阈值（px）—— 低于它仍算点击（打开右侧对话） */
 			const DRAG_SLOP = 4;
+			
+			/** 第 38 轮：Ctrl+滚轮缩放的**可观测计数**。
+			 *  存在的唯一理由是**让闸门能验它真的发生过** —— 缩放结果（`mm-zoom` 的文字）会因
+			 *  起始 k 不同而看不出"是滚轮导致的还是别处改的"；计数则**单调递增**，不受起点影响。
+			 *  与 `navHookStats` 同一手法（桥上露统计，闸门读统计）。 */
+			const mmWheelStats = { zoomed: 0, lastDelta: 0 };
+			
+			/** 第 38 轮：默认定位的执行计数（闸门判据）。
+			 *  🔴 为什么不用"滚动条位置"当判据：滚动位置受布局时序（字体加载 / 分组重排 / fit 延迟）
+			 *     影响，同一次行为两跑可能不同 ⇒ 阈值会过期（纪律 14/103）。
+			 *     **执行次数**则不受起点影响，且能区分"没执行"与"执行了但没找到节点"。 */
+			const mmCenterStats = { auto: 0, done: 0, missed: 0, last: "" };
+			
+			/* 第 38 轮：把两份统计挂到 window，供真机套件读（**只读**口径，与 `navHookStats` 同一手法）。
+			 * 挂的是**同一对象引用** ⇒ 组件里的 `+=` 会立刻反映到这里，无需同步。 */
+			if (typeof window !== "undefined") {
+				window.__mmStats = { wheel: mmWheelStats, center: mmCenterStats };
+			}
 			
 			const S = {
 				root: {
@@ -22041,6 +22626,19 @@ window.__ModuleLoader__.load({
 				/* 分支链路聚焦（R9）：focusId=被聚焦的会话；focusUp=「含上一层」（祖先层全景） */
 				const [focusId, setFocusId] = react.useState(null);
 				const [focusUp, setFocusUp] = react.useState(false);
+				/* ── 第 38 轮：**作用域（文件夹）过滤** ────────────────────────────
+				 *  用户需求 6/13/18：「仅显示这个文件夹中的作用」「按照点击的文件夹下的对话信息整理出的
+				 *  思维导图」「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+				 *
+				 *  · `hier` = **层级树**（文件夹/项目/会话的归属关系）—— 与血缘树是两个正交维度：
+				 *      血缘树答"谁 fork 了谁"，层级树答"谁属于哪个文件夹"。要按文件夹过滤，
+				 *      就必须把两者**交叉**（`logic/scope-tree.js` 就是干这个的）。
+				 *  · `scopeUp` = 从"当前会话所属文件夹"往上走几级（用户点「上一级」+1）。
+				 *      0 = 当前文件夹（**默认**）；到不了更多级时按钮自动禁用（不假装能点）。
+				 *  ⚠️ 加载失败 ⇒ `hier` 保持 null ⇒ 下游判为"不限作用域"⇒ **显示全部**。
+				 *     绝不因为"读不到层级"就把画布清空（那看起来像导图坏了）。 */
+				const [hier, setHier] = react.useState(null);
+				const [scopeUp, setScopeUp] = react.useState(0);
 				/* 总览弹窗（R10）：挂在导图最上面，独立 fixed 层 */
 				const [ovOpen, setOvOpen] = react.useState(false);
 				const [hov, setHov] = react.useState(null);
@@ -22080,6 +22678,18 @@ window.__ModuleLoader__.load({
 				const dragPosRef = react.useRef(null);
 				/** 「刚拖过」标记：拖动结束时置位一拍，避免拖完又被当成点击而弹出右侧面板 */
 				const justDraggedRef = react.useRef(false);
+				/** 第 38 轮：持有最新的 `zoom()`（它定义在早退之后、每次渲染都是新引用）。
+				 *  Ctrl+滚轮的监听只依赖 `[open]`，通过本 ref 取最新实现 ⇒ 不会每帧重挂。 */
+				const zoomRef = react.useRef(null);
+				/** 第 38 轮：持有**最新的缩放值 k**，并在 `setK` 的同时**立即**同步。
+				 *  🔴 为什么不能直接读闭包里的 `k`：「打开时定位到当前会话」发生在 `doFit()` **之后**
+				 *     （同一 tick），那时 `k` 的闭包值还是**适应前的**（可能 1.0 而实际已 0.3）
+				 *     ⇒ 按错误的 k 算滚动位置，会定位到画布**错误的**地方（看起来像"定位不生效"）。
+				 *     故 `setK` 处一并写 ref，读端永远拿到刚算出来的那个值。 */
+				const kRef = react.useRef(1);
+				/** 第 38 轮：「本次打开是否已经做过默认定位」——一次足够，避免 curId 每次变化都把
+				 *  用户的视野**拽回去**（用户自己滚开之后，再被拉回当前会话是很烦的）。 */
+				const centeredRef = react.useRef(false);
 			
 				react.useEffect(() => {
 					if (!open) return undefined;
@@ -22102,6 +22712,73 @@ window.__ModuleLoader__.load({
 					return watchCurrentSession((id) => { setCurId(id); if (id) flowStore.setActiveSession(id); });
 				}, [open]);
 			
+				/* ── 第 38 轮：加载**层级树**（作用域过滤的输入）────────────────────
+				 *  与血缘树**不同源**：血缘树来自宿主 `ctx.sessions`（谁 fork 了谁），
+				 *  层级树来自插件自己的 store（谁属于哪个文件夹）。按文件夹过滤必须把两者交叉。
+				 *  · 打开时拉一次 + 订阅 `onHierarchyChange`（用户在总监里"挂载会话/新建文件夹"
+				 *    之后，导图的作用域集合要跟着变，否则会按**旧归属**过滤 —— 看起来像"少显示了几个"）。
+				 *  ⚠️ 失败**不阻断**导图：`hier` 保持 null ⇒ 下游判为"不限作用域" ⇒ **显示全部**。
+				 *     绝不因"读不到层级"就把画布清空（那看起来像导图坏了 —— 纪律 58 同族）。 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					/* 🔴 第 38 轮：**每次打开都把本轮的开关归位**。
+					 *  为什么必须显式归位：`MindMap` 在 `!open` 时只是 `return null` ——
+					 *  **组件实例并不卸载**，`useState` / `useRef` 会跨"关 → 开"**原样保留**。
+					 *  后果有二（本机实测，都已现形过）：
+					 *    ① `scopeUp` 残留 ⇒ 用户第二次打开看到的是**上一次上溯后的层级**，
+					 *       而用户原话是「只显示**当前文件夹**下面的这些对话，除非我点击上一级」
+					 *       —— 默认口径被悄悄改掉了（用户没点任何东西，作用域却变了）。
+					 *    ② `centeredRef` 残留 ⇒ 「默认定位到当前会话」**只生效一次**，
+					 *       之后再打开就不再定位（用户需求 17 失效，且看起来像"定位偶尔不灵"）。
+					 *  ⚠️ 闸门侧同因：第二次跑会因"上溯已经做过"而**跳过** `C-M1e`，
+					 *     两跑读数不一致 —— 正是本项目"跨运行残留"那一族纪律的形态。 */
+					setScopeUp(0);
+					centeredRef.current = false;
+					let alive = true;
+					const pull = () => {
+						Promise.resolve(loadTree())
+							.then((tr) => { if (alive) setHier(tr); })
+							.catch(() => { /* 静默保持 null（= 不过滤）—— 但**不**把画布清空 */ });
+					};
+					pull();
+					const off = typeof onHierarchyChange === "function" ? onHierarchyChange(pull) : null;
+					return () => { alive = false; if (typeof off === "function") off(); };
+				}, [open]);
+			
+				/* ── 第 38 轮：**Ctrl / ⌘ + 滚轮缩放**（用户：「思维导图的 ctrl 加鼠标中键 无法放大缩小」）
+				 *
+				 * ── 为什么用原生 `addEventListener` 而不是 React 的 `onWheel` ────────────────
+				 *   React 把事件委托挂在 root 上，而浏览器把 **root 级 wheel 视为 passive**
+				 *   ⇒ `e.preventDefault()` 在里面**无效**（控制台只会给一句"Unable to preventDefault"，
+				 *   页面照旧缩放）。要拦住浏览器缩放，必须自己挂 **`{ passive: false }`** 的原生监听。
+				 *
+				 * ── 交互约定（与主流画布工具一致）────────────────────────────────
+				 *   · `Ctrl/⌘ + 滚轮` ⇒ **缩放**（并 `preventDefault`，否则会连带缩放整个宿主页面）
+				 *   · 裸滚轮 ⇒ **平移**（不拦截，交还给滚动容器 —— 这是既有行为，本轮到为止不改）
+				 *
+				 * ── `zoomRef` 的存在理由 ────────────────────────────────────────────
+				 *   `zoom()` 定义在渲染函数尾部（早退之后），每次渲染都是**新引用**；
+				 *   若把它写进 effect 依赖，监听会被反复解绑重挂（每帧一次）。
+				 *   故用 ref 持有最新引用，effect 只依赖 `[open]`。
+				 *   ⚠️ 这是本文件既有的同类手法（见 `dragPosRef` / `justDraggedRef` 的注释）。 */
+				react.useEffect(() => {
+					if (!open) return undefined;
+					const onWheel = (e) => {
+						const root = document.getElementById(MINDMAP_ID);
+						if (!root) return;
+						const t = e.target;
+						if (!(t === root || (t && root.contains && root.contains(t)))) return;
+						/* 只看 Ctrl/⌘ —— 其它修饰键（Shift/Alt）保留给浏览器/系统，不抢 */
+						if (!(e.ctrlKey || e.metaKey)) return;
+						e.preventDefault();
+						if (typeof zoomRef.current === "function") zoomRef.current(e.deltaY > 0 ? -0.08 : 0.08);
+						mmWheelStats.zoomed += 1;
+						mmWheelStats.lastDelta = e.deltaY;
+					};
+					document.addEventListener("wheel", onWheel, { passive: false });
+					return () => document.removeEventListener("wheel", onWheel, { passive: false });
+				}, [open]);
+			
 				/* 打开时自动适应一次（幂等：同一次打开只做一次，避免与用户的缩放打架） */
 				react.useEffect(() => {
 					if (!open) { fittedRef.current = false; return undefined; }
@@ -22110,6 +22787,27 @@ window.__ModuleLoader__.load({
 					const t = setTimeout(() => { doFit(true); }, 60);
 					return () => clearTimeout(t);
 				}, [open]);
+			
+				/* ── 第 38 轮：**默认定位到当前会话**（用户需求 17）────────────────────
+				 *  「点击会话之后进入的导图，默认定位到当前会话」
+				 *
+				 *  ⚠️ 为什么单独一个 effect，而不是并进上面的 fit effect：
+				 *     `curId` 由 `watchCurrentSession` **轮询**得到 —— 导图打开的那一帧它往往还是 null。
+				 *     若并进 fit effect（只依赖 `[open]`），定位会**因为"当时没有 curId"而整体跳过**，
+				 *     且此后不再重试（用户看到的就是"没定位"，而且**看不出为什么**）。
+				 *     ⇒ 拆开，依赖 `[open, curId]`：id 一到就开始。
+				 *  ⚠️ 延迟 160ms > fit 的 60ms：必须**等适应完成**再算滚动位置，
+				 *     否则按适应前的 k 滚，会定位到画布的错误位置。
+				 *  ⚠️ `centeredRef` 保证**每次打开只定位一次**：此后 curId 再变（用户在宿主切会话）
+				 *     不会把视野拽回去 —— 那会打断正在看图的用户。 */
+				react.useEffect(() => {
+					if (!open) { centeredRef.current = false; return undefined; }
+					if (centeredRef.current) return undefined;
+					if (!curId) return undefined;
+					centeredRef.current = true;
+					const t = setTimeout(() => { centerOn(curId); mmCenterStats.auto += 1; }, 160);
+					return () => clearTimeout(t);
+				}, [open, curId]);
 			
 				/* 视口尺寸变化时刷新 view（驱动 stageWrap 的居中 margin 跟随重算），不依赖用户滚动/再点适应 */
 				react.useEffect(() => {
@@ -22228,6 +22926,36 @@ window.__ModuleLoader__.load({
 				/* ── 数据派生（纯计算，非 hooks，可安全放在早退之后） ── */
 				const tree = snap.tree || { rows: [], edges: [], byId: {} };
 				const baseRows = tree.rows || [];
+			
+				/* ── 第 38 轮：**作用域（文件夹）过滤**（用户需求 6 / 13 / 18）────────
+				 *  「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+				 *
+				 *  ⚠️ 刻意**不用 `useMemo`**：本文件既有铁律 ——
+				 *     hooks 绝不能排在 `if (!open) return null` 之后（本项目在 DesignStudio 上
+				 *     吃过一次"整层崩溃"）。而 `curId` / `hier` / `scopeUp` 都已在上方就绪，
+				 *     就地算即可。数据规模是"会话条数"级（数十~数百），重算代价可接受。
+				 *
+				 *  🔴 找不到所属文件夹 ⇒ `scopeSet = null` ⇒ **不过滤**（显示全部）。
+				 *     把"我不知道当前在哪"当成"作用域是空的"会**把画布清空** ——
+				 *     用户看到的是"导图坏了"，而不是"这个会话还没挂到任何文件夹"（纪律 58）。 */
+				let scopeNode = null;
+				if (hier && curId) {
+					const sessNode = findNodeBySessionId(hier, curId);
+					if (sessNode && sessNode.parentId) {
+						let cur = findInTree(hier, sessNode.parentId);
+						for (let i = 0; i < scopeUp && cur && cur.parentId; i++) {
+							const up = findInTree(hier, cur.parentId);
+							if (!up) break;
+							cur = up;
+						}
+						scopeNode = cur || null;
+					}
+				}
+				const scopeSet = scopeSessionIdSet(hier, scopeNode && scopeNode.id);
+				const scopedRes = filterRowsByScope(baseRows, scopeSet);
+				const scopedRows = scopedRes.rows;
+				const scopeStat = scopeStats(scopedRows);
+				const canScopeUp = Boolean(scopeNode && scopeNode.parentId && findInTree(hier, scopeNode.parentId));
 				/* 位置叠加：store 里存的（用户拖过的）+ 拖动中的实时位置。
 				 * ⚠️ 这里**故意不用 useMemo**：它必须与 `if (!open) return null` 的相对位置保持一致，
 				 *    而 hooks 绝不能排在早退之后（本项目在 DesignStudio 上吃过一次整层崩溃）。
@@ -22250,11 +22978,11 @@ window.__ModuleLoader__.load({
 				 *    分区框也因此只按自动布局算 ⇒ 框整齐稳定；被拖出框外的节点**如实显示在框外**
 				 *    （回答"为什么它在框外面"：因为是你拖的），整体归位是「▦ 自动布局」的职责。 */
 				let rawMaxX = 0;
-				for (const rr of baseRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
+				for (const rr of scopedRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
 				const gres = lay.mmGroup
-					? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH, dimLabels: DIM_LABELS })
+					? buildGroups(scopedRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH, dimLabels: DIM_LABELS })
 					: null;
-				const rows = applyUserPos(gres ? gres.rows : baseRows, posMap);
+				const rows = applyUserPos(gres ? gres.rows : scopedRows, posMap);
 				const sections = gres ? gres.sections : [];
 			
 				/* ── 折叠计数：必须按**当前树里真的存在**的节点算 ────────────────────
@@ -22341,10 +23069,11 @@ window.__ModuleLoader__.load({
 				function zoom(delta, absolute) {
 					const el = bodyRef.current;
 					const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, absolute !== undefined ? absolute : k + delta));
-					if (!el) { setK(next); return; }
+					if (!el) { setK(next); kRef.current = next; return; }
 					const cx = (el.scrollLeft + el.clientWidth / 2) / k;
 					const cy = (el.scrollTop + el.clientHeight / 2) / k;
 					setK(next);
+					kRef.current = next; // ← 立即同步（见 kRef 注释：读端不等渲染）
 					requestAnimationFrame(() => {
 						const e2 = bodyRef.current;
 						if (!e2) return;
@@ -22353,6 +23082,9 @@ window.__ModuleLoader__.load({
 						syncView();
 					});
 				}
+				/* 第 38 轮：把最新实现交给 `zoomRef`，供 Ctrl+滚轮监听取用（见上方 effect 的说明）。
+				 * 🔴 必须在 `zoom` **定义之后**赋值 —— 否则拿到的是上一轮的旧闭包（`k` 会慢一拍）。 */
+				zoomRef.current = zoom;
 			
 				/* ── 适应屏幕（对**可见行**的包围盒，幂等 —— 已在视野内时只回文案） ── */
 				function doFit(silent) {
@@ -22364,6 +23096,7 @@ window.__ModuleLoader__.load({
 					// 但不低于 FIT_MIN：超长链保留可读性，放不下的方向滚动而非无限缩小。
 					const next = Math.max(FIT_MIN, Math.min(1.4, Math.min(cw / contentW, ch / contentH) * 0.96));
 					setK(next);
+					kRef.current = next; // ← 立即同步：紧随其后的 `centerOn()` 要用它算滚动位置
 					requestAnimationFrame(() => {
 						const e2 = bodyRef.current;
 						if (!e2) return;
@@ -22372,6 +23105,33 @@ window.__ModuleLoader__.load({
 						e2.scrollTop = contentH * next <= ch ? 0 : Math.max(0, bounds.y * next - 8);
 						syncView();
 						if (!silent) say("已适应：可见 " + winRows.length + " 个节点 · " + Math.round(next * 100) + "%");
+					});
+				}
+			
+				/* ── 第 38 轮：**把某个节点滚到视口中央** ────────────────────────────
+				 *  用户需求 17：「点击会话之后进入的导图，**默认定位到当前会话**」
+				 *
+				 *  · 单靠 `doFit()` 不够：它是"把**整棵**可见树缩进视野"，长树会缩到 30%
+				 *    （真机实测 28 节点时就是 0.3）—— 当前会话可能仍在视野外，
+				 *    用户点进来第一眼**找不到自己在哪**，这正是要治的点。
+				 *  · 找不到该节点（不在当前作用域内 / 不在快照里）⇒ **什么都不做**，
+				 *    不报错、不改选中 —— "没定位"不等于"定位失败"（纪律 58）。
+				 *  · 统计量 `mmCenterStats` 供闸门验"真的执行过"（滚动位置本身受布局时序影响，
+				 *    不是稳定判据；**执行次数**是）。 */
+				function centerOn(id) {
+					const el = bodyRef.current;
+					if (!el || !id) return;
+					const r = winRows.find((x) => x.sessionId === id);
+					if (!r) { mmCenterStats.missed += 1; return; }
+					mmCenterStats.done += 1;
+					mmCenterStats.last = String(id);
+					const kk = kRef.current || k || 1;
+					requestAnimationFrame(() => {
+						const e2 = bodyRef.current;
+						if (!e2) return;
+						e2.scrollLeft = Math.max(0, (r.x + LAYOUT.nodeW / 2) * kk - e2.clientWidth / 2);
+						e2.scrollTop = Math.max(0, (r.y + LAYOUT.nodeH / 2) * kk - e2.clientHeight / 2);
+						syncView();
 					});
 				}
 			
@@ -22557,6 +23317,34 @@ window.__ModuleLoader__.load({
 					h("div", { key: "tl", style: { ...S.tools, paddingRight: padRight }, "data-testid": "mm-tools" }, [
 						h("span", { key: "t0", style: { fontSize: "calc(11.5px * var(--dp-font,1))", fontWeight: 600, color: "var(--dp-ac2, #c9b0ff)" }, "data-testid": "mm-tree-title" },
 							"⑂ 分支树 · " + (rows[0] ? rows[0].title : "（无会话）")),
+			
+						/* ── 第 38 轮：**作用域指示 + 上一级**（用户需求 18）────────────────
+						 *  「只显示当前文件夹下面的这些对话的导图，除非我点击上一级才由上一级的显示」
+						 *
+						 *  🔴 必须**显式显示当前范围**：否则用户看到节点变少时，无法区分
+						 *     "作用域过滤生效了"与"我的数据丢了" —— 这正是用户上一轮投诉过的形态
+						 *     （"是不是数据没有清理"）。同理，滤掉几个也写出来，不做静默收缩。
+						 *  🔴 `disabled` 与 `opacity` 同时表达"到顶了"，并且 title 写明**为什么**不可用
+						 *     （纪律 19：能力不可用可以，但不能无声）。 */
+						h("span", {
+							key: "scope", style: S.muted, "data-testid": "mm-scope-chip",
+							"data-scope-up": String(scopeUp), "data-scoped": scopeSet ? "1" : "0",
+							"data-total": String(scopeStat.total), "data-dropped": String(scopedRes.dropped)
+						},
+							(scopeSet
+								? "📁 " + String((scopeNode && scopeNode.name) || "文件夹")
+									+ (scopeNode && LEVEL_LABEL[scopeNode.level] ? "（" + LEVEL_LABEL[scopeNode.level] + "）" : "")
+								: "🌐 全部作用域")
+							+ " · " + scopeStat.total + " 节点"
+							+ (scopedRes.dropped ? "（滤掉 " + scopedRes.dropped + "）" : "")),
+						h("button", {
+							key: "sup", style: { ...S.btn, opacity: canScopeUp ? 1 : 0.45 },
+							"data-testid": "mm-scope-up", disabled: !canScopeUp,
+							title: canScopeUp
+								? "上一级：显示更大范围（" + String((findInTree(hier, scopeNode.parentId) || {}).name || "上级") + "）"
+								: "已经是最高一级（或当前会话未挂到任何文件夹）",
+							onClick: () => { if (canScopeUp) { setScopeUp((v) => v + 1); say("作用域已上溯一级"); } }
+						}, "⬆ 上一级"),
 			
 						h("button", {
 							key: "fork", style: { ...S.btn, opacity: caps.fork ? 1 : 0.5 }, "data-testid": "mm-new-fork",
@@ -23128,6 +23916,8 @@ window.__ModuleLoader__.load({
 			__defaults["components/MindMap.js"] = MindMap;
 			
 			exports.MINDMAP_ID = MINDMAP_ID;
+			exports.mmWheelStats = mmWheelStats;
+			exports.mmCenterStats = mmCenterStats;
 			exports.MindMap = MindMap;
 		};
 
@@ -23453,13 +24243,91 @@ window.__ModuleLoader__.load({
 			exports.FloatDock = FloatDock;
 		};
 
+		// ── logic/nav-intent.js ──
+		__defs["logic/nav-intent.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：侧栏点击的**导航意图判定**（纯函数）
+			 * 引用：—
+			 * 上游：bridge/nav-hook.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/nav-intent.js — 侧栏点击的**导航意图判定**（纯函数）
+			 *
+			 * ── 为什么单独一个文件，而不是留在 `bridge/nav-hook.js` ────────────────
+			 *   `bridge/*` 是**带副作用**的一层（挂事件、读 DOM、碰 store）。判据留在那里，
+			 *   就只能在真机上验（要起应用、要真实鼠标）。而这条判据恰恰**最容易写错**
+			 *   （用户报的"点了没反应 / 该缩不缩"，历史上都是这一族）。
+			 *   ⇒ 提到 `logic/`（本项目纯函数层）：离线可跑、可植入缺陷校准，
+			 *     真机套件与离线闸门**用同一份实现**（不是"两套判据各测一半"）。
+			 *
+			 * ── 第 38 轮需求出处 ───────────────────────────────────────────────
+			 *   用户原话：「点击文件夹跳出总监；**非固定**情况下再点击**对话**总监缩回，
+			 *              点击文件夹，按照点击的文件夹**刷新**总监」（需求 11）
+			 *            「总监跳出来之后，我**再点击左侧的对话，这个总监页面不会变化**」（需求 10）
+			 */
+			
+			/** 意图取值（冻结，UI 与闸门都不许另写字面量） */
+			const NAV_INTENT = Object.freeze({
+				/** 固定态：**什么都不做**（作用域逐字不变，也不缩回） */
+				HOLD: "hold",
+				/** 点对话：缩回（`dialogCollapsed=true`，**作用域保留** —— 不是关闭） */
+				COLLAPSE: "collapse",
+				/** 点文件夹 / 项目：换作用域 + 展开 + 解除缩回 */
+				REFRESH: "refresh",
+				/** 弹窗本来就没开：什么都不做（**绝不误开** —— 保持既有"三级匹配、宁可不弹"的克制） */
+				NONE: "none"
+			});
+			
+			/** 会话级节点名（与 `store/hierarchy.js#LEVEL.SESSION` 同值；对拍见 `test-scope-tree.mjs`） */
+			const LEVEL_SESSION = "session";
+			
+			/**
+			 * 判定"点一下侧栏会怎样"
+			 *
+			 * 四态表（**穷尽**，不存在"没覆盖到"的组合）：
+			 * | pinned | hasMatch | level     | 结果                 |
+			 * |:------:|:--------:|:----------|:---------------------|
+			 * | true   | 任意     | 任意      | `hold`               |
+			 * | false  | 是       | session   | `collapse`           |
+			 * | false  | 是       | 非 session| `refresh`            |
+			 * | false  | 否       | —         | 弹窗开着 ⇒ `collapse`；否则 `none` |
+			 *
+			 * 🔴 为什么"无命中"也要缩回：用户原话是「点击**其他对话**的时候总监自动缩回」——
+			 *    "其他对话"未必都在层级树里（新建的、未同步的都可能不在）。若只在命中时缩回，
+			 *    用户会看到"有时缩有时不缩"，而且**无法预测**（他会以为坏了）。
+			 *    点在侧栏空隙也缩回属**可接受**：语义都是"离开了当前上下文"。
+			 *    ⚠️ 反向代价已评估：**不会误开**总监 —— 缩回是"关闭方向"，
+			 *       最坏结果只是多收一次（用户点一下文件夹即可回来）。
+			 *
+			 * @param {{pinned?:boolean, hasMatch?:boolean, level?:string, dialogOpen?:boolean}} o
+			 * @returns {"hold"|"collapse"|"refresh"|"none"}
+			 */
+			function navIntent(o = {}) {
+				if (Boolean(o.pinned)) return NAV_INTENT.HOLD;
+				if (o.hasMatch) {
+					return String(o.level || "") === LEVEL_SESSION ? NAV_INTENT.COLLAPSE : NAV_INTENT.REFRESH;
+				}
+				return o.dialogOpen ? NAV_INTENT.COLLAPSE : NAV_INTENT.NONE;
+			}
+			
+			/** 供离线闸门做"同值对拍"（零依赖：不 import store，靠断言守一致性） */
+			const __LEVEL_SESSION_FOR_TEST = LEVEL_SESSION;
+			
+			exports.NAV_INTENT = NAV_INTENT;
+			exports.navIntent = navIntent;
+			exports.__LEVEL_SESSION_FOR_TEST = __LEVEL_SESSION_FOR_TEST;
+		};
+
 		// ── bridge/nav-hook.js ──
 		__defs["bridge/nav-hook.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
 			 * 引用：要求 7/9
 			 * 上游：client-entry.js, mount.js
-			 * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js
+			 * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js, logic/nav-intent.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -23489,6 +24357,12 @@ window.__ModuleLoader__.load({
 			const { loadTree } = __m("store/hierarchy.js");
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { dshLog } = __m("util/debug.js");
+			/* 🔴 第 38 轮：判定"点侧栏会怎样"的**纯函数**搬到了 `logic/`。
+			 *    理由：留在本文件（bridge 层，带副作用）就只能靠真机验；而这条判据最容易写错
+			 *    （"该缩不缩 / 点了没反应"都是这一族）。搬走后**离线闸门与真机用同一份实现**。
+			 *    这里 `export` 一次，保持既有 `window.__dshNavApi.navIntent` 契约逐字不变。 */
+			const { navIntent } = __m("logic/nav-intent.js");
+			// export { navIntent };
 			
 			const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 			
@@ -23559,16 +24433,47 @@ window.__ModuleLoader__.load({
 						if (e.target && e.target.closest && e.target.closest("#dsh-director-dialog")) return;
 						if (e.clientX < 0 || e.clientX > (window.innerWidth || 1440)) return;
 			
+						/* ── 固定态：**判据同源**的短路 ────────────────────────────────
+						 *  用户原话「总监跳出来之后，我在点击左侧的对话，这个总监页面不会变化」。
+						 *  🔴 这里**不另写** if (pinned) return —— 那样会变成"两处判据"：
+						 *     一处 `navIntent`、一处短路，日后改一处必然漏另一处（纪律 126 同族）。
+						 *     改为**先问 navIntent，再由它决定**；`pinned` 为真时它返回 `hold`，
+						 *     于是连 `loadTree()` 都不必调用（省掉一次可能读盘的操作）。 */
+						const pinnedNow = typeof directorLayoutStore.isDialogPinned === "function"
+							&& directorLayoutStore.isDialogPinned();
+						if (navIntent({ pinned: pinnedNow }) === "hold") { navHookStats.held++; return; }
+			
 						const { text } = extractRowText(e.target);
-						if (!text) return;
-						const tree = await loadTree();
-						const hit = matchRowToNode(text, flattenTree(tree));
-						if (!hit) return; // ③ 无匹配 → 不打扰宿主导航
-						navHookStats.matched++;
-						navHookStats.lastMatch = { text, nodeId: hit.id, name: hit.name, level: hit.level };
-						directorLayoutStore.setActiveNode(hit.id);
-						directorLayoutStore.setDialogOpen(true);
-						dshLog("nav", "侧栏点击 → 打开总监：" + hit.name + "（" + hit.level + "）");
+						const openNow = typeof directorLayoutStore.isDialogOpen === "function"
+							&& directorLayoutStore.isDialogOpen();
+						/* 取不到行文本（点到侧栏空隙）⇒ 不读树，直接按"无命中"判 */
+						const tree = text ? await loadTree() : null;
+						const hit = text ? matchRowToNode(text, flattenTree(tree)) : null;
+			
+						const intent = navIntent({
+							pinned: pinnedNow, hasMatch: Boolean(hit),
+							level: hit ? hit.level : "", dialogOpen: openNow
+						});
+			
+						if (intent === "refresh") {
+							navHookStats.matched++;
+							navHookStats.lastMatch = { text, nodeId: hit.id, name: hit.name, level: hit.level, intent };
+							directorLayoutStore.setActiveNode(hit.id);
+							directorLayoutStore.setDialogOpen(true);
+							// 刷新作用域的同时**解除缩回** —— 点文件夹的语义是"我要看这个文件夹"
+							directorLayoutStore.setDialogCollapsed(false);
+							dshLog("nav", "侧栏点击 → 打开总监：" + hit.name + "（" + hit.level + "）");
+							return;
+						}
+			
+						if (intent === "collapse") {
+							navHookStats.collapsed++;
+							navHookStats.lastCollapse = { text, nodeId: hit ? hit.id : "", reason: hit ? "session" : "no-match" };
+							directorLayoutStore.setDialogCollapsed(true);
+							dshLog("nav", "侧栏点击对话 → 总监缩回" + (hit ? "（" + hit.name + "）" : "（无匹配行）"));
+							return;
+						}
+						// intent === "none"：弹窗本来就没开 ⇒ 什么都不做，**绝不误开**（保持原三级匹配策略的克制）
 					} catch (err) {
 						navHookStats.errors++;
 					}
@@ -23580,12 +24485,17 @@ window.__ModuleLoader__.load({
 			}
 			
 			/** 统计（供验证脚本断言"真的命中过"） */
-			const navHookStats = { matched: 0, errors: 0, lastMatch: null };
+			const navHookStats = { matched: 0, collapsed: 0, held: 0, errors: 0, lastMatch: null, lastCollapse: null };
 			
 			/** 安装全局契约 */
 			function installNavHookApi() {
 				if (!hasDom()) return null;
-				window.__dshNavApi = { extractRowText, flattenTree, matchRowToNode, installNavHook, navHookStats };
+				window.__dshNavApi = {
+					extractRowText, flattenTree, matchRowToNode, navIntent, installNavHook, navHookStats,
+					/* 第 38 轮：给真机套件一个**免猜测**的固定态读写口（不是新功能，是让闸门能设前提） */
+					setPinned: (v) => directorLayoutStore.setDialogPinned(v),
+					isPinned: () => Boolean(directorLayoutStore.isDialogPinned && directorLayoutStore.isDialogPinned())
+				};
 				return window.__dshNavApi;
 			}
 			
@@ -23595,6 +24505,7 @@ window.__ModuleLoader__.load({
 			exports.installNavHook = installNavHook;
 			exports.navHookStats = navHookStats;
 			exports.installNavHookApi = installNavHookApi;
+			exports.navIntent = navIntent;
 		};
 
 		// ── mount.js ──
@@ -30700,14 +31611,14 @@ window.__ModuleLoader__.load({
 			const KEY_FILES = Object.freeze([
 				// prettier-ignore
 				{ f: "src/components/DirectorPage.js", bytes: 193206, lines: 2834, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
+				{ f: "src/components/MindMap.js", bytes: 95913, lines: 1530, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
 				{ f: "src/components/DesignStudio.js", bytes: 94481, lines: 1407, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
-				{ f: "src/components/MindMap.js", bytes: 80342, lines: 1303, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
-				{ f: "src/components/DirectorDialog.js", bytes: 68061, lines: 980, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
+				{ f: "src/components/DirectorDialog.js", bytes: 86129, lines: 1253, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/scope-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
 				{ f: "src/store/design.js", bytes: 63926, lines: 1231, duty: "设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）", up: "client-entry.js, components/DesignStudio.js, mount.js", down: "store/design-schema.js, store/plugin-db.js" },
 				{ f: "src/client-entry.js", bytes: 57486, lines: 870, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
 				{ f: "src/bridge/host-director-column.js", bytes: 54930, lines: 1110, duty: "对话页**宿主左栏（总监列）**的几何接管 + 记忆面板时序", up: "client-entry.js", down: "store/layout.js, util/dom-style.js, bridge/host-panel-trim.js" },
 				{ f: "src/logic/branch-tree.js", bytes: 53261, lines: 986, duty: "分支血缘树（导图态的数据源）", up: "bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js" },
-				{ f: "src/store/layout.js", bytes: 43936, lines: 760, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
+				{ f: "src/store/layout.js", bytes: 50379, lines: 858, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
 				{ f: "src/logic/roles.js", bytes: 42326, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js", down: "（无）" },
 				{ f: "src/store/design-schema.js", bytes: 42225, lines: 770, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
 				{ f: "src/logic/split-dimensions.js", bytes: 39697, lines: 576, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, logic/attribution.js, logic/director-dispatch.js", down: "logic/attribution.js" },
@@ -30729,7 +31640,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/verify.js", bytes: 20226, lines: 433, duty: "双层验收与评审去偏", up: "client-entry.js, components/OrchestratorPanel.js", down: "（无）" },
 				{ f: "src/logic/director-collect.js", bytes: 20152, lines: 377, duty: "分支产出回收 + 总裁定（第 17 批）", up: "components/DirectorPage.js", down: "logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/session-dossier.js" },
 				{ f: "src/logic/flow.js", bytes: 20038, lines: 434, duty: "四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, components/NodeDetailPanel.js", down: "（无）" },
-				{ f: "src/store/hierarchy.js", bytes: 19776, lines: 485, duty: "多层级总监结构（对话级 / 文件夹级 / 全局级）", up: "bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js", down: "store/idb.js, store/plugin-db.js" },
+				{ f: "src/store/hierarchy.js", bytes: 19799, lines: 485, duty: "多层级总监结构（对话级 / 文件夹级 / 全局级）", up: "bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/MindMap.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js", down: "store/idb.js, store/plugin-db.js" },
 				{ f: "src/components/NodeDetailPanel.js", bytes: 19144, lines: 331, duty: "导图右侧「该框的对话」面板", up: "client-entry.js, components/MindMap.js", down: "logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, store/mindmap-schema.js" },
 				{ f: "src/store/agent-runs.js", bytes: 17554, lines: 413, duty: "总监执行状态（智能体 / 技能调用）唯一真相源", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "logic/catalog.js" },
 				{ f: "src/components/ModelSeat.js", bytes: 16861, lines: 336, duty: "标准模型选择席位（第 6 批需求 8）", up: "client-entry.js, components/DirectorPage.js", down: "config/model.js" },
@@ -30763,6 +31674,8 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/process.js", bytes: 9494, lines: 172, duty: "D1 总监对话核心处理函数", up: "client-entry.js", down: "config/model.js, store/persist.js, store/memory.js" },
 				{ f: "src/logic/sync.js", bytes: 9226, lines: 226, duty: "自动同步：让**每一个**对话 / 文件夹都拥有总监", up: "client-entry.js, components/DirectorHierarchy.js", down: "store/hierarchy.js, logic/discover.js, store/idb.js, util/debug.js, util/bus.js" },
 				{ f: "src/components/VersionPanel.js", bytes: 8678, lines: 147, duty: "版本历史面板（\"不同版本的选择\"）", up: "components/DesignStudio.js", down: "（无）" },
+				{ f: "src/logic/scope-tree.js", bytes: 8544, lines: 178, duty: "**作用域**（文件夹 / 项目 / 全局）与血缘树的交叉运算（纯函数）", up: "components/DirectorDialog.js, components/MindMap.js", down: "（无）" },
+				{ f: "src/bridge/nav-hook.js", bytes: 8529, lines: 176, duty: "「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）", up: "client-entry.js, mount.js", down: "bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js, logic/nav-intent.js" },
 				{ f: "src/logic/branch-focus.js", bytes: 8274, lines: 188, duty: "分支链路聚焦（纯函数）", up: "client-entry.js, components/MindMap.js", down: "（无）" },
 				{ f: "src/util/debug.js", bytes: 8173, lines: 158, duty: "D3 DSH 统一调试日志工具（**A3+D3 合并后的权威实现**）", up: "bridge/chat-bridge.js, bridge/nav-hook.js, bridge/split.js, client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorFlow.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/FloatDock.js, components/MindMap.js, logic/director-run.js, logic/summarize.js, logic/sync.js, mount.js, store/duty-config.js", down: "（无）" },
 				{ f: "src/store/docs.js", bytes: 7949, lines: 205, duty: "A5 总监文档 store（V8）", up: "client-entry.js", down: "store/idb.js" },
@@ -30772,7 +31685,6 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/duties.js", bytes: 6943, lines: 125, duty: "总监职责配置定义（03号文 §3.1「执行逻辑项」）", up: "components/DirectorWorkbench.js, logic/director-run.js, store/duty-config.js", down: "（无）" },
 				{ f: "src/logic/dim-branch.js", bytes: 6930, lines: 112, duty: "「维度 ↔ 分支节点」绑定的**唯一翻译点**（19 号文 N2 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "store/hierarchy.js" },
 				{ f: "src/config/model.js", bytes: 5879, lines: 127, duty: "C2 配置与本地模型", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/ModelSeat.js, logic/director-run.js, logic/process.js, logic/review.js, logic/summarize.js", down: "（无）" },
-				{ f: "src/bridge/nav-hook.js", bytes: 5825, lines: 134, duty: "「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）", up: "client-entry.js, mount.js", down: "bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js" },
 				{ f: "src/store/memory.js", bytes: 5811, lines: 120, duty: "A2 V9 记忆体系 CRUD", up: "client-entry.js, logic/process.js, store/branch.js", down: "store/idb.js" },
 				{ f: "src/store/duty-config.js", bytes: 5768, lines: 144, duty: "职责三级继承（03号文 §3.2「继承制」）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "store/hierarchy.js, logic/duties.js, util/debug.js" },
 				{ f: "src/dev/layout-probe.js", bytes: 5652, lines: 115, duty: "C1 V9-Design 布局探针", up: "client-entry.js", down: "（无）" },
@@ -30780,6 +31692,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/index.js", bytes: 5110, lines: 58, duty: "src/ 骨架的目录索引（导航用）", up: "（无：插件入口层）", down: "（无）" },
 				{ f: "src/logic/overview.js", bytes: 5011, lines: 123, duty: "总览弹窗的数据整形（纯函数）", up: "client-entry.js, components/OverviewDialog.js", down: "（无）" },
 				{ f: "src/store/docs-index-inject.js", bytes: 4956, lines: 112, duty: "A13 + A14 DSH_DOCS_INDEX 注入壳（**剥离改造版**）", up: "client-entry.js, components/DirectorPage.js, logic/ledger.js", down: "（无）" },
+				{ f: "src/logic/nav-intent.js", bytes: 4017, lines: 71, duty: "侧栏点击的**导航意图判定**（纯函数）", up: "bridge/nav-hook.js", down: "（无）" },
 				{ f: "src/bridge/spike-fs-probe.js", bytes: 3853, lines: 87, duty: "R3 风险验证（T5）", up: "（无：插件入口层）", down: "（无）" },
 				{ f: "src/util/no-drag.js", bytes: 3784, lines: 78, duty: "桌面壳「窗口拖拽带」穿透 —— 把可交互元素从 OS caption area 里救出来", up: "client-entry.js", down: "（无）" },
 				{ f: "src/util/dom-style.js", bytes: 3601, lines: 78, duty: "内联样式的单位归一（**唯一真相源**）", up: "bridge/host-composer-slot.js, bridge/host-director-column.js", down: "（无）" },
@@ -30788,11 +31701,11 @@ window.__ModuleLoader__.load({
 				{ f: "src/store/use-store.js", bytes: 3315, lines: 64, duty: "A10 `useDirectorStore` React hook 绑定", up: "client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js", down: "（无）" },
 				{ f: "src/util/log-collector.js", bytes: 2961, lines: 68, duty: "A3 专用 Log 收集器", up: "client-entry.js", down: "（无）" },
 				{ f: "src/store/messages.js", bytes: 2439, lines: 54, duty: "A1 总监消息 store（内存层）", up: "client-entry.js, store/create-store.js, store/persist.js", down: "（无）" },
-				{ f: "src/util/bus.js", bytes: 2054, lines: 49, duty: "层级数据变更事件总线（极简，零依赖）", up: "components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, logic/summarize.js, logic/sync.js, mount.js", down: "（无）" },
+				{ f: "src/util/bus.js", bytes: 2077, lines: 49, duty: "层级数据变更事件总线（极简，零依赖）", up: "components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/MindMap.js, logic/summarize.js, logic/sync.js, mount.js", down: "（无）" },
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 90, bytes: 1879664, lines: 34314 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 92, bytes: 1935057, lines: 35203 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -35633,5 +36546,5 @@ window.__ModuleLoader__.load({
 	}
 });
 
-/* dsh-build-stamp: c3add7304bf92e27 */
-(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="c3add7304bf92e27";}catch(e){}})();
+/* dsh-build-stamp: e5980d010d6d88f8 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="e5980d010d6d88f8";}catch(e){}})();
