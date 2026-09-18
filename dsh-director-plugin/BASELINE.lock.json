@@ -1,11 +1,11 @@
 {
-  "sealedAt": "2026-09-17T14:07:02.250Z",
+  "sealedAt": "2026-09-18T01:54:26.751Z",
   "version": "V16",
   "title": "总监驾驶舱 · 三页签 + 设计图工作室（落死基线）",
   "policy": "指纹只锁会决定运行行为的东西（src/build/package.json/cordis.patch.yml/产物/设计图）。scripts/*.mjs 与 docs/*.md 属叙述层，不纳入。",
   "command": "node scripts/baseline-check.mjs   # 校验；--write 重新封存",
-  "fileCount": 93,
-  "totalBytes": 3904037,
+  "fileCount": 95,
+  "totalBytes": 3983169,
   "files": {
     "src/bridge/chat-bridge.js": {
       "bytes": 33553,
@@ -60,8 +60,8 @@
       "md5": "c8800a7e4dfd6cd33a2453dd81a8ce7b"
     },
     "src/components/DirectorPage.js": {
-      "bytes": 192505,
-      "md5": "255eb9a5b5f06f7eced53ad7c8d48ee9"
+      "bytes": 193206,
+      "md5": "0553122bfd48acec25800221358bae47"
     },
     "src/components/DirectorWorkbench.js": {
       "bytes": 13819,
@@ -72,8 +72,8 @@
       "md5": "e5bbaf95921a8b0b7393b8d549c2454e"
     },
     "src/components/MindMap.js": {
-      "bytes": 73831,
-      "md5": "aa490c9d63c0aeb5ba7d93fcc473196e"
+      "bytes": 78978,
+      "md5": "a54044cc9afa4e190cfe0679970689d5"
     },
     "src/components/ModelSeat.js": {
       "bytes": 16861,
@@ -120,8 +120,8 @@
       "md5": "a99904be14b29d537a7ba03a592d7e73"
     },
     "src/logic/branch-tree.js": {
-      "bytes": 51821,
-      "md5": "390df4afbe534351b9598af54e0eb7b8"
+      "bytes": 53261,
+      "md5": "78f5e615ab3726b6e3beb07ffee28275"
     },
     "src/logic/catalog.js": {
       "bytes": 12992,
@@ -152,12 +152,12 @@
       "md5": "82f4bb3e29e97e2b0dea1078f58abe62"
     },
     "src/logic/director-dispatch.js": {
-      "bytes": 24445,
-      "md5": "e5fab8ff44723e51da437a8a967c7c4a"
+      "bytes": 24879,
+      "md5": "a3d4a8c04f2bdf875abd73b725b5c2e6"
     },
     "src/logic/director-reuse.js": {
-      "bytes": 18468,
-      "md5": "28c424703e9d7bf74ca162709fe15b08"
+      "bytes": 25342,
+      "md5": "403031c4c104e4aad17a3f7ea079e9d2"
     },
     "src/logic/director-run.js": {
       "bytes": 21909,
@@ -175,9 +175,13 @@
       "bytes": 20038,
       "md5": "835f25f5a2faf58b33009fbe9c45483a"
     },
+    "src/logic/grouping.js": {
+      "bytes": 10191,
+      "md5": "974201a899fb245aa95031aa95626623"
+    },
     "src/logic/key-files.js": {
-      "bytes": 25482,
-      "md5": "66458a15a254b42f03f8607089483d50"
+      "bytes": 25931,
+      "md5": "c8d340c799ccb0d88f10782e3a4dcad5"
     },
     "src/logic/ledger.js": {
       "bytes": 9720,
@@ -186,6 +190,10 @@
     "src/logic/lineage.js": {
       "bytes": 16773,
       "md5": "c8070a8cac1099cc4b75f81e6f98a08b"
+    },
+    "src/logic/mindmap-group.js": {
+      "bytes": 11771,
+      "md5": "f71e7e6cebda15d2dcd9588d485a593f"
     },
     "src/logic/mindmap-render.js": {
       "bytes": 7470,
@@ -296,8 +304,8 @@
       "md5": "3b11ebb7ccbc8fa4fc6343f41c038dfd"
     },
     "src/store/layout.js": {
-      "bytes": 42671,
-      "md5": "70ab93dbf0b02046d79bcba94ff94ba3"
+      "bytes": 43936,
+      "md5": "279f47ae598d555b98276e3c95a29c79"
     },
     "src/store/memory.js": {
       "bytes": 5811,
@@ -376,8 +384,8 @@
       "md5": "1a23d6fe791934c72e413924d144a01e"
     },
     "lib/client.js": {
-      "bytes": 2005289,
-      "md5": "142e798a2677ef4b7a6eb3aee49bbdfd"
+      "bytes": 2046149,
+      "md5": "e4adf41890630e0a6018b95d6c912acf"
     }
   }
 }

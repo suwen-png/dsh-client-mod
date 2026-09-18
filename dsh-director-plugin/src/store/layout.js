@@ -248,6 +248,12 @@ const DEFAULTS = Object.freeze({
 	 *    形如 { "<sessionId>": { x, y } }
 	 */
 	mmPos: {},
+	/* ── 第 37 轮新增：导图**按项目/维度分组**开关（用户：「按照项目分一个组，不然全堆在一起
+	 *    看看太麻烦了」）—— 默认 **true**：用户提这条就是因为"全堆在一起"看不下去，
+	 *    默认关掉等于让他每次进来都要手动开一次。
+	 *    ⚠️ 开着分组时节点的基础 y 由分区重排 ⇒ 拖过的框（`mmPos`）**仍按用户摆放显示**
+	 *    （用户意图优先，不做静默归位）；点「▦ 自动布局」才回到分区自动位。 */
+	mmGroup: true,
 	/* ── V17 P2：总监页 R2/R4 区域折叠偏好（跨会话持久化，首次默认全展开）──
 	 *   只新增字段，不动既有键（R5）。形如 { r2:false, r4:false }。
 	 *   🔴 2026-09-14 第 5 批：R6 已整块去除（用户：「R6 这一样都不要了」）⇒
@@ -341,6 +347,9 @@ export function createDirectorLayoutStore() {
 	// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
 	state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
 	state.railPinned = { ...DEFAULTS.railPinned, ...(state.railPinned || {}) };
+	/* 布尔字段的值域兜底：上面的通用合并**不校验类型**，而 `"false"` 是**真值**
+	 * ⇒ 被写坏成字符串的存量数据会让分组开关"打开着却读到开"，且**不报错**（纪律 19）。 */
+	if (typeof state.mmGroup !== "boolean") state.mmGroup = DEFAULTS.mmGroup;
 	/* 映射表类字段：**整体接管**（不是与 DEFAULTS 合并）—— 见 DEFAULTS 里的说明。
 	 * 这里只做"类型兜底"：老数据没有该键 / 被写坏成非对象 ⇒ 退回空表，不抛。 */
 	state.todoNotes = (state.todoNotes && typeof state.todoNotes === "object" && !Array.isArray(state.todoNotes))
@@ -488,6 +497,15 @@ export function createDirectorLayoutStore() {
 			state = { ...state, mmPos: {} };
 			notify();
 			return true;
+		},
+		/** 第 37 轮：导图分组开关（按项目 / 维度分区）。返回**写入后的实际值**，
+		 *  便于调用方与闸门回读校验（而不是假设写成功了 —— 纪律 4「写盘后回读」）。 */
+		setMmGroup: (on) => {
+			const next = Boolean(on);
+			if (state.mmGroup === next) return next;
+			state = { ...state, mmGroup: next };
+			notify();
+			return next;
 		},
 		/** V17 P2：切换/设置总监页区域折叠态（r2/r4/r6），并持久化
 		 *  🔴 白名单**保留 r6**：R6 已整块去除（第 5 批），UI 上再无入口，

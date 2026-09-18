@@ -28,18 +28,23 @@ import { PORT } from "./cdp-port.mjs";
 
 /* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
  *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */
-let targets;
-try {
-	targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-} catch (e) {
-	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
-	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
-	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
-	console.error("    powershell -File scripts/restart-harness.ps1");
-	console.error("    node scripts/verify-mindmap.mjs");
+/* 🔴 第 37 轮收敛到**唯一实现**（`_cdp-startup.mjs#waitCdpPage`）—— 与
+ *    `verify-director-logic` / `verify-novel-split` / `verify-v22` 同族。
+ *    旧写法（直接 fetch 一次 `/json/list`）踩的正是那段注释记载的坑：
+ *    `_run-with-harness` 报「CDP 就绪」只代表**端口**在应答（≈2.0s），
+ *    **page 目标更晚** ⇒ 一次性取会拿到空数组、报 `INVALID：CDP 无 page 目标`，
+ *    读起来像"Harness 没起来"（本轮实测复现：编排器说 CDP 就绪，本套件仍报 INVALID）。
+ *    ⇒ 有界等待，且**连不上**与**没有 page** 给不同文案（可分辨，纪律 58）。 */
+const { waitCdpPage } = await import("./_cdp-startup.mjs");
+const T = await waitCdpPage({ port: PORT, log: (s) => console.log(s) });
+if (!T.ok) {
+	console.error("IS_PASS: FALSE（INVALID：" + (T.reason || "连不上 CDP " + PORT) + "）");
+	console.error("  真因：Harness 未运行 / 端口被幽灵占用（端口顺移）/ 窗口尚未加载出 page 目标。");
+	console.error("  正确用法（启动与测试**同一条命令** —— 纪律 ㊵）：");
+	console.error("    RH_RESTART=1 node scripts/_run-with-harness.mjs node scripts/run-live.mjs --no-start verify-mindmap.mjs");
 	process.exit(2);
 }
-const page = targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
+const page = T.page || T.targets.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
 if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -1235,6 +1240,200 @@ if (ovFirst) {
 await clickSel('[data-testid="mm-ov-close"]');
 await sleep(380);
 t("C-M20g", "点 ✕ 关闭总览（不留残留）", await js(`!!document.querySelector('[data-testid="mm-ov"]')`) === false, null);
+
+/* ══════════ 13.7 项目 / 维度分区（R11 · 用户 2026-09-18）══════════
+ * 用户原话：「我觉得不同的一个分支……一个项目上，按照项目分组，不然全堆在一起看看太麻烦了。
+ *            按照项目分组，然后再按照分支同一个分支的一个维度分组。」
+ * 离线纯函数已由 `test-mindmap-group`（22/22）守住；本段证**界面用的是同一份结果**
+ * （纪律 79：写好了 ≠ 接进去了）。 */
+section("【13.7】按项目 / 维度分区");
+
+const grpBtn = await js(`(function(){
+  var b=document.querySelector('[data-testid="mm-group-toggle"]');
+  return b?{on:b.getAttribute('data-on'),text:(b.textContent||'').trim()}:null;})()`);
+t("C-M22a", "分区开关存在且默认**开**（`data-on=1`）—— 用户提这条就是因为「全堆在一起」，默认关掉等于每次都要手动开",
+	!!grpBtn && grpBtn.on === "1", grpBtn);
+
+const grpInfo = await js(`(function(){
+  var gs=Array.from(document.querySelectorAll('[data-testid="mm-group"]'));
+  var proj=gs.filter(function(g){return g.getAttribute('data-group-kind')==='project';});
+  var sum=proj.reduce(function(a,g){return a+Number(g.getAttribute('data-group-count')||0);},0);
+  return {n:gs.length,projN:proj.length,sum:sum,
+    nodes:document.querySelectorAll('[data-testid="mm-node"]').length,
+    labels:proj.map(function(g){return (g.getAttribute('data-group-label')||'')+'×'+g.getAttribute('data-group-count');}),
+    dimsAttr:proj.map(function(g){return g.getAttribute('data-group-dims');})};
+})()`);
+t("C-M22b", "🔴 出现**项目分区**（≥1 个）且每个都带名称与条数 —— 不是画了个空框",
+	grpInfo.projN >= 1 && grpInfo.labels.every((s) => s.indexOf("×") > 0), grpInfo);
+t("C-M22c", "🔴 **不丢行**：各分区条数之和 **== 画布可见节点数**（分区必须接住每一个框，兜底桶也算）",
+	grpInfo.sum === grpInfo.nodes && grpInfo.nodes > 0, { sum: grpInfo.sum, nodes: grpInfo.nodes, labels: grpInfo.labels });
+
+/* 🔴 分区框**不许吃指针事件** —— 吃了节点就"拖不动"，
+ *    而用户看到的是「有些框能拖有些不能」，完全不像分组的问题。
+ *    这是用户「所有导图的节点都要允许拖拽」的**机制前提**，必须显式守。 */
+const grpPE = await js(`(function(){
+  var gs=Array.from(document.querySelectorAll('[data-testid="mm-group"]'));
+  return {n:gs.length,none:gs.filter(function(g){return getComputedStyle(g).pointerEvents==='none';}).length};})()`);
+t("C-M22d", "🔴 **分区框不吃指针事件**（`pointer-events:none`）—— 「所有节点都能拖」的机制前提",
+	grpPE.n > 0 && grpPE.none === grpPE.n, grpPE);
+
+/* 父居中：真机复验（离线已证纯函数 ⇒ 这里证"界面渲染用的是同一份坐标"） */
+const centerInfo = await js(`(function(){
+  var ns=Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
+  var byId={};ns.forEach(function(n){byId[n.getAttribute('data-session-id')]=n;});
+  var pairs=[];
+  ns.forEach(function(n){
+    var pid=n.getAttribute('data-session-id');
+    var kids=ns.filter(function(k){return k.getAttribute('data-parent')===pid;});
+    if(kids.length) pairs.push({p:n,k:kids});
+  });
+  return {n:ns.length,pairs:pairs.length};
+})()`);
+if (centerInfo.pairs === 0) {
+	sk("C-M22e", "父居中（1 分叉 2/3/4 ⇒ 1 在中间）", "当前树上没有「父-子」配对（都是根），无法验证 —— 不是失败");
+} else {
+	/* 🔴 判据必须限定到**同一分区内**的父子对 —— 这是产品的真实口径，不是放宽：
+	 *    分区（按作品/维度）与血缘（宿主 fork 固化）是**两个正交维度**，
+	 *    父属于 A 项目、子属于 B 项目时，两者各被自己那一区平移 ⇒ **物理上不可能居中**。
+	 *    把它们算进"不居中"就是把一条**不可能满足**的要求当成缺陷（纪律 92：判据用产品自己的口径）。
+	 *    跨组对数如实打印，避免"排除了多少"变成看不见的暗数。 */
+	const cent = await js(`(function(){
+	  var ns=Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
+	  var bad=0,checked=0,crossPairs=0;
+	  ns.forEach(function(n){
+	    var pid=n.getAttribute('data-session-id');
+	    var g=n.getAttribute('data-group')||'';
+	    var all=ns.filter(function(k){return k.getAttribute('data-parent')===pid;});
+	    var kids=all.filter(function(k){return (k.getAttribute('data-group')||'')===g;});
+	    if(all.length && !kids.length) crossPairs++;
+	    if(!kids.length) return;
+	    var ys=kids.map(function(k){return parseFloat(k.style.top||'0');}).sort(function(a,b){return a-b;});
+	    var py=parseFloat(n.style.top||'0');
+	    checked++;
+	    if(Math.abs(py-(ys[0]+ys[ys.length-1])/2)>1.5) bad++;
+	  });
+	  return {checked:checked,bad:bad,crossPairs:crossPairs};})()`);
+	if (cent.checked === 0) {
+		sk("C-M22e", "父居中（同分区内的父子）",
+			"本次数据里没有任何「父子同属一个分区」的配对（跨分区 " + cent.crossPairs + " 对，物理上不可能居中）—— 不是失败");
+	} else {
+		t("C-M22e", "🔴 **父居中**在界面上真的生效（同分区内：有子的框 top = 首子与末子 top 的中点；容差 1.5px）",
+			cent.bad === 0, cent);
+	}
+}
+
+/* 关掉 → 分区消失且**节点数不变**（可逆、不丢行）；再打开 → 分区回来 */
+await clickSel('[data-testid="mm-group-toggle"]', "关分组");
+await sleep(300);
+const offInfo = await js(`(function(){
+  return {gs:document.querySelectorAll('[data-testid="mm-group"]').length,
+    nodes:document.querySelectorAll('[data-testid="mm-node"]').length};})()`);
+t("C-M22f", "关掉分区 ⇒ 分区框消失，而**节点数一个不少**（关视图 ≠ 丢数据）",
+	offInfo.gs === 0 && offInfo.nodes === grpInfo.nodes, { off: offInfo, on: grpInfo.nodes });
+await clickSel('[data-testid="mm-group-toggle"]', "开分组");
+await sleep(300);
+const onInfo = await js(`document.querySelectorAll('[data-testid="mm-group"]').length`);
+t("C-M22g", "再打开 ⇒ 分区回来（开关可逆，不留半开态）", onInfo >= 1, { gs: onInfo });
+
+/* ══════════ 13.8 所有节点可拖（R11 · 用户原话：「所有导图的节点都要允许拖拽」）══════════
+ * 🔴 本段是**新增的盲区补齐**：第三轮就做了拖拽，但真机套件**从来没有守过它**
+ *    （15 个段落里一段都没有）⇒ 它坏了不会有任何信号。用户这次明确点名"所有节点"，
+ *    所以判据不是"能拖"而是"**换一个不同层的节点也能拖**"。
+ * 🔴 真实鼠标对 `visibilityState` 极敏感（hidden 时 press/release 被整条吞掉，
+ *    读起来像"拖不动"= 产品坏了）⇒ 前提不成立时**跳过**，不判产品红（纪律 90/112）。 */
+section("【13.8】所有节点可拖（真实鼠标）");
+
+async function realDrag(sel, dx, dy) {
+	/* 🔴 落空要**先滚到位再拖**，不是"重试兜底"（与 `clickSel` 同范式）：
+	 *    本轮实测踩到 —— 被拖的节点 `y≈3401`，**在视口之外**，于是"按矩形中心打"
+	 *    算出一个视口外坐标，`elementsFromPoint` 命中的是别的元素 ⇒ 报 `drag=false`，
+	 *    读起来完全像"这个节点不能拖"，而真相是**我们没滚过去**。
+	 *    真人拖动前也会先滚到它 —— 所以这是补齐测试路径，不是掩盖问题。 */
+	let g = null;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		g = await js(`(function(){
+		  var e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;
+		  var r=e.getBoundingClientRect();
+		  var mx=Math.round(r.x+r.width/2),my=Math.round(r.y+r.height/2);
+		  var st=document.elementsFromPoint(mx,my),t=st[0]||null;
+		  return {mx:mx,my:my,top:Math.round(r.top),left:Math.round(r.left),
+		    ok:!!t&&(t===e||e.contains(t)||t.contains(e))};})()`);
+		if (!g) return { ok: false, why: "节点不在 DOM" };
+		if (g.ok) break;
+		if (attempt === 0) {
+			await js(`(function(){var e=document.querySelector(${JSON.stringify(sel)});`
+				+ `if(e&&e.scrollIntoView){try{e.scrollIntoView({block:"center",inline:"center"});}catch(_){e.scrollIntoView();}}return 1;})()`);
+			await sleep(360);
+			continue;
+		}
+		return { ok: false, why: "落点被遮挡或仍在视口外", top: g.top, left: g.left };
+	}
+	if (!g || !g.ok) return { ok: false, why: "落点自检未通过" };
+	emit("Input.dispatchMouseEvent", { type: "mouseMoved", x: g.mx, y: g.my });
+	emit("Input.dispatchMouseEvent", { type: "mousePressed", x: g.mx, y: g.my, button: "left", clickCount: 1, buttons: 1 });
+	await sleep(70);
+	/* 分步移动：真人拖动是连续的，一次跳到位可能被位移阈值判定成"点"而不是"拖" */
+	for (let i = 1; i <= 5; i++) {
+		emit("Input.dispatchMouseEvent", {
+			type: "mouseMoved", x: Math.round(g.mx + dx * i / 5), y: Math.round(g.my + dy * i / 5), buttons: 1
+		});
+		await sleep(45);
+	}
+	emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(g.mx + dx), y: Math.round(g.my + dy), button: "left", clickCount: 1, buttons: 0 });
+	await sleep(280);
+	return { ok: true, reached: [g.left, g.top] };
+}
+
+const pick2 = await js(`(function(){
+  var ns=Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
+  if(ns.length<2) return null;
+  var sorted=ns.slice().sort(function(a,b){
+    return Number(a.getAttribute('data-depth'))-Number(b.getAttribute('data-depth'));});
+  return {a:sorted[0].getAttribute('data-session-id'),
+          b:sorted[sorted.length-1].getAttribute('data-session-id'),
+          da:sorted[0].getAttribute('data-depth'),
+          db:sorted[sorted.length-1].getAttribute('data-depth'), n:ns.length};})()`);
+
+if (FOCUS_PRE.visibility !== "visible") {
+	sk("C-M23a", "真实鼠标拖动节点", "窗口 visibility=" + FOCUS_PRE.visibility + " ⇒ CDP 的 press/release 会被整条吞掉，拖拽结果不可信（纪律 90）");
+	sk("C-M23b", "另一个不同层的节点也能拖", "同上");
+} else if (!pick2 || pick2.a === pick2.b) {
+	sk("C-M23a", "真实鼠标拖动节点", "画布上不足 2 个节点，无法对比不同层（不是失败）");
+	sk("C-M23b", "另一个不同层的节点也能拖", "同上");
+} else {
+	/* 位移判据读**画布坐标**（`style.left/top`，未缩放）而不是屏幕 rect：
+	 * 屏幕位移 = 画布位移 × zoom，而 zoom 受前面「适应 / 缩放」段影响（可能已到 0.3）
+	 * ⇒ 用屏幕坐标会出现"拖了但没到阈值"的**假红**，与产品无关（纪律 102：判据偏保守侧）。 */
+	async function posOfNode(id) {
+		return await js(`(function(){var e=document.querySelector('[data-session-id=${JSON.stringify(id)}]');
+		  if(!e)return null;return {x:parseFloat(e.style.left||'NaN'),y:parseFloat(e.style.top||'NaN')};})()`);
+	}
+	const b1 = await posOfNode(pick2.a);
+	const drag1 = await realDrag('[data-session-id="' + pick2.a + '"]', 96, 64);
+	const a1 = await posOfNode(pick2.a);
+	const mv1 = await js(`(function(){var e=document.querySelector('[data-session-id=${JSON.stringify(pick2.a)}]');return e?e.getAttribute('data-moved'):null;})()`);
+	t("C-M23a", "🔴 真实鼠标拖动节点 ⇒ `data-moved=1` 且**画布坐标真的变了**（画布位移 > 40，与缩放无关）",
+		drag1.ok && mv1 === "1" && b1 && a1
+		&& (Math.abs(a1.x - b1.x) > 40 || Math.abs(a1.y - b1.y) > 40),
+		{ drag1, moved: mv1, from: b1, to: a1 });
+
+	const b2 = await posOfNode(pick2.b);
+	const drag2 = await realDrag('[data-session-id="' + pick2.b + '"]', -80, 60);
+	const a2 = await posOfNode(pick2.b);
+	const mv2 = await js(`(function(){var e=document.querySelector('[data-session-id=${JSON.stringify(pick2.b)}]');return e?e.getAttribute('data-moved'):null;})()`);
+	t("C-M23b", "🔴 **换一个不同层的节点也能拖**（depth " + pick2.da + " → " + pick2.db + "）—— 用户要的是「**所有**节点」，不是只有某一些",
+		drag2.ok && mv2 === "1" && b2 && a2
+		&& (Math.abs(a2.x - b2.x) > 40 || Math.abs(a2.y - b2.y) > 40),
+		{ drag2, moved: mv2, depth: [pick2.da, pick2.db], from: b2, to: a2 });
+
+	/* 收尾归位：`mmPos` 是**持久化**的，不归位会污染下一次运行
+	 *（⚠️ 已知取舍：跑本套件会清掉本机手工拖过的摆放 —— 测试机可接受） */
+	await clickSel('[data-testid="mm-auto-layout"]', "自动布局");
+	await sleep(320);
+	const left = await js(`document.querySelectorAll('[data-testid="mm-node"][data-moved="1"]').length`);
+	t("C-M23c", "收尾归位：点「自动布局」后 `data-moved` **归 0**（不留残留污染下次运行）",
+		left === 0, { movedLeft: left });
+}
 
 /* ══════════ 14. 关闭 ══════════ */
 section("【14】关闭");

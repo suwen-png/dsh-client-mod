@@ -2,7 +2,7 @@
  * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
  * 引用：—
  * 上游：client-entry.js, mount.js
- * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+ * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -74,6 +74,7 @@ import { readInset, watchInset } from "../util/safe-area.js";
 import { readConversation } from "../bridge/chat-bridge.js";
 import { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } from "../store/mindmap-schema.js";
 import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
+import { buildGroups, applyUserPos } from "../logic/mindmap-group.js";
 import { directorLayoutStore } from "../store/layout.js";
 import { personalizeStore } from "../store/personalize.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
@@ -386,14 +387,27 @@ export function MindMap({ open, onClose }) {
 	const posMap = dragPos
 		? { ...(lay.mmPos || {}), [dragPos.id]: { x: dragPos.x, y: dragPos.y } }
 		: (lay.mmPos || {});
-	const hasPos = Object.keys(posMap).length > 0;
-	const rows = hasPos
-		? baseRows.map((r) => {
-			const p = posMap[r.sessionId];
-			if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return r;
-			return { ...r, x: p.x, y: p.y, moved: true };
-		})
-		: baseRows;
+
+	/* ── 第 37 轮：**按项目 / 维度分区**（用户：「按照项目分一个组，不然全堆在一起看看太麻烦了」）
+	 * 🔴 位置必须在 `winRows` / `posOf` **之前**：分区是**坐标变换**，而节点渲染取 `r.x/r.y`、
+	 *    连线取 `posOf(e.from)` —— 两者必须同源，晚一步就会出现"框在这儿、线从别处出发"
+	 *    （纪律 78 单一真相源）。
+	 * 🔴 **分区必须建在 `baseRows`（自动布局）上，用户位置在分区之后才覆盖**：
+	 *    若先把用户位置并进 rows 再分区，分区平移 `shift = cursor - minY` 会把
+	 *    组内最小 y 那行（单成员分区时 = 唯一那行）平移回分区槽位 ⇒ "拖到哪都弹回去"；
+	 *    多成员分区里还会因 `minY` 变化而**带动整组**。
+	 *    真机读数（第 37 轮 `verify-flow` C8）：拖动目标 `{"l":48,"t":44} → {"l":548,"t":44}`
+	 *    —— X 位移 500 / **Y 位移 0**，看起来像"拖拽只响应横向"。
+	 *    完整机理见 `logic/mindmap-group.js` 的 `applyUserPos()` 头注。
+	 *    分区框也因此只按自动布局算 ⇒ 框整齐稳定；被拖出框外的节点**如实显示在框外**
+	 *    （回答"为什么它在框外面"：因为是你拖的），整体归位是「▦ 自动布局」的职责。 */
+	let rawMaxX = 0;
+	for (const rr of baseRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
+	const gres = lay.mmGroup
+		? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH })
+		: null;
+	const rows = applyUserPos(gres ? gres.rows : baseRows, posMap);
+	const sections = gres ? gres.sections : [];
 
 	/* ── 折叠计数：必须按**当前树里真的存在**的节点算 ────────────────────
 	 * 🔴 为什么不能直接用 `collapsed.size`（2026-09-12 真机定案）：
@@ -722,6 +736,24 @@ export function MindMap({ open, onClose }) {
 				}
 			}, "▦ 自动布局"),
 
+			/* ── 第 37 轮：**按项目 / 维度分区**开关（用户：「全堆在一起看看太麻烦了」）──
+			 * 默认开（见 `store/layout.js` 的 `mmGroup`）。切换时**如实告知拖动的影响**
+			 * ——拖过的框不会被静默归位，用户可能一时找不到它们（纪律 19：降级可以，无声不行）。 */
+			h("button", {
+				key: "gp", style: { ...S.btn, borderColor: lay.mmGroup ? "var(--dp-ac, #2f6feb)" : undefined },
+				"data-testid": "mm-group-toggle", "data-on": lay.mmGroup ? "1" : "0",
+				title: lay.mmGroup
+					? "当前：按项目 / 维度分区（点一下 = 整片平铺）"
+					: "当前：整片平铺（点一下 = 按项目 / 维度分区）",
+				onClick: () => {
+					const v = directorLayoutStore.setMmGroup(!lay.mmGroup);
+					if (!v) { say("已取消分区（整片平铺）"); return; }
+					say(movesCount
+						? ("已按项目 / 维度分区（" + movesCount + " 个拖过的框保持原位，点「▦ 自动布局」归位）")
+						: "已按项目 / 维度分区");
+				}
+			}, (lay.mmGroup ? "▤" : "▥") + " 分组"),
+
 			h("button", {
 				key: "fit", style: S.btn, "data-testid": "mm-fit", title: "把整棵可见血缘树缩进视野", onClick: () => doFit(false)
 			}, "🔍 适应"),
@@ -796,6 +828,45 @@ export function MindMap({ open, onClose }) {
 						key: "s", style: { ...S.stage, width: stageW, height: stageH, transform: "scale(" + k + ")" },
 						"data-testid": "mm-stage", "data-zoom": k
 					}, [
+						/* ── 第 37 轮：分区背景（按项目 → 维度）──────────────────────────
+						 * 🔴 两个硬约束，改这里前先看：
+						 *   ① **`pointerEvents:"none"`** —— 分区框是背景，一旦吃掉指针事件，
+						 *      节点就"拖不动了"，而用户看到的是「有些框能拖有些不能」，
+						 *      完全不像分组的问题（用户本轮明确要求"所有节点都要允许拖拽"）。
+						 *   ② **必须画在节点之前**（DOM 顺序决定叠放）—— 否则背景盖住节点文字。
+						 * 二级（维度）分区仅在**真有维度信息**时画：全是「未分流」时不画，
+						 * 因为那种二级分区不提供任何信息、只是噪声；此时项目框上
+						 * `data-group-dims="0"` 仍能让人分辨"没画"与"没算出来"（纪律 58）。 */
+						...sections.filter((s) => !s.hidden).map((s) => {
+							const isProj = s.kind === "project";
+							return h("div", {
+								key: "sec-" + s.kind + "-" + s.key,
+								style: {
+									position: "absolute", left: s.x, top: s.y, width: s.w, height: s.h,
+									boxSizing: "border-box", borderRadius: "var(--dp-radius, 8px)",
+									border: "1px " + (isProj ? "dashed" : "dotted") + " " + (isProj ? "var(--dp-line, rgba(255,255,255,.16))" : "rgba(255,255,255,.07)"),
+									background: isProj ? "rgba(255,255,255,.022)" : "transparent",
+									pointerEvents: "none"
+								},
+								"data-testid": "mm-group", "data-group-kind": s.kind,
+								"data-group-key": s.key, "data-group-label": s.label,
+								"data-group-count": s.count,
+								"data-group-dims": isProj ? s.dimsN : "",
+								"data-group-hidden": "0"
+							}, [
+								h("span", {
+									key: "l",
+									style: {
+										position: "absolute", left: 8, top: isProj ? 4 : 2,
+										fontSize: "calc(" + (isProj ? "11.5px" : "10.5px") + " * var(--dp-font,1))",
+										fontWeight: isProj ? 600 : 400,
+										color: isProj ? "var(--dp-t2, #c3c8ce)" : "var(--dp-t3, #6f757d)",
+										whiteSpace: "nowrap"
+									}
+								}, (isProj ? "▤ " : "") + s.label + " · " + s.count)
+							]);
+						}),
+
 						/* 连线：主干实线 / 分支虚线 / 选中链高亮（形状由个性化设定决定） */
 						h("svg", {
 							key: "svg", width: stageW, height: stageH,
@@ -831,6 +902,10 @@ export function MindMap({ open, onClose }) {
 								},
 								"data-testid": "mm-node", "data-session-id": r.sessionId, "data-state": st,
 								"data-kind": r.kind, "data-depth": r.depth, "data-state-source": r.stateSource,
+								/* 父会话（空串 = 根）。闸门据此校验**父居中**（有子的框，其 y = 首子与末子中点）
+								 * 与「所有节点都能拖」的覆盖面 —— 没有这个字段，真机只能跳过这两条。 */
+								"data-parent": r.parentSessionId || "",
+								"data-group": r.groupKey || "",
 								/* 第 16 批：分流维度与标题来源 —— 用户原话「思维导图应该能看出来」。
 								 * `data-split` 空串 = 这一支不是分流出来的（**空串不等于缺失**，
 								 * 闸门按 `[data-split]` 非空计数即可，不必另设布尔位）。 */

@@ -159,8 +159,20 @@ export function buildBranchTree(summaries, opts = {}) {
 	const rows = [];
 	const visited = new Set();
 	const cycles = [];
-	const walk = (s, depth, slotY) => {
-		if (visited.has(s.sessionId)) { cycles.push(s.sessionId); return; }
+	/* 🔴 父居中（tidy tree）—— 用户 2026-09-18 原话「比如根据 1 创建分支 2.3.4，
+	 *    那么 1 应该在中间」。这不是新需求，是**设计原定**：
+	 *    `docs/10-架构设计/思维导图驱动的多分支对话管理系统-统一方案文档.md` §2.3 原文
+	 *    「**布局算法：后序遍历，叶子分配纵向槽位，父节点居中于子节点**」——
+	 *    而旧实现用的是**全局递增 slot**（`walk(s, depth, slotY)`，父恒占最上一个槽位），
+	 *    即"父在最上方"而不是"父在子中间"（纪律 79 的又一形态：设计写了、代码没接）。
+	 *
+	 *    做法：后序遍历 —— 叶子按 DFS 序占槽位（保证互不重叠，视觉顺序与旧版一致），
+	 *    父节点 y = **首子与末子 y 的中点**（1 分叉 2/3/4 ⇒ 1 落在 2 与 4 的中间）。
+	 *    ⚠️ 环内节点 `walk` 回 `undefined` ⇒ 过滤掉，否则算术会污染成 NaN。
+	 */
+	let leafSlot = 0;
+	const walk = (s, depth) => {
+		if (visited.has(s.sessionId)) { cycles.push(s.sessionId); return undefined; }
 		visited.add(s.sessionId);
 		const childrenCount = (children.get(s.sessionId) || []).length;
 		const parentMissing = Boolean(s.parentSessionId) && !byId.has(s.parentSessionId);
@@ -171,7 +183,7 @@ export function buildBranchTree(summaries, opts = {}) {
 			title: s.title,
 			depth,
 			x: LAYOUT.x0 + depth * LAYOUT.dx,
-			y: LAYOUT.y0 + slotY * LAYOUT.dy,
+			y: 0,   // ← 占位；真实 y 在**后序**阶段回填（父居中，见 walk 头注）
 			w: LAYOUT.nodeW, h: LAYOUT.nodeH,
 			childrenCount,
 			// 宿主真值透传（undefined 表示"宿主没说"，不是 false）
@@ -185,13 +197,20 @@ export function buildBranchTree(summaries, opts = {}) {
 		row.stateSource = hasHostState(row) ? "host" : "inferred";
 		rows.push(row);
 		const kids = children.get(s.sessionId) || [];
-		let i = 0;
-		for (const kid of kids) { walk(kid, depth + 1, slotY + i + 1); i += 1; }
+		const kidYs = [];
+		for (const kid of kids) {
+			const ky = walk(kid, depth + 1);
+			// 环内子节点回 undefined ⇒ 不进 kidYs（否则中点算成 NaN，整棵子树坐标静默失效）
+			if (typeof ky === "number" && Number.isFinite(ky)) kidYs.push(ky);
+		}
+		row.y = kidYs.length
+			? (kidYs[0] + kidYs[kidYs.length - 1]) / 2             // 父 = 首子与末子中点 ⇒ 居中
+			: LAYOUT.y0 + (leafSlot++) * LAYOUT.dy;                 // 无子（或子全在环里）⇒ 自己占一个叶子槽位
+		return row.y;
 	};
-	let slot = 0;
-	for (const root of roots) { walk(root, 0, slot); slot += 1; }
+	for (const root of roots) walk(root, 0);
 	// 未访问到的（环内节点）也输出，避免"静默消失"
-	for (const s of list) if (!visited.has(s.sessionId)) { walk(s, 0, slot); slot += 1; }
+	for (const s of list) if (!visited.has(s.sessionId)) walk(s, 0);
 
 	// 边：父 → 子（仅当父在 byId 内）
 	const edges = rows

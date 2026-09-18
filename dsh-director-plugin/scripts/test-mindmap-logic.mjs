@@ -135,8 +135,16 @@ t("C1", "行数 = 输入会话数（含父不存在的孤儿，不丢行）", T.
 t("C2", "血缘可用（存在非 ws: 父边）", T.lineage === true, T.lineage);
 t("C3", "深度正确：root 0 / a 1 / a1 2", rowOf("root").depth === 0 && rowOf("a").depth === 1 && rowOf("a1").depth === 2,
 	[rowOf("root").depth, rowOf("a").depth, rowOf("a1").depth]);
-t("C4", "坐标随深度递增（x = x0 + depth*dx）",
-	rowOf("a1").x === LAYOUT.x0 + 2 * LAYOUT.dx && rowOf("a1").y !== rowOf("a").y, [rowOf("a1").x, rowOf("a1").y]);
+/* 🔴 第 37 轮就地更正：本断言原先还要求 `a1.y !== a.y`，那是**旧布局的实现细节**
+ *   （旧实现 y 随深度全局递增）。而设计稿《统一方案文档》§2.3 原定的是
+ *   「**后序遍历，叶子分配纵向槽位，父节点居中于子节点**」—— 父居中下
+ *   **单子链的父子必然同 y**（唯一子即中点），所以那句断言与设计直接冲突。
+ *   ⇒ 保留真正有效的那半（**x 随深度线性递增**），y 的语义交给新闸门
+ *     `test-mindmap-group`（MM-G1/G3/G4：父居中、单子链同 y、同深度不重叠）——
+ *     即"把断言精确限定到它该管的那一层"，而不是放宽或删掉它。 */
+t("C4", "坐标随深度递增（x = x0 + depth*dx；y 的语义见 test-mindmap-group 的 MM-G1/G3/G4）",
+	rowOf("a1").x === LAYOUT.x0 + 2 * LAYOUT.dx && rowOf("a1").x === rowOf("a").x + LAYOUT.dx,
+	[rowOf("a1").x, rowOf("a").x, rowOf("a").y, rowOf("a1").y]);
 t("C5", "节点分类：root=topic / a=branch / a1=leaf", rowOf("root").kind === "topic" && rowOf("a").kind === "branch" && rowOf("a1").kind === "leaf",
 	[rowOf("root").kind, rowOf("a").kind, rowOf("a1").kind]);
 t("C6", "无父（父不存在）⇒ 当根而不是丢弃", rowOf("orphan").depth === 0 && rowOf("orphan").kind === "topic", rowOf("orphan"));

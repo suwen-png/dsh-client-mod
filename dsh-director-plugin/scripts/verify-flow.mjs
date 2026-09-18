@@ -55,18 +55,22 @@ const WAIT = (ms) => new Promise((r) => setTimeout(r, ms));
  * 🔴 2026-09-14 补（纪律 17：用错目标必须自诊断，不许崩成"产品坏了"）：
  *    原先 Harness 未启动时这里直接抛 `TypeError: fetch failed` + ECONNREFUSED 崩栈，
  *    读起来像脚本/产品坏了，实际只是**目标没开**。⇒ 判 INVALID(2)，不判 FAIL(1)。 */
-let pages;
-try {
-	pages = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json();
-} catch (e) {
-	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
-	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
-	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
-	console.error("    powershell -File scripts/restart-harness.ps1");
-	console.error("    node scripts/verify-flow.mjs");
+/* 🔴 第 37 轮收敛到**唯一实现**（`_cdp-startup.mjs#waitCdpPage`），与 `verify-director-logic`
+ *    / `verify-novel-split` / `verify-v22` / `verify-mindmap` 同族。
+ *    旧写法（一次性 fetch）踩的坑：`_run-with-harness` 报「CDP 就绪」只代表**端口**在应答
+ *    （≈2.0s），**page 目标更晚** ⇒ 一次性取会拿到空数组、报 `INVALID：CDP 无 page 目标`，
+ *    读起来像"Harness 没起来"（本轮实测在 `verify-mindmap` 上原样复现过一次）。
+ *    ⇒ 有界等待；且"连不上"与"没有 page"给不同文案（可分辨，纪律 58）。 */
+const { waitCdpPage } = await import("./_cdp-startup.mjs");
+const T = await waitCdpPage({ port: PORT, log: (s) => console.log(s) });
+if (!T.ok) {
+	console.error("IS_PASS: FALSE（INVALID：" + (T.reason || "连不上 CDP " + PORT) + "）");
+	console.error("  真因：Harness 未运行 / 端口被幽灵占用（端口顺移）/ 窗口尚未加载出 page 目标。");
+	console.error("  正确用法（启动与测试**同一条命令** —— 纪律 ㊵）：");
+	console.error("    RH_RESTART=1 node scripts/_run-with-harness.mjs node scripts/run-live.mjs --no-start verify-flow.mjs");
 	process.exit(2);
 }
-const page = pages.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
+const page = T.page;
 if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -264,9 +268,23 @@ async function clickText(sel, text) {
  * ⚠️ 步与步之间留一点间隔：原来 8 个事件零间隔连发，比真人"拖"更硬，
  *    实测第 7 次真机跑就是在这条路径上把渲染进程顶死的。真人拖动每步都有几毫秒间隔。 */
 async function drag(sel, dx, dy) {
-	const r = await rectOf(sel);
+	let r = await rectOf(sel);
 	if (!r || r.zero) return { ok: false, why: "未找到或零尺寸 " + sel };
-	const hit = await hitAt(sel, r.cx, r.cy);
+	let hit = await hitAt(sel, r.cx, r.cy);
+	/* 🔴 第 37 轮：拖点不在视口内 / 被遮挡 ⇒ **先把目标滚到视野中央再拖**。
+	 *    旧写法直接按"矩形中心"发鼠标事件：目标在视口外时那个坐标也在视口外，
+	 *    事件等于打空 —— 而框在屏幕上看着好好的（只是要滚下去才能看到），
+	 *    于是表现成"这个框拖不动"= 产品坏了。
+	 *    真机实测：分区布局让画布明显变高（节点 y 可达 3401），C8 因此由绿转红。
+	 *    真人拖动前也会先滚过去 ⇒ 这是**补齐测试路径**，不是重试兜底（纪律 96）。 */
+	if (!hit || !hit.ok) {
+		await ev("(()=>{const e=document.querySelector(" + J(sel) + ");"
+			+ "if(e&&e.scrollIntoView){try{e.scrollIntoView({block:'center',inline:'center'});}catch(_){e.scrollIntoView();}}return 1;})()");
+		await WAIT(380);
+		r = await rectOf(sel);
+		if (!r || r.zero) return { ok: false, why: "滚到位后仍取不到矩形 " + sel };
+		hit = await hitAt(sel, r.cx, r.cy);
+	}
 	await mouse("mouseMoved", r.cx, r.cy, 0);
 	await WAIT(15);
 	await mouse("mousePressed", r.cx, r.cy, 1);
@@ -823,8 +841,18 @@ if (mmOpen) {
 	const gAfter = await geomOf(); const pathsB = await allPaths();
 	const dxReal = rBefore && rAfter ? Math.abs(rAfter.x - rBefore.x) : -1;
 	const dyReal = rBefore && rAfter ? Math.abs(rAfter.y - rBefore.y) : -1;
-	check("C8", "🔴 真实拖动框（150,96）⇒ 框真的移动了（位移 ≥ 90 / 60）",
-		dragId !== null && dv.ok && dxReal >= 90 && dyReal >= 60, "位移 " + dxReal + " / " + dyReal + " px" + (dv.occluded ? "（注意：拖点当时被遮挡）" : ""));
+	/* 🔴 第 37 轮就地更正：判据取**画布坐标**位移（`gBefore/gAfter` 的 l/t），不取屏幕位移。
+	 *    屏幕位移 = 画布位移 × zoom，而 zoom 由「适应屏幕」按**内容规模**算出来 ——
+	 *    本轮加了分区（内容显著变高）⇒ fit 后 zoom 变小 ⇒ 同样一次拖动在屏幕上位移变小，
+	 *    于是判据由绿转红，而产品行为**完全正确**。
+	 *    ⇒ 拿"会随布局规模漂移的量"当门，就是纪律 14/102 说的会过期的判据。
+	 *    画布位移与 zoom 无关：拖 150 屏幕像素 ⇒ 画布位移 = 150/zoom ≥ 150/1.4 ≈ 107。 */
+	const dxCanvas = (gBefore && gAfter) ? Math.abs(gAfter.l - gBefore.l) : -1;
+	const dyCanvas = (gBefore && gAfter) ? Math.abs(gAfter.t - gBefore.t) : -1;
+	check("C8", "🔴 真实拖动框（150,96）⇒ 框真的移动了（**画布**位移 ≥ 90 / 60，与缩放无关）",
+		dragId !== null && dv.ok && dxCanvas >= 90 && dyCanvas >= 60,
+		"画布位移 " + dxCanvas + " / " + dyCanvas + " px（屏幕 " + dxReal + " / " + dyReal + " px）"
+		+ (dv.occluded ? "（注意：拖点当时被遮挡）" : "") + (dv.why ? " ｜ " + dv.why : ""));
 	check("C9", "拖动后打上 data-moved 标记（位置来自插件侧持久化）", movedFlag === "1", String(movedFlag));
 
 	/* 🔴 C10 的判据必须**几何对账**，不能只比「第一条 path」——

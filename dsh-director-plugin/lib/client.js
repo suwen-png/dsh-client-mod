@@ -601,6 +601,12 @@ window.__ModuleLoader__.load({
 				 *    形如 { "<sessionId>": { x, y } }
 				 */
 				mmPos: {},
+				/* ── 第 37 轮新增：导图**按项目/维度分组**开关（用户：「按照项目分一个组，不然全堆在一起
+				 *    看看太麻烦了」）—— 默认 **true**：用户提这条就是因为"全堆在一起"看不下去，
+				 *    默认关掉等于让他每次进来都要手动开一次。
+				 *    ⚠️ 开着分组时节点的基础 y 由分区重排 ⇒ 拖过的框（`mmPos`）**仍按用户摆放显示**
+				 *    （用户意图优先，不做静默归位）；点「▦ 自动布局」才回到分区自动位。 */
+				mmGroup: true,
 				/* ── V17 P2：总监页 R2/R4 区域折叠偏好（跨会话持久化，首次默认全展开）──
 				 *   只新增字段，不动既有键（R5）。形如 { r2:false, r4:false }。
 				 *   🔴 2026-09-14 第 5 批：R6 已整块去除（用户：「R6 这一样都不要了」）⇒
@@ -694,6 +700,9 @@ window.__ModuleLoader__.load({
 				// 嵌套对象兜底：老数据可能缺某个折叠键（未来新增 r8 等），与 DEFAULTS 合并而非整体替换
 				state.sectionCollapsed = { ...DEFAULTS.sectionCollapsed, ...(state.sectionCollapsed || {}) };
 				state.railPinned = { ...DEFAULTS.railPinned, ...(state.railPinned || {}) };
+				/* 布尔字段的值域兜底：上面的通用合并**不校验类型**，而 `"false"` 是**真值**
+				 * ⇒ 被写坏成字符串的存量数据会让分组开关"打开着却读到开"，且**不报错**（纪律 19）。 */
+				if (typeof state.mmGroup !== "boolean") state.mmGroup = DEFAULTS.mmGroup;
 				/* 映射表类字段：**整体接管**（不是与 DEFAULTS 合并）—— 见 DEFAULTS 里的说明。
 				 * 这里只做"类型兜底"：老数据没有该键 / 被写坏成非对象 ⇒ 退回空表，不抛。 */
 				state.todoNotes = (state.todoNotes && typeof state.todoNotes === "object" && !Array.isArray(state.todoNotes))
@@ -841,6 +850,15 @@ window.__ModuleLoader__.load({
 						state = { ...state, mmPos: {} };
 						notify();
 						return true;
+					},
+					/** 第 37 轮：导图分组开关（按项目 / 维度分区）。返回**写入后的实际值**，
+					 *  便于调用方与闸门回读校验（而不是假设写成功了 —— 纪律 4「写盘后回读」）。 */
+					setMmGroup: (on) => {
+						const next = Boolean(on);
+						if (state.mmGroup === next) return next;
+						state = { ...state, mmGroup: next };
+						notify();
+						return next;
 					},
 					/** V17 P2：切换/设置总监页区域折叠态（r2/r4/r6），并持久化
 					 *  🔴 白名单**保留 r6**：R6 已整块去除（第 5 批），UI 上再无入口，
@@ -8271,8 +8289,20 @@ window.__ModuleLoader__.load({
 				const rows = [];
 				const visited = new Set();
 				const cycles = [];
-				const walk = (s, depth, slotY) => {
-					if (visited.has(s.sessionId)) { cycles.push(s.sessionId); return; }
+				/* 🔴 父居中（tidy tree）—— 用户 2026-09-18 原话「比如根据 1 创建分支 2.3.4，
+				 *    那么 1 应该在中间」。这不是新需求，是**设计原定**：
+				 *    `docs/10-架构设计/思维导图驱动的多分支对话管理系统-统一方案文档.md` §2.3 原文
+				 *    「**布局算法：后序遍历，叶子分配纵向槽位，父节点居中于子节点**」——
+				 *    而旧实现用的是**全局递增 slot**（`walk(s, depth, slotY)`，父恒占最上一个槽位），
+				 *    即"父在最上方"而不是"父在子中间"（纪律 79 的又一形态：设计写了、代码没接）。
+				 *
+				 *    做法：后序遍历 —— 叶子按 DFS 序占槽位（保证互不重叠，视觉顺序与旧版一致），
+				 *    父节点 y = **首子与末子 y 的中点**（1 分叉 2/3/4 ⇒ 1 落在 2 与 4 的中间）。
+				 *    ⚠️ 环内节点 `walk` 回 `undefined` ⇒ 过滤掉，否则算术会污染成 NaN。
+				 */
+				let leafSlot = 0;
+				const walk = (s, depth) => {
+					if (visited.has(s.sessionId)) { cycles.push(s.sessionId); return undefined; }
 					visited.add(s.sessionId);
 					const childrenCount = (children.get(s.sessionId) || []).length;
 					const parentMissing = Boolean(s.parentSessionId) && !byId.has(s.parentSessionId);
@@ -8283,7 +8313,7 @@ window.__ModuleLoader__.load({
 						title: s.title,
 						depth,
 						x: LAYOUT.x0 + depth * LAYOUT.dx,
-						y: LAYOUT.y0 + slotY * LAYOUT.dy,
+						y: 0,   // ← 占位；真实 y 在**后序**阶段回填（父居中，见 walk 头注）
 						w: LAYOUT.nodeW, h: LAYOUT.nodeH,
 						childrenCount,
 						// 宿主真值透传（undefined 表示"宿主没说"，不是 false）
@@ -8297,13 +8327,20 @@ window.__ModuleLoader__.load({
 					row.stateSource = hasHostState(row) ? "host" : "inferred";
 					rows.push(row);
 					const kids = children.get(s.sessionId) || [];
-					let i = 0;
-					for (const kid of kids) { walk(kid, depth + 1, slotY + i + 1); i += 1; }
+					const kidYs = [];
+					for (const kid of kids) {
+						const ky = walk(kid, depth + 1);
+						// 环内子节点回 undefined ⇒ 不进 kidYs（否则中点算成 NaN，整棵子树坐标静默失效）
+						if (typeof ky === "number" && Number.isFinite(ky)) kidYs.push(ky);
+					}
+					row.y = kidYs.length
+						? (kidYs[0] + kidYs[kidYs.length - 1]) / 2             // 父 = 首子与末子中点 ⇒ 居中
+						: LAYOUT.y0 + (leafSlot++) * LAYOUT.dy;                 // 无子（或子全在环里）⇒ 自己占一个叶子槽位
+					return row.y;
 				};
-				let slot = 0;
-				for (const root of roots) { walk(root, 0, slot); slot += 1; }
+				for (const root of roots) walk(root, 0);
 				// 未访问到的（环内节点）也输出，避免"静默消失"
-				for (const s of list) if (!visited.has(s.sessionId)) { walk(s, 0, slot); slot += 1; }
+				for (const s of list) if (!visited.has(s.sessionId)) walk(s, 0);
 			
 				// 边：父 → 子（仅当父在 byId 内）
 				const edges = rows
@@ -20976,6 +21013,456 @@ window.__ModuleLoader__.load({
 			exports.HOVER_BTN_STYLE = HOVER_BTN_STYLE;
 		};
 
+		// ── logic/grouping.js ──
+		__defs["logic/grouping.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：「作品 / 维度」归一化与归属（**唯一真相源**）
+			 * 引用：—
+			 * 上游：logic/director-reuse.js, logic/mindmap-group.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/grouping.js — 「作品 / 维度」归一化与归属（**唯一真相源**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  用户 2026-09-18 原话（第 37 轮）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  ①「思维导图按照项目分一个组，不然全堆在一起看看太麻烦了」
+			 *  ②「按照项目分组，然后再按照分支同一个分支的一个维度分组」
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么单独成一个文件（而不是写进 MindMap.js）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  同一套「归一化后 contains」判据有**两个消费者**：
+			 *    · `logic/director-reuse.js` 第三层 —— **派发前**判断「这条需求该复用哪个会话」
+			 *    · `logic/mindmap-group.js`  分组   —— **渲染时**判断「这个框属于哪个项目」
+			 *  两处各写一份 = 纪律 126「同一语义两个标识符 ⇒ 隐式断链」。
+			 *  典型症状：**复用认得出是同一项目、导图却把它分成两组**（或反之），
+			 *  而两边单独看都正常 —— 正是本轮要避免的"看起来像别的问题"。
+			 *  ⇒ 归一化 / 作品名提取 / 维度代码提取，只留这一份，两边都 import。
+			 *
+			 *  纯函数：无 DOM / 无 store / 无时钟 / 不 import 任何模块（Node 里可直接跑）。
+			 */
+			
+			/** 归一化后短于这个长度就不当分组键 —— 单字项目名（如「海」）会命中几乎所有标题，
+			 *  误配比不分组更糟（第 25 批已定性「投错维度比多建一条严重」）。与 `director-reuse` 同源。 */
+			const MIN_KEY_LEN = 2;
+			
+			/** 未归类：标题里推不出任何作品名。**不是错误**，是不丢行的兜底桶。 */
+			const UNGROUPED = " ungrouped";
+			
+			/** 未分流：既没有 `splitDim` 真值、标题里也没有维度代码。 */
+			const NODIM = " nodim";
+			
+			/** 兜底桶的显示名（界面上必须能看出"这是兜底"，不能与真项目名同形） */
+			const FALLBACK_LABEL = Object.freeze({
+				[UNGROUPED]: "未归类",
+				[NODIM]: "未分流"
+			});
+			
+			/**
+			 * 归一化：去书名号/引号/括号 + 去全部标点空白 + 小写。
+			 * 🔴 判据为什么是「归一化后 contains」而不是别的档位 —— 见 `director-reuse.js` 的头注：
+			 *    全等（措辞一变就不等）、前缀（自由文本无固定前缀）两种档位在真实数据上**恒 miss**。
+			 */
+			function normKey(t) {
+				return String(t == null ? "" : t)
+					.replace(/[《》「」『』【】\[\]()（）""'']/g, "")
+					.replace(/[\u3000\s·、,，.。!！?？:：;；~～\-_/\\|]+/g, "")
+					.toLowerCase();
+			}
+			
+			/** 书名号里的作品名（归一化后）。取不到回空串 —— 「没有这个事实」与「事实是空」必须可分。 */
+			function bookOf(t) {
+				const m = /《([^》]*)》/.exec(String(t == null ? "" : t));
+				return m ? normKey(m[1]) : "";
+			}
+			
+			/** 书名号里的作品名（**原文**，不归一化）—— 只用于**显示**。
+			 *  候选键是归一化后的（去标点、小写），直接拿去当分区标题会把用户原本的书写习惯抹掉
+			 *  （英文项目名会被强制小写）。能取到原文就用原文，取不到才退回键。 */
+			function bookRawOf(t) {
+				const m = /《([^》]*)》/.exec(String(t == null ? "" : t));
+				return m ? String(m[1]).trim() : "";
+			}
+			
+			/** 标题里的维度代码（`A1` / `a 10` 之类）。取不到回空串。 */
+			function dimCodeOf(t) {
+				const m = /(?:^|[^A-Za-z0-9])([Aa]\s?\d{1,2})(?![A-Za-z0-9])/.exec(String(t == null ? "" : t));
+				return m ? m[1].replace(/\s+/g, "").toLowerCase() : "";
+			}
+			
+			/** 由一批标题推出**作品名候选集**（数据驱动，不靠人工维护清单 —— 纪律 103「手工维护必然过期」）。
+			 *
+			 *  两个来源，缺一不可：
+			 *    ① **书名号作品名** —— 最强证据，且**位置无关**：真实数据里既有
+			 *       `《墟海》项目分线推进`（书名在头），也有 `小说项目《墟海》多维度协作`（书名在中）
+			 *       ⇒ 只看前缀的实现会漏掉后者。
+			 *    ② **两两真前缀**（公共前缀长度 ≥2 且**严格短于较短者**）—— 覆盖"从没写过书名号"的场景。
+			 *       ⚠️ 必须是**真**前缀：归一化后完全相同的两条（`墟海项目分线推进` 与
+			 *       `《墟海》项目分线推进` 去掉书名号后逐字相同）其公共前缀 = 全长，
+			 *       若收下就把**整条标题**当成了项目名 ⇒ 每条各成一"组"。
+			 *
+			 *  ③ **强候选不被收敛**：书名号是**明确的作品标识**，`《灵能修仙》` 与 `《灵能修仙传》`
+			 *     是**两本书**（RU-T3 负对照就在守这条）⇒ 书名候选之间互不归并。
+			 *     前缀候选则不同：它只是"书名 + 后缀"的产物（`墟海` → `墟海项目多`），
+			 *     若**包含**任一书名候选就丢弃 —— 不丢的话归属取"最长命中"会把
+			 *     `墟海项目多维度推进` 单独拆成一组（**首版实测踩到**：候选算成
+			 *     `["灵能修仙全流程","墟海世界观","墟海项目多"]`，18/26 条落空）。
+			 *
+			 *  ④ **一本都没写书名号时**（`books` 为空）：只保留**最短**的前缀候选。
+			 *     最长前缀会把同一项目按措辞拆散（`灵能修仙全流程` 只覆盖 2 条），
+			 *     最短前缀覆盖最广；代价是组名可能不够精确（`灵能` 而非 `灵能修仙`），
+			 *     **这是有意的取舍** —— 宁可组名粗一点，也不能把同一项目分成好几坨。
+			 *
+			 *  @param {Array<string>} titles
+			 *  @returns {Array<string>} 候选（长的在前 ⇒ 归属时先命中最具体的）
+			 */
+			function projectCandidates(titles) {
+				const list = (Array.isArray(titles) ? titles : []);
+				const norm = list.map(normKey).filter((t) => t.length >= MIN_KEY_LEN);
+				const books = new Set();
+				for (const raw of list) {
+					const b = bookOf(raw);
+					if (b.length >= MIN_KEY_LEN) books.add(b);
+				}
+				const prefix = new Set();
+				for (let i = 0; i < norm.length; i++) {
+					for (let j = i + 1; j < norm.length; j++) {
+						const a = norm[i], b = norm[j];
+						const lim = Math.min(a.length, b.length);
+						let n = 0;
+						while (n < lim && a.charAt(n) === b.charAt(n)) n += 1;
+						if (n >= MIN_KEY_LEN && n < lim) prefix.add(a.slice(0, n));
+					}
+				}
+				const strong = Array.from(books);
+				let out;
+				if (strong.length) {
+					out = strong.concat(Array.from(prefix).filter((k) => !strong.some((b) => k.indexOf(b) >= 0)));
+				} else {
+					const weak = Array.from(prefix);
+					const minLen = weak.reduce((m, k) => Math.min(m, k.length), Infinity);
+					out = weak.filter((k) => k.length === minLen);
+				}
+				return out.sort((a, b) => b.length - a.length);
+			}
+			
+			/**
+			 * 一条标题归到哪个作品（返回候选键；都不命中回 `UNGROUPED`）。
+			 * 命中多个候选时取**最长**的（最具体）。
+			 */
+			function projectKeyOf(title, candidates) {
+				const t = normKey(title);
+				if (!t) return UNGROUPED;
+				let hit = "";
+				for (const c of (Array.isArray(candidates) ? candidates : [])) {
+					if (c && t.indexOf(c) >= 0 && c.length > hit.length) hit = c;
+				}
+				return hit || UNGROUPED;
+			}
+			
+			/**
+			 * 一条会话行归到哪个维度。
+			 * 🔴 顺序不可反：`splitDim` 是**总监分流写入的真值**（唯一真相源），
+			 *    标题里的维度代码只是**兜底推断**。先真值后推断，且两条路都要能分辨
+			 *    （`dimSource` 告诉界面"这是真的还是猜的"，纪律 92「判据用产品自己的口径」）。
+			 */
+			function dimKeyOf(row) {
+				const d = row && row.splitDim;
+				if (d) return { key: normDim(d), source: "split" };
+				const c = dimCodeOf(row && row.title);
+				if (c) return { key: c, source: "title" };
+				return { key: NODIM, source: "none" };
+			}
+			
+			/** 维度键归一化（小写 + 去空格）。
+			 *  🔴 为什么两条来源必须用**同一个**归一化：`splitDim` 的真值形如 `A1`，
+			 *     而标题推断出来的是小写 `a1` —— 不统一就会出现**同一维度被分成两组**
+			 *     （一块 `A1`、一块 `a1`），而两边的判据单独看都对。这正是纪律 126 的形态。 */
+			function normDim(k) {
+				return String(k == null ? "" : k).replace(/\s+/g, "").toLowerCase();
+			}
+			
+			/** 维度键的**显示**形式（键恒小写，显示回 `A1` —— 别让用户看见内部编码） */
+			function dimLabel(key) {
+				const m = /^a(\d{1,2})$/.exec(String(key || ""));
+				return m ? "A" + m[1] : String(key == null ? "" : key);
+			}
+			
+			/** 维度代码的自然序（`A2` 必须排在 `A10` 前 —— 字符串序会反） */
+			function dimOrder(k) {
+				const m = /^a\s*(\d{1,2})$/.exec(String(k || ""));
+				return m ? Number(m[1]) : 999;
+			}
+			
+			/** 分组几何常量（与 `LAYOUT` 分开放：布局是血缘树的，分组是视图分区的） */
+			const GROUP_GEOM = Object.freeze({
+				pad: 18,        // 分区框内边距
+				head: 24,       // 项目标题带高度
+				subHead: 18,    // 维度标题带高度
+				dimGap: 20,     // 维度块之间
+				projectGap: 36, // 项目块之间
+				top: 20,        // 第一个项目块的起始 y
+				left: 16        // 分区框左边距
+			});
+			
+			exports.UNGROUPED = UNGROUPED;
+			exports.NODIM = NODIM;
+			exports.FALLBACK_LABEL = FALLBACK_LABEL;
+			exports.normKey = normKey;
+			exports.bookOf = bookOf;
+			exports.bookRawOf = bookRawOf;
+			exports.dimCodeOf = dimCodeOf;
+			exports.projectCandidates = projectCandidates;
+			exports.projectKeyOf = projectKeyOf;
+			exports.dimKeyOf = dimKeyOf;
+			exports.dimLabel = dimLabel;
+			exports.dimOrder = dimOrder;
+			exports.GROUP_GEOM = GROUP_GEOM;
+		};
+
+		// ── logic/mindmap-group.js ──
+		__defs["logic/mindmap-group.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：导图分组布局（纯函数：零 import、无 DOM / 无 store / 无时钟）
+			 * 引用：—
+			 * 上游：components/MindMap.js
+			 * 下游：logic/grouping.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/mindmap-group.js — 导图分组布局（纯函数：零 import、无 DOM / 无 store / 无时钟）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  它解决什么（用户 2026-09-18 原话）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  「按照项目分一个组，不然全堆在一起看看太麻烦了」
+			 *  「按照项目分组，然后再按照分支同一个分支的一个维度分组」
+			 *
+			 *  实测前提（第 37 轮普查，28 条会话）：`splitDim` 命中 **0** 条
+			 *  ⇒ 「按维度分组」在真实数据上必然落空 ⇒ 必须有**标题兜底**，且兜不住时
+			 *  如实落在「未分流」桶里（纪律 60「数出 0 ≠ 没有」：落空要看得见，不能悄悄不分组）。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  与 `buildBranchTree` 的分工（改这块前先看这条）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  `branch-tree.js` 算的是**血缘局部坐标**（x = 深度，y = 父居中后的槽位）。
+			 *  本文件做的是**后置的分区变换**：把行按 (作品, 维度) 归集，整组平移 y，
+			 *  并为每个分区产出可渲染的矩形（`sections`）。
+			 *
+			 *  🔴 为什么不做进 `buildBranchTree`：血缘是**宿主真值**（`parentSessionId` 由 fork 固化），
+			 *     分组是**视图组织**，两者正交 —— 一个血缘子树可以跨分区（父在 A 组、子在 B 组）。
+			 *     把分组揉进树构建会让「血缘错了」与「分组错了」再也分不开。
+			 *
+			 *  🔴 `sections` 在界面上**必须 `pointerEvents:none`** —— 分区框是背景，
+			 *     一旦吃掉指针事件，节点就"拖不动了"，而用户看到的是"有些框能拖有些不能"，
+			 *     完全不像分组的问题（正是本轮要保住的那条：**所有节点都要能拖**）。
+			 */
+			
+			const { projectCandidates, projectKeyOf, dimKeyOf, dimOrder, normKey, bookRawOf, dimLabel, UNGROUPED, NODIM, FALLBACK_LABEL, GROUP_GEOM } = __m("logic/grouping.js");
+			
+			/** 分区框最小宽度（节点很少时也不至于缩成一条线） */
+			const MIN_SECTION_W = 360;
+			
+			/**
+			 * 把**用户拖动过的位置**覆盖到分区结果上。
+			 *
+			 * 🔴 为什么它必须是一个**独立的后置步骤**，而不是"先把用户位置并进 rows 再分组"
+			 *    （第 37 轮真机抓到的真缺陷，症状与真因毫无表面关联）：
+			 *
+			 *    `buildGroups` 的分区平移是 `shift = cursor - minY`，其中 `minY` 取**组内最小 y**。
+			 *    若用户位置先并进去：
+			 *      · 分区内只有一行（或用户拖的正是 `minY` 那行）⇒ `shift = cursor - y`
+			 *        ⇒ `ny = cursor` —— **用户拖到哪，它就被拉回分区槽位**。
+			 *        真机读数：拖动目标 `{"l":48,"t":44} → {"l":548,"t":44}`，
+			 *        X 位移 500 / **Y 位移 0** —— 看上去像"拖拽只响应横向"，其实是 X 分组不动、
+			 *        Y 被分组吸收（X 与 Y 走的是两条完全不同的路径，所以只有一边坏）。
+			 *      · 分区内有多个成员 ⇒ 拖一行会改变 `minY` ⇒ `shift` 变化 ⇒
+			 *        **同组其他成员全部跟着平移**（拖一个动一群）。
+			 *
+			 *    ⇒ 顺序铁律：**先在"自动布局"上分区（`buildGroups(baseRows)`），再叠加用户位置**。
+			 *      这样分区平移量只由自动布局决定 ⇒ 拖动一行不会带动任何其他行，
+			 *      且单成员分区的拖动被完整保留。
+			 *
+			 *    分区框（`sections`）仍按自动布局算 ⇒ 框整齐、稳定；
+			 *    被拖出框外的节点就**如实显示在框外**（回答"为什么它在框外面"：因为是你拖的），
+			 *    归位交给「▦ 自动布局」。
+			 *
+			 * @param {Array} rows `buildGroups(...).rows` 或未分组时的行（**均须为自动布局行**）
+			 * @param {object} [posMap] `{ [sessionId]: { x, y } }` 用户位置（画布绝对坐标）
+			 * @returns {Array} 新数组；命中者带 `moved:true`，未命中者原样返回
+			 */
+			function applyUserPos(rows, posMap) {
+				const list = Array.isArray(rows) ? rows : [];
+				const map = posMap && typeof posMap === "object" ? posMap : null;
+				if (!map) return list;
+				return list.map((r) => {
+					const p = map[r && r.sessionId];
+					if (!p) return r;
+					const x = Number(p.x), y = Number(p.y);
+					if (!Number.isFinite(x) || !Number.isFinite(y)) return r;
+					return { ...r, x: Math.max(0, x), y: Math.max(0, y), moved: true };
+				});
+			}
+			
+			/** 自然序比较（同名时不依赖 Array.sort 的稳定性假设） */
+			function cmpKey(a, b) {
+				return a < b ? -1 : a > b ? 1 : 0;
+			}
+			
+			/**
+			 * 把血缘行按 (作品, 维度) 分区重排 y，并产出分区矩形。
+			 *
+			 * 契约：
+			 *  · **行数守恒** —— 出参 `rows` 与入参逐条同 sessionId、同条数（不丢不重，兜底桶必须接住）
+			 *  · 组内**相对 y 顺序保持**（分区只平移，不重排组内上下关系）
+			 *  · 出参行**不修改入参**（新对象），未变化的字段原样带过
+			 *
+			 * @param {Array} rows `buildBranchTree().rows`（可已叠加用户拖动位置）
+			 * @param {object} [opts]
+			 * @param {string[]} [opts.candidates] 预置候选集（不传则由本批标题推）
+			 * @param {number} [opts.nodeH] 节点高（不传则从行上取最普遍的 h，最后退回 72）
+			 * @param {number} [opts.width] 分区框宽
+			 * @returns {{rows:Array, sections:Array, stats:object, height:number}}
+			 */
+			function buildGroups(rows, opts = {}) {
+				const list = Array.isArray(rows) ? rows : [];
+				if (!list.length) {
+					return {
+						rows: list, sections: [], height: GROUP_GEOM.top,
+						stats: { total: 0, projN: 0, dimN: 0, ungrouped: 0, nodim: 0 }
+					};
+				}
+				const G = GROUP_GEOM;
+				const left = G.left;
+				const nodeH = Number.isFinite(opts.nodeH) ? opts.nodeH
+					: (Number.isFinite(list[0].h) ? list[0].h : 72);
+			
+				const cands = Array.isArray(opts.candidates) ? opts.candidates : projectCandidates(list.map((r) => r && r.title));
+			
+				/* ── 1. 归集：作品 → 维度 → 行 ───────────────────────────────── */
+				const projMap = new Map();
+				/** 显示名（key → 原文）：能拿到书名号原文就用原文，否则退回键 */
+				const labelMap = new Map();
+				for (const r of list) {
+					const pk = projectKeyOf(r && r.title, cands);
+					const dk = dimKeyOf(r);
+					if (pk !== UNGROUPED && !labelMap.has(pk)) {
+						const raw = bookRawOf(r && r.title);
+						if (raw && normKey(raw) === pk) labelMap.set(pk, raw);
+					}
+					let p = projMap.get(pk);
+					if (!p) { p = { key: pk, items: [], dims: new Map() }; projMap.set(pk, p); }
+					p.items.push(r);
+					let d = p.dims.get(dk.key);
+					if (!d) { d = { key: dk.key, source: dk.source, items: [] }; p.dims.set(dk.key, d); }
+					d.items.push(r);
+					if (dk.source === "split") d.source = "split";   // 真值优先：任一行为真即标真
+				}
+			
+				/* ── 2. 排序：作品按规模降序（兜底桶恒最后），维度按自然序 ─────── */
+				const projects = Array.from(projMap.values());
+				projects.sort((a, b) => {
+					if (a.key === UNGROUPED) return 1;
+					if (b.key === UNGROUPED) return -1;
+					return (b.items.length - a.items.length) || cmpKey(a.key, b.key);
+				});
+				for (const p of projects) {
+					p.dimList = Array.from(p.dims.values()).sort((a, b) => {
+						if (a.key === NODIM) return 1;
+						if (b.key === NODIM) return -1;
+						return (dimOrder(a.key) - dimOrder(b.key)) || cmpKey(a.key, b.key);
+					});
+				}
+			
+				/* ── 3. 分配 y：逐分区平移（组内只平移，不重排） ───────────────── */
+				const outRows = [];
+				const sections = [];
+				const newY = new Map();
+				/** 分区框宽：取整幅内容宽度，泳道视觉才整齐（不按组内最右节点收窄） */
+				const width = Math.max(Number(opts.width) || 0, MIN_SECTION_W);
+				let cursor = G.top;
+				let dimN = 0;
+			
+				for (const p of projects) {
+					const pTop = cursor;
+					cursor += G.head;
+					/* 只有一个「未分流」子维度 ⇒ 二级标题不提供任何信息，只画项目框（仍产 section 并标 hidden，
+					 * 让闸门能分辨"没画"与"没算出来" —— 纪律 58「没跑成 ≠ 失败」同族）。 */
+					const showSub = !(p.dimList.length === 1 && p.dimList[0].key === NODIM);
+					for (const d of p.dimList) {
+						const dTop = cursor;
+						if (showSub) cursor += G.subHead;
+						let minY = Infinity, maxY = -Infinity;
+						for (const r of d.items) {
+							const y = Number(r && r.y);
+							if (Number.isFinite(y)) { if (y < minY) minY = y; if (y > maxY) maxY = y; }
+						}
+						if (!Number.isFinite(minY)) { minY = 0; maxY = 0; }
+						const shift = cursor - minY;
+						for (const r of d.items) {
+							const y = Number(r && r.y);
+							const ny = Number.isFinite(y) ? Math.round((y + shift) * 10) / 10 : cursor;
+							newY.set(r.sessionId, ny);
+						}
+						cursor += (maxY - minY) + nodeH + G.dimGap;
+						const dH = (maxY - minY) + nodeH + G.subHead;   // 含维度标题带
+						if (showSub) {
+							dimN += 1;
+							sections.push({
+								kind: "dim", projectKey: p.key, key: d.key,
+								label: d.key === NODIM ? FALLBACK_LABEL[NODIM] : dimLabel(d.key),
+								source: d.source, count: d.items.length, hidden: false,
+								x: left, y: dTop, w: width, h: (maxY - minY) + nodeH + G.pad
+							});
+						} else {
+							sections.push({
+								kind: "dim", projectKey: p.key, key: d.key,
+								label: d.key === NODIM ? FALLBACK_LABEL[NODIM] : dimLabel(d.key),
+								source: d.source, count: d.items.length, hidden: true,
+								x: left, y: dTop, w: width, h: (maxY - minY) + nodeH + G.pad
+							});
+						}
+						void dH;
+					}
+					const pBottom = cursor - G.dimGap;
+					sections.push({
+						kind: "project", key: p.key,
+						label: p.key === UNGROUPED ? FALLBACK_LABEL[UNGROUPED] : (labelMap.get(p.key) || p.key),
+						/* `dimsN` = 本项目**实际画出**的二级分区数（0 = 该项目的维度信息为零，不画二级）
+						 * ⇒ 让"没画二级"与"算不出二级"在 DOM 上可分（纪律 58：没跑成 ≠ 失败）。 */
+						count: p.items.length, hidden: false, dimsN: showSub ? p.dimList.length : 0,
+						x: left - G.pad, y: pTop, w: width + G.pad * 2, h: Math.max(pBottom - pTop, nodeH) + G.pad
+					});
+					cursor += G.projectGap;
+				}
+			
+				/* 行顺序保持入参顺序（渲染序不变），只换 y */
+				for (const r of list) {
+					const ny = newY.get(r.sessionId);
+					outRows.push(Number.isFinite(ny) ? { ...r, y: ny, groupKey: projectKeyOf(r && r.title, cands) } : r);
+				}
+			
+				const ungrouped = projMap.has(UNGROUPED) ? projMap.get(UNGROUPED).items.length : 0;
+				let nodim = 0;
+				for (const p of projects) for (const d of p.dimList) if (d.key === NODIM) nodim += d.items.length;
+			
+				return {
+					rows: outRows,
+					sections,
+					height: Math.max(cursor - G.projectGap + G.pad, 0),
+					stats: { total: list.length, projN: projects.length, dimN, ungrouped, nodim }
+				};
+			}
+			
+			exports.applyUserPos = applyUserPos;
+			exports.buildGroups = buildGroups;
+		};
+
 		// ── components/NodeDetailPanel.js ──
 		__defs["components/NodeDetailPanel.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -21319,7 +21806,7 @@ window.__ModuleLoader__.load({
 			 * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
 			 * 引用：—
 			 * 上游：client-entry.js, mount.js
-			 * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+			 * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -21387,6 +21874,7 @@ window.__ModuleLoader__.load({
 			const { readConversation } = __m("bridge/chat-bridge.js");
 			const { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } = __m("store/mindmap-schema.js");
 			const { flowStore, lastFlowIdFor, flowOrigin, DIM } = __m("logic/flow.js");
+			const { buildGroups, applyUserPos } = __m("logic/mindmap-group.js");
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { personalizeStore } = __m("store/personalize.js");
 			const { NodeDetailPanel } = __m("components/NodeDetailPanel.js");
@@ -21699,14 +22187,27 @@ window.__ModuleLoader__.load({
 				const posMap = dragPos
 					? { ...(lay.mmPos || {}), [dragPos.id]: { x: dragPos.x, y: dragPos.y } }
 					: (lay.mmPos || {});
-				const hasPos = Object.keys(posMap).length > 0;
-				const rows = hasPos
-					? baseRows.map((r) => {
-						const p = posMap[r.sessionId];
-						if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return r;
-						return { ...r, x: p.x, y: p.y, moved: true };
-					})
-					: baseRows;
+			
+				/* ── 第 37 轮：**按项目 / 维度分区**（用户：「按照项目分一个组，不然全堆在一起看看太麻烦了」）
+				 * 🔴 位置必须在 `winRows` / `posOf` **之前**：分区是**坐标变换**，而节点渲染取 `r.x/r.y`、
+				 *    连线取 `posOf(e.from)` —— 两者必须同源，晚一步就会出现"框在这儿、线从别处出发"
+				 *    （纪律 78 单一真相源）。
+				 * 🔴 **分区必须建在 `baseRows`（自动布局）上，用户位置在分区之后才覆盖**：
+				 *    若先把用户位置并进 rows 再分区，分区平移 `shift = cursor - minY` 会把
+				 *    组内最小 y 那行（单成员分区时 = 唯一那行）平移回分区槽位 ⇒ "拖到哪都弹回去"；
+				 *    多成员分区里还会因 `minY` 变化而**带动整组**。
+				 *    真机读数（第 37 轮 `verify-flow` C8）：拖动目标 `{"l":48,"t":44} → {"l":548,"t":44}`
+				 *    —— X 位移 500 / **Y 位移 0**，看起来像"拖拽只响应横向"。
+				 *    完整机理见 `logic/mindmap-group.js` 的 `applyUserPos()` 头注。
+				 *    分区框也因此只按自动布局算 ⇒ 框整齐稳定；被拖出框外的节点**如实显示在框外**
+				 *    （回答"为什么它在框外面"：因为是你拖的），整体归位是「▦ 自动布局」的职责。 */
+				let rawMaxX = 0;
+				for (const rr of baseRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
+				const gres = lay.mmGroup
+					? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH })
+					: null;
+				const rows = applyUserPos(gres ? gres.rows : baseRows, posMap);
+				const sections = gres ? gres.sections : [];
 			
 				/* ── 折叠计数：必须按**当前树里真的存在**的节点算 ────────────────────
 				 * 🔴 为什么不能直接用 `collapsed.size`（2026-09-12 真机定案）：
@@ -22035,6 +22536,24 @@ window.__ModuleLoader__.load({
 							}
 						}, "▦ 自动布局"),
 			
+						/* ── 第 37 轮：**按项目 / 维度分区**开关（用户：「全堆在一起看看太麻烦了」）──
+						 * 默认开（见 `store/layout.js` 的 `mmGroup`）。切换时**如实告知拖动的影响**
+						 * ——拖过的框不会被静默归位，用户可能一时找不到它们（纪律 19：降级可以，无声不行）。 */
+						h("button", {
+							key: "gp", style: { ...S.btn, borderColor: lay.mmGroup ? "var(--dp-ac, #2f6feb)" : undefined },
+							"data-testid": "mm-group-toggle", "data-on": lay.mmGroup ? "1" : "0",
+							title: lay.mmGroup
+								? "当前：按项目 / 维度分区（点一下 = 整片平铺）"
+								: "当前：整片平铺（点一下 = 按项目 / 维度分区）",
+							onClick: () => {
+								const v = directorLayoutStore.setMmGroup(!lay.mmGroup);
+								if (!v) { say("已取消分区（整片平铺）"); return; }
+								say(movesCount
+									? ("已按项目 / 维度分区（" + movesCount + " 个拖过的框保持原位，点「▦ 自动布局」归位）")
+									: "已按项目 / 维度分区");
+							}
+						}, (lay.mmGroup ? "▤" : "▥") + " 分组"),
+			
 						h("button", {
 							key: "fit", style: S.btn, "data-testid": "mm-fit", title: "把整棵可见血缘树缩进视野", onClick: () => doFit(false)
 						}, "🔍 适应"),
@@ -22109,6 +22628,45 @@ window.__ModuleLoader__.load({
 									key: "s", style: { ...S.stage, width: stageW, height: stageH, transform: "scale(" + k + ")" },
 									"data-testid": "mm-stage", "data-zoom": k
 								}, [
+									/* ── 第 37 轮：分区背景（按项目 → 维度）──────────────────────────
+									 * 🔴 两个硬约束，改这里前先看：
+									 *   ① **`pointerEvents:"none"`** —— 分区框是背景，一旦吃掉指针事件，
+									 *      节点就"拖不动了"，而用户看到的是「有些框能拖有些不能」，
+									 *      完全不像分组的问题（用户本轮明确要求"所有节点都要允许拖拽"）。
+									 *   ② **必须画在节点之前**（DOM 顺序决定叠放）—— 否则背景盖住节点文字。
+									 * 二级（维度）分区仅在**真有维度信息**时画：全是「未分流」时不画，
+									 * 因为那种二级分区不提供任何信息、只是噪声；此时项目框上
+									 * `data-group-dims="0"` 仍能让人分辨"没画"与"没算出来"（纪律 58）。 */
+									...sections.filter((s) => !s.hidden).map((s) => {
+										const isProj = s.kind === "project";
+										return h("div", {
+											key: "sec-" + s.kind + "-" + s.key,
+											style: {
+												position: "absolute", left: s.x, top: s.y, width: s.w, height: s.h,
+												boxSizing: "border-box", borderRadius: "var(--dp-radius, 8px)",
+												border: "1px " + (isProj ? "dashed" : "dotted") + " " + (isProj ? "var(--dp-line, rgba(255,255,255,.16))" : "rgba(255,255,255,.07)"),
+												background: isProj ? "rgba(255,255,255,.022)" : "transparent",
+												pointerEvents: "none"
+											},
+											"data-testid": "mm-group", "data-group-kind": s.kind,
+											"data-group-key": s.key, "data-group-label": s.label,
+											"data-group-count": s.count,
+											"data-group-dims": isProj ? s.dimsN : "",
+											"data-group-hidden": "0"
+										}, [
+											h("span", {
+												key: "l",
+												style: {
+													position: "absolute", left: 8, top: isProj ? 4 : 2,
+													fontSize: "calc(" + (isProj ? "11.5px" : "10.5px") + " * var(--dp-font,1))",
+													fontWeight: isProj ? 600 : 400,
+													color: isProj ? "var(--dp-t2, #c3c8ce)" : "var(--dp-t3, #6f757d)",
+													whiteSpace: "nowrap"
+												}
+											}, (isProj ? "▤ " : "") + s.label + " · " + s.count)
+										]);
+									}),
+			
 									/* 连线：主干实线 / 分支虚线 / 选中链高亮（形状由个性化设定决定） */
 									h("svg", {
 										key: "svg", width: stageW, height: stageH,
@@ -22144,6 +22702,10 @@ window.__ModuleLoader__.load({
 											},
 											"data-testid": "mm-node", "data-session-id": r.sessionId, "data-state": st,
 											"data-kind": r.kind, "data-depth": r.depth, "data-state-source": r.stateSource,
+											/* 父会话（空串 = 根）。闸门据此校验**父居中**（有子的框，其 y = 首子与末子中点）
+											 * 与「所有节点都能拖」的覆盖面 —— 没有这个字段，真机只能跳过这两条。 */
+											"data-parent": r.parentSessionId || "",
+											"data-group": r.groupKey || "",
 											/* 第 16 批：分流维度与标题来源 —— 用户原话「思维导图应该能看出来」。
 											 * `data-split` 空串 = 这一支不是分流出来的（**空串不等于缺失**，
 											 * 闸门按 `[data-split]` 非空计数即可，不必另设布尔位）。 */
@@ -23265,7 +23827,7 @@ window.__ModuleLoader__.load({
 			 * 职责：「先考虑目前存在的会话」（第 19 批 · **纯函数**）
 			 * 引用：—
 			 * 上游：logic/director-dispatch.js
-			 * 下游：（无）
+			 * 下游：logic/grouping.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -23313,6 +23875,13 @@ window.__ModuleLoader__.load({
 			 *   ⇒ 可离线单测，也是 UI 与闸门共用的**同一份判据**。
 			 */
 			
+			/* 🔴 第 37 轮：归一化 / 书名号 / 维度代码收敛到**唯一真相源** `logic/grouping.js`。
+			 *   导图分组要用**同一套**判据（判断"这个框属于哪个项目"），两处各写一份
+			 *   ⇒ 纪律 126「同一语义两个标识符 ⇒ 隐式断链」，症状是
+			 *   **"复用认得出是同一项目、导图却把它分成两组"**（或反之），而两边单独看都正常。
+			 *   `grouping.js` 零依赖零副作用，本文件仍是纯函数（离线可直跑）。 */
+			const { normKey, bookOf, dimCodeOf } = __m("logic/grouping.js");
+			
 			/** 分组分隔符：不可见，避免 name 含 `|` 等字符时跨组误配 */
 			const SEP = "\u0000";
 			
@@ -23359,12 +23928,9 @@ window.__ModuleLoader__.load({
 			 *
 			 * 纯函数：无 DOM / 无 store / 无时钟。
 			 */
-			function normProject(t) {
-				return String(t == null ? "" : t)
-					.replace(/[《》「」『』【】\[\]()（）""'']/g, "")
-					.replace(/[\u3000\s·、,，.。!！?？:：;；~～\-_/\\|]+/g, "")
-					.toLowerCase();
-			}
+			/* 判据实现见 `logic/grouping.js` 的 `normKey`（唯一真相源）。
+			 * ⚠️ 长度下限 **2** 也在那边（单字项目名会命中几乎所有标题 ⇒ 误配比新建更糟）。 */
+			const normProject = normKey;
 			
 			/**
 			 * 第三层的**两道安全闸**（🔴 缺一不可，否则会撞翻既有负对照 RU-T2 / RU-T3）
@@ -23381,14 +23947,7 @@ window.__ModuleLoader__.load({
 			 * 时不含相反证据 ⇒ 允许按项目名复用。这正是用户要的"同一项目别再建新的"，
 			 * 同时不牺牲"不许投错"这条更硬的原则。
 			 */
-			function bookOf(t) {
-				const m = /《([^》]*)》/.exec(String(t == null ? "" : t));
-				return m ? normProject(m[1]) : "";
-			}
-			function dimCodeOf(t) {
-				const m = /(?:^|[^A-Za-z0-9])([Aa]\s?\d{1,2})(?![A-Za-z0-9])/.exec(String(t == null ? "" : t));
-				return m ? m[1].replace(/\s+/g, "").toLowerCase() : "";
-			}
+			/* `bookOf` / `dimCodeOf` 同上 —— 从 `logic/grouping.js` 引入，不在此处重复实现。 */
 			
 			/**
 			 * 派发前的**复用决策**（纯函数）。
@@ -30094,13 +30653,13 @@ window.__ModuleLoader__.load({
 				// prettier-ignore
 				{ f: "src/components/DirectorPage.js", bytes: 193206, lines: 2834, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
 				{ f: "src/components/DesignStudio.js", bytes: 94481, lines: 1407, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
-				{ f: "src/components/MindMap.js", bytes: 73831, lines: 1206, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
+				{ f: "src/components/MindMap.js", bytes: 78978, lines: 1281, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
 				{ f: "src/components/DirectorDialog.js", bytes: 68061, lines: 980, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
 				{ f: "src/store/design.js", bytes: 63926, lines: 1231, duty: "设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）", up: "client-entry.js, components/DesignStudio.js, mount.js", down: "store/design-schema.js, store/plugin-db.js" },
 				{ f: "src/client-entry.js", bytes: 57486, lines: 870, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
 				{ f: "src/bridge/host-director-column.js", bytes: 54930, lines: 1110, duty: "对话页**宿主左栏（总监列）**的几何接管 + 记忆面板时序", up: "client-entry.js", down: "store/layout.js, util/dom-style.js, bridge/host-panel-trim.js" },
-				{ f: "src/logic/branch-tree.js", bytes: 51821, lines: 967, duty: "分支血缘树（导图态的数据源）", up: "bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js" },
-				{ f: "src/store/layout.js", bytes: 42671, lines: 742, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
+				{ f: "src/logic/branch-tree.js", bytes: 53261, lines: 986, duty: "分支血缘树（导图态的数据源）", up: "bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js", down: "logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js" },
+				{ f: "src/store/layout.js", bytes: 43936, lines: 760, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
 				{ f: "src/logic/roles.js", bytes: 42326, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js", down: "（无）" },
 				{ f: "src/store/design-schema.js", bytes: 42225, lines: 770, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
 				{ f: "src/logic/split-dimensions.js", bytes: 39674, lines: 576, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorDialog.js, components/DirectorPage.js, logic/attribution.js, logic/director-dispatch.js", down: "logic/attribution.js" },
@@ -30111,7 +30670,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/store/mindmap-schema.js", bytes: 28381, lines: 435, duty: "思维导图元素库（导图态的「原子词汇表」，纯数据）", up: "components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js", down: "（无）" },
 				{ f: "src/logic/routing.js", bytes: 27973, lines: 498, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
 				{ f: "src/store/plugin-db.js", bytes: 25406, lines: 497, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
-				{ f: "src/logic/director-reuse.js", bytes: 24946, lines: 413, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "（无）" },
+				{ f: "src/logic/director-reuse.js", bytes: 25342, lines: 410, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "logic/grouping.js" },
 				{ f: "src/logic/director-dispatch.js", bytes: 24879, lines: 385, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 				{ f: "src/logic/attribution.js", bytes: 22786, lines: 371, duty: "归属判定（19 号文 §3.3 / N1 · **纯函数**）", up: "components/DirectorPage.js, logic/split-dimensions.js", down: "logic/split-dimensions.js" },
 				{ f: "src/logic/director-run.js", bytes: 21909, lines: 454, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js" },
@@ -30142,9 +30701,11 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/orchestrate.js", bytes: 13606, lines: 285, duty: "总监统筹闭环（纯函数）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js", down: "（无）" },
 				{ f: "src/logic/catalog.js", bytes: 12992, lines: 237, duty: "技能与智能体的**指向表**（单一真相源）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, store/agent-runs.js", down: "（无）" },
 				{ f: "src/store/branch.js", bytes: 12531, lines: 270, duty: "A4 分支创建与记忆面板交互", up: "client-entry.js", down: "store/idb.js, store/memory.js" },
+				{ f: "src/logic/mindmap-group.js", bytes: 11771, lines: 236, duty: "导图分组布局（纯函数：零 import、无 DOM / 无 store / 无时钟）", up: "components/MindMap.js", down: "logic/grouping.js" },
 				{ f: "src/components/OverviewDialog.js", bytes: 11475, lines: 216, duty: "总览弹窗（R10）", up: "components/MindMap.js", down: "logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/plugin-db.js" },
 				{ f: "src/logic/summarize.js", bytes: 10582, lines: 227, duty: "分层总结 + 分梯度调用", up: "client-entry.js, components/DirectorHierarchy.js", down: "config/model.js, store/hierarchy.js, util/debug.js, util/bus.js" },
 				{ f: "src/store/dispatch-log.js", bytes: 10340, lines: 220, duty: "本次「总监派发」台账（第 17 批）", up: "components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
+				{ f: "src/logic/grouping.js", bytes: 10191, lines: 194, duty: "「作品 / 维度」归一化与归属（**唯一真相源**）", up: "logic/director-reuse.js, logic/mindmap-group.js", down: "（无）" },
 				{ f: "src/components/DirectorFlow.js", bytes: 9873, lines: 181, duty: "E1 小窗总监对话流组件", up: "client-entry.js", down: "store/create-store.js, store/use-store.js, util/debug.js" },
 				{ f: "src/logic/ledger.js", bytes: 9720, lines: 210, duty: "台账 / 文档树取数", up: "components/DirectorPage.js", down: "store/docs-index-inject.js" },
 				{ f: "src/store/idb.js", bytes: 9626, lines: 218, duty: "IndexedDB 持久化层（主要机制）", up: "logic/discover.js, logic/sync.js, store/branch.js, store/docs.js, store/hierarchy.js, store/memory.js, store/persist.js", down: "（无）" },
@@ -30183,7 +30744,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 88, bytes: 1845887, lines: 33727 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 90, bytes: 1876097, lines: 34266 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -35024,5 +35585,5 @@ window.__ModuleLoader__.load({
 	}
 });
 
-/* dsh-build-stamp: a21e0464632bbff5 */
-(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="a21e0464632bbff5";}catch(e){}})();
+/* dsh-build-stamp: 17920f730bb815b1 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="17920f730bb815b1";}catch(e){}})();

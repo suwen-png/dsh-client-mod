@@ -2,7 +2,7 @@
  * 职责：「先考虑目前存在的会话」（第 19 批 · **纯函数**）
  * 引用：—
  * 上游：logic/director-dispatch.js
- * 下游：（无）
+ * 下游：logic/grouping.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -50,6 +50,13 @@
  *   ⇒ 可离线单测，也是 UI 与闸门共用的**同一份判据**。
  */
 
+/* 🔴 第 37 轮：归一化 / 书名号 / 维度代码收敛到**唯一真相源** `logic/grouping.js`。
+ *   导图分组要用**同一套**判据（判断"这个框属于哪个项目"），两处各写一份
+ *   ⇒ 纪律 126「同一语义两个标识符 ⇒ 隐式断链」，症状是
+ *   **"复用认得出是同一项目、导图却把它分成两组"**（或反之），而两边单独看都正常。
+ *   `grouping.js` 零依赖零副作用，本文件仍是纯函数（离线可直跑）。 */
+import { normKey, bookOf, dimCodeOf } from "./grouping.js";
+
 /** 分组分隔符：不可见，避免 name 含 `|` 等字符时跨组误配 */
 const SEP = "\u0000";
 
@@ -96,12 +103,9 @@ function keyOf(name, dim) {
  *
  * 纯函数：无 DOM / 无 store / 无时钟。
  */
-function normProject(t) {
-	return String(t == null ? "" : t)
-		.replace(/[《》「」『』【】\[\]()（）""'']/g, "")
-		.replace(/[\u3000\s·、,，.。!！?？:：;；~～\-_/\\|]+/g, "")
-		.toLowerCase();
-}
+/* 判据实现见 `logic/grouping.js` 的 `normKey`（唯一真相源）。
+ * ⚠️ 长度下限 **2** 也在那边（单字项目名会命中几乎所有标题 ⇒ 误配比新建更糟）。 */
+const normProject = normKey;
 
 /**
  * 第三层的**两道安全闸**（🔴 缺一不可，否则会撞翻既有负对照 RU-T2 / RU-T3）
@@ -118,14 +122,7 @@ function normProject(t) {
  * 时不含相反证据 ⇒ 允许按项目名复用。这正是用户要的"同一项目别再建新的"，
  * 同时不牺牲"不许投错"这条更硬的原则。
  */
-function bookOf(t) {
-	const m = /《([^》]*)》/.exec(String(t == null ? "" : t));
-	return m ? normProject(m[1]) : "";
-}
-function dimCodeOf(t) {
-	const m = /(?:^|[^A-Za-z0-9])([Aa]\s?\d{1,2})(?![A-Za-z0-9])/.exec(String(t == null ? "" : t));
-	return m ? m[1].replace(/\s+/g, "").toLowerCase() : "";
-}
+/* `bookOf` / `dimCodeOf` 同上 —— 从 `logic/grouping.js` 引入，不在此处重复实现。 */
 
 /**
  * 派发前的**复用决策**（纯函数）。
