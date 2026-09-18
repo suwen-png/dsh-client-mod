@@ -2,7 +2,7 @@
  * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
  * 引用：—
  * 上游：client-entry.js, mount.js
- * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+ * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -75,6 +75,7 @@ import { readConversation } from "../bridge/chat-bridge.js";
 import { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } from "../store/mindmap-schema.js";
 import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
 import { buildGroups, applyUserPos } from "../logic/mindmap-group.js";
+import { SPLIT_DIMENSIONS, GENERIC_DIMENSIONS } from "../logic/split-dimensions.js";
 import { directorLayoutStore } from "../store/layout.js";
 import { personalizeStore } from "../store/personalize.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
@@ -82,6 +83,27 @@ import { PersonalizePanel } from "./PersonalizePanel.js";
 
 const h = react.createElement;
 export const MINDMAP_ID = "dsh-mindmap";
+
+/** 维度键 → 中文显示名（第 37 轮 · 真机 1:1 截图暴露的问题）。
+ *
+ * 🔴 真机实测（`logs/audit-r37/3-mindmap-100.png`）：分区标题写着 `chars · 1` /
+ *    `plot · 1` / `power · 1` —— 用户看到的是**内部英文 key**。
+ *    权威中文名在 `logic/split-dimensions.js` 的 `SPLIT_DIMENSIONS[].label`（「A4 人物」）
+ *    与 `GENERIC_DIMENSIONS[].label`（「方案」）。
+ * 🔴 显示名**只能**来自那份定义，不许在导图侧再抄一份
+ *    （纪律 126：同一语义两个标识符 ⇒ 迟早对不上）。
+ *    本模块只**注入**：那个文件与 `attribution.js` 互为循环，而 `logic/grouping.js`
+ *    签了"不 import 任何模块"的契约 ⇒ 由这里查表后传进去（`dimLabels`）。
+ *    键统一小写 —— 与 `grouping.js` 的 `normDim()` 同口径（真值 `A1` 与推断 `a1`
+ *    必须落同一个键，否则同一维度裂成两块，这正是第 37 轮修过的 MM-G16）。 */
+const DIM_LABELS = (() => {
+	const m = {};
+	for (const d of SPLIT_DIMENSIONS.concat(GENERIC_DIMENSIONS)) {
+		const k = String((d && d.key) || "").toLowerCase();
+		if (k && d.label) m[k] = String(d.label);
+	}
+	return m;
+})();
 
 /** toast 自动消失时长（ms）—— 沿用设计图工作室的修正：原实现"永不消失"是缺陷 */
 const TOAST_MS = 2400;
@@ -404,7 +426,7 @@ export function MindMap({ open, onClose }) {
 	let rawMaxX = 0;
 	for (const rr of baseRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
 	const gres = lay.mmGroup
-		? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH })
+		? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH, dimLabels: DIM_LABELS })
 		: null;
 	const rows = applyUserPos(gres ? gres.rows : baseRows, posMap);
 	const sections = gres ? gres.sections : [];

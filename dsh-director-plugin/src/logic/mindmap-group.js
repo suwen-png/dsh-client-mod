@@ -102,6 +102,10 @@ function cmpKey(a, b) {
  * @param {string[]} [opts.candidates] 预置候选集（不传则由本批标题推）
  * @param {number} [opts.nodeH] 节点高（不传则从行上取最普遍的 h，最后退回 72）
  * @param {number} [opts.width] 分区框宽
+ * @param {object} [opts.dimLabels] 维度键 → 中文显示名（如 `{ chars: "A4 人物" }`）——
+ *        由调用方从 `logic/split-dimensions.js` 注入，本模块**不 import 它**
+ *        （该文件与 `attribution.js` 互为循环，且本模块签了纯函数零依赖契约）。
+ *        不传则退化显示内部键（**调用方必须传**，见 `dimLabel()` 头注）。
  * @returns {{rows:Array, sections:Array, stats:object, height:number}}
  */
 export function buildGroups(rows, opts = {}) {
@@ -190,7 +194,7 @@ export function buildGroups(rows, opts = {}) {
 				dimN += 1;
 				sections.push({
 					kind: "dim", projectKey: p.key, key: d.key,
-					label: d.key === NODIM ? FALLBACK_LABEL[NODIM] : dimLabel(d.key),
+					label: d.key === NODIM ? FALLBACK_LABEL[NODIM] : dimLabel(d.key, opts.dimLabels),
 					source: d.source, count: d.items.length, hidden: false,
 					x: left, y: dTop, w: width, h: (maxY - minY) + nodeH + G.pad
 				});

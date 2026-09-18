@@ -1,11 +1,11 @@
 {
-  "sealedAt": "2026-09-18T01:54:26.751Z",
+  "sealedAt": "2026-09-18T02:10:09.909Z",
   "version": "V16",
   "title": "总监驾驶舱 · 三页签 + 设计图工作室（落死基线）",
   "policy": "指纹只锁会决定运行行为的东西（src/build/package.json/cordis.patch.yml/产物/设计图）。scripts/*.mjs 与 docs/*.md 属叙述层，不纳入。",
   "command": "node scripts/baseline-check.mjs   # 校验；--write 重新封存",
   "fileCount": 95,
-  "totalBytes": 3983169,
+  "totalBytes": 3990545,
   "files": {
     "src/bridge/chat-bridge.js": {
       "bytes": 33553,
@@ -72,8 +72,8 @@
       "md5": "e5bbaf95921a8b0b7393b8d549c2454e"
     },
     "src/components/MindMap.js": {
-      "bytes": 78978,
-      "md5": "a54044cc9afa4e190cfe0679970689d5"
+      "bytes": 80342,
+      "md5": "3d51e4a61c3b5c3fb28ea74486c800a8"
     },
     "src/components/ModelSeat.js": {
       "bytes": 16861,
@@ -176,12 +176,12 @@
       "md5": "835f25f5a2faf58b33009fbe9c45483a"
     },
     "src/logic/grouping.js": {
-      "bytes": 10191,
-      "md5": "974201a899fb245aa95031aa95626623"
+      "bytes": 11953,
+      "md5": "0739ed92a11f6c555a64d60d88183bfd"
     },
     "src/logic/key-files.js": {
-      "bytes": 25931,
-      "md5": "c8d340c799ccb0d88f10782e3a4dcad5"
+      "bytes": 25981,
+      "md5": "b41d269130a1f1e72714dc18989b9ec9"
     },
     "src/logic/ledger.js": {
       "bytes": 9720,
@@ -192,8 +192,8 @@
       "md5": "c8070a8cac1099cc4b75f81e6f98a08b"
     },
     "src/logic/mindmap-group.js": {
-      "bytes": 11771,
-      "md5": "f71e7e6cebda15d2dcd9588d485a593f"
+      "bytes": 12189,
+      "md5": "84efa627d4dcac54269e04781b99b100"
     },
     "src/logic/mindmap-render.js": {
       "bytes": 7470,
@@ -228,8 +228,8 @@
       "md5": "76a53d0455e6228289957a23a61d32a9"
     },
     "src/logic/split-dimensions.js": {
-      "bytes": 39674,
-      "md5": "f58ed83cdf5d25fe71418284b51db973"
+      "bytes": 39697,
+      "md5": "2a87fbd6afdacd08e9c5687ce8d0bc3a"
     },
     "src/logic/summarize.js": {
       "bytes": 10582,
@@ -384,8 +384,8 @@
       "md5": "1a23d6fe791934c72e413924d144a01e"
     },
     "lib/client.js": {
-      "bytes": 2046149,
-      "md5": "e4adf41890630e0a6018b95d6c912acf"
+      "bytes": 2049908,
+      "md5": "7b2a6ebe890a96a86ec723802c074583"
     }
   }
 }

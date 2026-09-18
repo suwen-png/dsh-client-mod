@@ -10045,7 +10045,7 @@ window.__ModuleLoader__.load({
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：按维度拆线（**纯函数**：无 DOM、无 store、无副作用）
 			 * 引用：—
-			 * 上游：components/DirectorDialog.js, components/DirectorPage.js, logic/attribution.js, logic/director-dispatch.js
+			 * 上游：components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, logic/attribution.js, logic/director-dispatch.js
 			 * 下游：logic/attribution.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -21050,11 +21050,18 @@ window.__ModuleLoader__.load({
 			 *  误配比不分组更糟（第 25 批已定性「投错维度比多建一条严重」）。与 `director-reuse` 同源。 */
 			const MIN_KEY_LEN = 2;
 			
-			/** 未归类：标题里推不出任何作品名。**不是错误**，是不丢行的兜底桶。 */
-			const UNGROUPED = " ungrouped";
+			/** 未归类：标题里推不出任何作品名。**不是错误**，是不丢行的兜底桶。
+			 *
+			 * 🔴 前缀 `\u0000`（NUL）是**故意的**：兜底桶的键不能与任何真实作品名归一化后同串
+			 *    （否则"未归类"会跟真项目并成一个框，用户看不出来）。NUL 不可能出现在标题里。
+			 * 🔴 必须写成**转义序列**，不许写成真 NUL 字节 —— 第 37 轮实测：真 NUL 会让整个
+			 *    源文件被判为**二进制** ⇒ `grep` / `rg` 直接跳过它，所有基于 rg 的扫描
+			 *    **静默漏掉本文件**（当时 `Grep` 工具对 `src/logic/grouping.js` 报
+			 *    "Binary file matches"）。这是"静默失效"的典型形态（纪律 106 同族）。 */
+			const UNGROUPED = "\u0000ungrouped";
 			
-			/** 未分流：既没有 `splitDim` 真值、标题里也没有维度代码。 */
-			const NODIM = " nodim";
+			/** 未分流：既没有 `splitDim` 真值、标题里也没有维度代码。（前缀理由同上） */
+			const NODIM = "\u0000nodim";
 			
 			/** 兜底桶的显示名（界面上必须能看出"这是兜底"，不能与真项目名同形） */
 			const FALLBACK_LABEL = Object.freeze({
@@ -21186,10 +21193,25 @@ window.__ModuleLoader__.load({
 				return String(k == null ? "" : k).replace(/\s+/g, "").toLowerCase();
 			}
 			
-			/** 维度键的**显示**形式（键恒小写，显示回 `A1` —— 别让用户看见内部编码） */
-			function dimLabel(key) {
-				const m = /^a(\d{1,2})$/.exec(String(key || ""));
-				return m ? "A" + m[1] : String(key == null ? "" : key);
+			/** 维度键的**显示**形式（键恒小写，显示名给用户看 —— 别让用户看见内部编码）。
+			 *
+			 * 🔴 为什么要有 `labels` 注入参数（第 37 轮 · 真机 1:1 截图暴露）：
+			 *   内部键 `chars` / `plot` / `power` / … 直接当标题显示时，用户看到的是**英文 key**
+			 *   （真机实测分区标题写着 `chars · 1`），而权威中文名在
+			 *   `logic/split-dimensions.js` 的 `SPLIT_DIMENSIONS[].label`（「A4 人物」）与
+			 *   `GENERIC_DIMENSIONS[].label`（「方案」）。
+			 *   ⇒ 显示名必须来自那份**定义**，本模块**不许再抄一份**（纪律 126：同一语义两个标识符）。
+			 *   但本模块签了「不 import 任何模块」的契约，而 `split-dimensions.js` 与
+			 *   `attribution.js` **互为循环** ⇒ 由**调用方注入**映射
+			 *   （`buildGroups(rows, { dimLabels })`），本模块只做查表 + 兜底回键。
+			 *   不注入时**不崩**、退回显示原键（降级可以，无声不行 —— 但这里连降级都不该无声：
+			 *   调用方必须注入，`MindMap.js` 已注入）。 */
+			function dimLabel(key, labels) {
+				const k = String(key == null ? "" : key);
+				const m = /^a(\d{1,2})$/.exec(k);
+				if (m) return "A" + m[1];
+				if (labels && typeof labels === "object" && labels[k]) return String(labels[k]);
+				return k;
 			}
 			
 			/** 维度代码的自然序（`A2` 必须排在 `A10` 前 —— 字符串序会反） */
@@ -21327,6 +21349,10 @@ window.__ModuleLoader__.load({
 			 * @param {string[]} [opts.candidates] 预置候选集（不传则由本批标题推）
 			 * @param {number} [opts.nodeH] 节点高（不传则从行上取最普遍的 h，最后退回 72）
 			 * @param {number} [opts.width] 分区框宽
+			 * @param {object} [opts.dimLabels] 维度键 → 中文显示名（如 `{ chars: "A4 人物" }`）——
+			 *        由调用方从 `logic/split-dimensions.js` 注入，本模块**不 import 它**
+			 *        （该文件与 `attribution.js` 互为循环，且本模块签了纯函数零依赖契约）。
+			 *        不传则退化显示内部键（**调用方必须传**，见 `dimLabel()` 头注）。
 			 * @returns {{rows:Array, sections:Array, stats:object, height:number}}
 			 */
 			function buildGroups(rows, opts = {}) {
@@ -21415,7 +21441,7 @@ window.__ModuleLoader__.load({
 							dimN += 1;
 							sections.push({
 								kind: "dim", projectKey: p.key, key: d.key,
-								label: d.key === NODIM ? FALLBACK_LABEL[NODIM] : dimLabel(d.key),
+								label: d.key === NODIM ? FALLBACK_LABEL[NODIM] : dimLabel(d.key, opts.dimLabels),
 								source: d.source, count: d.items.length, hidden: false,
 								x: left, y: dTop, w: width, h: (maxY - minY) + nodeH + G.pad
 							});
@@ -21806,7 +21832,7 @@ window.__ModuleLoader__.load({
 			 * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
 			 * 引用：—
 			 * 上游：client-entry.js, mount.js
-			 * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+			 * 下游：logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -21875,6 +21901,7 @@ window.__ModuleLoader__.load({
 			const { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } = __m("store/mindmap-schema.js");
 			const { flowStore, lastFlowIdFor, flowOrigin, DIM } = __m("logic/flow.js");
 			const { buildGroups, applyUserPos } = __m("logic/mindmap-group.js");
+			const { SPLIT_DIMENSIONS, GENERIC_DIMENSIONS } = __m("logic/split-dimensions.js");
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { personalizeStore } = __m("store/personalize.js");
 			const { NodeDetailPanel } = __m("components/NodeDetailPanel.js");
@@ -21882,6 +21909,27 @@ window.__ModuleLoader__.load({
 			
 			const h = react.createElement;
 			const MINDMAP_ID = "dsh-mindmap";
+			
+			/** 维度键 → 中文显示名（第 37 轮 · 真机 1:1 截图暴露的问题）。
+			 *
+			 * 🔴 真机实测（`logs/audit-r37/3-mindmap-100.png`）：分区标题写着 `chars · 1` /
+			 *    `plot · 1` / `power · 1` —— 用户看到的是**内部英文 key**。
+			 *    权威中文名在 `logic/split-dimensions.js` 的 `SPLIT_DIMENSIONS[].label`（「A4 人物」）
+			 *    与 `GENERIC_DIMENSIONS[].label`（「方案」）。
+			 * 🔴 显示名**只能**来自那份定义，不许在导图侧再抄一份
+			 *    （纪律 126：同一语义两个标识符 ⇒ 迟早对不上）。
+			 *    本模块只**注入**：那个文件与 `attribution.js` 互为循环，而 `logic/grouping.js`
+			 *    签了"不 import 任何模块"的契约 ⇒ 由这里查表后传进去（`dimLabels`）。
+			 *    键统一小写 —— 与 `grouping.js` 的 `normDim()` 同口径（真值 `A1` 与推断 `a1`
+			 *    必须落同一个键，否则同一维度裂成两块，这正是第 37 轮修过的 MM-G16）。 */
+			const DIM_LABELS = (() => {
+				const m = {};
+				for (const d of SPLIT_DIMENSIONS.concat(GENERIC_DIMENSIONS)) {
+					const k = String((d && d.key) || "").toLowerCase();
+					if (k && d.label) m[k] = String(d.label);
+				}
+				return m;
+			})();
 			
 			/** toast 自动消失时长（ms）—— 沿用设计图工作室的修正：原实现"永不消失"是缺陷 */
 			const TOAST_MS = 2400;
@@ -22204,7 +22252,7 @@ window.__ModuleLoader__.load({
 				let rawMaxX = 0;
 				for (const rr of baseRows) rawMaxX = Math.max(rawMaxX, (rr.x || 0) + (rr.w || LAYOUT.nodeW));
 				const gres = lay.mmGroup
-					? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH })
+					? buildGroups(baseRows, { width: Math.max(rawMaxX + LAYOUT.pad, 620), nodeH: LAYOUT.nodeH, dimLabels: DIM_LABELS })
 					: null;
 				const rows = applyUserPos(gres ? gres.rows : baseRows, posMap);
 				const sections = gres ? gres.sections : [];
@@ -30653,7 +30701,7 @@ window.__ModuleLoader__.load({
 				// prettier-ignore
 				{ f: "src/components/DirectorPage.js", bytes: 193206, lines: 2834, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
 				{ f: "src/components/DesignStudio.js", bytes: 94481, lines: 1407, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
-				{ f: "src/components/MindMap.js", bytes: 78978, lines: 1281, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
+				{ f: "src/components/MindMap.js", bytes: 80342, lines: 1303, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
 				{ f: "src/components/DirectorDialog.js", bytes: 68061, lines: 980, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
 				{ f: "src/store/design.js", bytes: 63926, lines: 1231, duty: "设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）", up: "client-entry.js, components/DesignStudio.js, mount.js", down: "store/design-schema.js, store/plugin-db.js" },
 				{ f: "src/client-entry.js", bytes: 57486, lines: 870, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
@@ -30662,7 +30710,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/store/layout.js", bytes: 43936, lines: 760, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
 				{ f: "src/logic/roles.js", bytes: 42326, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js", down: "（无）" },
 				{ f: "src/store/design-schema.js", bytes: 42225, lines: 770, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
-				{ f: "src/logic/split-dimensions.js", bytes: 39674, lines: 576, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorDialog.js, components/DirectorPage.js, logic/attribution.js, logic/director-dispatch.js", down: "logic/attribution.js" },
+				{ f: "src/logic/split-dimensions.js", bytes: 39697, lines: 576, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, logic/attribution.js, logic/director-dispatch.js", down: "logic/attribution.js" },
 				{ f: "src/store/personalize.js", bytes: 39417, lines: 702, duty: "个性化设定（右上角「⚙ 个性化」的单一真相源）", up: "client-entry.js, components/DirectorPage.js, components/MindMap.js, components/PersonalizePanel.js", down: "（无）" },
 				{ f: "src/bridge/chat-bridge.js", bytes: 33553, lines: 675, duty: "「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, mount.js", down: "bridge/split.js, util/debug.js" },
 				{ f: "src/bridge/host-panel-trim.js", bytes: 33183, lines: 618, duty: "显示层裁剪宿主残留区块", up: "bridge/host-director-column.js, client-entry.js", down: "（无）" },
@@ -30701,11 +30749,11 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/orchestrate.js", bytes: 13606, lines: 285, duty: "总监统筹闭环（纯函数）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js", down: "（无）" },
 				{ f: "src/logic/catalog.js", bytes: 12992, lines: 237, duty: "技能与智能体的**指向表**（单一真相源）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, store/agent-runs.js", down: "（无）" },
 				{ f: "src/store/branch.js", bytes: 12531, lines: 270, duty: "A4 分支创建与记忆面板交互", up: "client-entry.js", down: "store/idb.js, store/memory.js" },
-				{ f: "src/logic/mindmap-group.js", bytes: 11771, lines: 236, duty: "导图分组布局（纯函数：零 import、无 DOM / 无 store / 无时钟）", up: "components/MindMap.js", down: "logic/grouping.js" },
+				{ f: "src/logic/mindmap-group.js", bytes: 12189, lines: 240, duty: "导图分组布局（纯函数：零 import、无 DOM / 无 store / 无时钟）", up: "components/MindMap.js", down: "logic/grouping.js" },
+				{ f: "src/logic/grouping.js", bytes: 11953, lines: 216, duty: "「作品 / 维度」归一化与归属（**唯一真相源**）", up: "logic/director-reuse.js, logic/mindmap-group.js", down: "（无）" },
 				{ f: "src/components/OverviewDialog.js", bytes: 11475, lines: 216, duty: "总览弹窗（R10）", up: "components/MindMap.js", down: "logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/plugin-db.js" },
 				{ f: "src/logic/summarize.js", bytes: 10582, lines: 227, duty: "分层总结 + 分梯度调用", up: "client-entry.js, components/DirectorHierarchy.js", down: "config/model.js, store/hierarchy.js, util/debug.js, util/bus.js" },
 				{ f: "src/store/dispatch-log.js", bytes: 10340, lines: 220, duty: "本次「总监派发」台账（第 17 批）", up: "components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
-				{ f: "src/logic/grouping.js", bytes: 10191, lines: 194, duty: "「作品 / 维度」归一化与归属（**唯一真相源**）", up: "logic/director-reuse.js, logic/mindmap-group.js", down: "（无）" },
 				{ f: "src/components/DirectorFlow.js", bytes: 9873, lines: 181, duty: "E1 小窗总监对话流组件", up: "client-entry.js", down: "store/create-store.js, store/use-store.js, util/debug.js" },
 				{ f: "src/logic/ledger.js", bytes: 9720, lines: 210, duty: "台账 / 文档树取数", up: "components/DirectorPage.js", down: "store/docs-index-inject.js" },
 				{ f: "src/store/idb.js", bytes: 9626, lines: 218, duty: "IndexedDB 持久化层（主要机制）", up: "logic/discover.js, logic/sync.js, store/branch.js, store/docs.js, store/hierarchy.js, store/memory.js, store/persist.js", down: "（无）" },
@@ -30744,7 +30792,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 90, bytes: 1876097, lines: 34266 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 90, bytes: 1879664, lines: 34314 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -35585,5 +35633,5 @@ window.__ModuleLoader__.load({
 	}
 });
 
-/* dsh-build-stamp: 17920f730bb815b1 */
-(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="17920f730bb815b1";}catch(e){}})();
+/* dsh-build-stamp: c3add7304bf92e27 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="c3add7304bf92e27";}catch(e){}})();

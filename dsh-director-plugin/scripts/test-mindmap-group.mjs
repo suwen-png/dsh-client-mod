@@ -33,7 +33,7 @@
  */
 
 import { buildBranchTree } from "../src/logic/branch-tree.js";
-import { projectCandidates, projectKeyOf, normKey, UNGROUPED, NODIM } from "../src/logic/grouping.js";
+import { projectCandidates, projectKeyOf, normKey, UNGROUPED, NODIM, dimLabel } from "../src/logic/grouping.js";
 import { buildGroups, applyUserPos } from "../src/logic/mindmap-group.js";
 
 let pass = 0, fail = 0;
@@ -333,6 +333,36 @@ t("MM-G30", "分组**关闭**时拖动同样保留（开关只决定组织方式
 	{});
 
 console.log("\n═══════════════════════════════════════════════════════════");
+/* ══════════════════════════════════════════════════════════════════
+ *  D 组 · 维度显示名（第 37 轮 · 真机 1:1 截图暴露）
+ *  截图实测分区标题写着 `chars · 1` / `plot · 1` —— 用户看到的是**内部英文 key**
+ * ══════════════════════════════════════════════════════════════════ */
+console.log("\n══ D 组 · 维度显示名用中文（不让用户看见内部键）══");
+
+const DIM_LB = { chars: "A4 人物", plot: "A3 剧情", world: "A1 世界观" };
+const withLb = buildGroups([
+	{ sessionId: "x1", title: "《墟海》人物线", y: 0, h: 72, splitDim: "chars" },
+	{ sessionId: "x2", title: "《墟海》剧情线", y: 96, h: 72, splitDim: "plot" },
+	{ sessionId: "x3", title: "《墟海》世界观线", y: 192, h: 72, splitDim: "world" }
+], { width: 800, dimLabels: DIM_LB });
+const lbs = withLb.sections.filter((s) => s.kind === "dim" && !s.hidden).map((s) => s.label);
+t("MM-G31", "🔴 **显示名注入生效**：`splitDim=chars` 的分区标题显示「A4 人物」，不是内部键 `chars`",
+	lbs.indexOf("A4 人物") >= 0 && lbs.indexOf("chars") < 0, { lbs });
+
+const noLb = buildGroups([
+	{ sessionId: "y1", title: "《墟海》人物线", y: 0, h: 72, splitDim: "chars" }
+], { width: 800 });
+t("MM-G32", "🔴 不注入时**不崩**且退回原键（这是**降级**，不是静默 —— 注入缺失要看得见）",
+	noLb.sections.some((s) => s.kind === "dim" && s.label === "chars"), { n: noLb.sections.length });
+
+t("MM-G33", "注入**不影响**代码式维度：`a1` 仍显示 `A1`（真值与推断同键同显示，纪律 126）",
+	dimLabel("a1") === "A1" && dimLabel("a1", DIM_LB) === "A1" && dimLabel("A1", DIM_LB) === "A1",
+	{ a: dimLabel("a1"), b: dimLabel("a1", DIM_LB) });
+
+t("MM-G34", "兜底桶标签不受注入影响：仍未分流 `未分流`（不被英文键覆盖）",
+	noLb.sections.filter((s) => s.kind === "dim").every((s) => s.key !== NODIM || s.label === "未分流"),
+	{});
+
 console.log("  PASS " + pass + " / FAIL " + fail + " / 总计 " + (pass + fail));
 console.log(fail === 0 ? "  IS_PASS: TRUE" : "  IS_PASS: FALSE");
 console.log("═══════════════════════════════════════════════════════════");
