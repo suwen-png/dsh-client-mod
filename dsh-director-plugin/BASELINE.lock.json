@@ -1,11 +1,11 @@
 {
-  "sealedAt": "2026-09-19T09:57:43.606Z",
+  "sealedAt": "2026-09-20T03:18:54.412Z",
   "version": "V16",
   "title": "总监驾驶舱 · 三页签 + 设计图工作室（落死基线）",
   "policy": "指纹只锁会决定运行行为的东西（src/build/package.json/cordis.patch.yml/产物/设计图）。scripts/*.mjs 与 docs/*.md 属叙述层，不纳入。",
   "command": "node scripts/baseline-check.mjs   # 校验；--write 重新封存",
-  "fileCount": 104,
-  "totalBytes": 4416980,
+  "fileCount": 105,
+  "totalBytes": 4435458,
   "files": {
     "src/bridge/chat-bridge.js": {
       "bytes": 43103,
@@ -156,8 +156,8 @@
       "md5": "0d8a5bb5753ba2676439c93087dbb2c3"
     },
     "src/logic/director-dispatch.js": {
-      "bytes": 28690,
-      "md5": "eae893dfe7ccb90dda94224374458605"
+      "bytes": 30007,
+      "md5": "e9710e36e773d2ce2d3df4be36838edf"
     },
     "src/logic/director-inherit.js": {
       "bytes": 6006,
@@ -242,6 +242,10 @@
     "src/logic/roles.js": {
       "bytes": 42326,
       "md5": "5339779d25623dcb92c3abb50f443ead"
+    },
+    "src/logic/router-decision.js": {
+      "bytes": 15808,
+      "md5": "354089509fde7885660d721a2182ca5d"
     },
     "src/logic/routing.js": {
       "bytes": 27973,
@@ -420,8 +424,8 @@
       "md5": "1a23d6fe791934c72e413924d144a01e"
     },
     "lib/client.js": {
-      "bytes": 2270293,
-      "md5": "acb1b8af4d9cd41448079bb7eaa41b3a"
+      "bytes": 2271646,
+      "md5": "f715dcedd02d4a34f629633d039ec86e"
     }
   }
 }

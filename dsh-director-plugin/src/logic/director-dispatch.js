@@ -94,6 +94,12 @@ export function projectOf(text) {
  *        —— 这正是 N9/F10 的落点：判了「建议开新分支」就得**真的换维度去**，
  *        否则"要开新分支"只写进一段文字，需求还是派回同一个维度。
  * @param {string} [opts.currentDim] 当前所在分支的维度 key（配合 `continuous=false` 使用）
+ * @param {(src:string, planOpts:object)=>object|Promise<object>} [opts.decide]
+ *        🔴 **模型语义路由接线缝**（用户最高优先级需求：分流判断由模型按语义做、插件只执行）。
+ *        传了 ⇒ 用它替代关键词 `plan(src, planOpts)`，返回**与 plan() 同形**的对象
+ *        （`{kind,dims:[{key,label,stage,brief,files}],name,reason,routingSource?}`）；
+ *        不传 ⇒ **默认仍走 `plan()`**（既有派发流程与离线闸门零回归）。
+ *        🔴 它可以是 async（内部去问 L0 路由会话）；这里 `await Promise.resolve(...)` 同时兼容 sync/async。
  * @param {number} [opts.hostConfirmMs=2500] 投递后等宿主确认的时间（**复核"真的起来了"**）
  * @param {(msg:string)=>void} [opts.log] 进度回调（每建成一条报一次，便于界面"看得见在动"）
  * @param {(info:object)=>Promise<void>} [opts.onBranch] 每建成一条后的**外部挂载钩子**
@@ -121,7 +127,10 @@ export async function dispatchBranches(text, opts = {}) {
 	if (o.max) planOpts.max = o.max;
 	if (o.continuous !== undefined && o.continuous !== null) planOpts.continuous = o.continuous === true;
 	if (o.currentDim) planOpts.currentDim = String(o.currentDim);
-	const p = plan(src, planOpts);
+	/* 🔴 模型语义路由接线缝：传了 `opts.decide` 就用它（可 async），否则默认走关键词 `plan()`。
+	 *    `await Promise.resolve(...)` 同时兼容 sync/async；不传时本表达式 == `plan(...)`，
+	 *    既有派发流程与 `test-split-dimensions` 零回归（纪律：不改默认行为）。 */
+	const p = (typeof o.decide === "function") ? await Promise.resolve(o.decide(src, planOpts)) : plan(src, planOpts);
 	if (!p.dims.length) {
 		return { ok: false, kind: p.kind || "none", name: p.name || "", dims: [], made: 0, failed: 0,
 			confirmed: 0, unconfirmed: 0, items: [],
@@ -364,6 +373,9 @@ export async function dispatchBranches(text, opts = {}) {
 	return {
 		ok: made.length > 0,
 		kind: p.kind, name: p.name, dims: p.dims.map((d) => d.key),
+		/* 🔴 读数：本次分流是「模型判的」（routingSource==="model"，来自 opts.decide）
+		 *    还是「关键词规则降级」（默认 "rule"）。台账/界面据此可分两条路径。 */
+		routingSource: (p && p.routingSource) || "rule",
 		/* 🔴 19 号文 **N8**（人可感知层）：把**归属判定的原样输出**带上来。
 		 *    总监页的常驻读数由 `attributionSummary(attribution)` 渲染 ——
 		 *    **同源**，不是"另算一遍"（另算必漂移，纪律 78）。
