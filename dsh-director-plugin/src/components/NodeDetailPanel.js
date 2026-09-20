@@ -2,7 +2,7 @@
  * 职责：导图右侧「该框的对话」面板
  * 引用：—
  * 上游：client-entry.js, components/MindMap.js
- * 下游：logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, store/mindmap-schema.js
+ * 下游：logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, logic/director-inherit.js, store/mindmap-schema.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -41,6 +41,9 @@ import { currentTaskOf, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip } from
 import { openSession, currentSessionId } from "../logic/branch-tree.js";
 import { deliverToChat } from "../bridge/chat-bridge.js";
 import { listDirectorMessages } from "../store/plugin-db.js";
+/* 🔴 第 42 轮（需求 3）：详情面板的总监对话与弹窗**同源**（继承链） —— 两处若不同源，
+ *    用户会看到"同一个对话在两个地方显示不同的总监消息"（纪律 126）。 */
+import { readDirectorMessages } from "../logic/director-inherit.js";
 import { STATE_KINDS, NODE_KINDS } from "../store/mindmap-schema.js";
 
 const h = react.createElement;
@@ -144,7 +147,7 @@ export function NodeDetailPanel(props) {
 	react.useEffect(() => {
 		let alive = true;
 		if (!sid) { setMsgs([]); return () => { alive = false; }; }
-		listDirectorMessages(sid).then((list) => { if (alive) setMsgs(list || []); }).catch(() => { if (alive) setMsgs([]); });
+		readDirectorMessages(sid).then((res) => { if (alive) setMsgs((res && res.rows) || []); }).catch(() => { if (alive) setMsgs([]); });
 		return () => { alive = false; };
 	}, [sid]);
 

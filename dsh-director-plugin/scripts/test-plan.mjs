@@ -39,7 +39,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	PLUGIN_ROOT, listSuites, surfaceOf, artifactStamp, srcStamp,
-	needsPlatformStub, loadLedger, saveLedger, record, LEDGER_PATH
+	needsPlatformStub, loadLedger, saveLedger, record, LEDGER_PATH, selfCheck
 } from "./_test-ledger.mjs";
 
 /* ── 参数 ───────────────────────────────────────────────────────── */
@@ -52,6 +52,22 @@ if (has("--help") || has("-h")) {
 	process.exit(0);
 }
 if (unknown.length) { console.error("用法错：不认识的参数 " + unknown.join(" ") + "（--help 看用法）"); process.exit(2); }
+
+/* ══ 🔴 `T-PLUG-062` 前置：**提取器必须先自证能收到真引用** ══════════════════════
+ * 本脚本的结论**完全**建立在 `surfaceOf()` 之上。它若失效（正则写窄 / 路径断言写错），
+ * 会把**所有**套件**静默**判成「与本改动无交集」而全跳过 —— **假跳过比假红危险**（22 号文 §十）。
+ * ⇒ 先跑植入缺陷校准；不通过就 INVALID，**绝不给出一个"看起来全绿"的空计划**。 */
+{
+	const sc = selfCheck();
+	if (!sc.ok) {
+		console.error("══ 覆盖面提取器自检（T-PLUG-062）══");
+		for (const x of sc.rows || []) console.error("  " + (x.ok ? "✅" : "❌") + " " + x.name);
+		console.error("INVALID：覆盖面提取器校准未通过 ⇒ 本次「该跑哪些套件」的结论**不可信**（纪律 32/62）。");
+		console.error("  复核：node scripts/_test-ledger.mjs --self-check");
+		process.exit(2);
+	}
+	if (has("--explain")) console.log("  [前置] ✅ 覆盖面提取器自检通过（5 组样本 · 其中 3 组是坏样本）");
+}
 
 /* ── 改动集 ─────────────────────────────────────────────────────── */
 function gitChanged() {

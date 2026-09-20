@@ -62,7 +62,9 @@
  *  | HT-19 | 含 `--remote-debugging-port=` 项 | 否则顺移改不动端口 |
  *  | HT-20 | 🔴 **与 `restart-harness.ps1` 同源** | exe / workDir / 三个开关逐字一致 |
  *  | HT-21 | `imageProcs()` | 返回数组（不抛 / 不是 null） |
- *  | HT-22 | 🔴 `dp-root` 已在 ⇒ 立即 ok 且**零点击** | 起点是"看到"的，不是"点出来"的 |
+ *  | HT-22 | 🔴 `dp-root` 已在 **且就绪** ⇒ 立即 ok 且**零点击** | 起点是"看到"的，不是"点出来"的。⚠️ 第四十一轮口径升级（纪律 148）：旧判据只覆盖「DOM 挂载」 |
+ *  | HT-22c/d | 🔴 **已挂载但盒为 0×0**（宿主显示别的视图）⇒ 必须**真去点「总监」**并自报归因 | 形态取自真机 `logs/_r41j-ns.out`（`{w:0,h:0,hit:["DIV@out"×2]}`）；守的是那 11 条假红的入口。**植入缺陷校准**：还原旧行为 ⇒ 精确红 `HT-22c`+`HT-22d` |
+ *  | HT-22e/f | 🔴 **环读得到、但一个都不可见**（宿主把装着它的 `centerSurface` 置了 `hidden`）⇒ 必须走 ③「真实 UI 侧栏自举」；且**不等满冷启动预算** | 形态逐字取自现场取证（`logs/_tmp-probe-tabs.mjs` 现场B/C + `logs/_r41l-ns.out`）：5 个页签全 0×0、页面上**两个 `centerSurface` 一隐一显**（隐的 0×0 / 显的 1154×816）。**植入缺陷校准**：把 ③ 段触发条件改回「看全部环」⇒ 精确红 `HT-22e`（纪律 149） |
  *  | HT-23 | 🔴 四种归因**互不相同** | 4 个不同字符串 |
  *  | HT-24 | 无环 ⇒ 归因 = 宿主没渲染会话视图 | 精确串 |
  *  | HT-25 | 环在、无「总监」⇒ 归因 = 视图未注册 | 精确串 |
@@ -320,6 +322,12 @@ function fakeCL(sink) {
  *    否则会被 `ensureDirectorPage` 的 catch 吞成"自举抛错"，让某条用例**因为错的理由通过**（纪律 23）。
  *    为此 F 组每条用例都对 `reason` 做**精确串比对**（抛错路径的 reason 是 `自举抛错：…`，不可能撞上）。
  */
+/* 🔴 就绪契约的两个标准样本（第四十一轮 · 纪律 148）—— 取自真机实测读数：
+ *   就绪   = 真机成功批 `logs/_r41i-ns.out`（`w=1146 h=597 hit=[DIV@in ×2]`）
+ *   未就绪 = 真机失败批 `logs/_r41j-ns.out`（`w=0 h=0 hit=[DIV@out ×2]` = 宿主显示的是别的视图） */
+const PROBE_READY = JSON.stringify({ w: 1146, h: 597, hit: ["DIV@in", "DIV@in"], busy: "0", ledger: "1" });
+const PROBE_NOT_READY = JSON.stringify({ w: 0, h: 0, hit: ["DIV@out", "DIV@out"], busy: "0", ledger: "1" });
+
 function makeJs(cfg) {
 	const calls = [];
 	let overlayN = 0;
@@ -327,13 +335,36 @@ function makeJs(cfg) {
 		const e = String(expr);
 		calls.push(e.slice(0, 48));
 		if (cfg.throwOn && cfg.throwOn.test(e)) throw new Error("模拟：CDP 目标已失效");
+		/* 🔴 判别顺序必须**从最专到最泛**（第四十一轮）：就绪探针（含 `elementFromPoint`）与
+		 *    **归因读数**（含 `role=tab`）里**都含有 `dp-root`** —— 若让泛匹配 `dp-root` 先命中，
+		 *    两者都会被 `cfg.root()` 的值顶掉。实测症状：`reason` 全变成"归因读数读不到"，
+		 *    HT-24/25/26/23 **一起红**（纪律 23 的 stub 侧形态：用错的理由通过/失败）。 */
+		if (/elementFromPoint/.test(e)) return cfg.probe ? cfg.probe() : PROBE_NOT_READY;
+		/* 🔴 **归因读数必须最先被认出来**（第四十一轮 · 纪律 149）：它里面**也含** `width>=2`
+		 *    （归因要把"可见环"与"中心容器"一并取证）⇒ 若让 `width>=2` 先命中，
+		 *    diag 会被 `cfg.ringVis()` 顶掉 ⇒ 四种归因全错 ⇒ HT-24/25/26/23 一起红
+		 *    （纪律 23 的 stub 侧形态：用错的理由通过/失败）。判别特征取 `idPresent`（diag 独有）。 */
+		if (/idPresent/.test(e)) {
+			if (cfg.diag) return cfg.diag();
+			/* 默认归因读数**与配置的环联动** —— 否则"环在但全不可见"这类用例会读到
+			 * 一份自相矛盾的 diag（`ring:[]` 却是"有环"）⇒ 归因分支永远走不到（假绿温床）。 */
+			const all = cfg.ring ? cfg.ring() : [];
+			const vis = cfg.ringVis ? cfg.ringVis() : (cfg.ring ? cfg.ring() : []);
+			return JSON.stringify({ ring: all, visible: vis, surfaces: [], selected: [], hasDirector: false, handle: null, idPresent: false, textured: 0, rect: null });
+		}
+		/* 🔴 **可见环**（纪律 149）—— 判别特征 = 可见性过滤里那句 `width>=2`。
+		 *    `_cdp-startup.mjs` 有**两处**读环：`RING_ALL`（**取证**）与 `RING_VIS`（**判据**）
+		 *    —— 桩必须把两者分辨开，否则 `cfg.ring()` 会同时顶掉两处。
+		 *    未配置 `cfg.ringVis` 时**退回 `cfg.ring()`** ⇒ 既有用例语义一字不变
+		 *    （纪律 ⑭：不为新判据搅动旧用例；新判据由新增的 HT-22e/f 守）。 */
+		if (/width>=2/.test(e)) return cfg.ringVis ? cfg.ringVis() : (cfg.ring ? cfg.ring() : []);
+		if (/role="tab"/.test(e)) return cfg.ring ? cfg.ring() : [];
+		if (/role=tab/.test(e)) return cfg.diag ? cfg.diag() : JSON.stringify({ ring: [], visible: [], surfaces: [], selected: [], hasDirector: false, handle: null, idPresent: false, textured: 0, rect: null });
 		if (/dp-root/.test(e)) return cfg.root ? cfg.root() : false;
 		if (/dsh-mindmap/.test(e)) return cfg.overlays ? cfg.overlays(overlayN++) : [];
 		if (/rawSessionSummaries/.test(e)) return cfg.materialize ? cfg.materialize() : { ok: false, reason: "无 __dshBranchTree（插件未装载）" };
 		if (/新会话/.test(e)) return cfg.newSession === undefined ? null : cfg.newSession;
 		if (/treeitem/.test(e)) return cfg.tree ? cfg.tree() : [];
-		if (/role="tab"/.test(e)) return cfg.ring ? cfg.ring() : [];
-		if (/role=tab/.test(e)) return cfg.diag ? cfg.diag() : JSON.stringify({ ring: [], selected: [], hasDirector: false, handle: null, idPresent: false, textured: 0 });
 		throw new Error("F 组 js 桩不认识这个表达式：" + e.slice(0, 70));
 	};
 	return { js: js, calls: calls };
@@ -343,20 +374,120 @@ const RE_RING = "宿主始终没有页签环（会话视图未打开 —— 冷�
 const RE_NO_DIR = "页签环里没有「总监」（视图未注册到宿主）";
 const reasons = {};
 
-/* ── HT-22：`dp-root` 已在 ⇒ 立即 ok + **零点击**（正对照：起点是"看到"的）── */
+/* ── HT-22：`dp-root` 已在 **且就绪** ⇒ 立即 ok + **零点击**（正对照：起点是"看到"的）──
+ * 🔴 第四十一轮口径更正（纪律 148）：判据从「已在 DOM」升级为「已在 DOM **且满足就绪契约**」——
+ *    因为实测存在"挂着但 0×0"（宿主显示别的视图）的形态，旧判据会判「在位」并放行。 */
 {
 	installClock(); clockOffset = 0;
 	const clicks = [];
-	const stub = makeJs({ root: () => true, ring: () => ["总监", "对话", "轨迹"], overlays: () => [] });
+	const stub = makeJs({ root: () => true, probe: () => PROBE_READY, ring: () => ["总监", "对话", "轨迹"], overlays: () => [] });
 	const r = await ensureDirectorPage({
 		CL: fakeCL(clicks), js: stub.js, send: async () => ({}), sleep: vSleep, log: () => {}
 	});
 	uninstallClock();
-	t("HT-22", "🔴 dp-root 已在 ⇒ 立即 ok 且**零点击**", r.ok === true && clicks.length === 0 && r.dpRoot === true,
+	t("HT-22", "🔴 dp-root 已在**且就绪** ⇒ 立即 ok 且**零点击**（起点是「看到」的，不是「点出来」的）",
+		r.ok === true && clicks.length === 0 && r.dpRoot === true,
 		"ok=" + r.ok + " 点击次数=" + clicks.length + " ring=" + JSON.stringify(r.tabRing));
 	t("HT-22b", "已在 DOM 时**不进入**等待/自举（steps 含「已在 DOM」）",
 		r.steps.length > 0 && r.steps.some((s) => /已在 DOM/.test(s)), "steps=" + r.steps.length);
 	t("HT-29", "steps 非空（证据留痕；静默失败不可接受 —— 纪律 54）", r.steps.length > 0, "steps=" + r.steps.length);
+}
+
+/* ── HT-22c：🔴 **已挂载但没有盒**（宿主显示别的视图）⇒ 必须转「点总监」把它显示出来 ──
+ * 这条守的是第四十一轮真机抓到的那 11 条假红的入口（纪律 135「落点在 ≠ 闸门守」）：
+ *   若把「已在 DOM ⇒ 早返回 ok」写回去，本用例立刻红 —— 即**植入缺陷可校准**。
+ * 形态取自真机读数：`logs/_r41j-ns.out` 的 `{"w":0,"h":0,"hit":["DIV@out","DIV@out"]}`。 */
+{
+	installClock(); clockOffset = 0;
+	const clicks = [];
+	/* 点一下之后宿主才切过来 ⇒ 探针是**有状态**的（复现真机"点了才显示"） */
+	const stub = makeJs({
+		root: () => true, ring: () => ["总监", "对话", "轨迹", "关键文件", "产出物"], overlays: () => [],
+		probe: () => (clicks.length > 0 ? PROBE_READY : PROBE_NOT_READY)
+	});
+	const r = await ensureDirectorPage({
+		CL: fakeCL(clicks), js: stub.js, send: async () => ({}), sleep: vSleep, log: () => {}
+	});
+	uninstallClock();
+	t("HT-22c", "🔴 `dp-root` 已挂载但**盒为 0×0**（宿主显示的是别的视图）⇒ 必须**真的去点「总监」**把它显示出来（不是早返回 ok）",
+		r.ok === true && clicks.length > 0, "ok=" + r.ok + " 点击次数=" + clicks.length + " reason=" + r.reason);
+	t("HT-22d", "该分支必须**自报归因**（不许静默降级 —— 纪律 19/54）",
+		r.steps.some((s) => /未满足就绪契约/.test(s)) && r.steps.some((s) => /不提前返回/.test(s)),
+		"steps 命中数=" + r.steps.filter((s) => /未满足就绪契约|不提前返回/.test(s)).length);
+}
+
+/* ── HT-22e/f：🔴 **环读得到、但一个都不可见**（宿主把装着它的 `centerSurface` 置了 `hidden`）──
+ * 这条守的是第四十一轮批 #3 的 **11 条级联假红**（`logs/_r41l-ns.out`），形态**逐字取自现场取证**
+ * （`logs/_tmp-probe-tabs.mjs` 现场B/C）：
+ *   · `[role="tab"]` 共 5 个（`总监/对话/轨迹` + `关键文件/产出物`），**全部 0×0**，
+ *     `offsetParent===null`、祖先 `[hidden]`；
+ *   · 页面上**同时存在两个 `OrjXgq_centerSurface`** —— 一个 `hidden`（0×0，装着那 5 个页签），
+ *     另一个 `1154×816` 正是宿主**此刻显示**的中心区 ⇒ 「点宿主页签里的总监」是**原理上无效**的操作
+ *     （那个环属于已隐藏的旧容器，且尺寸 0 连点都点不下去 —— `geomExpr` 直接回 `尺寸为 0`）；
+ *   · 侧栏（`aFw_Oq_root` 280×816）**是正常的**，树里有会话行 ⇒ **唯一有效路径**
+ *     就是 ③ 段「真实 UI 点侧栏会话行」让宿主**重建**一个含总监页的 centerSurface。
+ * 🔴 缺陷本质（纪律 149）：`ringOf()` 只读 `textContent`、不看可见性 ⇒ 「环非空」被当成
+ *   「视图在显示」⇒ ③ 段的触发条件 `if (!ring.length)` 被绕过 ⇒ 在隐藏页签上白转 90s
+ *   ⇒ 起点永远恢复不了（真机 `_r41l-ensure.out` 每次调用白烧 90s）。
+ * 与纪律 148 是**同一个错误的第二个入口**：148 = 「`dp-root` 在 DOM ≠ 宿主在显示它」；
+ *   本条 = 「环非空 ≠ 环可点」。 */
+{
+	installClock(); clockOffset = 0;
+	const clicks = [];
+	/* 有状态桩：**只有真的点了侧栏会话行**（③ 段走 `CL.clickAt`）宿主才重建出**可见**的环。
+	 * 🔴 反例是靠得住的：④ 段点宿主页签走的是 `clickByText`，**不**能让可见环出现
+	 *    —— 这正是真机事实（那个页签在隐藏容器里，点了也没用）。
+	 *    若不加这条区分，旧实现会"碰巧"绿（桩被 `clickByText` 骗过）⇒ 判据就变成橡皮图章。 */
+	const stub = makeJs({
+		root: () => true,
+		ring: () => ["总监", "对话", "轨迹", "关键文件", "产出物"],
+		ringVis: () => (clicks.indexOf("clickAt") >= 0 ? ["总监", "对话", "轨迹"] : []),
+		probe: () => (clicks.indexOf("clickAt") >= 0 ? PROBE_READY : PROBE_NOT_READY),
+		overlays: () => [],
+		tree: () => [{ i: 0, t: "自举启动确认请求", ex: null, cls: "sessionRow" }]
+	});
+	const r = await ensureDirectorPage({
+		CL: fakeCL(clicks), js: stub.js, send: async () => ({}), sleep: vSleep, log: () => {}, tabBudgetMs: 4000
+	});
+	uninstallClock();
+	t("HT-22e", "🔴 环**读得到但一个都不可见**（全在隐藏的 `centerSurface` 里）⇒ 必须走「真实 UI 侧栏自举」，不许在隐藏页签上白转",
+		r.ok === true && r.steps.some((s) => /真实 UI 自举/.test(s)),
+		"ok=" + r.ok + " ｜ 走侧栏自举=" + r.steps.some((s) => /真实 UI 自举/.test(s)) + " ｜ 点击=" + JSON.stringify(clicks));
+	/* 短等：环在但不可见 ⇒ 等满冷启动预算（60s）毫无意义（宿主早已渲染过，只是把旧容器藏了） */
+	const wm = r.steps.map((s) => /等待 (\d+)ms/.exec(s)).filter(Boolean).map((m) => Number(m[1]))[0];
+	t("HT-22f", "🔴 可见环为空时**不等满冷启动预算**（环在但不可见 ⇒ 短等后立刻转侧栏自举）",
+		typeof wm === "number" && wm > 0 && wm < 20000,
+		"实际等待=" + JSON.stringify(wm) + "ms（旧行为会等满 tabBudgetMs/2）");
+}
+
+
+/* ── HT-22i：🔴 「环全不可见」必须**独立归因**（不许说成「视图未注册」）──
+ * 为什么必须独立（纪律 58）：两种失败的**修法完全不同** ——
+ *   · 「环里没有总监」= 视图未注册到宿主 ⇒ 查插件注册；
+ *   · 「环全不可见」= 宿主显示的不是会话视图 ⇒ 去点侧栏会话行重建。
+ * 而隐藏容器里的页签**读得到** `总监` ⇒ 若按旧口径算 `hasDirector`，会把后者说成前者。 */
+{
+	installClock(); clockOffset = 0;
+	const clicks = [];
+	/* 全不可见 **且** 侧栏也点不出可见环（宿主彻底不给）⇒ 判失败，
+	 * 但**失败原因必须精确**（否则下游拿到的是一句会误导修法的话）。 */
+	const stub = makeJs({
+		root: () => true,
+		ring: () => ["总监", "对话", "轨迹"],
+		ringVis: () => [],
+		probe: () => PROBE_NOT_READY,
+		overlays: () => [],
+		tree: () => []
+	});
+	const r = await ensureDirectorPage({
+		CL: fakeCL(clicks), js: stub.js, send: async () => ({}), sleep: vSleep, log: () => {}, tabBudgetMs: 4000
+	});
+	uninstallClock();
+	reasons.hiddenRing = r.reason;
+	t("HT-22i", "🔴 环全不可见 ⇒ 归因含「页签环**全部不可见**」并点名**中心容器**（**不是**说成「视图未注册」）",
+		r.ok === false && /页签环\*\*全部不可见\*\*/.test(r.reason) && /中心容器/.test(r.reason),
+		String(r.reason).slice(0, 96));
+	/* 与 HT-22e 合起来 = 这条判据的**两个方向**（能走通 / 走不通时的归因），缺一即空真 */
 }
 
 /* ── HT-24：无环 ⇒ 归因 = 宿主没渲染会话视图 ── */
@@ -378,7 +509,7 @@ const reasons = {};
 	const clicks = [];
 	const stub = makeJs({
 		root: () => false, ring: () => ["对话", "轨迹"], overlays: () => [], tree: () => [],
-		diag: () => JSON.stringify({ ring: ["对话", "轨迹"], selected: ["对话"], hasDirector: false, handle: false, idPresent: false, textured: 0 })
+		diag: () => JSON.stringify({ ring: ["对话", "轨迹"], visible: ["对话", "轨迹"], surfaces: [], selected: ["对话"], hasDirector: false, handle: false, idPresent: false, textured: 0 })
 	});
 	const r = await ensureDirectorPage({
 		CL: fakeCL(clicks), js: stub.js, send: async () => ({}), sleep: vSleep, log: () => {}, tabBudgetMs: 4000
@@ -394,7 +525,7 @@ const reasons = {};
 	const clicks = [];
 	const stub = makeJs({
 		root: () => false, ring: () => ["总监"], overlays: () => [], tree: () => [],
-		diag: () => JSON.stringify({ ring: ["总监"], selected: ["总监"], hasDirector: true, handle: true, idPresent: false, textured: 0 })
+		diag: () => JSON.stringify({ ring: ["总监"], visible: ["总监"], surfaces: [], selected: ["总监"], hasDirector: true, handle: true, idPresent: false, textured: 0 })
 	});
 	const r = await ensureDirectorPage({
 		CL: fakeCL(clicks), js: stub.js, send: async () => ({}), sleep: vSleep, log: () => {}, tabBudgetMs: 4000
@@ -423,11 +554,11 @@ const reasons = {};
 		"threw=" + threw + " ok=" + (r && r.ok) + " reason=" + (r && r.reason));
 }
 
-/* ── HT-23：四种归因**互不相同** ── */
+/* ── HT-23：五种归因**互不相同** ── */
 {
-	const vals = ["noRing", "noDirector", "notMounted", "threw"].map((k) => reasons[k]);
+	const vals = ["noRing", "noDirector", "notMounted", "threw", "hiddenRing"].map((k) => reasons[k]);
 	const uniq = vals.filter((v, i) => v && vals.indexOf(v) === i);
-	t("HT-23", "🔴 四种归因互不相同（四个字符串）", uniq.length === 4,
+	t("HT-23", "🔴 五种归因互不相同（五个字符串）", uniq.length === 5,
 		JSON.stringify(vals.map((v) => String(v).slice(0, 22))));
 }
 

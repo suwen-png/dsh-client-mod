@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：分支血缘树（导图态的数据源）
  * 引用：—
- * 上游：bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js
- * 下游：logic/discover.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js
+ * 上游：bridge/chat-bridge.js, bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js
+ * 下游：logic/discover.js, logic/host-ctx.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 C2（分支生命周期状态机）· F1 / F5（导图行模型与宿主真值透传）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -60,8 +60,18 @@
  */
 
 import { discover, sessionLabel } from "./discover.js";
+/* 🔴 第 42 轮：会话快照读取 / 宿主 ctx 收敛到**唯一实现** `logic/host-ctx.js`
+ *    （会话显示名 · 血缘 · 工作区真实名三件事必须读同一份快照 —— 纪律 126）。
+ *    本文件保留 `readSessionsFromCtx` 的 **re-export**（`window.__dshBranchTree` 契约口）。 */
+import { readSessionsFromCtx, setHostCtx, getHostCtx, hostService } from "./host-ctx.js";
 import { kindOfNode, stateOfRow, hasHostState } from "../store/mindmap-schema.js";
-/* 分流标签索引（第 16 批）：宿主不给 rename ⇒ 显示名由插件侧补，且**只有一处真相源** */
+/* 分流标签索引（第 16 批）：显示名由插件侧补，且**只有一处真相源**。
+ * 🔴 第 41 轮**就地更正**（纪律 130）：本行原写「宿主不给 rename」——
+ *    该结论**已被第十九轮实测推翻**（`sessions.rename` 确实存在、插件也拿得到会话实体；
+ *    两条事实见 `store/split-index.js` 头部事实①②）。
+ *    现行口径：派发时**优先调宿主 `rename`**（本文件 `renameSession()`，`T-PLUG-042`），
+ *    插件侧标签覆盖只作**兜底 + 可追标记**（`titleOrigin = "plugin:split"`）。
+ *    ⚠️ 在此更正前，不得把这行读成"已按宿主能力做过了"。 */
 import { readSplitIndex, applySplitLabels } from "../store/split-index.js";
 import { applyDispatchLabels } from "../store/dispatch-log.js";
 /* 会话档案（第 19 批建、第 21 批**接进唯一摄取点**）：每会话自己的总监与总结 */
@@ -295,65 +305,16 @@ export function matchRows(rows, q) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * 从 cordis `ctx.sessions` 读出会话摘要数组 + 当前会话。
+ * 会话快照读取 —— **实现已迁至 `logic/host-ctx.js`**。
  *
- * 🔴 形状按宿主源码取证（`dsh-client-runtime/lib/client.js`）：
- *    `ctx.sessions.list.getSnapshot()` → `{ ids, current, byId }`，
- *    `byId[id] = { id, displayTitle, running, completed?, blank, updatedAt, parentId?, … }`。
+ * 🔴 迁走的理由（纪律 126）：会话**显示名**（需求 2）· 会话**血缘**（需求 3）·
+ *    工作区**真实名**（需求 4）三件事必须读**同一份** `ctx.sessions` 快照。
+ *    原先只有本文件读，于是另外两处各自用 id 截断名顶上 ⇒ 两处口径错误、且都不会报错。
  *
- * 🔴 **为什么有两级读取**（2026-09-12 定位到的静默降级根因）：
- *    cordis 的 `ctx.<service>` 是 Proxy 陷阱，**未在 `inject` 声明的服务会直接抛错**
- *    （`@deepseek-ai/cordis/lib/index.js:675` → `cannot get property "sessions" without inject`）。
- *    旧实现外层一个 try/catch 把这句话吞了并返回 null，于是**降级无声** ——
- *    界面上只看到"血缘不可用"，看不出是"我们自己没声明注入"。
- *    ⇒ 修法三层：① 产物 `exports.inject` 补 `"sessions"`（声明真实依赖）；
- *       ② 这里先试 `ctx.sessions`，再退到 `ctx.get("sessions")`
- *          （cordis 的 `get()` 是**不要求 inject** 的读取口，
- *           见同文件 `:755` "Read a service from the store without the inject requirement"）；
- *       ③ 逐级写 `diag`，让原因能显示在 UI 的 title 上。
- *
- * @param {object} ctx
- * @param {object} [diag] 出参：逐级失败原因（降级不再无声）
- * @returns {Array|null}
+ * ⚠️ 本处**保留 re-export**：`window.__dshBranchTree.readSessionsFromCtx` 是既有闸门与
+ *    CDP 诊断的契约口 —— 删掉会让它们静默失联（纪律 79：写好了 ≠ 接进去了）。
  */
-export function readSessionsFromCtx(ctx, diag) {
-	const d = diag || {};
-	d.hasCtx = Boolean(ctx);
-	if (!ctx) { d.error = "apply(ctx) 未收到 ctx"; return null; }
-	try {
-		let svc = null;
-		try {
-			svc = ctx.sessions;                     // 路径 A：已声明 inject ⇒ 可用
-		} catch (e) {
-			d.injectMiss = String((e && e.message) || e);   // 记下"未声明 inject"这句话本身
-		}
-		if (!svc && typeof ctx.get === "function") {
-			try { svc = ctx.get("sessions"); d.viaGet = true; } catch (e) { d.getError = String((e && e.message) || e); }
-		}
-		d.hasSessions = Boolean(svc);
-		if (!svc) { d.error = d.injectMiss || d.getError || "ctx.sessions 不可用（也未通过 ctx.get 取得）"; return null; }
-		const list = svc.list;
-		d.hasList = Boolean(list);
-		if (!list) { d.error = "ctx.sessions.list 不可用"; return null; }
-		d.hasGetSnapshot = typeof list.getSnapshot === "function";
-		if (!d.hasGetSnapshot) { d.error = "ctx.sessions.list.getSnapshot 不是函数"; return null; }
-		const snap = list.getSnapshot();
-		d.snapKeys = snap && typeof snap === "object" ? Object.keys(snap).slice(0, 8) : null;
-		if (!snap) { d.error = "getSnapshot() 返回空"; return null; }
-		d.currentId = snap.current;
-		let arr = null;
-		if (snap.byId && typeof snap.byId === "object") arr = Object.keys(snap.byId).map((k) => snap.byId[k]).filter(Boolean);
-		else if (Array.isArray(snap.list)) arr = snap.list;
-		else if (Array.isArray(snap)) arr = snap;
-		d.rawCount = arr ? arr.length : 0;
-		if (!arr || !arr.length) { d.error = "快照里没有会话"; return null; }
-		d.sampleKeys = arr[0] ? Object.keys(arr[0]).slice(0, 12) : null;
-		return arr;
-	} catch (e) {
-		d.error = "读取 ctx.sessions 抛错：" + ((e && e.message) || e);
-		return null;
-	}
-}
+export { readSessionsFromCtx };
 
 /** 降级：由 discover 的 workspaces/sessions 造"无血缘"的平铺树 */
 async function fallbackFromDiscover() {
@@ -377,7 +338,9 @@ async function fallbackFromDiscover() {
  * 三、状态与订阅
  * ══════════════════════════════════════════════════════════════════ */
 
-let ctxRef = null;
+/* 🔴 第 42 轮：本地 `ctxRef` 已删除 —— 宿主 ctx 的唯一持有者是 `logic/host-ctx.js`
+ *    （原先这里与 `logic/branch-tree.js` 各存一份，外围模块拿不到 ctx 只能自己再造一份）。
+ *    读取一律走 `getHostCtx()`；写入见 `installBranchTreeApi(ctx)`。 */
 let cache = { tree: null, source: "none", lineage: false, at: 0, diag: { error: "尚未刷新" } };
 const listeners = new Set();
 
@@ -402,7 +365,7 @@ export async function refreshBranchTree() {
 	let tree = null;
 	let source = "none";
 	let lineage = false;
-	const fromCtx = readSessionsFromCtx(ctxRef, diag);
+	const fromCtx = readSessionsFromCtx(getHostCtx(), diag);
 	if (fromCtx && fromCtx.length) {
 		/* 🔴 第 21 批 D1 —— 用户原话「重复创建了一百多个会话」的**真因**：
 		 *    宿主快照的 `ids` **包含已归档会话**。实测 126 条里 125 条是用户早已下架、
@@ -523,12 +486,47 @@ export function watchCurrentSession(cb, ms) {
  * （为什么必须两级：见 readSessionsFromCtx 的 🔴 段）
  */
 function sessionsService() {
-	if (!ctxRef) return null;
-	try { const s = ctxRef.sessions; if (s) return s; } catch (e) { /* 未声明 inject ⇒ 落到 ctx.get */ }
+	/* 🔴 第 42 轮：两级读取（直读 → `ctx.get`）已收敛到 `host-ctx.js#hostService`
+	 *    —— 原先这里与 `readSessionsFromCtx` 各写一份同义逻辑（纪律 126）。 */
+	return hostService("sessions", getHostCtx());
+}
+
+/**
+ * **把标题写回宿主**（`T-PLUG-042` · 第 41 轮落地）。
+ *
+ * ══════════════════════════════════════════════════════════════════
+ *  为什么必须走宿主，而不是继续只在插件侧覆盖
+ * ══════════════════════════════════════════════════════════════════
+ *  宿主 `sessions.rename({sessionId,title})` **确实存在**（第十九轮实测更正；
+ *  两条事实见 `store/split-index.js` 头部）。而插件侧覆盖（`applySplitLabels`）
+ *  只改**血缘树的显示字段** ⇒ 宿主自己的会话列表 / 搜索里**仍是默认标题** ——
+ *  这正是用户说的"一百多个会话分不清"的一半原因。
+ *
+ * ══════════════════════════════════════════════════════════════════
+ *  🔴 使用边界（**只对刚建出来的空会话调用**）
+ * ══════════════════════════════════════════════════════════════════
+ *  · 只允许用于**本次新建**的会话（原名是宿主默认标签、零用户价值）；
+ *  · **不得**对"复用"的既有会话调用 —— 那会覆盖用户自己改过的标题
+ *    （纪律 82：闸门/自动化不许把用户数据当耗材）。
+ *  · 失败**不改**"分支已建出"这一事实，但必须**降级可见**（纪律 19）：
+ *    把 `ok/why` 交给调用方记进派发读数。
+ *
+ * @param {string} sessionId
+ * @param {string} title
+ * @returns {Promise<{ok:boolean, why?:string, raw?:string|null}>}
+ */
+export async function renameSession(sessionId, title) {
+	const svc = sessionsService();
+	const id = String(sessionId == null ? "" : sessionId);
+	const t = String(title == null ? "" : title).trim();
+	if (!svc || typeof svc.rename !== "function") return { ok: false, why: "宿主未提供 sessions.rename" };
+	if (!id || !t) return { ok: false, why: "缺 sessionId 或 title" };
 	try {
-		if (typeof ctxRef.get === "function") return ctxRef.get("sessions") || null;
-	} catch (e) { /* 两级都不可用 */ }
-	return null;
+		const res = await svc.rename({ sessionId: id, title: t });
+		return { ok: true, raw: res === undefined || res === null ? null : String(res).slice(0, 80) };
+	} catch (e) {
+		return { ok: false, why: String((e && e.message) || e) };
+	}
 }
 
 /**
@@ -966,7 +964,7 @@ function safeJson(v) {
 
 /** 安装全局契约并绑定 ctx（由 client-entry 的 apply 调用） */
 export function installBranchTreeApi(ctx) {
-	ctxRef = ctx || null;
+	setHostCtx(ctx);
 	const api = {
 		LAYOUT, buildBranchTree, normalizeSummary, visibleRows, ancestorChain, treeBounds, matchRows,
 		readSessionsFromCtx, refreshBranchTree, subscribeBranch, getBranchSnapshot,

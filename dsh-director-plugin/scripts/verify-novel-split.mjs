@@ -3,6 +3,12 @@ import { readFileSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { makeClicker, pressEsc } from "./_cdp-click-until.mjs";
+/* 🔴 第二十四轮（`T-PLUG-053 ④`）：「派发后**等到位**」的唯一实现 —— 为什么不能用
+ *   固定 `sleep`：CDP `Input.dispatchMouseEvent` 实测**落地 264–290 ms**（响应仅 18–21 ms），
+ *   而本套件多处是「派发 → `sleep(≤320)` → **单次**读数」⇒ 320 与 290 **同一量级**，
+ *   读到的是"相邻一步的迟到结果"。`settle` 等的是**前置条件**（状态停止变化），
+ *   **不回答"对不对"**（纪律 32 红线：等断言值 ⇒ 判据恒绿）。 */
+import { until, settle } from "./_cdp-wait.mjs";
 import { ensurePageFocus } from "./_cdp-focus.mjs";
 /* 🔴 纪律 98：**统一起点自举只一份实现**。本套件过去自己写了一遍（A1 段），
  *    在冷启动下不成立 ⇒ A 段整片红并把真因藏进后续连锁失败里。 */
@@ -41,6 +47,7 @@ import { plan } from "../src/logic/split-dimensions.js";
  *  | L | NS-11a–h | **第 19/25 批：派发前先复用已有会话**（用户原话「先考虑目前存在的会话,然后没有才是新建会话」） | 🔴 归属可加（`reused + created === 本次条数`）→ 🔴 `NS-11b` **冷启动下"复用也必须补登记"**（索引新增 == 复用条数）→ 🔴🔴 **核心验收：宿主会话净增 == 自报 created**（宿主真值实证，非自证）→ 🔴 孤儿清点可读。**第 25 批新增 `NS-11e/f/g`**（U10/P9 冷启动标题弱匹配）：`data-title-pool` 必写出（0 命中时分辨「读不到标题」与「形态变了」）· **冷启动（索引 0 条）+ `reused>0` ⇒ `data-title-hit` 必须为 1**（复用只可能来自标题匹配 = U10 生效的硬证据）· `reused=0` ⇒ `data-title-missed` 非空（「全新建」必须给得出原因）· **`NS-11h` 常驻读数与同一份树对账**（`data-alive` === 树行数；「树未建立」必须与「0 条」可分 —— 纪律 60）。🔴 **同批口径更正（纪律 99）**：`NS-11c`/`NS-4c2` 旧版把结果二分（全复用/全新建）且假定"复用的早已在索引里"，两条前提都已被推翻 ⇒ 改为**真正的不变式**（净增 == created、**索引新增 == 新建 + 标题命中**），**不掰产品** |
  *  | M | NS-13a–f | **19 号文 N2：跨维度转发**（用户原话「在这个分支里说另一个分支的事」） | 🔴 三个新契约装在**真机产物**上（离线绿 ≠ 产物绿）→ 🔴 真机映射对账 `dimKeys = bound + unbound`（纪律 78）→ 🔴 **判据 2**：属于其他维度 ⇒ `transfer` 且候选 id **= 该分支节点 id**（目标会话对账）→ 🔴 **判据 1 + 负对照**：属于当前维度 ⇒ `local`（不得是 transfer）→ 🔴 **产物内** `childEnvelope`：`root` 继承 / `parent` 指源 / `round`+1 → 🔴 **接线进了产物**（读磁盘 `lib/client.js` 的 5 个调用点 / 锚点）。**为什么必须读磁盘**：P1–P3 的事故形态正是「src 里写了、产物里没生效」 |
  *  | O | NS-14a–h | **19 号文 P6：N5 对话持续性 + N6 档案全覆盖** | 🔴 **P2 对账**（`dp-r5-msg` 文案数字 **===** 库内条数，纪律 78）→ 🔴 **P2 非空**（> 0，"切会话即空"的直接否定）→ 🔴 **P2 可见**（元素数 = `min(14, 库内)` —— **口径更正**：产品渲染有 14 条上限，按"元素数=库内"判会必然假红）→ 🔴 **P1 前提**（原生框写入并逐字回读）→ 🔴 **P1 显式标注**（「登记」提示必须**明说**「不产生总监消息」）→ 🔴 **P1 负对照**（同一次登记前后条数**不变** —— 证明那句标注是真话）→ 🔴 **N6 判据 3**（`aliveCount = withAlive + missingAlive` 且 `total = withAlive + orphans`）→ 🔴 **N6 判据 1**（存活的总监分支 `missingAlive === 0`，先证前提 `dimAliveN > 0`） |
+ *  | G2-A | NS-17a–g2 | **批次 D · 三级作用域面包屑 + 宿主限制如实标注**（用户原话「工作区**不允许文件夹嵌套**…**能调整么**」「novels 下面有多个项目，我应该可以**再打开不同项目**处理问题」） | 🔴 **前提**（作用域已定 ⇒ `dp-crumb` 必须渲染）→ 🔴 **末级 ≡ `dp-level` 选中项**（**身份层**：`data-node-id` === `dp-level.value`，纪律 78）→ 🔴 **结构/深度**（`data-depth` = 级数 · 各级 `data-node-id` 非空 · 恰一个 `data-current=1` 且在末级 · 末级 `SPAN` / 非末级 `BUTTON`）→ 🔴 **如实标注**（`dp-crumb-host` **可见**且明说"宿主侧栏不支持文件夹嵌套"，不许只藏在 `title` —— 纪律 146）→ 🔴 **逐级可跳转**（非末级是**可用**按钮，不是装饰）→ 🔴 **呈现层对账**（末级**可见文字** === 下拉项规范化后的节点名 —— 身份一致 ≠ 用户读到的一致）→ 🔴🔴 **真机动作 `NS-17g`**：**真点**第 1 级 ⇒ `dp-level` 切到**那一级的 node id**（"看着能点" ≠ "点了真的切过去"，纪律 57），随后 `NS-17g2` **收尾复原**（纪律 129）。**配 `NS_CRUMB_NEG=1` 校准**（期望 id 换哨兵 ⇒ `NS-17b` 必须**精确红**，而 `NS-17f` 仍绿 —— 证明两条判据各自独立、都不是橡皮图章）。⚠️ 本段是 38 轮"把路径塞进 `title` ⇒ 用户看不见 ⇒ 反馈没完成"的**判据侧补课**（纪律 135：落点在 ≠ 闸门守）。⚠️ 与 `verify-walk` 的**分工**写在 §G2-A-a 注释里：广度套件**排除**面包屑按钮（导航型会改写 `activeNodeId`、连累其后控件读数），深点由本段承担 |
  *  | D | NS-6a–c | 清除的**二次确认** | 首点进 `data-armed=1`；**超时自动撤防**回 `0`（正负对照：不能永久停在待删态） |
  *  | D | NS-6d–g | 清除的真实效果（🔴 完成信号 = **哨兵消失** · 纪律 16/23/55） | 二击窗口内 `armed=1` → **哨兵从库中消失之后**才取读数（`dp-maint-result` 是**持久 DOM**，直接 `waitFor` 会命中**上一轮旧值**）→ `removed === before > 0` → `data-before ≥` 闸门独立实测条数（抓"旧读数"）→ `ok=1` |
  *  | D | NS-6h0 | 🔴 哨兵**先证前提** | 自写一条带唯一 `messageId` 的消息，**必须能按它读回来**（否则后面的"消失"不可信 —— 纪律 23） |
@@ -292,10 +299,16 @@ async function closeMindmap(tag) {
 /* 注：本套件**不使用** keyboard / touch，只发 mouseMoved/Pressed/Released ⇒ 不会命中 8000ms 超时口径。 */
 const MOUSE_EMIT_MS = 8000;
 
-let pass = 0, fail = 0; const failures = [];
+let pass = 0, fail = 0, skip = 0; const failures = [];
 function t(id, name, cond, detail) {
 	if (cond) pass++; else { fail++; failures.push(id + " " + name); }
 	console.log(`  ${cond ? "✅" : "❌"} ${id} ${name}${detail !== undefined && !cond ? "\n      → " + JSON.stringify(detail) : (detail !== undefined && typeof detail === "string" ? "" : "")}`);
+}
+/* 🔴 前提缺失必须**可分**（纪律 94/140）：不判红，也不许**假装绿**（纪律 119 同族：
+ *    唯一真相源之外的"看着像绿"最危险）。⏭ 计入独立计数，不混进 pass。 */
+function sk(id, name, why) {
+	skip++;
+	console.log("  ⏭ " + id + " " + name + " —— 跳过：" + why);
 }
 function section(s) { console.log("\n" + "─".repeat(60) + "\n【" + s + "】"); }
 const J = (v) => JSON.stringify(v);
@@ -774,7 +787,10 @@ const splitRead = await js(`(function(){ var e=document.querySelector('[data-tes
            titleHit: e.getAttribute('data-title-hit'), titleMissed: e.getAttribute('data-title-missed'),
            titlePool: e.getAttribute('data-title-pool'), titleHits: e.getAttribute('data-title-hits'),
            /* 第 36 轮：项目级兜底复用条数（松匹配），与 titleHits 分列 */
-           projectHits: e.getAttribute('data-project-hits') }; })()`);
+           projectHits: e.getAttribute('data-project-hits'),
+           /* 🔴 T-PLUG-042：宿主改名结局（离线只守接线 ⇒ 真机必须读得到结局） */
+           renameOk: e.getAttribute('data-rename-ok'), renameFail: e.getAttribute('data-rename-fail'),
+           renameWhy: e.getAttribute('data-rename-why') }; })()`);
 const reusedN = splitRead && splitRead.reused !== null && splitRead.reused !== "" ? Number(splitRead.reused) : -1;
 const createdN = splitRead && splitRead.created !== null && splitRead.created !== "" ? Number(splitRead.created) : -1;
 const orphanN = splitRead && splitRead.orphan ? Number(splitRead.orphan) : 0;
@@ -1346,6 +1362,103 @@ section("O 对话持续性（N5 P1/P2）+ 档案全覆盖（N6）");
  * 🔴 为什么不从 `__dshHierarchy` 反推：作用域由 `directorLayoutStore.activeNode` 驱动，
  *    `dp-level` 正是它的投影 ⇒ **读界面就是读真相**（纪律 92：用产品自己的口径）。 */
 const curScopeId = await js(`(function(){ var e=document.querySelector('[data-testid="dp-level"]'); return e? String(e.value||'') : null; })()`);
+
+/* ══════════════════════════════════════════════════════════════════════
+ * `NS-17`（批次 D · **G2-A**）：三级作用域**可见面包屑** + 宿主限制**如实标注**
+ * ──────────────────────────────────────────────────────────────────────
+ * 用户需求原文：「标准客户端左侧导航栏的**工作区**，不允许**文件夹嵌套**…**能调整么**」
+ *              「novels 下面有多个项目，我应该可以**再打开不同项目**处理问题」
+ * 项目落死「不改宿主编译产物」⇒ 该能力**在插件侧完整承载**，并**如实标注**宿主侧的限制。
+ *
+ * 🔴 为什么必须配闸门（纪律 135「落点在 ≠ 闸门守」）：
+ *    38 轮把路径塞进下拉 `title`（悬停才可见）= 用户**看不见** ⇒ 实测反馈"没完成"。
+ *    若本轮只写代码不写判据，下一个人完全可以把 `dp-crumb` 删掉而**全套闸门照样全绿**
+ *    —— 那就等于把同一个缺陷再犯一遍。**新增标识符必须被 `grep` 得到才算"接进去了"。**
+ *
+ * 🔴 判据口径（纪律 78 单一真相源）：
+ *    末级面包屑的文字 **===** `dp-level`（作用域下拉）**选中项**的文字 ——
+ *    两者是**同一真相源**（页面 `nodeId`）的两个投影 ⇒ 不一致就说明其中一个骗人。
+ * ══════════════════════════════════════════════════════════════════════ */
+/* 校准开关（纪律 32：能红 ⇒ 必然红）。`NS_CRUMB_NEG=1` 把「期望文本」换成**不可能匹配的哨兵**
+ * ⇒ 若 `NS-17b` 仍绿，说明该判据是**恒真**（写成 `true` 了），不是真的在比对。 */
+const CRUMB_NEG = process.env.NS_CRUMB_NEG === "1";
+const crumbRead = await js(`(function(){
+	var box=document.querySelector('[data-testid="dp-crumb"]');
+	if(!box) return { present:false };
+	var items=[].slice.call(box.querySelectorAll('[data-testid="dp-crumb-i"]'));
+	var host=box.querySelector('[data-testid="dp-crumb-host"]');
+	var sel=document.querySelector('[data-testid="dp-level"]');
+	var opt=sel? sel.options[sel.selectedIndex] : null;
+	return {
+		present:true, depth:Number(box.getAttribute('data-depth')),
+		n:items.length,
+		texts:items.map(function(e){return String(e.textContent||'').trim();}),
+		levels:items.map(function(e){return e.getAttribute('data-level');}),
+		/* 🔴 身份层（id）—— 与呈现文字分开取。下拉项的**文字**是
+		 *   「全角缩进 ×d + LEVEL_LABEL + 中点 + name」（见 buildOptions），
+		 *   与面包屑末级的 name **不同源** ⇒ 拿文字相等判必假红。
+		 * ⚠️ 本注释位于外层模板串内部：**禁用反引号**（会提前闭合模板 ⇒ 语法错）。 */
+		nodeIds:items.map(function(e){return e.getAttribute('data-node-id');}),
+		cur:items.map(function(e){return e.getAttribute('data-current');}),
+		tags:items.map(function(e){return e.tagName;}),
+		selText: opt? String(opt.textContent||'').trim() : null,
+		selValue: sel? String(sel.value||'') : null,
+		/* 呈现层：把下拉项文字规范化成"节点名"——去首部全角缩进 + 去掉首段「层级标签 · 」
+		 * 🔴 正则里的反斜杠必须**双写**（模板串内禁反引号，故这里用文字描述）：
+		 *    外层是模板串 ⇒ 单写 \s 会被外层**先吃成字母 s** ⇒ 全角类变成 [全角空格 + s]
+		 *    ⇒ 连节点名里的字母 s 都会被剥掉（静默改变正则语义，不报错）。 */
+		selName: opt? String(opt.textContent||'').replace(/^[\\u3000\\s]+/,'').replace(/^.*?\\u00a0*\\u00b7\\s*/,'').trim() : null,
+		host: host? String(host.textContent||'').trim() : null,
+		scopeKind: (function(){var c=document.querySelector('[data-testid="dp-cols"]');return c? c.getAttribute('data-scope-kind') : null;})()
+	};})()`);
+console.log("  NS-17 读数：" + J(crumbRead));
+
+t("NS-17a", "🔴 **前提**：作用域已确定（`dp-level` 有值）⇒ 三级面包屑 `dp-crumb` **必须渲染**（不渲染 = 用户看不到自己在哪一层）",
+	!!crumbRead && (crumbRead.present === true) && !!curScopeId,
+	{ present: !!(crumbRead && crumbRead.present), scope: curScopeId, neg: CRUMB_NEG });
+
+if (crumbRead && crumbRead.present) {
+	const lastText = crumbRead.texts[crumbRead.texts.length - 1];
+	const lastId = crumbRead.nodeIds[crumbRead.nodeIds.length - 1];
+	/* 🔴 **身份层对账**（纪律 78）：两边都取 **节点 id**，不经任何字符串格式化 ⇒ 无歧义。
+	 *   为什么不用文字：下拉项文字含层级标签前缀（`会话总监 · …`），面包屑末级只有名字 ——
+	 *   第一版就是拿文字直接比 ⇒ **我自己造成的假红**（本来该同源，判据却建在"呈现"上）。 */
+	const wantId = CRUMB_NEG ? "__CAL_SENTINEL__" : crumbRead.selValue;
+	t("NS-17b", "🔴 **末级 ≡ 下拉选中项（身份层）**：末级 `data-node-id` **===** `dp-level.value` —— 同一真相源（页面 `nodeId`）的两个投影，按 **id** 对账不经格式化（纪律 78）",
+		typeof lastId === "string" && lastId !== "" && lastId === wantId,
+		{ lastId: lastId, selValue: crumbRead.selValue, want: wantId, neg: CRUMB_NEG });
+
+	/* 🔴 **呈现层对账**（纪律 146：判据必须对着用户看得见的那一面）：
+	 *   身份一致还不够 —— 用户读到的是**文字**，所以文字也必须对得上。 */
+	t("NS-17f", "🔴 **末级 ≡ 下拉选中项（呈现层）**：末级**可见文字** === 下拉选中项文字去掉全角缩进与「层级标签 · 」前缀后的节点名（用户看到的两处必须说同一件事）",
+		typeof lastText === "string" && lastText !== "" && lastText === crumbRead.selName,
+		{ last: lastText, selText: crumbRead.selText, selName: crumbRead.selName });
+
+	t("NS-17c", "🔴 **结构与深度**：`data-depth` = 级数 · 每一级都有非空 `data-node-id`（身份契约）· 恰好**一个** `data-current=1`（且是末级）· 末级是 `SPAN`（不可点，因为「你在这里」不是跳转目标）· 非末级是 `BUTTON`（可点跳转）",
+		crumbRead.depth === crumbRead.n && crumbRead.n >= 1
+			&& crumbRead.nodeIds.every((x) => typeof x === "string" && x !== "")
+			&& crumbRead.cur.filter((x) => x === "1").length === 1
+			&& crumbRead.cur[crumbRead.n - 1] === "1"
+			&& crumbRead.tags[crumbRead.n - 1] === "SPAN"
+			&& crumbRead.tags.slice(0, -1).every((x) => x === "BUTTON"),
+		{ depth: crumbRead.depth, n: crumbRead.n, nodeIds: crumbRead.nodeIds, cur: crumbRead.cur, tags: crumbRead.tags, levels: crumbRead.levels });
+
+	t("NS-17d", "🔴 **如实标注（需求 14/15）**：`dp-crumb-host` 可见，且文案**明说**宿主侧栏不支持文件夹嵌套 —— 不许只在 `title`（悬停）里，更不许假装两边都做到了（纪律 57 的用户侧形态）",
+		typeof crumbRead.host === "string" && /宿主侧栏不支持文件夹嵌套/.test(crumbRead.host),
+		{ host: crumbRead.host });
+
+	/* 跳转能力：非末级必须真的能点（有 `onClick` 的按钮 = 可聚焦、非 disabled）。
+	 * 🔴 只判"是 BUTTON"不够 —— 一个 `disabled` 的按钮同样是 BUTTON（纪律 22 同族）。 */
+	t("NS-17e", "🔴 **逐级可跳转**：非末级的每一级都是**可用**按钮（不是 disabled 的摆设）—— 否则「再打开不同项目」只能靠下拉，面包屑就成了纯装饰",
+		crumbRead.n === 1 || await js(`(function(){
+			var box=document.querySelector('[data-testid="dp-crumb"]');
+			var its=[].slice.call(box.querySelectorAll('[data-testid="dp-crumb-i"]'));
+			return its.slice(0,-1).every(function(e){ return e.tagName==='BUTTON' && !e.disabled; });
+		})()`),
+		{ n: crumbRead.n, tags: crumbRead.tags });
+} else {
+	["NS-17b", "NS-17c", "NS-17d", "NS-17e", "NS-17f"].forEach((k) => sk(k, "面包屑未渲染（前提 NS-17a 不成立）"));
+}
 const uiMsgCount = async () => {
 	const txt = await js(`(function(){ var e=document.querySelector('[data-testid="dp-r5-msg"]'); return e? String(e.textContent||'') : null; })()`);
 	if (txt === null || txt === undefined) return null;
@@ -1393,8 +1506,20 @@ const regRun = await clickWithFallback('[data-testid="dp-host-register"]', "📥
 	return txt !== null && txt !== undefined && String(txt).indexOf("登记") >= 0;
 }, 10, 250);
 const regToast = await js(`(function(){ var e=document.querySelector('[data-testid="dp-toast"]'); return e? String(e.textContent||'') : null; })()`);
-t("NS-14e", "🔴 **P1 显式标注**：点「登记流转」后提示**明说**「不产生总监消息」+ 给出替代路径（用户不会以为「功能坏了」）",
-	regRun.click.ok === true && String(regToast).indexOf("不产生总监消息") >= 0, { toast: String(regToast).slice(0, 80), click: regRun.click });
+/* 🔴 第 41 轮修（纪律 126 / 139）：口径必须取自**产品自己的常量**，不许硬编码副本。
+ *   原先这里写死「不产生总监消息」，而第 41 轮把「**不产生**总监消息」这句错口径
+ *   收口成了 `NO_DIRECTOR_MSG_TAG = "本动作**不写**总监消息"`（同一语义只许一处构造点）
+ *   ⇒ 判据钉在**旧副本**上就必然红，而且它红的是"我改了措辞"，**不是产品坏了**
+ *     —— 这正是纪律 126 的判据侧形态：**同一语义两处措辞，收口时必有一处被漏掉**。
+ *   ⇒ 改为读页内 API（`client-entry.js` 的 `installSummaryNotesApi()` 已把它挂上），
+ *     并**同时**校验替代路径提示；API 读不到 ⇒ 如实判红（纪律 54：不静默）。 */
+const snApi = await js(`(function(){ var a=window.__dshSummaryNotes;
+  return a ? { tag:String(a.NO_DIRECTOR_MSG_TAG||""), hint:String(a.REGISTER_HINT||"") } : null; })()`);
+const regTag = snApi && snApi.tag ? snApi.tag : null;
+t("NS-14e", "🔴 **P1 显式标注**：点「登记流转」后提示**明说**「不写总监消息」+ 给出替代路径（用户不会以为「功能坏了」）",
+	regRun.click.ok === true && regTag !== null
+	&& String(regToast).indexOf(regTag) >= 0 && String(regToast).indexOf(String(snApi.hint)) >= 0,
+	{ toast: String(regToast).slice(0, 90), 页内常量: snApi, click: regRun.click });
 
 await sleep(300);
 const p1After = await dbMsgCount(curScopeId);
@@ -1438,6 +1563,87 @@ t("NS-14g", "🔴 **N6 判据 3 恒等式**：`aliveCount === withAlive + missin
 t("NS-14h", "🔴 **N6 判据 1 全覆盖**：**每个存活的总监分支**会话都有自己的档案（`missingAlive === 0`）—— 先证前提 `dimAliveN > 0`",
 	!!stD && dosProbe.dimAliveN > 0 && stD.missingAlive === 0,
 	{ dimAliveN: dosProbe && dosProbe.dimAliveN, missingAlive: stD && stD.missingAlive, missingIds: stD && stD.missingIds });
+
+/* ══════════════ 🔴 `T-PLUG-042`：宿主改名结局（真机）══════════════
+ * 离线闸门（`test-director-dispatch` 的 `DD-10..13`）只能证明**接线**；
+ * "宿主自己的会话列表里标题真的变了"必须**真机读结局** —— 而 `<span>` 是块级兄弟，
+ * 拿不到就直接跳过（前提缺失），**不许**因为"没读到"报红（纪律 58/94）。 */
+const renameOkN = splitRead && splitRead.renameOk ? Number(splitRead.renameOk) : 0;
+const renameFailN = splitRead && splitRead.renameFail ? Number(splitRead.renameFail) : 0;
+const renameWhyS = (splitRead && splitRead.renameWhy) ? String(splitRead.renameWhy) : "";
+t("NS-15c", "🔴 读数**已接线**（`data-rename-ok` 属性**存在**，不是 null —— 纪律 79：写好了 ≠ 接进去了）",
+	!!splitRead && splitRead.renameOk !== null,
+	{ renameOk: splitRead && splitRead.renameOk, keys: splitRead ? Object.keys(splitRead) : null });
+if (createdN <= 0) {
+	sk("NS-15a", "新建条目的改名结局覆盖（`renameOk + renameFail === created`）",
+		"本次**全复用**（created=" + createdN + "）⇒ **没有新建可改名** —— 这是「**没改名**」而非「改名失败」（纪律 140）");
+	sk("NS-15b", "改名失败必给出原因", "同上：无新建条目可改名");
+} else {
+	t("NS-15a", "🔴 **每个新建条目都尝试过宿主改名**（`renameOk + renameFail === created`）",
+		renameOkN + renameFailN === createdN, { created: createdN, renameOk: renameOkN, renameFail: renameFailN });
+	t("NS-15b", "🔴 改名**失败必给出原因**（降级可见 · 纪律 19）",
+		renameFailN === 0 || renameWhyS.length > 0, { renameFail: renameFailN, renameWhy: renameWhyS });
+}
+
+/* ══════════════ P · 存储体检（`T-PLUG-048` / `T-PLUG-049` · 真机）══════════════
+ * 离线闸门（`test-store-budget` 的 `SB-*`）已用**合成 storage** 穷举了判定与降级；
+ * 真机这一层守的是另外两件**离线测不到**的事：
+ *   ① 界面读数**真的接出来了**（点了按钮就有读数 —— 纪律 79）；
+ *   ② 读数与**页内真值对账**（当场直接数 `localStorage`）—— 几何对账 > 存在性。
+ * 🔴 体检是**只读**动作（不删任何东西）⇒ 不需要二次确认、也不需要环境复原。
+ * 🔴 判据只对「读数 == 真值」下硬结论；**不**断言"孤儿必须是 N" —— 那取决于真机历史，
+ *    拿它钉阈值就是纪律 126 禁止的「照手工计数钉」。 */
+section("P 存储体检（T-PLUG-048/049）：读数接线 + 与真值对账 + 降级可分");
+const healthCond = async () => await js(`!!document.querySelector('[data-testid="dp-store-health"]')`);
+await clickWithFallback('[data-testid="dp-maint-health"]', "🔍 存储体检", healthCond, 12, 250);
+const sh = await js(`(function(){
+  var e = document.querySelector('[data-testid="dp-store-health"]');
+  if (!e) return null;
+  var g = function(k){ var v = e.getAttribute(k); return v === null ? null : v; };
+  var n = 0, c = 0, ok = true;
+  try {
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf('dsh.director.store.') === 0) { n++; c += (localStorage.getItem(k) || '').length; }
+    }
+  } catch (err) { ok = false; }
+  return { total: g('data-total'), orphan: g('data-orphan'), judged: g('data-judged'),
+           chars: g('data-chars'), unknown: g('data-unknown'), failed: g('data-failed'),
+           aliveBuckets: g('data-alive-buckets'), aliveSessions: g('data-alive-sessions'),
+           truthN: n, truthChars: c, truthOk: ok };
+})()`);
+
+t("NS-16a", "🔴 存储体检读数**已接线**（`dp-store-health` 在场且 `data-total` 非 null —— 纪律 79：写好了 ≠ 接进去了）",
+	!!sh && sh.total !== null && sh.total !== "",
+	{ sh: sh });
+
+t("NS-16b", "🔴 读数与**页内真值对账**：`data-total` === 当场数出来的 `dsh.director.store.*` 桶数（几何对账 > 存在性）",
+	!!sh && sh.truthOk === true && Number(sh.total) === sh.truthN,
+	{ reportedTotal: sh && sh.total, truthN: sh && sh.truthN });
+
+t("NS-16c", "🔴 字符数口径同源：`data-chars` === 逐桶原文长度之和（同一前缀、同一口径）",
+	!!sh && Number(sh.chars) === sh.truthChars,
+	{ reportedChars: sh && sh.chars, truthChars: sh && sh.truthChars });
+
+t("NS-16d", "🔴 **降级可与「0 个孤儿」分辨**（纪律 19）：`data-judged ∈ {0,1}`，且 `judged=0 ⇒ 孤儿必须为 0 且有未判定桶`",
+	!!sh && (sh.judged === "0" || sh.judged === "1")
+	&& (sh.judged !== "0" || (String(sh.orphan) === "0" && Number(sh.unknown) > 0)),
+	{ judged: sh && sh.judged, orphan: sh && sh.orphan, unknown: sh && sh.unknown });
+
+const canClean = await js(`(function(){var e=document.querySelector('[data-testid="dp-maint-orphans"]');return e?e.getAttribute('data-can-clean'):null;})()`);
+t("NS-16e", "🔴 「清孤儿」**按读数开门**：`data-can-clean=1` ⇔（`judged=1` 且有孤儿）—— 不许在判不了的时候可点",
+	canClean !== null && (canClean === "1") === !!(sh && sh.judged === "1" && Number(sh.orphan) > 0),
+	{ canClean: canClean, judged: sh && sh.judged, orphan: sh && sh.orphan });
+
+t("NS-16f", "🔴 **恒等式**（几何对账）：`存活桶 + 孤儿 + 未判定 === 桶总数` —— 三个读数必须来自**同一次分类**",
+	!!sh && Number(sh.total) === (Number(sh.aliveBuckets) + Number(sh.orphan) + Number(sh.unknown)),
+	{ total: sh && sh.total, aliveBuckets: sh && sh.aliveBuckets, orphan: sh && sh.orphan, unknown: sh && sh.unknown });
+
+t("NS-16g", "🔴 两个**不同口径**不共用一个字段（纪律 126）：`data-alive-buckets`（存活**桶**）与 "
+	+ "`data-alive-sessions`（存活**会话**）必须各自有值且**不必相等**（相等只是巧合）",
+	!!sh && sh.aliveBuckets !== null && sh.aliveBuckets !== "" && sh.aliveSessions !== null && sh.aliveSessions !== ""
+	&& Number(sh.aliveBuckets) >= 0 && Number(sh.aliveSessions) >= 0,
+	{ aliveBuckets: sh && sh.aliveBuckets, aliveSessions: sh && sh.aliveSessions });
 
 /* ══════════════ D · 清除对话消息 ══════════════ */
 section("D 清除对话消息：二次确认 + 只清自己 + 不越界");
@@ -1850,14 +2056,20 @@ async function dragMouse(from, to, steps, onStep) {
 	console.log("  · 松手前排空：" + J(settled));
 	if (onStep) { const s = await winRead(); if (s) traced.push(s); }
 	emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1, buttons: 0 });
-	await sleep(300);
+	/* 松手同样有异步落地（吸附 / 落位）⇒ 等**稳定**再返回：调用方紧接着就读 `winRead()`，
+	 * 固定 `sleep(300)` 与派发落地 264–290 ms 同量级（纪律 145）。 */
+	await settle(winRead, { budgetMs: 1500, stepMs: 120, tag: "拖后稳定(steps=" + steps + ")" });
 	return traced;
 }
 
 /* W 起点**显式建立**（纪律 51）：上一轮可能把窗口拖到别处/停在贴边态，
  * 不重置的话"默认是 collapsed"这类断言会以**上一次运行的状态**为起点 ⇒ 假红。 */
 await js("(function(){try{window.__directorLayoutStore.resetRunningWin();return 1;}catch(e){return '__err:'+e.message;}})()");
-await sleep(220);
+/* 🔴 起点建立 ≠ 页面就绪（纪律 133）：`resetRunningWin()` 是**异步生效**的 ⇒ 固定
+ *   `sleep(220)` 之后单次读数可能读到"还没归位"的中间态（= 假红）。改等**连续两次
+ *   读数一致**（`settle` 只回答"还变不变"，按定义**不回答"对不对"**）。 */
+const w0Settle = await settle(winRead, { budgetMs: 1500, stepMs: 120, tag: "NS-8a 起点" });
+if (!w0Settle.ok) console.log("  · [NS-8a 起点] 1500ms 内仍在变（rounds=" + w0Settle.rounds + "）—— 起点判据照旧单次读");
 const w0 = await winRead();
 const vp = await js("(function(){return {vw:innerWidth,vh:innerHeight};})()");
 console.log("  · 视口 " + J(vp) + " ｜ W 起点：" + J(w0));
@@ -1930,11 +2142,80 @@ emit("Input.dispatchMouseEvent", { type: "mouseMoved", x: hb3.x, y: hb3.y });
 emit("Input.dispatchMouseEvent", { type: "mousePressed", x: hb3.x, y: hb3.y, button: "left", clickCount: 2, buttons: 1 });
 await sleep(40);
 emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: hb3.x, y: hb3.y, button: "left", clickCount: 2, buttons: 0 });
-await sleep(320);
+/* 🔴 派发后**等到位**（纪律 145）：原写法 `sleep(320)` 与 CDP 派发落地实测 **264–290 ms**
+ *   同一量级 ⇒ 单次读数会读到"相邻一步的迟到结果"。改等**状态停止变化**这一**前置条件**，
+ *   再单次读断言值 —— 等的是"稳没稳"，**不是**"对不对"（纪律 32 红线：等断言值 ⇒ 判据恒绿）。 */
+const w4Settle = await settle(winRead, { budgetMs: 1500, stepMs: 120, tag: "NS-8r" });
+if (!w4Settle.ok) console.log("  · [NS-8r 前置] 派发后 1500ms 内状态仍变（waited=" + w4Settle.waited + "ms · rounds=" + w4Settle.rounds + "）—— 判据仍由下面单次读数决定");
 const w4 = await winRead();
 console.log("  · 归位后：" + J(w4));
 t("NS-8r", "🔴 双击头部归位 ⇒ 回默认位且 `collapsed` / 未浮动（环境复原）",
 	w4 && w4.mode === "collapsed" && w4.floating === "0", w4);
+
+/* ══════════════ G2-A-a · 面包屑「逐级跳转」真机动作（状态改写段 · 收尾复原） ══════════════
+ * 为什么必须**真点**（纪律 57「全绿 ≠ 能验收」）：
+ *   本套件前面的 `NS-17e` 只断言「非末级是**可用**按钮」（`tagName==='BUTTON' && !disabled`）——
+ *   一个按钮"看起来能点"和"点了真的切过去"是两件事。而用户的原话需求正是**动作**：
+ *     「novels 下面有多个项目，我应该可以**再打开不同项目**处理问题」
+ *   ⇒ 若只验 `!disabled`，下一个人把 `onClick` 删掉，闸门照样全绿。
+ *
+ * 与 `verify-walk` 的分工（**闸门不许成为产品的破坏者**）：
+ *   `verify-walk` 是**广度**套件，会枚举并真点总监页上每一个 `button`。
+ *   面包屑按钮是**导航型**（点一下就改写 `activeNodeId`，会连累其后同排控件的几何读数）
+ *   ⇒ 在那边**排除**（否则它自己制造假红），改由本段的 `NS-17g` **定点**做深——点一次、断言、复原。
+ *
+ * 🔴 红线（纪律 145）：`waitFor` 等的是**前置条件**「作用域**变了**」（= 事件真的送达并处理），
+ *   断言的是「**变成谁**」（`=== 那一级的 node id`）—— 两者**不同源**，不是"把要断言的事等到成立"。
+ * 🔴 纪律 127/129：前提由**本段自己建立**（先显式回到本套件建立的作用域），
+ *   结束后**还回去**（不还 ⇒ 后面所有段落都在别的作用域上跑）。 */
+section("G2-A · 面包屑逐级跳转（真点一次 ⇒ 作用域真的切过去 ⇒ 收尾复原）");
+
+const scopeValue = async () => String((await js(`(function(){var s=document.querySelector('[data-testid="dp-level"]');return s? String(s.value||'') : '';})()`)) || "");
+/* 本段自建前提：回到本套件建立的那个作用域（中段可能被切过） */
+await js(`(function(){try{window.__directorLayoutStore.setActiveNode(${JSON.stringify(curScopeId)});return 1;}catch(e){return '__e';}})()`);
+const scopeHome = await waitFor(async () => { const v = await scopeValue(); return v === curScopeId ? v : null; }, 30, 150);
+console.log("  作用域归位：" + J({ want: curScopeId, got: scopeHome }));
+
+const firstCrumb = await js(`(function(){
+  var b=document.querySelector('[data-testid="dp-crumb"]');
+  if(!b) return { present:false };
+  var its=[].slice.call(b.querySelectorAll('[data-testid="dp-crumb-i"][data-current="0"]'));
+  if(!its.length) return { present:true, n:0, depth:Number(b.getAttribute('data-depth')) };
+  var e=its[0];
+  /* 先滚进视口再看几何 —— 否则"在折叠区下面"会被读成"点不动"（纪律 23：先证前提再断结果） */
+  if(e.scrollIntoView) e.scrollIntoView({block:'center', inline:'center'});
+  var r=e.getBoundingClientRect();
+  return { present:true, n:its.length, id:e.getAttribute('data-node-id'), text:String(e.textContent||'').trim(),
+    inView:(r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight),
+    w:Math.round(r.width), h:Math.round(r.height) };
+})()`);
+console.log("  NS-17g 前提读数：" + J(firstCrumb));
+
+t("NS-17g0", "🔴 **前提**：作用域已归位到本套件建立的那一级，且存在**非末级**面包屑并在**视口内可见**（否则「点不动」会被伪装成「跳转没生效」）",
+	scopeHome === curScopeId && !!firstCrumb && firstCrumb.present === true && firstCrumb.n > 0 && firstCrumb.inView === true,
+	{ home: scopeHome === curScopeId, crumb: firstCrumb });
+
+if (firstCrumb && firstCrumb.present && firstCrumb.n > 0 && firstCrumb.inView === true) {
+	const gClick = await clickSel('[data-testid="dp-crumb-i"][data-current="0"]', "🧭 点第 1 级面包屑「" + firstCrumb.text + "」（验「能再打开不同项目」）");
+	const gScope = await waitFor(async () => { const v = await scopeValue(); return v && v !== curScopeId ? v : null; }, 30, 150);
+	t("NS-17g", "🔴 **面包屑真的把作用域切过去了**：真点第 1 级 ⇒ `dp-level` = **那一级的 node id**（「按钮看着能点」与「点了真的切过去」是两件事 —— `NS-17e` 只到前一件）",
+		gClick.ok === true && gScope === firstCrumb.id,
+		{ click: gClick, before: curScopeId, after: gScope, want: firstCrumb.id });
+
+	/* ── 收尾复原（纪律 129）：判据动过的状态**必须还回去** ── */
+	let gBack = null;
+	if (gScope && gScope !== curScopeId) {
+		await js(`(function(){try{window.__directorLayoutStore.setActiveNode(${JSON.stringify(curScopeId)});return 1;}catch(e){return '__e';}})()`);
+		gBack = await waitFor(async () => { const v = await scopeValue(); return v === curScopeId ? v : null; }, 30, 150);
+	} else {
+		gBack = curScopeId;   /* 没变化 ⇒ 无需复原，也不算"复原失败" */
+	}
+	t("NS-17g2", "🔴 **收尾复原**：作用域已回到本段起点（不还回去 = 其后每一段都在别的作用域上跑 —— 纪律 129/141）",
+		gBack === curScopeId, { before: curScopeId, after: gScope, restored: gBack });
+} else {
+	sk("NS-17g", "面包屑逐级跳转（真机动作）", "前提不成立：无可见的非末级面包屑（子级为空 / 不在视口内）");
+	sk("NS-17g2", "面包屑跳转后的收尾复原", "同上：未执行跳转");
+}
 
 /* ══════════════ E · 收尾与健康度 ══════════════ */
 section("E 收尾：环境复原 + CDP 健康度");
@@ -1985,7 +2266,7 @@ if (envNoise.length) {
 }
 
 console.log("\n" + "═".repeat(59));
-console.log("  真机验收：PASS " + pass + " / FAIL " + fail + " / 总计 " + (pass + fail));
+console.log("  真机验收：PASS " + pass + " / FAIL " + fail + (skip ? " / 跳过 " + skip : "") + " / 总计 " + (pass + fail));
 if (cdpTimeouts.length) console.log("  ⚠️ CDP 超时 " + cdpTimeouts.length + " 次：" + J(cdpTimeouts.slice(0, 5)));
 /* 🔴 收尾打印**与 `NS-7f` 同一口径**：只列**产品**异常。
  *    否则噪声会在收尾再喊一遍"页面未捕获异常 N 条"，而 NS-7f 已经判绿

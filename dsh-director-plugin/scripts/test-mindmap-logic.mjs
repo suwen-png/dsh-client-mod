@@ -223,12 +223,17 @@ section("【F】产物自证 —— inject 必须声明 sessions");
 let bundle = "";
 try { bundle = readFileSync(resolve(import.meta.dirname, "../lib/client.js"), "utf8"); } catch (e) { bundle = ""; }
 t("F1", "产物存在（lib/client.js）", bundle.length > 100000, bundle.length);
-t("F2", "exports.inject 含 sessions（缺它 ⇒ ctx.sessions 抛错 ⇒ 血缘静默降级）",
-	/var inject = \["slots", "sessions"\];/.test(bundle), (bundle.match(/var inject = \[[^\]]*\]/) || [])[0]);
+/* 🔴 第 42 轮：会话快照读取 / 宿主 ctx 已收敛到 `logic/host-ctx.js`（**唯一实现**）。
+ *    F2/F3/F4 的**语义一条没变**（inject 是否声明 · 两级兜底 · diag 是否留痕），
+ *    只是被检查的实现搬了家 ⇒ 判据必须跟着指到新位置，否则它会跟着旧文件一起**静默过期**
+ *    （这正是本项目「判据比实现先腐」的典型形态）。 */
 const mmSource = readFileSync(resolve(import.meta.dirname, "../src/logic/branch-tree.js"), "utf8");
-t("F3", "读取 sessions 走两级兜底（ctx.sessions → ctx.get）",
-	/ctx\.sessions/.test(mmSource) && /ctx\.get\("sessions"\)/.test(mmSource), null);
-t("F4", "降级原因写入 diag（不再无声）", /d\.error\s*=/.test(mmSource) && /degradationReason/.test(mmSource), null);
+const hostCtxSource = readFileSync(resolve(import.meta.dirname, "../src/logic/host-ctx.js"), "utf8");
+t("F2", "exports.inject 含 sessions + workspaces（缺它 ⇒ ctx 服务抛错 ⇒ 血缘/工作区名静默降级）",
+	/var inject = \["slots", "sessions", "workspaces"\];/.test(bundle), (bundle.match(/var inject = \[[^\]]*\]/) || [])[0]);
+t("F3", "读取 sessions 走两级兜底（直读 ctx.<svc> → ctx.get）",
+	/hostService/.test(hostCtxSource) && /c\.get\(key\)/.test(hostCtxSource), null);
+t("F4", "降级原因写入 diag（不再无声）", /d\.error\s*=/.test(hostCtxSource) && /degradationReason/.test(mmSource), null);
 t("F5", "菜单禁止出现「无接口的假动作」：合并 / 删除必须 enabled:false",
 	/merge: false/.test(mmSource) && /remove: false/.test(mmSource), null);
 

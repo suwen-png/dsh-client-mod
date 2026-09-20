@@ -2,7 +2,7 @@
  * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
  * 引用：—
  * 上游：client-entry.js, mount.js
- * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+ * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -80,6 +80,10 @@ import { readInset, watchInset } from "../util/safe-area.js";
 import { readConversation } from "../bridge/chat-bridge.js";
 import { NODE_KINDS, STATE_KINDS, MM_COVERAGE, supportedStates, controlsOfRow, coverageStats } from "../store/mindmap-schema.js";
 import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
+/* 🔴 第 40 轮 · 22 号文 G5：导图这条通道**没有**总监小结面板 ⇒ 转交凭证落在**流转条目**上，
+ *    但措辞必须与另外两处**逐字同源**（`logic/summary-notes.js`）—— 否则同一件事
+ *    在三个界面有三种说法（纪律 126）。 */
+import { transferLine } from "../logic/summary-notes.js";
 import { buildGroups, applyUserPos } from "../logic/mindmap-group.js";
 import { SPLIT_DIMENSIONS, GENERIC_DIMENSIONS } from "../logic/split-dimensions.js";
 import { directorLayoutStore } from "../store/layout.js";
@@ -861,7 +865,15 @@ export function MindMap({ open, onClose }) {
 		const latestSid = sel || null;
 		const list = flowStore.ofSession(latestSid);
 		const latest = list.length ? list[list.length - 1] : null;
-		if (latest) flowStore.move(latest.flowId, dest === DESTINATION.DIRECT ? "director" : "chat", "确认去向：" + DESTINATION_LABEL[dest], { status: "routed" });
+		/* 🔴 22 号文 **G5 · 源侧（导图这条通道）**：真转交时流转条目上留固定措辞的
+		 *    「已转交 → <目标>（维度 X）（HH:MM）」。判据的负对照是「无转发时不许出现该行」
+		 *    ⇒ 只有 `transfer` 且判出了目标名才加（`local` 是"就地处理"，一个字都不搬）。 */
+		const cand = (routeResult && routeResult.candidates && routeResult.candidates[0]) || null;
+		const handed = dest === DESTINATION.TRANSFER && cand;
+		const noteText = "确认去向：" + DESTINATION_LABEL[dest];
+		if (latest) flowStore.move(latest.flowId, dest === DESTINATION.DIRECT ? "director" : "chat",
+			handed ? transferLine({ toName: String(cand.name || "") }) + "\n" + noteText : noteText,
+			{ status: "routed" });
 		say("已确认：" + DESTINATION_LABEL[dest] + "（" + (routeResult.subtasks || []).length + " 个子任务）");
 		setRouteResult(null);
 		setDraft("");

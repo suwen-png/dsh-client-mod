@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：分流标签索引
  * 引用：—
- * 上游：components/DirectorDialog.js, components/DirectorPage.js, logic/branch-tree.js, logic/director-dispatch.js
+ * 上游：components/DirectorDialog.js, components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -107,9 +107,117 @@ export function writeSplitIndex(map) {
 	mem = keep;
 	const s = storage();
 	if (s) {
-		try { s.setItem(SPLIT_INDEX_KEY, JSON.stringify({ v: 1, items: keep })); } catch (e) { /* 隐私模式 / 超预算：内存内仍生效 */ }
+		try {
+			/* 🔴 第 41 轮：**必须把 `quota` 备忘读回来一起写**，否则每次登记分流都会
+			 *    静默抹掉 `T-PLUG-043` 的配额备忘（同一记录两个写者 = 隐式断链，纪律 126）。 */
+			const rec = readRawRecord(s);
+			const out = { v: 1, items: keep };
+			if (rec && rec.quota) out.quota = rec.quota;
+			s.setItem(SPLIT_INDEX_KEY, JSON.stringify(out));
+		} catch (e) { /* 隐私模式 / 超预算：内存内仍生效 */ }
 	}
 	return Object.keys(keep).length;
+}
+
+/* ══════════════════ 第 41 轮 `T-PLUG-043`：配额备忘 ══════════════════
+ * 「派发前配额预检」：模型侧 QUOTA 时仍会投出 8 条简报、8 次运行全失败。
+ *
+ * 🔴 为什么必须**持久化**（而不是只放内存）：
+ *    `store/dispatch-log.js` 的台账是**本次运行内单例**（它的头注释写明"不落 localStorage"），
+ *    而宿主会话快照里**没有**错误字段（只有 `running` / tokens，见 `session-io.js#stateOfSummary`）
+ *    ⇒ 若不落盘，「上一次 `turn/end` 的 failure」在冷启动后**无从预检**。
+ *
+ * 🔴 为什么写在**本记录**里（不新开 key）：
+ *    `dsh.director.split` 已经是"最近一次派发的产物"，配额失败属于**同一次派发的结局**
+ *    ⇒ 放一起语义同源；新开 key 会多一条"要跟谁同步清理"的隐式契约。
+ *
+ * 🔴 为什么带 TTL：备忘**不许**把用户永久锁死。不设过期的话，充值/换模型后仍会
+ *    一直拦（而拦的理由已经不成立）；设了 TTL，「上一次失败」最多影响 30 分钟，
+ *    且**任何一次成功都会立刻清掉它**（见 `director-collect.js`）。
+ */
+export const QUOTA_MEMO_TTL_MS = 30 * 60 * 1000;
+
+/** 读原始记录（一次 `JSON.parse`；失败 ⇒ null，绝不抛） */
+function readRawRecord(s) {
+	try {
+		const raw = s.getItem(SPLIT_INDEX_KEY);
+		const obj = raw ? JSON.parse(raw) : null;
+		return obj && typeof obj === "object" ? obj : null;
+	} catch (e) { return null; }
+}
+
+/**
+ * 判「这次运行失败是不是配额类」（**纯函数**，供离线校准）。
+ *
+ * 三类判据，**任一命中即算**：
+ *   · `code` 含 `QUOTA` / `INSUFFICIENT` / `BALANCE`（实测形态 `code:"QUOTA"`）；
+ *   · `status === 402`（Payment Required，实测形态）；
+ *   · `message` 匹配 `Insufficient Balance` / 余额 / 配额。
+ * ⚠️ 判据**从宽**（false positive 的代价只是"多拦一次、提示充值"；false negative 的代价是
+ *    8 条简报白投 + 用户看到 8 个失败框）。
+ * @param {{code?:string, status?:number, message?:string}|null} fail
+ * @returns {boolean}
+ */
+export function isQuotaFailure(fail) {
+	if (!fail || typeof fail !== "object") return false;
+	const code = String(fail.code == null ? "" : fail.code).toUpperCase();
+	if (code.indexOf("QUOTA") >= 0 || code.indexOf("INSUFFICIENT") >= 0 || code.indexOf("BALANCE") >= 0) return true;
+	if (Number(fail.status) === 402) return true;
+	const msg = String(fail.message == null ? "" : fail.message);
+	return /insufficient\s+balance|quota/i.test(msg) || msg.indexOf("余额") >= 0 || msg.indexOf("配额") >= 0;
+}
+
+/**
+ * 落一份配额备忘（由观测到失败的那一处调用）。
+ * @param {{code?:string,status?:number,message?:string}} fail
+ * @param {number} [at]
+ * @returns {object|null} 写入的备忘（无 storage ⇒ null）
+ */
+export function writeQuotaMemo(fail, at) {
+	if (!isQuotaFailure(fail)) return null;
+	const s = storage();
+	if (!s) return null;
+	const memo = {
+		code: String(fail.code == null ? "" : fail.code),
+		status: Number.isFinite(Number(fail.status)) ? Number(fail.status) : null,
+		message: String(fail.message == null ? "" : fail.message),
+		at: Number.isFinite(Number(at)) ? Number(at) : Date.now()
+	};
+	try {
+		const rec = readRawRecord(s);
+		const items = rec && rec.items && typeof rec.items === "object" ? rec.items : {};
+		s.setItem(SPLIT_INDEX_KEY, JSON.stringify({ v: 1, items: items, quota: memo }));
+	} catch (e) { return null; }
+	return memo;
+}
+
+/**
+ * 读配额备忘（**带 TTL**：过期 ⇒ 顺手清掉并返回 null）。
+ * @param {number} [now]
+ * @returns {object|null}
+ */
+export function readQuotaMemo(now) {
+	const s = storage();
+	if (!s) return null;
+	const rec = readRawRecord(s);
+	const q = rec && rec.quota;
+	if (!q || typeof q !== "object") return null;
+	const t = Number(q.at);
+	const cur = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+	if (!Number.isFinite(t) || (cur - t) > QUOTA_MEMO_TTL_MS) { clearQuotaMemo(); return null; }
+	return { code: String(q.code || ""), status: q.status == null ? null : Number(q.status), message: String(q.message || ""), at: t };
+}
+
+/** 清单条备忘（**任何一次成功都必须调它**，否则会拦到 TTL 到期） */
+export function clearQuotaMemo() {
+	const s = storage();
+	if (!s) return false;
+	try {
+		const rec = readRawRecord(s);
+		if (!rec || !rec.quota) return false;
+		s.setItem(SPLIT_INDEX_KEY, JSON.stringify({ v: 1, items: (rec.items && typeof rec.items === "object") ? rec.items : {} }));
+		return true;
+	} catch (e) { return false; }
 }
 
 /**
@@ -151,6 +259,10 @@ export function forgetSplits(ids) {
 export function clearSplitIndex() {
 	const n = Object.keys(readSplitIndex()).length;
 	writeSplitIndex({});
+	/* 🔴 第 41 轮：**「清空索引」必须连配额备忘一起清**。
+	 *    否则真机闸门/用户"清一下试试"之后，一条陈旧的 `quota` 仍会拦住下一次派发 ——
+	 *    而界面上的分流索引看着是**空的**（读数与行为不一致 = 最坏的一类）。 */
+	clearQuotaMemo();
 	return n;
 }
 

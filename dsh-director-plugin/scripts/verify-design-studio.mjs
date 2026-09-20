@@ -438,12 +438,25 @@ const full = await js(`(function(){
 	var s=document.getElementById('dsh-design-studio'); if(!s) return {mounted:false};
 	var r=s.getBoundingClientRect(), cs=getComputedStyle(s);
 	var maxZ=0; [].slice.call(document.querySelectorAll('body *')).forEach(function(e){var z=parseInt(getComputedStyle(e).zIndex||'0',10); if(z>maxZ)maxZ=z;});
+	/* 🔴 参照系必须与被测元素**同源**（第 41 轮 · 纪律 139 的"参照物"形态）：
+	 *    工作室根是「position:fixed; inset:0」（源码 DesignStudio.js 的 S.root），
+	 *    而 **fixed 元素的包含块是「布局视口」= documentElement.clientWidth**，
+	 *    它**不含**经典滚动条；\`innerWidth\` **含**滚动条。
+	 *    本机实测：w=1432 而 innerWidth=1440 ⇒ 差 **8px**（正是滚动条宽度），
+	 *    旧判据拿 innerWidth 当参照 ⇒ 判红，读起来像"工作室没铺满屏"（**假红**）。
+	 *    同一个数在**同一坐标系**下比：clientWidth 才是 fixed 元素该对齐的那个。
+	 *    ⚠️ 若 \`sbw === 0\`（无滚动条）而宽度仍不等 ⇒ 那才是**真**缺陷，本判据照样红。 */
+	var lw=document.documentElement.clientWidth, lh=document.documentElement.clientHeight;
 	return { mounted:true, x:Math.round(r.x), y:Math.round(r.y), w:Math.round(r.width), h:Math.round(r.height),
-	         vw:innerWidth, vh:innerHeight, pos:cs.position, z:cs.zIndex, maxZ:maxZ,
-	         covers: Math.abs(r.x)<2 && Math.abs(r.y)<2 && Math.abs(r.width-innerWidth)<6 && Math.abs(r.height-innerHeight)<6 };
+	         vw:innerWidth, vh:innerHeight, lw:lw, lh:lh,
+	         sbw:innerWidth-lw, sbh:innerHeight-lh, pos:cs.position, z:cs.zIndex, maxZ:maxZ,
+	         covers: Math.abs(r.x)<2 && Math.abs(r.y)<2
+	              && Math.abs(r.width-lw)<2 && Math.abs(r.height-lh)<2 };
 })()`);
 assert("C2.1", "工作室已挂载", !!(full && full.mounted), full);
-assert("C2.2", "position:fixed 且四边贴合视口", !!(full && full.covers), full ? `${full.w}x${full.h} vs 视口 ${full.vw}x${full.vh} · position=${full.pos} · z=${full.z}` : "n/a");
+assert("C2.2", "position:fixed 且四边贴合**布局视口**（fixed 的包含块；与 innerWidth 差的就是滚动条宽）",
+	!!(full && full.covers),
+	full ? `${full.w}x${full.h} vs 布局视口 ${full.lw}x${full.lh} · innerWidth ${full.vw}（滚动条 ${full.sbw}）· position=${full.pos} · z=${full.z}` : "n/a");
 
 /* ══ C2b 缩放归一到 1:1（后续位移断言的基准）══
  * 🔴 为什么必须先做这一步：工作室打开时**自动适应容器**（新行为）——

@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：分支产出回收 + 总裁定（第 17 批）
- * 引用：—
+ * 引用：T-PLUG-043
  * 上游：components/DirectorPage.js
- * 下游：logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/session-dossier.js
+ * 下游：logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -27,6 +27,8 @@
 import { rawSessionSummaries, refreshBranchTree, scopedConversationOf, archivedSessionIds } from "./branch-tree.js";
 import { findSummary, stateOfSummary, readSessionOutput, probeSessionIo } from "../bridge/session-io.js";
 import { readDispatchLog, refreshStates, patchDispatchItem, setDispatchCollect } from "../store/dispatch-log.js";
+/* 第 41 轮 `T-PLUG-043`：配额备忘（落点 = 唯一能拿到 `turn/end` 失败原因的地方） */
+import { writeQuotaMemo, clearQuotaMemo } from "../store/split-index.js";
 import { putDossier } from "../store/session-dossier.js";
 
 /**
@@ -106,6 +108,12 @@ export async function collectBranches(opts = {}) {
 			 *    用户看到这句**无从处置**（配额问题会被当成插件坏了）。
 			 *    ⇒ 三类原因必须**可分辨**：无条目 / 宿主报错 / 只有用户侧条目（纪律 18、58）。 */
 			const fail = r.endFailure || null;
+			/* 🔴 第 41 轮 `T-PLUG-043`：**观测到配额类失败就落一份备忘**。
+			 *    为什么必须落在这里：这是全仓**唯一**能拿到宿主 `turn/end` 失败原因的地方
+			 *    （`session-io.js#readSessionOutput` 的 `endFailure`）。
+			 *    落盘后，「派发前配额预检」才有源可读 —— 否则用户下次点派发，
+			 *    8 条简报会**白投一遍**（模型侧仍然拒绝，界面再出 8 个失败框）。 */
+			try { writeQuotaMemo(fail); } catch (e) { /* 备忘写失败不改回收结论 */ }
 			const failText = fail && fail.message
 				? "宿主本轮运行失败：" + fail.message
 					+ (fail.code ? "（" + fail.code + (fail.status ? " " + fail.status : "") + "）" : "")
@@ -141,6 +149,10 @@ export async function collectBranches(opts = {}) {
 			/* 真读到产出了 ⇒ 上一次的失败留痕必须**清掉**（否则「已产出」与「上轮失败」并存的读数会误导） */
 			runFailure: null
 		});
+		/* 🔴 第 41 轮 `T-PLUG-043`：**真读到产出 ⇒ 配额备忘也必须清掉**。
+		 *    它是"上一次失败"的缓存，留着会把**已经恢复**的额度继续当成不足
+		 *    （界面会一直说"先充值"，而实际上已经好了）。 */
+		try { clearQuotaMemo(); } catch (e) { /* 清失败不改回收结论 */ }
 		/* 🔴 第 19 批 R3：把该会话**自己的总结**写进**它自己的档案**
 		 *    —— 用户原话「（每个会话）存在自己的会话总结文档」。
 		 *

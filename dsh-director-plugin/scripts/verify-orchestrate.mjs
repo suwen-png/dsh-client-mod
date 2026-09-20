@@ -40,6 +40,9 @@ import { ASSERT_KEYS, LABEL } from "../src/logic/verify.js";
 import { DIRECTOR_CHAIN } from "../src/logic/director-chain.js";
 
 import { PORT } from "./cdp-port.mjs";
+/* 🔴 第 41 轮（T-PLUG-053 ④ · 纪律 126）：轮询循环**唯一实现** —— 本套件原先自带一份
+ *   副本实现（`untilRead` 的 for 循环）。两份实现意味着"改预算语义只改一处"必失效。 */
+import { until } from "./_cdp-wait.mjs";
 
 /* ── 期望值：全部从源码算，不写死 ── */
 const EXP_LAYERS = LAYERS.map((x) => x.key).sort();
@@ -277,16 +280,16 @@ const panelText = () => js("(function(){var p=document.querySelector('[data-test
  * 🔴 预算为什么必须 ≥8s（本轮实测再次修正）：失败的形态是 `耗时ms ≈ 3100` 而状态纹丝不动，
  *   即**轮询到 3s 预算用尽**。这不是"点击没生效"，而是 host 后台装载把**渲染进程主线程阻塞了数秒**，
  *   真实输入事件在队列里排队 —— 同一轮里紧邻的下一条点击 `耗时ms: 2` 立刻通过，
- *   正是"队列排空后立刻处理"的指纹。⇒ 预算是**等主线程**的，不是等 React 的。 */
+ *   正是"队列排空后立刻处理"的指纹。⇒ 预算是**等主线程**的，不是等 React 的。
+ *
+ * 🔴 第 41 轮（`T-PLUG-053 ④`）：本函数**不再是第二份实现** ——
+ *   轮询循环已收敛到 `_cdp-wait.mjs#until`（唯一实现）。这里只保留**签名适配**：
+ *     · `want` 可传值（`===`）或谓词（函数）—— 与本仓既有调用点一致，调用点零改动；
+ *     · 返回字段名沿用 `ms`（本套件 8 处读数在用），由 `waited` 映射而来。
+ *   ⇒ 同一语义**只有一个循环体**（纪律 126）：以后改预算/步长/超时语义只改一处。 */
 async function untilRead(fn, want, budgetMs = 8000, stepMs = 110) {
-	const t0 = Date.now();
-	let last = null;
-	for (;;) {
-		last = await fn();
-		if (typeof want === "function" ? want(last) : last === want) return { ok: true, val: last, ms: Date.now() - t0 };
-		if (Date.now() - t0 >= budgetMs) return { ok: false, val: last, ms: Date.now() - t0 };
-		await sleep(stepMs);
-	}
+	const r = await until(fn, typeof want === "function" ? want : (v) => v === want, { budgetMs, stepMs });
+	return { ok: r.ok, val: r.val, ms: r.waited };
 }
 
 /* ── 环境心跳（跨段可见）──

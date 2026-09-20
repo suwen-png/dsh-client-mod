@@ -768,7 +768,15 @@ if (mmOpen) {
 	/* 真实点击折叠：可见框数必须减少 */
 	const foldSel = "[data-toggle-id]";
 	const foldId = await ev("(()=>{const e=Array.from(document.querySelectorAll('[data-testid=\"mm-node-toggle\"]')).find(x=>x.getAttribute('data-enabled')==='1');return e?e.getAttribute('data-toggle-id'):null;})()");
-	if (foldId) {
+	/* 🔴 第 41 轮修（纪律 139：**同一前提不许两套口径**）：
+	 *   旧判据的入口条件只有 `foldId`（页面上存在 `mm-node-toggle[data-enabled="1"]`），
+	 *   而同一段里 C4 / C10 的入口条件是 `cHasEdge`（树里有没有父子连线）。
+	 *   本批真机实测两者**打架**：读数 `enabled=[0,0,1,0,0,0,0]`（有一个 enabled=1）
+	 *   而 `nEdges=0` ⇒ C4/C10 **跳过**、C6 **跑** ⇒ 点一个**没有子节点**的框，
+	 *   可见框数当然不减 ⇒ C6 红，且读起来像"折叠功能坏了"。
+	 *   ⇒ `data-enabled="1"` 只说明"这个折叠钮可点"，**不等于**"这个框有子会话"。
+	 *     两处必须用**同一个**前提量：这里也以 `cHasEdge` 为闸。 */
+	if (cHasEdge && foldId) {
 		const before = await count('[data-testid="mm-node"]');
 		await click('[data-toggle-id="' + foldId + '"]'); await WAIT(400);
 		const after = await count('[data-testid="mm-node"]');
@@ -1709,6 +1717,24 @@ const gBefore = await ev("(()=>{const dp=document.querySelector('[data-testid=dp
  * 若它不在场，`setComposerText` 会以 `composer-not-found` 失败 ⇒ 链路的输入是空的 ⇒
  * G2/G2b/G3/G3b/G6 会一起变红，读起来像"真流转整条没做"。
  * ⇒ 先尝试复原（切回起点会话），仍不成立时**只记一条前置失败**，其余标 SKIP 并写明原因。 */
+/* 🔴 **干跑感知**（第 42 轮需求 1 —— 用户原话「你测试流转的时候…把我的额度跑没了」）
+ *   真机批默认**开着干跑**（`_ensure-page.mjs` 置 `window.__dshDirectorDryRun = true`）：
+ *   流转只把文本填进 composer、**不点发送 / 不直投宿主** ⇒ **零模型调用**、不烧额度。
+ *   ⇒ 本段里"**真投递**"类断言（G2b 首选通道 / G6 宿主受理凭据）在干跑下**必然不成立**，
+ *     那属于**有意跳过**、不是失败（纪律 58：没跑成 ≠ 失败；纪律「没跑成」≠「失败」）。
+ *   ⇒ 但仍要**显式 SKIP 并写明原因**，绝不静默放过（纪律 18/19：跳过比红更危险，必须看得见）。
+ *   ⇒ 需要真验投递链路时：置 `RH_ALLOW_REAL_SEND=1` —— 守卫据此**不开**干跑，
+ *     并会显式警告「本次会真发（消耗额度）」。
+ *
+ * 🔴 **口径唯一**（第 42 轮二次修正 · 纪律 126）：原先这里读的是 `window.__dshDirectorDryRun`，
+ *   而干跑为了**跨 reload 存活**还写了 `sessionStorage`（见 `chat-bridge.js` 的 `isDryRun`）
+ *   ⇒ 两个口径：`verify-v17-sync` reload 之后，**插件确实是干跑**、而这里读到 `false`
+ *   ⇒ 会把"有意跳过"误判成"会真发"（假红），更糟的是**误导人以为没在干跑**。
+ *   ⇒ 改为读**桥上唯一实现** `window.__dshChatBridge.isDryRun()`（与插件判定同源）。
+ *   ⚠️ 桥不在时的降级是**安全的**：桥未安装 ⇒ 本段的 `deliverToChat` 也调不到 ⇒ 不可能真发。 */
+const gDry = (await ev("(function(){try{var b=window.__dshChatBridge;return !!(b&&typeof b.isDryRun==='function'&&b.isDryRun());}catch(e){return false;}})()")) === true;
+console.log("  · G 段干跑=" + gDry + (gDry ? "（流转只填不发 ⇒ 真投递类断言本轮 SKIP）" : "（会真发 ⇒ 真投递类断言实跑）"));
+
 const gComposerReady = await restoreStartSession();
 check("G0", "前置：原生 composer 在场（「执行」读的就是它；不在场则本段其余断言无意义）",
 	gComposerReady, gComposerReady ? "composer 在场=true" : "复原后仍不在场（起点会话 " + (openedSessionLabel || "?") + "）");
@@ -1767,10 +1793,10 @@ if (gComposerReady) {
 		if (settled && i >= 24) break;   // 12s 后链路已终态而消息没涨 ⇒ 交给 G3 如实报红
 	}
 }
-check("G2", "🔴 点「执行」后链路**有明确结果**（离开 idle，落到 sent/filled/failed 之一）—— 守「有归因」而不是「必须成功」",
+check("G2", "🔴 点「执行」后链路**有明确结果**（离开 idle，落到 sent/filled/failed/dry-run 之一）—— 守「有归因」而不是「必须成功」",
 	gComposerReady
 		? (!!gAfter && !!gAfter.mode && gAfter.mode !== "idle"
-			&& ["sent", "filled", "failed"].indexOf(gAfter.mode) >= 0)
+			&& ["sent", "filled", "failed", "dry-run"].indexOf(gAfter.mode) >= 0)
 		: "SKIP",
 	gComposerReady
 		? (gAfter ? ("mode=" + gAfter.mode + " busy=" + gAfter.busy + " grade=" + gAfter.grade
@@ -1786,16 +1812,22 @@ const gVia = await ev("(()=>{const dp=document.querySelector('[data-testid=dp-ro
 	+ "?window.__dshChatBridge.getLastDeliver():null;"
 	+ "return via?{via:via,last:last}:null;})()");
 check("G2b", "投递走**首选通道 host-send**（宿主直投对话域；不是悄悄降级到点按钮）",
-	gComposerReady ? (!!gVia && gVia.via === "host-send" && gVia.last && gVia.last.mode === "sent") : "SKIP",
-	gComposerReady
-		? (gVia ? J({ 界面标注: gVia.via, 链路返回: gVia.last && { mode: gVia.last.mode, verified: gVia.last.verified } }) : "取不到 data-deliver-via")
-		: "前置不成立（G0）");
+	gDry ? "SKIP"
+		: (gComposerReady ? (!!gVia && gVia.via === "host-send" && gVia.last && gVia.last.mode === "sent") : "SKIP"),
+	gDry
+		? "干跑开启（测试不烧额度）⇒ 本轮**没有真实投递**，本断言不适用；置 RH_ALLOW_REAL_SEND=1 可实跑"
+		: (gComposerReady
+			? (gVia ? J({ 界面标注: gVia.via, 链路返回: gVia.last && { mode: gVia.last.mode, verified: gVia.last.verified } }) : "取不到 data-deliver-via")
+			: "前置不成立（G0）"));
 
 /* G6：宿主侧第三方证据 —— 宿主确实收下了这次投递（不是我们自己的账本自证） */
 const gProbe1 = await ev("(()=>{const p=window.__directChatProbe;return p?{called:p.called,sessionId:p.sessionId,draft:String(p.draft||'').slice(0,40)}:null;})()");
 check("G6", "🔴 宿主侧第三方证据：`__directChatProbe.called` 增量 = 1（宿主真的受理了这次投递）",
-	gComposerReady ? (!!gProbe1 && typeof gProbe1.called === "number" && gProbe1.called === gProbe0 + 1) : "SKIP",
-	gComposerReady ? J({ before: gProbe0, after: gProbe1 }) : "前置不成立（G0）");
+	gDry ? "SKIP"
+		: (gComposerReady ? (!!gProbe1 && typeof gProbe1.called === "number" && gProbe1.called === gProbe0 + 1) : "SKIP"),
+	gDry
+		? "干跑开启（测试不烧额度）⇒ 宿主**没有收到**任何投递（正是需求 1 要的效果）；置 RH_ALLOW_REAL_SEND=1 可实跑"
+		: (gComposerReady ? J({ before: gProbe0, after: gProbe1 }) : "前置不成立（G0）"));
 
 check("G3", "🔴 处理链真的落库：总监消息数 +2（本条 user + 总监 assistant）",
 	gComposerReady

@@ -13,7 +13,13 @@ import shutil
 import sys
 
 ROOT = r"D:\hermes-data\dsh-client-mod"
-SNAP = os.path.join(ROOT, r"snapshots\snapshot-20260908-131412-before-apply\dsh-client-ui-conversation\lib\client.js")
+"""🔴 `T-DOC-001` B6 更正（2026-09-18）：原指向
+  `snapshots\\snapshot-20260908-131412-before-apply\\...`
+  —— 该目录已于 **09-14 清理**时删除 ⇒ 本脚本 `--check` **恒失败**（退路名存实亡）。
+  现存唯一快照是 `snapshots\\host-b6-20260911-before-patch\\client.js`，
+  实测体积 **1479577 B**，与下面 `EXPECTED_SNAP_BYTES` **逐字节一致**
+  ⇒ 是同一份文件被重新归置（不是"另一份快照"），故改指向即可，判据不必放松。"""
+SNAP = os.path.join(ROOT, r"snapshots\host-b6-20260911-before-patch\client.js")
 DST = os.path.join(ROOT, r"workspace\@deepseek-ai\dsh-client-ui-conversation\lib\client.js")
 ASSET = os.path.join(ROOT, r"dsh-director-plugin\assets\docs-index.json")
 

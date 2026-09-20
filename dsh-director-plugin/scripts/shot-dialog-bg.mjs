@@ -174,7 +174,43 @@ const shotExpr = (function () {
  *   🔴 药丸是**开合型**（点击切换）⇒ 必须先确认当前态再点，且点完要**等状态真的翻转**。
  *      第一版直接"点一下就当开了"，结果 warm / dim 两档读到 `no-panel`
  *      —— 那不是产品坏，是**量法把"正在关闭的动画"当成了"已经关好"**。 */
-const panelNow = () => js("!!document.querySelector(\"[data-testid='d-panel']\")");
+/* 🔴 修复（2026-09-19 · T-PLUG-072）：「弹窗开着吗」必须读**弹窗自己** ──────────
+ *   旧实现读 `[data-testid='d-panel']` —— 那是**左栏展开态**才渲染的内层面板
+ *   （`components/DirectorDialog.js`：`leftCollapsed ? "d-left-rail" : "d-panel"`），
+ *   而 `directorPanelCollapsed` **有 localStorage 持久化**（`store/layout.js` 读写
+ *   `DIRECTOR_LAYOUT_KEY`）⇒ 只要左栏被折叠过（整批里任一套件折叠且未复原
+ *   —— 纪律 129/141），这里就**恒 false**：
+ *     · `ensureOpen()` 的 4 轮点击实际在做 **toggle**（开→关→开→关）
+ *     · 兜底 `__openDlg()` 又 toggle 一次 ⇒ 终态随机
+ *     · 读数恒 `undefined` ⇒ 报「弹窗打不开」，**读起来像产品缺陷**（实为判据用错量）
+ *   ⇒ 口径统一到 `d-dialog`（**弹窗根**，`verify-req22` 用的同一个）——
+ *     「同一语义只许一个采样实现」（纪律 126 判据侧形态 · 150 同族）。 */
+const dialogNow = () => js("!!document.querySelector(\"[data-testid='d-dialog']\")");
+/** 失败时的**自报归因**（纪律 149 家族：失败必须自证"为什么"，而不是只印一句 failed）
+ *  一次读全：弹窗根 / 左栏 rail / 面板 / store 两态 / 药丸矩形与最上层命中。 */
+const dlgDiag = () => js("(function(){"
+	+ "var d=document.querySelector(\"[data-testid='d-dialog']\");"
+	+ "var lr=document.querySelector(\"[data-testid='d-left-rail']\");"
+	+ "var p=document.querySelector(\"[data-testid='d-panel']\");"
+	+ "var b=document.querySelector(\"[data-testid='d-open-director']\");"
+	+ "var br=b?b.getBoundingClientRect():null;"
+	+ "var at=(br&&br.width>1)?[Math.round(br.x+br.width/2),Math.round(br.y+br.height/2)]:null;"
+	+ "var h=at?document.elementFromPoint(at[0],at[1]):null;"
+	+ "var st=null;try{var s=window.__directorLayoutStore;st=(s&&s.getState)?s.getState():null;}catch(e){st=null;}"
+	+ "return JSON.stringify({dialog:!!d,leftRail:!!lr,panel:!!p,"
+	+ "storeOpen:st?!!st.dialogOpen:null,leftCollapsed:st?!!st.directorPanelCollapsed:null,"
+	+ "pill:at,pillHit:h?((h.getAttribute&&h.getAttribute('data-testid'))||String(h.tagName)):null,"
+	+ "openDlgFn:String(typeof window.__openDlg)});})()");
+/** 🔴 前提显式建立（纪律 41/143）：`d-panel` 只在**左栏展开**时存在 ⇒ 读色前先保证展开。
+ *  返回**原值**，收尾复原（纪律 129：闸门不许改用户状态还不还原）。 */
+async function ensureLeftExpanded() {
+	const before = await js("(function(){try{var s=window.__directorLayoutStore;return (s&&s.getState)?!!s.getState().directorPanelCollapsed:null;}catch(e){return null;}})()");
+	if (before === true) {
+		const r = await js("(function(){try{window.__directorLayoutStore.toggleDirectorCollapsed();return true;}catch(e){return String(e&&e.message);}})()");
+		console.log("  [前提] 左栏处于**折叠态**（localStorage 持久 · 跨套件残留）⇒ 已展开以取证（原值=true · 收尾复原）· 结果 " + JSON.stringify(r));
+	}
+	return before;
+}
 const pillRect = () => js("(function(){var b=document.querySelector(\"[data-testid='d-open-director']\");if(!b)return null;var r=b.getBoundingClientRect();if(r.width<2)return null;return [Math.round(r.x+r.width/2),Math.round(r.y+r.height/2)];})()");
 async function clickPill(tag) {
 	const at = await pillRect();
@@ -185,34 +221,50 @@ async function clickPill(tag) {
 	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: at[0], y: at[1], button: "left", clickCount: 1 });
 }
 /** 等到「面板在/不在」稳定成立；超时返回 false（**不抛**） */
-async function waitPanel(want, budgetMs) {
+async function waitDialog(want, budgetMs) {
 	const t = Date.now();
 	while (Date.now() - t < (budgetMs || 4000)) {
-		if ((await panelNow()) === want) return true;
+		if ((await dialogNow()) === want) return true;
 		await sleep(220);
 	}
-	return (await panelNow()) === want;
+	return (await dialogNow()) === want;
 }
 async function ensureOpen() {
-	if (await panelNow()) return "already-open";
+	if (await dialogNow()) return "already-open";
 	for (let i = 0; i < 4; i++) {
 		await clickPill("open#" + (i + 1));
-		if (await waitPanel(true, 3500)) return "real-click";
+		if (await waitDialog(true, 3500)) return "real-click";
 	}
 	/* 兜底只作**诊断通道**并留痕（纪律 96：兜底会盖住真因，必须计数） */
 	await js("window.__openDlg&&window.__openDlg()");
-	const ok = await waitPanel(true, 3000);
-	return ok ? "internal(兜底)" : "failed";
+	const ok = await waitDialog(true, 3000);
+	if (ok) return "internal(兜底)";
+	/* 🔴 两条路都失败 ⇒ **自报归因**（纪律 149 家族）：只印一句 "failed" 查不出到底是
+	 *   ① 判据读错量（左栏折叠 ⇒ `d-panel` 不在，本行读的是 `d-dialog`，故已排除）
+	 *   ② 药丸被浮动入口接走（`pillHit` 不是 `d-open-director` —— 纪律 150 同族）
+	 *   ③ `__openDlg` 根本没注入（`openDlgFn` = "undefined"）
+	 *   —— 三者的修法完全不同，必须让失败自己说清是哪一种。 */
+	console.log("  [开窗诊断] " + JSON.stringify(await dlgDiag()));
+	return "failed";
 }
 async function ensureClosed() {
-	if (!(await panelNow())) return "already-closed";
+	if (!(await dialogNow())) return "already-closed";
 	for (let i = 0; i < 3; i++) {
 		await clickPill("close#" + (i + 1));
-		if (await waitPanel(false, 3000)) return "real-click";
+		if (await waitDialog(false, 3000)) return "real-click";
 	}
 	await js("window.__closeDlg&&window.__closeDlg()");
-	return (await waitPanel(false, 2500)) ? "internal(兜底)" : "failed";
+	if (await waitDialog(false, 2500)) return "internal(兜底)";
+	console.log("  [关窗诊断] " + JSON.stringify(await dlgDiag()));
+	return "failed";
 }
+
+/* 🔴 前提显式建立（纪律 41/143）：下面每档都要读 `d-panel` 的**渲染色**，而它只在
+ *   左栏展开时存在 ⇒ 先保证展开，并记下原值供收尾复原（纪律 129：闸门不许改
+ *   用户状态还不还原）。这是 `T-PLUG-072` 两条独立修法中的第二条 ——
+ *   即便判据口径已换成 `d-dialog`，**读色**这一半仍然需要面板真的在场。 */
+const leftCollapsedBefore = await ensureLeftExpanded();
+if (leftCollapsedBefore === null) console.log("  [前提] 读不到 `__directorLayoutStore`（无法确认左栏态）—— 不作为失败，仅留痕");
 
 const rows = [];
 const problems = [];
@@ -225,7 +277,7 @@ for (const c of CASES) {
 	if (opened === "failed") { problems.push(c.id + "：弹窗打不开"); }
 	await sleep(500);
 	const st = JSON.parse(await js(shotExpr));
-	if (st.err) problems.push(c.id + "：读不到面板（" + opened + "）");
+	if (st.err) { problems.push(c.id + "：读不到面板（" + opened + "）"); console.log("  [读色诊断] " + JSON.stringify(await dlgDiag())); }
 	/* 截图：整窗 + 面板裁剪（面板裁剪更便于看配色） */
 	const full = await send("Page.captureScreenshot", { format: "png" });
 	const fullPath = join(OUT_DIR, "dialog-" + c.id + "-full.png");
@@ -262,11 +314,20 @@ const restored = await js("(function(){var K=" + JSON.stringify(KEY) + ",V=" + J
 const okRestore = (snap === null) ? (restored === null) : (restored === snap);
 await js("window.__closeDlg&&window.__closeDlg()");
 
+/* 🔴 复原左栏折叠态（纪律 129）—— 本脚本只为**取证**才展开左栏，
+ *   下游套件不该被我们的取证动作改态（整批内尤其如此：`T-PLUG-072` 的原始症状
+ *   正是"前序套件改了态没复原"，所以自己更不能成为下一个污染源）。 */
+if (leftCollapsedBefore === true) {
+	const r2 = await js("(function(){try{window.__directorLayoutStore.toggleDirectorCollapsed();return true;}catch(e){return String(e&&e.message);}})()");
+	console.log("  左栏折叠态已复原（true）· " + JSON.stringify(r2));
+}
+
 console.log("");
 console.log("══════════════════ 汇总 ══════════════════");
 console.log("  四档截图: " + rows.map((r) => r.id).join(" / ") + "  →  " + OUT_DIR);
 console.log("  对比度: " + rows.map((r) => r.id + "=" + r.cr).join("  "));console.log("  用户设置还原: " + (okRestore ? "✅ 逐字节一致" : "❌ 未还原（原=" + (snap === null ? "null" : snap.length + "B") + " 现=" + (restored === null ? "null" : restored.length + "B") + "）"));
-console.log("  弹窗已关闭: " + String(await js("!window.__dlg||!window.__dlg()")));
+/* 口径与 `dialogNow()` 同源（同一语义只许一个采样实现 —— 旧写法用 `__dlg()` 是第二套） */
+console.log("  弹窗已关闭: " + String(!(await dialogNow())));
 if (problems.length) { console.log("  问题：" + problems.join(" ; ")); console.log("IS_PASS: FALSE"); process.exit(1); }
 if (!okRestore) { console.log("IS_PASS: FALSE（用户设置未还原）"); process.exit(1); }
 console.log("IS_PASS: TRUE（四档截图齐备 · 对比度全 ≥4.5 · 设置逐字节还原）");

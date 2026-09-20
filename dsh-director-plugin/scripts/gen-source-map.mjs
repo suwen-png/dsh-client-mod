@@ -304,6 +304,113 @@ md.push("3. `node build/build.mjs` → `plugin-install.mjs --apply` → **重启
 md.push("4. 更新 `docs/00-统筹入口/10-当前基线-落死锚点-V16.md` → `node scripts/baseline-check.mjs --write`");
 md.push("");
 
+/* ── 5. 章七：**符号索引（函数级）** · 🔴 `T-PLUG-060` ──────────────────────────
+ * 执行标准 §3.11 步骤 4 / §3.12「索引确认」要求**函数级**索引 + **定位测试**。
+ * 本仓原先只到**文件级**（86 文件总表，`@map` 块不含函数名）⇒ 函数级覆盖率实测 **0%**，
+ * 符号定位只能靠全仓 `grep`（能达成，但**不经过索引**）⇒ 属**未达标项**。
+ * 落点选择：加在**同一份生成物**的章七，而**不新增第 4 个索引文件**
+ *   —— 后者会牵扯 `verify-index.mjs` 的"三份对账"，属"影响范围大的决策"。
+ * 抽取口径：**只登记 `export` 的顶层声明**（剥注释），**不含**内部私有函数 —— 头行写清楚，
+ *   免得读者把"没有它"读成"提取器坏了"（纪律 19 同族：读数必须自带口径）。 */
+const INJECT = process.argv.includes("--inject-broken");
+const EXPORT_PATTERNS = [
+	{ re: /^\s*export\s+async\s+function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gm, kind: "async function" },
+	{ re: /^\s*export\s+function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gm, kind: "function" },
+	{ re: /^\s*export\s+class\s+([A-Za-z_$][\w$]*)/gm, kind: "class" },
+	{ re: /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/gm, kind: "const(箭头)" },
+	{ re: /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function/gm, kind: "const(函数式)" },
+	{ re: /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=/gm, kind: "const(值/其它)" }
+];
+const symbols = {};
+const srcOf = {};
+for (const abs of files) {
+	const r = rel(abs);
+	const code = stripMapBlock(readFileSync(abs, "utf8"));
+	srcOf[r] = code;
+	const seen = new Set(), list = [];
+	for (const p of EXPORT_PATTERNS) {
+		p.re.lastIndex = 0;
+		let m;
+		while ((m = p.re.exec(code))) {
+			const name = m[1];
+			if (seen.has(name)) continue;
+			seen.add(name);
+			list.push({
+				name: name,
+				kind: p.kind + (/\basync\b/.test(m[0]) ? " · async" : ""),
+				params: String(m[2] || "").replace(/\s*\n\s*/g, " ").replace(/[`|]/g, " ").trim().slice(0, 56)
+			});
+		}
+	}
+	symbols[r] = list.sort((a, b) => a.name.localeCompare(b.name));
+}
+/* 🔴 `--inject-broken`：塞一个**源码里根本不存在**的符号 ⇒ `SYM-2` 必须抓到（纪律 32 校准）。
+ *    只改内存、**不写盘**（见下方 `INJECT` 提前返回）。 */
+if (INJECT) symbols[rows[0]].push({ name: "__injected_ghost_symbol__", kind: "注入缺陷", params: "" });
+
+const symTotal = rows.reduce((n, r) => n + (symbols[r] || []).length, 0);
+const filesWithSym = rows.filter((r) => (symbols[r] || []).length > 0).length;
+md.push("## 七、符号索引（**函数级** · T-PLUG-060）");
+md.push("");
+md.push("> 抽取口径：**只登记 `export` 的顶层声明**（已剥注释）⇒ **不含**文件内部私有函数（不是提取器坏了）。");
+md.push("> 共 **" + symTotal + "** 个符号，覆盖 **" + filesWithSym + " / " + rows.length + "** 个文件。");
+md.push("> 用途：**符号 → 文件** 1 步定位（不必全仓 `grep`）。");
+md.push("");
+md.push("| 符号 | 类型 | 形参 | 文件 |");
+md.push("|:-----|:-----|:-----|:-----|");
+for (const r of rows) for (const s of (symbols[r] || [])) md.push("| `" + s.name + "` | " + s.kind + " | `" + (s.params || "—") + "` | `src/" + r + "` |");
+md.push("");
+
+/* ── 6. 🔴 符号索引**全量真值自检**（`T-PLUG-060`）────────────────────────
+ * 对**全量**符号执行（抽样会漏 —— 区别于 `SYM-4` 的"定位步数"抽样）：
+ *   SYM-1 **覆盖率**：凡源码里出现 `export` 的文件，必须至少被索引到 1 个符号。
+ *   SYM-2 **真值**：每个被索引的符号名必须**真的**出现在它对应的源文件里（防"索引说谎"）。
+ *   SYM-3 **同名跨文件**：如实**报告**（合法重名存在 ⇒ **不判红**，只列出）。
+ *   SYM-4 **定位步数**：抽 10 个符号，**从已生成的章七表格反向解析**再做一次定位（真回环）。
+ * 注入态期望：`SYM-2` 精确命中。 */
+const symProblems = [];
+for (const r of rows) {
+	const hasExport = /^\s*export\s/m.test(srcOf[r]);
+	if (hasExport && !(symbols[r] || []).length) symProblems.push("SYM-1 「" + r + "」有 `export` 但索引 0 符号（覆盖率缺）");
+	for (const s of (symbols[r] || [])) {
+		if (!srcOf[r].includes(s.name)) symProblems.push("SYM-2 索引说「" + s.name + "」在 " + r + "，但源文件里**找不到**这个符号名（索引说谎）");
+	}
+}
+const owners = {};
+for (const r of rows) for (const s of (symbols[r] || [])) (owners[s.name] = owners[s.name] || new Set()).add(r);
+const dupNames = Object.keys(owners).filter((n) => owners[n].size > 1);
+/* SYM-4：从**已生成的 md** 里反解表格（验证"写出去的那一份"确实可定位，而不是验证内存里的对象） */
+const idxVia = {};
+for (const line of md) {
+	const mm = /^\| `([^`]+)` \|([^|]*)\|([^|]*)\|\s*`src\/([^`]+)`\s*\|\s*$/.exec(line);
+	if (mm) (idxVia[mm[1]] = idxVia[mm[1]] || new Set()).add(mm[4]);
+}
+const flat = [];
+for (const r of rows) for (const s of (symbols[r] || [])) flat.push({ name: s.name, file: r });
+const probe = flat.filter((_, i) => flat.length <= 10 || i % Math.ceil(flat.length / 10) === 0).slice(0, 10);
+for (const s of probe) {
+	const via = [...(idxVia[s.name] || [])];
+	if (!via.includes(s.file)) symProblems.push("SYM-4 「" + s.name + "」经**章七表格**定位不到它的真实文件（表坏了 / 被截断）");
+}
+console.log("符号索引：符号 " + symTotal + " 个 ｜ 覆盖文件 " + filesWithSym + "/" + rows.length
+	+ " ｜ 定位抽样 " + probe.length + " 个（步数 1 ≤ 2）");
+if (dupNames.length) console.log("  SYM-3 同名跨文件 " + dupNames.length + " 个（**合法重名**，只报告不判红）："
+	+ dupNames.slice(0, 10).join(" / ") + (dupNames.length > 10 ? " …" : ""));
+if (INJECT) {
+	const hit = symProblems.some((p) => p.indexOf("SYM-2 ") === 0);
+	for (const p of symProblems) console.error("  ❌ " + p);
+	console.log("  [注入缺陷] 塞入不存在的 `__injected_ghost_symbol__` ⇒ 期望 `SYM-2` 精确命中");
+	if (!hit) { console.error("IS_PASS: FALSE（注入的假符号**没被 SYM-2 抓到** ⇒ 校准无效）"); process.exit(1); }
+	console.log("IS_PASS: TRUE（注入缺陷已精确命中 SYM-2 · 未写盘）");
+	process.exit(0);
+}
+if (symProblems.length) {
+	for (const p of symProblems.slice(0, 12)) console.error("  ❌ " + p);
+	console.error("IS_PASS: FALSE（符号索引自检 " + symProblems.length + " 处不一致）");
+	process.exit(1);
+}
+console.log("  ✅ 符号索引自检通过（全量 " + symTotal + " 个符号 · 0 处不一致）");
+
 if (!existsSync(DOCS)) mkdirSync(DOCS, { recursive: true });
 const out = join(DOCS, "12-源码映射索引.md");
 const prev = existsSync(out) ? readFileSync(out, "utf8") : "";

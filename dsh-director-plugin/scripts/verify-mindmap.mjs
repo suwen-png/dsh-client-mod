@@ -27,6 +27,10 @@
 import { PORT } from "./cdp-port.mjs";
 /* 🔴 `T-PLUG-068`：收尾对账的**唯一实现**（重号自检 + 声明面提示 + 显式下限）。 */
 import { tallyCheck } from "./_test-tally.mjs";
+/* 🔴 `T-PLUG-053 ④`（第 41 轮）：**「派发后等到位」的唯一实现**。
+ *    本文件原先自带一份 `until()`，现收敛到这里 —— 其余真机套件一律 import 这一份，
+ *    避免"每个套件各写一个轮询助手"（纪律 126：同一语义两个实现 = 隐式断链）。 */
+import { until } from "./_cdp-wait.mjs";
 
 /* 🔴 2026-09-14 补（纪律 17）：Harness 未启动时原先崩栈成 `TypeError: fetch failed`，
  *    读起来像脚本坏了。用错目标判 INVALID(2)，不判 FAIL(1)。 */
@@ -56,8 +60,19 @@ ws.addEventListener("message", (ev) => {
 	if (m.id !== undefined && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result); }
 });
 const send = (method, params = {}) => new Promise((res, rej) => { const id = ++seq; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); });
-/* fire-and-forget：本 Electron 环境 Input 事件**响应**稳定延迟约 5s、事件本身立即送达
- * （Runtime.evaluate 仅 2ms）。坐标/键盘事件绝不能 await 响应，否则一次点击要 15s 且时序断言被拖垮。 */
+/* fire-and-forget：坐标/键盘事件**不等响应**（响应只用来拿返回值，与"事件到没到"无关）。
+ *
+ * 🔴 第 41 轮**更正**（纪律 130 · 对照实验 `logs/_r41-wheelprobe.out`）：
+ *   原文写「Input 事件**响应**稳定延迟约 5s、事件本身立即送达」—— 两处都要改：
+ *     · **响应**：实测 `Input.dispatchMouseEvent`(mouseWheel) 的 CDP 响应 **18–21 ms**，
+ *       不是 5s（该数字在此环境未能复现；不再作为设计依据）。
+ *     · 🔴 **「事件本身立即送达」是真正的错处**：实测**落地**（页面处理器真的跑到）
+ *       耗时 **264–290 ms**（合成 WheelEvent 264 ms / CDP 真派发 284·290 ms）。
+ *       ⇒ 本文件各处「派发后 `sleep(200~320)` 再读一次」**全在临界线上**，实测出现过
+ *         同一段里「计数 0→0」与「k 100→92」**同时成立**（各自读到的是相邻一步的迟到结果），
+ *         读起来像"产品坏了一半"（纪律 58/94 的标准形态）。
+ *    ⇒ 处置：`emit` 保留（不等响应是对的）；但凡「派发 → 读结果」一律改为
+ *      **`until()` 轮询到条件成立**（带超时），不赌固定时长（纪律 133）。 */
 const emit = (method, params = {}) => { const id = ++seq; ws.send(JSON.stringify({ id, method, params })); };
 await new Promise((r) => ws.addEventListener("open", r));
 await send("Runtime.enable");
@@ -90,6 +105,13 @@ async function js(expr) {
 	return r.result?.value;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* 🔴 轮询到条件成立（`T-PLUG-053 ④`）—— 实现已收敛到 `scripts/_cdp-wait.mjs#until`
+ *   （唯一实现，见文件头 import 处的说明）。此处只留**红线**：
+ *   ⚠️ 只许用来等**前置条件**（事件已落地、页面已回已知态），
+ *      **不许**拿它等"断言要成立的那个量" —— 那会把判据变成恒绿（纪律 32）。
+ *   依据：`logs/_r41-wheelprobe.out` 实测「派发 ⇒ 处理器真的跑到」= **264–290 ms**
+ *      （而 CDP 响应仅 18–21 ms）⇒ 「派发 → 固定 sleep → 单次读数」必然错位（纪律 145）。 */
 
 async function clickAt(x, y) {
 	const X = Math.round(x), Y = Math.round(y);
@@ -160,13 +182,46 @@ async function state(tag) {
 	console.log("  · " + tag + " 现场 " + JSON.stringify(s));
 	return s;
 }
-/** 确保导图层是打开的（上一段可能把它关了）。返回是否打开。 */
+/** 确保导图层是打开的（上一段可能把它关了）。返回是否打开。
+ *
+ * 🔴 第 41 轮修（真机实测：**下游 8 条假红**，纪律 130 归因 + 141 起点隔离）——
+ *    原实现有两个缺陷，叠加成"看起来像产品坏了"：
+ *      ① **只走一条路径**：`d-open-mindmap`（浮动按钮组）。而【12】段的 Esc 逐层退
+ *         会把弹窗/面板一起退掉，**弹窗若在场就会盖住浮动按钮** ⇒ 真实鼠标命中弹窗
+ *         ⇒ `clickSel` 落空（返回 false）—— 而它**没人接**；
+ *      ② **调用处 `await ensureOpen();` 丢弃返回值** ⇒ 静默半成功（纪律 54）。
+ *    结果：【13】及之后所有段落都在"无画布"状态下跑 —— `nodes:0` ⇒ 15+ 条红，
+ *    读起来像"底栏/作用域/缩放全坏了"，其实**根因在闸门自己的打开动作**。
+ *    ⚠️ 为什么上一轮是全绿：批内前序套件**恰好**把弹窗留开着 ⇒ 按钮没被盖 ⇒ 能点上。
+ *       这正是"批内起点未隔离"（纪律 141）的形态 —— 绿得靠运气，不是靠本段自己建立。
+ *
+ *  ⇒ 本版：**多路径**（关遮挡 → 用户路径 → store 兜底）+ **打印每一步真相** + 返回布尔。 */
 async function ensureOpen() {
 	if (await js(`!!document.getElementById("dsh-mindmap")`)) return true;
 	console.log("  · 导图未打开 → 走用户路径重新打开");
-	await clickSel('[data-testid="d-open-mindmap"]');
+	const snap = async () => await js(`(function(){return {dock:!!document.querySelector('[data-testid="d-open-mindmap"]'),dialog:!!document.querySelector('[data-testid="d-dialog"]'),studio:!!document.getElementById('dsh-design-studio')};})()`);
+	const s0 = await snap();
+	console.log("  · 重开前现场 " + JSON.stringify(s0));
+	let how = "";
+	let covered = false;
+	if (s0 && s0.dialog) {
+		/* 弹窗层盖住浮动按钮组 ⇒ 真实鼠标会命中弹窗（"须命中自己"）⇒ 先撤遮挡 */
+		await js(`(function(){var s=window.__directorLayoutStore;if(s&&typeof s.setDialogOpen==="function")s.setDialogOpen(false);return 1;})()`);
+		await sleep(350);
+		covered = true;
+	}
+	const hit = await clickSel('[data-testid="d-open-mindmap"]');
 	await sleep(700);
-	return await js(`!!document.getElementById("dsh-mindmap")`);
+	let ok = await js(`!!document.getElementById("dsh-mindmap")`);
+	how = (covered ? "撤弹窗遮挡+" : "") + "dock(命中=" + hit + ")";
+	if (!ok) {
+		const viaStore = await js(`(function(){try{var s=window.__directorLayoutStore;if(s&&typeof s.setMindmap==="function"){s.setMindmap(true);return "ok";}return "no-api";}catch(e){return "exc:"+e.message;}})()`);
+		await sleep(700);
+		ok = await js(`!!document.getElementById("dsh-mindmap")`);
+		how += " + store(" + String(viaStore) + ")";
+	}
+	console.log("  · 重开导图：" + how + " ⇒ " + (ok ? "已打开" : "**仍打不开**"));
+	return ok;
 }
 /** 把画布滚回原点，并返回一个**确证在视口内、确证命中自己**的节点中心。
  *
@@ -297,9 +352,13 @@ async function blankPoint() {
 
 /* ── 断言器 ── */
 let pass = 0, fail = 0, skip = 0; const failures = [];
-function t(id, name, cond, detail) {
-	if (cond) { pass++; console.log(`  ✅ ${id} ${name}`); }
-	else { fail++; failures.push(`${id} ${name}`); console.log(`  ❌ ${id} ${name}${detail !== undefined ? "\n      " + JSON.stringify(detail) : ""}`); }
+function t(id, name, cond, detail, opt) {
+	/* `opt.always = true` ⇒ **绿也打读数**。用于"数值本身就是验收证据"的判据
+	 * （如 `C-M27a` 的 `base/up/down` —— G4 用户原话"无法放大缩小"的直接反证）。
+	 * 默认不打（130 条全打会淹没报告）。 */
+	const show = detail !== undefined && (!cond || (opt && opt.always));
+	if (cond) { pass++; console.log(`  ✅ ${id} ${name}${show ? "\n      " + JSON.stringify(detail) : ""}`); }
+	else { fail++; failures.push(`${id} ${name}`); console.log(`  ❌ ${id} ${name}${show ? "\n      " + JSON.stringify(detail) : ""}`); }
 }
 function sk(id, name, why) { skip++; console.log(`  ⏭ ${id} ${name} —— 跳过：${why}`); }
 function section(s) { console.log("\n" + s); }
@@ -329,8 +388,12 @@ let reachedFinal = false;
 /* 🔴 第 38 轮：100 → **110**（新增【13.9】3 条 + 可能 skip 的 3 条、【13.10】2 条、【13.11】2 条）。
  *    这个下限的作用是"有没有段落静默没跑"—— 加了断言却不抬下限，等于把新段落的沉默合法化。
  *    **同轮追加 +1**（110 → 111）：【15】新增 `C-M21b`（记名册类型自检）。
- *    **同轮再追加 +2**（111 → 113）：【0】新增 `C-M1e`（上溯真生效 / 或跳过）+ `C-M1f`（作用域归一建前提）。 */
-const MIN_ASSERTIONS = 113;
+ *    **同轮再追加 +2**（111 → 113）：【0】新增 `C-M1e`（上溯真生效 / 或跳过）+ `C-M1f`（作用域归一建前提）。
+ *    **第 41 轮：114 → 117**（新增【13.10b】`C-M27a/b/c` —— G4 滚轮**成对** + 负对照 + 中键）。
+ *    ⚠️ **编号不许撞**（纪律 32/128）：初版误用 `C-M26a/b`，而那两个号**已被【13.11】占用**
+ *       ⇒ 对账报「编号复用 13 个」时把这组也算进去了（真重号，不是合法互斥分支）⇒ 改为 `C-M27*`。
+ *    ⚠️ 这 3 条带 `sk` 分支：画布容器不在场时跳过（此时套件本就大面积红，下限报不报都不影响结论）。 */
+const MIN_ASSERTIONS = 117;
 const dieReport = (why) => {
 	console.error("\n───────────────────────────────────────────────");
 	console.error(" ❌ INVALID：脚本异常终止 —— " + why);
@@ -440,23 +503,52 @@ t("C-M1c", "🔴 血缘前提**已实体化**（宿主有父子会话：复用�
  *    ① 作用域生效 ⇒ 作用域内**没有「父子都在」的配对** ⇒ 各自成根、无边（**按设计**）；
  *    ② 渲染层把 depth 写错、或边被逻辑丢掉（**真缺陷**）。
  *  没有这份并排读数就只能猜 —— 而"猜"在本项目已三次把环境问题记成产品缺陷（纪律 31 / 23）。
- *  故把**数据层血缘**与**画布层血缘**并排打出来，一眼分清是谁的问题。 */
-console.log("  [血缘前提诊断] " + await js(`(function(){
+ *  故把**数据层血缘**与**画布层血缘**并排打出来，一眼分清是谁的问题。
+ *
+ *  🔴 第 41 轮（2026-09-18）：提为**可复用函数**并在三处各打一次。
+ *     为什么必须提：原先是**一次性**打印（只在归一**之前**打一次）⇒ 归一之后到底变成什么样
+ *     **没有读数**，于是 `C-M1f` 红的时候只能猜"是设计使然还是渲染丢了"。而本批真机实测到
+ *     一种新的矛盾形态：数据层 `pairs > 0`（父子都在 rows 里 ⇒ `branch-tree.js` L216-218
+ *     一定会产出这条边），画布却 0 条连线、0 个 `depth≠0` 节点。
+ *     ⇒ 提为函数 + 在【4】连线段之前再打一次，用**同一次运行**的三份读数把原因分开
+ *       （纪律 130：归因不是猜测，必须过对照实验）。
+ *
+ *  🔴 本函数体内**不许出现反引号**（它整个包在模板字面量里，出现即提前闭合 ⇒ SyntaxError）。 */
+async function dumpLineageDiag(tag) {
+	const raw = await js(`(function(){
   try{
     var s = window.__dshBranchTree.getBranchSnapshot();
     var rows = (s.tree&&s.tree.rows)||[]; var edges = (s.tree&&s.tree.edges)||[];
+    var ids = {}; for (var i=0;i<rows.length;i++) ids[String(rows[i].sessionId)]=1;
+    var dataPairs = edges.filter(function(e){ return ids[String(e.from)] && ids[String(e.to)]; }).length;
     var ns = Array.from(document.querySelectorAll('[data-testid="mm-node"]'));
-    var dist = {}; for (var i=0;i<ns.length;i++){var d=ns[i].getAttribute('data-depth');dist[String(d)]=(dist[String(d)]||0)+1;}
+    function sidOf(n){ return n.getAttribute('data-session-id'); }
+    var dist = {}; for (var j=0;j<ns.length;j++){var d=ns[j].getAttribute('data-depth');dist[String(d)]=(dist[String(d)]||0)+1;}
+    var parented = ns.filter(function(n){ return n.getAttribute('data-parent'); });
+    var onCanvas = parented.filter(function(n){ var p=n.getAttribute('data-parent');
+      return ns.some(function(m){ return sidOf(m) === p; }); });
     var chip = document.querySelector('[data-testid="mm-scope-chip"]');
     return JSON.stringify({
-      dataLayer:{lineage:s.lineage, rows:rows.length, withParent:rows.filter(function(r){return r.parentSessionId;}).length, edges:edges.length},
-      canvasLayer:{nodes:ns.length, depthDist:dist, drawnEdges:document.querySelectorAll('[data-testid="mm-edges"] path').length},
+      dataLayer:{lineage:s.lineage, rows:rows.length,
+        withParent:rows.filter(function(r){return r.parentSessionId;}).length,
+        pairs:dataPairs, edges:edges.length},
+      canvasLayer:{nodes:ns.length, depthDist:dist,
+        drawnEdges:document.querySelectorAll('[data-testid="mm-edges"] path').length,
+        edgeSvg:document.querySelectorAll('[data-testid="mm-edges"]').length,
+        depthGt0: ns.filter(function(n){return n.getAttribute('data-depth')!=='0';}).length,
+        parented: parented.length, parentOnCanvas: onCanvas.length,
+        parentedDepth0: onCanvas.filter(function(n){return n.getAttribute('data-depth')==='0';}).length},
       scope: chip ? {scoped:chip.getAttribute('data-scoped'), total:chip.getAttribute('data-total'),
         dropped:chip.getAttribute('data-dropped'), up:chip.getAttribute('data-scope-up'),
         text:(chip.textContent||'').trim().slice(0,70)} : null
     });
   }catch(e){return '__exc ' + e.message;}
-})()`));
+})()`);
+	console.log("  [血缘前提诊断·" + tag + "] " + raw);
+	try { return JSON.parse(raw); } catch (e) { return null; }
+}
+const diagBefore = await dumpLineageDiag("归一前");
+if (!diagBefore) console.log("  ⚠️ 归一前诊断读不出来（见上一行原文）；后续 C-M1g 会按「无可判」处理");
 
 /* ── 🔴 2026-09-18（第 38 轮）：**作用域归一**（给「连线语义」「折叠/展开」两段建前提）──
  *
@@ -539,6 +631,7 @@ async function ensureScopeLineage(tag, assert) {
 	return norm;
 }
 const scopeNorm = await ensureScopeLineage("【0】", true);
+const diagAfter = await dumpLineageDiag("归一后");
 if (scopeNorm.did > 0) {
 	t("C-M1e", "🔴 点「上一级」上溯**真生效**：`scope-up` 递增 且 `total` 单调不减（上一级只会看到更多）",
 		scopeNorm.upOk && scopeNorm.monotonic, scopeNorm);
@@ -547,6 +640,37 @@ if (scopeNorm.did > 0) {
 }
 t("C-M1f", "🔴 作用域已归一为「**看得见血缘**」——给连线 / 折叠两段建前提（否则那两段无对象可测）",
 	scopeNorm.status === "ok" || scopeNorm.status === "reused", scopeNorm);
+
+/* 🔴 2026-09-18（第 41 轮）新增 `C-M1g`：**矛盾自检**（纪律 130 归因 / 纪律 23 先证前提再断结果）
+ *  为什么必须有：本批真机出现一种"两种原因长得一模一样"的形态 ——
+ *    `verify-mindmap` 5 条红（C-M1f / C-M1d / C-M7a / C-M7c / C-M7d）与
+ *    `verify-flow` 的 C6 红 + C4/C10 跳过，**全是同一句话**：画布上 0 条父子连线。
+ *  按纪律 130，这句话的归因不能靠猜，只有两种可能，且都可用**同一批读数**判死：
+ *    ① **渲染层丢了血缘**（真缺陷）：数据层 `pairs`（父子**都在** `tree.rows` 里）> 0
+ *       —— `branch-tree.js` L216-218 明确只在这种情形下产边 ⇒ 数据层有边，画布就必须画得出；
+ *    ② **前提确实缺失**（不是产品坏）：数据层 `pairs === 0`，宿主本来就没有可画的父子配对。
+ *  ⇒ 本判据把这两者在**退出码层面**分开，不再让人读日志去猜（纪律 31：报绿先审口径）。
+ *  ⚠️ 只在作用域**已到顶**（`dropped === 0`，即"看得见全部"）时才判 ——
+ *     作用域还在过滤时，画布缺血缘**可能是设计使然**（需求 18：默认只看当前文件夹），
+ *     那种情形下判红就会出现"第 38 轮已经踩过一次"的假红。
+ *  ⚠️ 读数拿不到（`__exc` / DOM 未就绪）⇒ SKIP 并说明，不拿"读不到"当"没问题"（纪律 54）。 */
+const scopeDropped = diagAfter && diagAfter.scope ? Number(diagAfter.scope.dropped) : null;
+const scopeAtTop = scopeDropped === null ? null : scopeDropped === 0;
+const dataPairs = diagAfter && diagAfter.dataLayer ? Number(diagAfter.dataLayer.pairs) : null;
+const canvasDepthGt0 = diagAfter && diagAfter.canvasLayer ? Number(diagAfter.canvasLayer.depthGt0) : null;
+const canvasDrawn = diagAfter && diagAfter.canvasLayer ? Number(diagAfter.canvasLayer.drawnEdges) : null;
+/* 供【4】连线段复用（**单一真相源**：同一条语义不许在两处各算一遍 —— 纪律 126） */
+const lineageDrawable = dataPairs !== null && (dataPairs === 0 || canvasDepthGt0 > 0 || canvasDrawn > 0);
+if (dataPairs === null || canvasDepthGt0 === null || scopeAtTop === null) {
+	sk("C-M1g", "矛盾自检（数据层有配对 ⇒ 画布必须体现）", "归一后诊断读数不完整（见 [血缘前提诊断·归一后] 原文）⇒ 本判无法做，**不是通过**");
+} else if (!scopeAtTop) {
+	sk("C-M1g", "矛盾自检（数据层有配对 ⇒ 画布必须体现）",
+		"作用域仍在过滤（dropped=" + scopeDropped + "）⇒ 画布缺血缘可能是设计使然，本轮不作判");
+} else {
+	t("C-M1g", "🔴 矛盾自检：数据层有「父子都在」的配对时，画布必须体现（depth≠0 **或** 至少一条连线）—— 否则是**渲染丢血缘**，不许记成「前提缺失」",
+		lineageDrawable,
+		{ 数据层配对数: dataPairs, 画布depth非零: canvasDepthGt0, 画布已画连线: canvasDrawn, 作用域dropped: scopeDropped });
+}
 
 /* 🔴 折叠/展开段还需要「**非根且有子**」的节点 ⇒ 血缘至少 **3 层**（根 → 子 → 孙）。
  *   只 fork 一次只到 2 层：根(depth0) → 子(depth1，无子) ⇒ 没有「非根且有子」的对象
@@ -674,9 +798,19 @@ t("C-M6b", "图例**不含**「出错」（宿主无该字段，不许画无源�
 
 /* ══════════ 4. 连线语义 ══════════ */
 section("【4】连线语义（主干实线 / 分支虚线 / 选中链高亮）");
+/* 🔴 连线段之前再打一次读数（第 41 轮）：C-M7a 红的时候，"数据层有没有可画配对"必须当场可见 ——
+ *    否则又是一次"读起来像产品坏了"的红（C-M1g 已在前面判过一次，这里是为了**现场可核对**）。 */
+await dumpLineageDiag("【4】连线前");
 const edgeKinds = await js(`Array.from(document.querySelectorAll('[data-testid="mm-edges"] path')).map(function(p){return [p.getAttribute("data-edge-kind"), getComputedStyle(p).strokeDasharray];})`);
 if (lineageBuilt === "unavailable") {
 	sk("C-M7a", "连线至少一条（有血缘边就画得出）", "无血缘边 ⇒ **未检验**（见 C-M1c）");
+} else if (dataPairs === 0) {
+	/* 数据层**没有**可画配对（宿主本来就没有父子会话）⇒ 画布上无边可画是**正确行为**。
+	 * 纪律 58：「没跑成」≠「失败」—— 这种情形记 SKIP 并写明原因，不算产品账。 */
+	sk("C-M7a", "连线至少一条（有血缘边就画得出）",
+		"数据层没有「父子都在」的配对（宿主无父子会话）⇒ 画布上本就无边可画 —— **未检验**，不是产品坏（纪律 58）");
+} else if (dataPairs === null) {
+	sk("C-M7a", "连线至少一条（有血缘边就画得出）", "数据层配对数读不出来（见 [血缘前提诊断·【4】连线前] 原文）⇒ **未检验**");
 } else {
 	t("C-M7a", "连线至少一条（有血缘边就画得出）", edgeKinds.length >= 1, edgeKinds);
 }
@@ -691,7 +825,7 @@ const chainProbe = await js(`(function(){
   return { leafWithParent: rows.filter(function(r){ return r.parentSessionId && r.depth>0; })[0] ? rows.filter(function(r){ return r.parentSessionId && r.depth>0; })[0].sessionId : null,
            parent: parent?parent.sessionId:null, root: root?root.sessionId:null };
 })()`);
-if (chainProbe.leafWithParent) {
+if (chainProbe.leafWithParent && dataPairs !== 0) {
 	await clickSel(`[data-testid="mm-node"][data-session-id="${chainProbe.leafWithParent}"]`);
 	await sleep(220);
 	const chained = await js(`document.querySelectorAll('[data-edge-kind="chain"]').length`);
@@ -716,9 +850,16 @@ if (chainProbe.leafWithParent) {
 	t("C-M7e", "小地图同步高亮选中链（期望色取自产品同一个 --dp-ac 令牌，不硬编码颜色）",
 		!!minimapChain && minimapChain.err === undefined && minimapChain.hit >= 1, minimapChain);
 } else {
-	sk("C-M7c", "选中链高亮", "本机没有「有父的会话」可用（没有 fork 过）");
-	sk("C-M7d", "底栏选中分支同步", "同上");
-	sk("C-M7e", "小地图同步高亮", "同上");
+	/* 🔴 第 41 轮补：两条原因**分开写**（纪律 130）——
+	 *   · 数据层根本没有可画配对 ⇒ 前提缺失，本机数据如此（纪律 58）
+	 *   · 数据层有配对却被画布丢掉 ⇒ **真缺陷**，此时**不许**在这里记 SKIP 蒙过去，
+	 *     要让 C-M1g / C-M7a 去红（skip 的只是"选中链"这三条实现细节的检验）。 */
+	const whyNoPair = dataPairs === 0
+		? "数据层没有「父子都在」的配对（宿主无父子会话）⇒ 无对象可测（前提缺失，纪律 58）"
+		: "数据层有配对但画布上找不到「有父且 depth>0」的节点 ⇒ **渲染丢血缘**，真因见 C-M1g / C-M7a 的红";
+	sk("C-M7c", "选中链高亮", whyNoPair);
+	sk("C-M7d", "底栏选中分支同步", whyNoPair);
+	sk("C-M7e", "小地图同步高亮", whyNoPair);
 }
 
 /* ══════════ 5. 折叠 / 展开（含「折叠入口」提示） ══════════ */
@@ -985,14 +1126,59 @@ const safe = await js(`(function(){
     boundary: titleRect ? titleRect.x + titleRect.width : (window.innerWidth - parseInt(root.getAttribute("data-inset"),10))
   };
 })()`);
-t("C-M13a", "本环境确实存在原生窗口控件覆盖层（防「平凡真」：inset=0 时「不重叠」对谁都成立）",
-	safe && safe.wcoVisible === true && safe.inset > 0, safe);
-t("C-M13b", "顶栏已按安全区右侧内缩（paddingRight = inset + 10）",
-	safe && safe.topPadRight > safe.inset, safe && { padRight: safe.topPadRight, inset: safe.inset });
-t("C-M13c", "工具条同样避让（原生控件高 44 > 工具条，会向下溢出）",
-	safe && safe.toolPadRight !== null && safe.toolPadRight > safe.inset, safe && { toolPadRight: safe.toolPadRight, inset: safe.inset });
-t("C-M13d", "✕ 的右边界 ≤ 安全区边界（不与最小化/最大化/关闭 三个原生按钮重叠）",
-	safe && safe.xRight <= safe.boundary + 0.5, safe && { xRight: safe.xRight, boundary: safe.boundary });
+/* 🔴 第 41 轮**修正**（纪律 130：先证否，再改口径；纪律 58/94：前提不成立不许判红）
+ *
+ *  现象：`C-M13a` 两轮读数**互相矛盾** ——
+ *    · 第一次跑（复用已有实例）`wcoVisible:true, inset>0` ⇒ 绿；
+ *    · 强重启后（`_run-with-harness` 拉起的实例）`wcoVisible:false, inset:0` ⇒ 红；
+ *    而同一次跑里 `C-M13b..f` **全绿仍是"真的"吗？不 —— 它们成了平凡真**。
+ *
+ *  取证：
+ *    · 宿主 `app.asar!/lib/main.js#createMainWindow` 在 win32 上**确实**配了
+ *      `titleBarStyle:"hidden"` + `titleBarOverlay:{height:44}` ⇒ 覆盖层"本应存在"，
+ *      说明这次 `visible:false` 是**实例/窗口态差异**，不是插件能控制的东西。
+ *    · 本仓对这件事**早有裁定**（`scripts/probe-window-state.mjs` §状态③ 与输出行 115-117）：
+ *      「窗口可见但**没有原生窗口控件覆盖层**（`visible===false`）⇒『右侧被系统按钮独占』
+ *        这一物理事实**不存在**，任何"避开安全区"的越界断言都会**恒真/恒假**（平凡真/假）
+ *        ⇒ 该判 **SKIP 而不是判红**」。
+ *      `verify-orchestrate.mjs:463` 同口径（「无覆盖层可判，测试面不成立」）。
+ *
+ *  ⇒ 处置（两条，都不许把真判据弄弱）：
+ *    ① `C-M13a` 是**前提守卫**，不是产品断言：前提不在 ⇒ **SKIP**（附真相读数）。
+ *       `C-M13d`（✕ ≤ 安全区边界）随之无测试面 ⇒ 同样 SKIP。
+ *    ② `C-M13b`/`C-M13c` **收紧**：原来判 `paddingRight > inset`
+ *       —— `inset=0` 时 `10 > 0` **恒真**，等于没测。改为断言**精确公式**
+ *       `paddingRight === max(10, inset + 10)`（`MindMap.js:895` 的唯一真相源）。
+ *       这条在**两种环境都有判别力**：硬编码 138 ⇒ 无覆盖层环境必红；恒设 10 ⇒ 有覆盖层环境必红。
+ *       ⇒ 净效果是**更强**，不是更松。
+ *    ⚠️ 未结（不猜，纪律 130）：**为什么**两次启动 WCO 不同 —— 属环境事实，
+ *       已记入 22 号文 §环境事实；不影响本条处置（无论原因为何，无覆盖层时该判 SKIP）。 */
+const overlayOn = !!(safe && safe.wcoVisible === true && safe.inset > 0);
+const padWant = Math.max(10, (safe && Number.isFinite(safe.inset) ? safe.inset : 0) + 10);
+console.log("  · 安全区真相：wcoVisible=" + (safe && safe.wcoVisible) + " ｜ inset=" + (safe && safe.inset)
+	+ " ｜ 覆盖层=" + (overlayOn ? "**在**（安全区类断言有判别力）" : "**不在**（安全区类断言恒真 ⇒ 按 probe-window-state 裁定判 SKIP）")
+	+ " ｜ 避让量应=" + padWant);
+const NO_OVERLAY_WHY = "navigator.windowControlsOverlay.visible=" + JSON.stringify(safe && safe.wcoVisible)
+	+ "、inset=" + (safe && safe.inset)
+	+ " ⇒ 本实例无原生窗口控件覆盖层，「右侧被系统按钮独占」这一物理事实不存在 ⇒ 该断言恒真（平凡真）"
+	+ " ⇒ 按 `probe-window-state.mjs` §状态③ 的既有裁定判 SKIP 而不是判红（纪律 58/94）";
+if (overlayOn) {
+	t("C-M13a", "本环境确实存在原生窗口控件覆盖层（防「平凡真」：inset=0 时「不重叠」对谁都成立）", true, safe);
+} else {
+	sk("C-M13a", "本环境确实存在原生窗口控件覆盖层（防「平凡真」：inset=0 时「不重叠」对谁都成立）", NO_OVERLAY_WHY);
+}
+t("C-M13b", "🔴 顶栏避让量 == `max(10, inset + 10)`（**精确公式**，两态都有判别力 —— 原来判 `> inset` 在 inset=0 时恒真）",
+	safe && Math.abs(safe.topPadRight - padWant) < 0.5,
+	safe && { padRight: safe.topPadRight, want: padWant, inset: safe.inset });
+t("C-M13c", "🔴 工具条同一公式（原生控件高 44 > 工具条，会向下溢出；两态都有判别力）",
+	safe && safe.toolPadRight !== null && Math.abs(safe.toolPadRight - padWant) < 0.5,
+	safe && { toolPadRight: safe.toolPadRight, want: padWant, inset: safe.inset });
+if (overlayOn) {
+	t("C-M13d", "✕ 的右边界 ≤ 安全区边界（不与最小化/最大化/关闭 三个原生按钮重叠）",
+		safe && safe.xRight <= safe.boundary + 0.5, safe && { xRight: safe.xRight, boundary: safe.boundary });
+} else {
+	sk("C-M13d", "✕ 的右边界 ≤ 安全区边界（不与最小化/最大化/关闭 三个原生按钮重叠）", NO_OVERLAY_WHY);
+}
 t("C-M13e", "✕ 仍在可视区内且可点（宽 > 0，左边界 > 0）",
 	safe && safe.xW > 0 && safe.xLeft > 0, safe && { xLeft: safe.xLeft, xW: safe.xW });
 const closeHit = await js(`(function(){
@@ -1211,7 +1397,19 @@ t("C-M16d2", "反证：导图**不是**被一跳关掉的（至少经历过 1 �
 	escSeq.length >= 1 && escSeq.slice(0, -1).every((s) => s.map[1] === true), escSeq.map((s) => s.map.join("→")));
 
 /* ══════════ 13. 底栏路由 ══════════ */
-await ensureOpen();
+/* 🔴 第 41 轮：**起点必须显式建立并断言**（纪律 141 + 54）。
+ *    原写法 `await ensureOpen();` **丢弃返回值** —— 【12】段的 Esc 逐层退把导图关掉后，
+ *    若重开失败就**静默**往下走 ⇒ 【13】及之后 15+ 条全在"无画布"状态下红（实测 `nodes:0`），
+ *    读起来像"底栏 / 作用域 / 缩放全坏了"，而根因在**闸门自己的打开动作**。
+ *    ⇒ 拿不到就 INVALID(2)，把下游假红一次掐掉，并在诊断里写清两条可能。 */
+if (!(await ensureOpen())) {
+	console.error("\nIS_PASS: FALSE（INVALID：导图浮层重开失败 ⇒ 【13】及之后无对象可测）");
+	console.error("  已跑出：通过 " + pass + " / 失败 " + fail + " / 跳过 " + skip);
+	console.error("  ⚠️ 这不是产品缺陷的必要证据 —— 先看上一行『重开导图』诊断：");
+	console.error("     · `dock(命中=false)` ⇒ 浮动按钮没被真实鼠标命中（可能被弹窗 / 浮层遮挡）；");
+	console.error("     · `store(no-api)`     ⇒ 兜底路径也不可用 ⇒ 那才是真的打不开。");
+	process.exit(2);
+}
 await state("【13】前");
 section("【13】底栏「待总监路由」");
 /* 🔴 这里原来直接把 HTMLInputElement.prototype 的 value setter 套到一个可能是 null
@@ -1628,6 +1826,20 @@ section("【13.10】Ctrl + 滚轮缩放");
 
 const zoomText = async () => await js(`(function(){var v=document.querySelector('[data-testid="mm-zoom"]');return v?(v.textContent||'').trim():null;})()`);
 const wheelN = async () => await js(`(function(){var s=window.__mmStats;return (s&&s.wheel)?s.wheel.zoomed:-1;})()`);
+/* 🔴 「派发一发滚轮 → 等到计数真的递增」的**唯一实现**（【13.10】与【13.10b】共用，纪律 126）。
+ *   超时 ⇒ 原样返回 base（**不抛**），好让断言以"没动"的形态红出来（真红可归因）。 */
+const wheelTo = async (base, tag) => {
+	const r = await until(wheelN, (n) => n > base, { tag });
+	return r.ok ? r.val : base;
+};
+/* 🔴 滚轮派发的**唯一实现**（【13.10】与【13.10b】共用，纪律 126）。
+ *   校准开关 `MM_WHEEL_NEG=1` ⇒ **静默不派发**（纪律 32：新判据必须能被坏样本精确校准）。
+ *   期望读数：精确红 `C-M25a` + `C-M25b` + `C-M27a`；
+ *             `C-M27b/c` 仍绿（负对照与中键本就不该有滚轮反应 —— 它们红才是闸门写坏了）。 */
+const wheelAt = (dy, mods) => {
+	if (process.env.MM_WHEEL_NEG === "1") return;
+	emit("Input.dispatchMouseEvent", { type: "mouseWheel", x: canvasPt.x, y: canvasPt.y, deltaX: 0, deltaY: dy, modifiers: mods || 0 });
+};
 const canvasPt = await js(`(function(){var r=document.getElementById('dsh-mindmap');if(!r)return null;var b=r.getBoundingClientRect();if(!b.width||!b.height)return null;return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};})()`);
 
 const wc0 = await wheelN();
@@ -1645,14 +1857,19 @@ const wc0 = await wheelN();
  *    从 100% 往下必然有空间（下限 30%），读数**必定**变化 ⇒ 与起点无关。
  */
 await clickSel('[data-testid="mm-zoom-100"]', "C-M25b 归位 1:1");
-await sleep(260);
-const wz0 = await zoomText();
+/* 🔴 第 41 轮：归位也要**等到位**（原来 `sleep(260)`）。
+ *   点击同样走 CDP 派发（~280ms 落地）⇒ 260ms 是临界值，曾读到**尚未归位**的旧值当起点
+ *   —— `wz0` 本身就是上一步的迟到结果，"起点"是假的（纪律 133 同族）。 */
+const home1010 = await until(zoomText, (v) => v === "100%", { tag: "13.10 归位 1:1" });
+const wz0 = home1010.val;
 if (canvasPt && wc0 >= 0) {
-	emit("Input.dispatchMouseEvent", { type: "mouseWheel", x: canvasPt.x, y: canvasPt.y, deltaX: 0, deltaY: 120, modifiers: 2 });
-	await sleep(240);
-	emit("Input.dispatchMouseEvent", { type: "mouseWheel", x: canvasPt.x, y: canvasPt.y, deltaX: 0, deltaY: 120, modifiers: 2 });
-	await sleep(320);
+	/* 两发滚轮（向下 = deltaY>0）**各自等到计数 +1**再发下一发（见 `wheelTo` / `wheelAt`）。 */
+	wheelAt(120, 2); const n1 = await wheelTo(wc0, "13.10 滚轮①");
+	wheelAt(120, 2); await wheelTo(n1, "13.10 滚轮②");
 }
+/* 计数已确认落地 ⇒ 等一帧渲染，再**单次**读断言值
+ * （🔴 不许用 `until` 等 `wz1 !== wz0` —— 那会把判据变成恒绿，纪律 32）。 */
+await sleep(160);
 const wc1 = await wheelN();
 const wz1 = await zoomText();
 
@@ -1662,7 +1879,104 @@ t("C-M25b", "缩放读数随之变化（真的改了 k，不是只记了个数 �
 	wz1 !== wz0, { before: wz0, after: wz1 });
 /* 收尾复原：把缩放还给「适应」，免得把 1:1 态留给下一段（纪律：收尾必复原）。 */
 await clickSel('[data-testid="mm-fit"]', "C-M25b 收尾复原");
-await sleep(260);
+await sleep(500);   /* 复原也是 CDP 派发 ⇒ 给足落地（原来是 260 ms，临界） */
+
+/* ══════════ 13.10b G4 · 滚轮**成对**（R21-16 · 批次 B · 2026-09-18）══════════
+ *  用户原话：「Ctrl + **鼠标中键** 无法放大缩小」。口径裁定见 22 号文 §G4：
+ *    · 中文语境里「中键」通常**就指滚轮**（主流画布工具 Figma / draw.io 均为 Ctrl+滚轮）
+ *      ⇒ 判为**同一诉求**，不改键位；但必须留下口径说明 + 补一条**成对**判据。
+ *    · 🔴 既有 `C-M25a/b` 只滚了 **deltaY 正方向**，口径是"读数变了"——
+ *      这个口径下**任何方向**的变化都能过 ⇒ 只能证明"滚轮有反应"，
+ *      证明不了"能放大**也能**缩小"（G4 明文写的反例）。
+ *    · 🔴 另补**负对照**：非 Ctrl 的裸滚轮**不得**缩放 —— `MindMap.js#onWheel` 里
+ *      `if (!(e.ctrlKey || e.metaKey)) return;`（交还滚动容器）。
+ *
+ *  🔴 起点安全（纪律 129）：先点「1:1」把 k 钉到 1，**两个方向才都有空间**
+ *     （`ZOOM_MIN=0.1 / ZOOM_MAX=3`）⇒ 与任何前序段落留下的状态无关。
+ *  🔴 收尾复原：跑完把缩放还给「适应」，不把 1:1 态留给【13.11】。 */
+
+await clickSel('[data-testid="mm-zoom-100"]', "C-M27 归位 1:1");
+const home1010b = await until(zoomText, (v) => v === "100%", { tag: "13.10b 归位 1:1" });
+const zoomPct = async () => {
+	const s = await zoomText();
+	const n = parseFloat(String(s).replace("%", ""));
+	return Number.isFinite(n) ? n : NaN;
+};
+/* （滚轮派发 `wheelAt` 已收敛到段头**唯一实现**，此处不再重复定义 —— 纪律 126） */
+/* 🔴 第 41 轮**更正**（纪律 130：归因必须过对照实验；证伪后要**显式更正**原记录）
+ *
+ *  ❌ 已证伪的旧归因（第 41 轮上半夜我自己写下的，留此以防重蹈）：
+ *     「滚轮派发必须 `await send`，因为 `emit`（fire-and-forget）不保证送达。」
+ *     ⇒ 改为 `await send` 后**重跑五条原样全红**（`_r41-g4b.out`）⇒ 该假设**不成立**。
+ *     而且它本来就与本文件 59-61 行的既有结论**直接冲突**：
+ *       「本 Electron 环境 `Input.dispatchMouseEvent` 的 **CDP 响应**稳定延迟约 5s、
+ *         而**事件本身立即送达** … 绝不能 await 响应，否则一次点击要 15s 且时序断言被拖垮。」
+ *     ⇒ 那次"修复"只是让每次派发多等 5 秒，压根没碰到"事件到没到"这件事。
+ *
+ *  ✅ 第 41 轮**已定案**（对照实验 `scripts/_r41-wheel-probe.mjs` → `logs/_r41-wheelprobe.out`）：
+ *     · 合成 WheelEvent 正对照：100%→92%、计数 +1 ✅（**处理器本身是好的**）
+ *     · CDP 真派发 +Ctrl：92%→84%、计数 +1 ✅（**真事件也能缩放**）
+ *     · 裸滚轮负对照：计数 0、读数不变 ✅（`ctrlKey` 早退生效）
+ *     ⇒ 三者都成立 ⇒ 既不是"事件不通"也不是"处理器坏"，而是 🔴 **落地耗时 264–290 ms**，
+ *       而本段原来每发只 `sleep(200~340)` ⇒ 读数读到的是**上一发的迟到结果**，
+ *       于是同一次运行里既出现"计数 0→0"又出现"k 100→92"（自相矛盾 = 错位的指纹）。
+ *     ⇒ 修法：每发**等到计数递增**（`wheelTo`）再继续；断言值仍**单次读**。 */
+
+if (canvasPt) {
+	/* ① 向上（deltaY<0）⇒ 放大；② 向下（deltaY>0）⇒ 缩小 —— 成对。
+	 * 🔴 每发都**等到计数递增**再发下一发：否则下一发的读数读到的是上一发的迟到结果
+	 *    （修前实测 `{base:100,up:92,down:84}` 正是三个读数各错位一步的产物）。 */
+	const p0 = home1010b.ok ? 100 : await zoomPct();
+	const w0 = await wheelN();
+	wheelAt(-120, 2); const w1 = await wheelTo(w0, "13.10b 放大①");
+	wheelAt(-120, 2); const w2 = await wheelTo(w1, "13.10b 放大②");
+	await sleep(160);
+	const pUp = await zoomPct();
+	wheelAt(120, 2); const w3 = await wheelTo(w2, "13.10b 缩小①");
+	wheelAt(120, 2); const w4 = await wheelTo(w3, "13.10b 缩小②");
+	wheelAt(120, 2); await wheelTo(w4, "13.10b 缩小③");
+	await sleep(160);
+	const pDown = await zoomPct();
+
+	t("C-M27a", "🔴 **成对**（G4 反例）：Ctrl+滚轮**向上 ⇒ 放大**、**向下 ⇒ 缩小**，且都要越过起点 —— 只测「变了」会让单程实现照样过",
+		p0 === 100 && pUp > p0 && pDown < p0,
+		{ base: p0, up: pUp, down: pDown, wheeled: [w0, w1, w2, w3, w4] },
+		{ always: true });   /* 🔴 绿也打读数：这三值就是 G4「能放大**也能**缩小」的验收证据 */
+
+	/* ③ 负对照：非 Ctrl 的裸滚轮 ⇒ 计数与读数都不变。
+	 * 🔴 每发等 **600 ms**（> 实测落地 264–290 ms）：等太短会把"还没落地"读成"没缩放"
+	 *    ⇒ 负对照恒绿 = 抓不到缺陷（纪律 32 的标准坑：校准不了的闸门等于没有）。
+	 * 🔴 先证前提（纪律 23/58）：`__mmStats` 读不到时 `wheelN()` 返回 -1，
+	 *    两边都 -1 则 `zc1 === zc0` **恒过** ⇒ 必须显式排除这个空绿形态。 */
+	const zc0 = await wheelN();
+	const pz0 = await zoomPct();
+	wheelAt(120, 0); await sleep(600);
+	wheelAt(-120, 0); await sleep(600);
+	const zc1 = await wheelN();
+	const pz1 = await zoomPct();
+	t("C-M27b", "🔴 负对照：**非 Ctrl** 的裸滚轮 ⇒ 缩放计数与读数**都不变**（交还滚动容器，不许抢）",
+		zc0 >= 0 && zc1 === zc0 && pz1 === pz0,
+		{ zoomedBefore: zc0, zoomedAfter: zc1, pctBefore: pz0, pctAfter: pz1, probeAvailable: zc0 >= 0 });
+
+	/* ④ 中键（button===1）按下 ⇒ 不得进入自动滚动、也不得拖走节点 */
+	const midProbe = `(function(){var s=document.scrollingElement||document.documentElement;return {top:s.scrollTop,left:s.scrollLeft,moved:document.querySelectorAll('[data-testid="mm-node"][data-moved="1"]').length};})()`;
+	const midBefore = await js(midProbe);
+	emit("Input.dispatchMouseEvent", { type: "mousePressed", x: canvasPt.x, y: canvasPt.y, button: "middle", buttons: 4, clickCount: 1 });
+	await sleep(500);   /* > 实测落地 264–290 ms（等长更严格：若真会拖走/自动滚动，这里必然抓到） */
+	emit("Input.dispatchMouseEvent", { type: "mouseReleased", x: canvasPt.x, y: canvasPt.y, button: "middle", buttons: 0, clickCount: 1 });
+	await sleep(500);
+	const midAfter = await js(midProbe);
+	t("C-M27c", "中键（`button===1`）按下 ⇒ 页面**不进入自动滚动**、也不拖走节点（默认行为本就不触发 / 已 `preventDefault`）",
+		midAfter.top === midBefore.top && midAfter.left === midBefore.left && midAfter.moved === midBefore.moved,
+		{ before: midBefore, after: midAfter });
+} else {
+	for (const id of ["C-M27a", "C-M27b", "C-M27c"]) {
+		sk(id, "滚轮成对（G4）", "画布容器 `dsh-mindmap` 不在场 ⇒ 无落点，无法派发滚轮（不是失败）");
+	}
+}
+/* 收尾复原（纪律：收尾必复原）—— 缩放还给「适应」 */
+await clickSel('[data-testid="mm-fit"]', "C-M27 收尾复原");
+await sleep(500);   /* 同上：复原失败会把 1:1 态漏给【13.11】（纪律 129 收尾必复原） */
 
 /* ══════════ 13.11 默认定位到当前会话（R12 · 用户原话：「默认定位到当前会话」）══════════
  *  ⚠️ 前提守卫：冷启动没有"当前会话"（宿主不给 curId）⇒ 定位**按设计不执行**，

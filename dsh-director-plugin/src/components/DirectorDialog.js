@@ -2,7 +2,7 @@
  * 职责：总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）
  * 引用：要求 5/6/7/8/9/10/11 · 要求 5 · 要求 6 · 要求 11
  * 上游：client-entry.js, components/DirectorPage.js, mount.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/scope-tree.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/scope-tree.js, logic/conv-snapshot.js, logic/sync.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, logic/director-inherit.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, logic/summary-notes.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监弹窗三态）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -41,24 +41,37 @@ import {
 } from "../store/layout.js";
 import {
 	loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel,
-	findNodeById, scopeKeyOf, scopeHasConversation
+	findNodeById, scopeKeyOf, scopeKeyForNode, scopeHasConversation
 } from "../store/hierarchy.js";
 import { onHierarchyChange } from "../util/bus.js";
 import { applySplit, clearSplit, getSplitRootRect } from "../bridge/split.js";
-import { sendToChat, deliverToChat, observeConversation, readConversation, installChatBridgeApi } from "../bridge/chat-bridge.js";
+import { sendToChat, deliverToChat, observeConversation, readConversation, installChatBridgeApi, conversationMirror } from "../bridge/chat-bridge.js";
 import { openSession, getBranchSnapshot, subscribeBranch } from "../logic/branch-tree.js";
 /* 第 38 轮：**作用域 ∩ 血缘**的纯函数（总监段与导图段共用一份判据 —— 封死纪律 126） */
 import { findInTree, scopeSessions, scopeSessionIdSet, filterRowsByScope, scopeStats } from "../logic/scope-tree.js";
+/* 第 40 轮（需求 21-R21-05）：「对话概况」的**行级呈现口径**（唯一真相源：组件与闸门同读一份）
+ * → `lastUser` / `lastResult` / `pending` / `briefLines`，见该文件头注的口径表。 */
+import { briefLines } from "../logic/conv-snapshot.js";
+/* 第 40 轮 I10：「刷新本作用域快照」走**既有**的同步入口（幂等），不另造通道。 */
+import { syncFromSource } from "../logic/sync.js";
 import { route, confirmRoute, review6, reviewAndSave, DESTINATION, DESTINATION_LABEL, dimensionCandidates } from "../logic/routing.js";
 import { plan as planSplit } from "../logic/split-dimensions.js";
 import { dimBranchContext } from "../logic/dim-branch.js";
 import { readSplitIndex } from "../store/split-index.js";
 import { makeEnvelope, childEnvelope, VIA, summariesFor } from "../logic/lineage.js";
 import { appendDirectorMessage, listDirectorMessages, listAllDirectorMessages, pluginDbStats, makeId, PLUGIN_DB_NAME } from "../store/plugin-db.js";
+/* 🔴 第 42 轮（需求 3）：总监对话的**读展示**走继承链（本桶为空 ⇒ 上溯分支父）。
+ *    ⚠️ 维护类操作（清空/备份）仍用原始 `listDirectorMessages` —— 继承结果不可用于删除。 */
+import { readDirectorMessages } from "../logic/director-inherit.js";
 import { DirectorWorkbench } from "./DirectorWorkbench.js";
 import { DirectorHierarchy } from "./DirectorHierarchy.js";
 import { dshLog } from "../util/debug.js";
 import { flowStore, lastFlowIdFor, flowOrigin, DIM } from "../logic/flow.js";
+/* 🔴 第 40 轮 · 22 号文 G5/G6：总监小结里那两行的**唯一构造点**。
+ *    为什么必须 import 而不是就地拼字符串：跨维度转交有 **3 个调用点**
+ *    （本组件 / `DirectorPage` / `MindMap`），就地拼 ⇒ 同一语义 3 份措辞、
+ *    闸门没法用一个判据守住（纪律 126：同一语义两个标识符 = 隐式断链）。 */
+import { transferLine, acceptLine, registerNote } from "../logic/summary-notes.js";
 /* 右上角「⚙ 个性化」—— 与总监页 / 设计图 / 导图**共用同一个组件与同一份持久化**。
  * 需求原文：「…同时都在右上角加自定义个性化设定」。 */
 import { PersonalizePanel } from "./PersonalizePanel.js";
@@ -156,7 +169,7 @@ const S = {
 	},
 	head: { display: "flex", alignItems: "center", gap: 6, height: 36, flex: "0 0 36px", padding: "0 8px", borderBottom: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1c1e22))" },
 	headTitle: { fontWeight: 620, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
-	lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "var(--dp-dlg-ac2, #b794f6)", whiteSpace: "nowrap" },
+	lvchip: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "2px 6px", borderRadius: 4, background: "rgba(137,87,229,.18)", border: "1px solid rgba(137,87,229,.4)", color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", whiteSpace: "nowrap" },
 	btns: { marginLeft: "auto", display: "flex", gap: 3 },
 	btn: { width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #212429))", color: "var(--dp-dlg-t2, var(--dsw-alias-label-secondary, #c3c8ce))", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: 0 },
 	/* ── 分段条（第 38 轮**视觉重做** —— 用户：「总监插件对的 <层级> tap 的背景颜色和文字
@@ -199,7 +212,7 @@ const S = {
 		fontSize: 11, padding: "3px 8px", borderRadius: 5, cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
 		border: "1px solid " + (mode === "auto" ? "rgba(137,87,229,.42)" : "rgba(210,153,34,.42)"),
 		backgroundColor: on ? "rgba(137,87,229,.16)" : "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))",
-		color: mode === "auto" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-warn, #e0b341)", fontWeight: on ? 600 : 400
+		color: mode === "auto" ? "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" : "var(--dp-dlg-warn, #e0b341)", fontWeight: on ? 600 : 400
 	}),
 	dot: (c) => ({ width: 5, height: 5, borderRadius: "50%", background: c || "#39c5cf", display: "inline-block" }),
 	input: { flex: 1, minWidth: 0, height: 28, borderRadius: 6, border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #3d4148))", backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-layer-2, #141619))", color: "var(--dp-dlg-t1, var(--dsw-alias-label-primary, #e8eaed))", padding: "0 9px", fontSize: 11.5, boxSizing: "border-box" },
@@ -209,11 +222,11 @@ const S = {
 		position: "absolute", pointerEvents: "auto", display: "flex", flexDirection: "column", alignItems: "center",
 		justifyContent: "flex-start", gap: 8, paddingTop: 10, cursor: "pointer",
 		backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #1b1e23))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))",
-		color: side === "left" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
+		color: side === "left" ? "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, letterSpacing: 1
 	}),
 	muted: { fontSize: 11, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))", lineHeight: 1.6 },
 	msg: { display: "flex", gap: 6, marginBottom: 6 },
-	av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" : "var(--dp-dlg-ac2, #b794f6)", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
+	av: (kind) => ({ width: 18, height: 18, flex: "0 0 18px", borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, fontWeight: 700, background: kind === "user" ? "rgba(47,111,235,.18)" : "rgba(137,87,229,.22)", color: kind === "user" ? "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))" : "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", border: "1px solid " + (kind === "user" ? "rgba(47,111,235,.4)" : "rgba(137,87,229,.4)") }),
 	bub: { backgroundColor: "var(--dp-dlg-bg2, var(--dsw-alias-bg-base, #212429))", border: "1px solid var(--dp-dlg-line, var(--dsw-alias-border-l2, #31343a))", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, lineHeight: 1.55, flex: 1, minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }
 };
 
@@ -241,7 +254,7 @@ function RouteCard({ result, onConfirm, onCancel, busy }) {
 			h("div", { key: "1" }, "意图：" + result.intent.kind + "（置信 " + result.intent.confidence.toFixed(2) + "）"),
 			h("div", { key: "2" }, "候选：" + (result.candidates.length ? result.candidates.slice(0, 3).map((c) => c.name + "(" + c.score + ")").join(" / ") : "无")),
 			h("div", { key: "3" }, "子任务：" + result.subtasks.length + " 个"),
-			h("div", { key: "4", style: { color: "var(--dp-dlg-ac2, #b794f6)" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
+			h("div", { key: "4", style: { color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" } }, "建议：" + DESTINATION_LABEL[d.destination] + "（置信 " + d.confidence.toFixed(2) + "）"),
 			h("div", { key: "5" }, "理由：" + d.reason)
 		]),
 		h("div", { key: "b", style: { display: "flex", gap: 5, flexWrap: "wrap" } }, [
@@ -290,6 +303,17 @@ function ReviewCard({ result, onRun, busy }) {
  *   **不显示空白**（空白会让"没数据"与"数据是空"同形 —— 纪律 19/58 同族）。
  */
 function ScopeBrief({ tree, scope, onOpen }) {
+	/* 第 40 轮 I10：**一键刷新本作用域快照**。走既有同步入口（幂等），不新造通道；
+	 * 同步完成会广播层级变更 ⇒ 本组件随 `tree` 重渲染。 */
+	const [busy, setBusy] = react.useState(false);
+	const doRefresh = () => {
+		if (busy) return;
+		setBusy(true);
+		Promise.resolve()
+			.then(() => syncFromSource())
+			.catch(() => { /* 失败不抛穿；下次点仍可重试 */ })
+			.then(() => setBusy(false));
+	};
 	const list = react.useMemo(() => {
 		const node = scope ? findInTree(tree, scope.id) : null;
 		const sessions = node ? scopeSessions(node) : [];
@@ -306,7 +330,14 @@ function ScopeBrief({ tree, scope, onOpen }) {
 				nodeId: String(s.id || ""), sessionId: sid,
 				title: String(c.title || s.name || sid || "未命名"),
 				summary: String(meta.summary || ""),
+				/* 🔴 第 40 轮：`lastMessage` 是**总监侧**末条（来源 = 该会话的总监 store），
+				 *    与「最后一个我发的」**不是同一件事** ⇒ 两者必须分开标（见 `briefLines`）。 */
 				lastMessage: String(c.lastMessage || ""),
+				/* 用户 ↔ AI 对话的快照（由 `bridge/chat-bridge.js` 的镜像落盘，见 `conv-snapshot.js`） */
+				lastUser: String(c.lastUser || ""),
+				lastResult: String(c.lastResult || ""),
+				lastPending: Boolean(c.lastPending),
+				snapAt: Number(c.snapAt || 0),
 				lastTime: Number(c.lastTime || 0),
 				count: Number(c.messageCount || 0),
 				flowLine
@@ -328,13 +359,30 @@ function ScopeBrief({ tree, scope, onOpen }) {
 	}, [
 		h("div", { key: "t", style: S.blkT }, [
 			"本作用域对话概况",
-			h("span", { key: "x", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } },
+			/* I10：一键刷新（幂等；走既有同步入口）—— 让"未采集"**可自愈**，
+			 * 不必逼用户逐个点开对话。 */
+			h("button", {
+				key: "rf", "data-testid": "d-brief-refresh", disabled: busy, onClick: doRefresh,
+				style: {
+					marginLeft: "auto", marginRight: 6, ...S.btnGhost,
+					opacity: busy ? 0.55 : 1, cursor: busy ? "default" : "pointer"
+				},
+				title: "重新同步层级树与各会话快照（幂等）"
+			}, busy ? "刷新中…" : "刷新"),
+			h("span", { key: "x", style: { color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } },
 				list.length ? list.length + " 个对话" : "无对话")
 		]),
 		/* 作用域说明（需求 6：嵌套时"仅显示这个文件夹中的作用"）—— 把"范围是什么"写出来，
 		 * 否则用户看到 0 条时无法区分"这个文件夹真的没有"与"我点错了节点"。 */
 		h("div", { key: "s", style: { ...S.muted, marginBottom: 5 }, "data-testid": "d-scope-note" },
 			"范围：" + ((scope && scope.name) || "全局总管") + "（含其子文件夹）"),
+		/* 🔴 空的时候必须能回答"**为什么**空"（纪律 19/54：不静默、可分辨）。
+		 *    原因取自 `chat-bridge` 的可分辨字段（不是我在这里猜的），分两类：
+		 *    ① 该会话还没被点开过（镜像没数据）② 镜像取不到数（宿主不在【对话】页签）。 */
+		(list.length && list.every((it) => briefLines(it).length === 0) && conversationMirror.persistReason)
+			? h("div", { key: "pr", "data-kind": "why", style: { ...S.muted, marginBottom: 4 } },
+				"采集状态：" + conversationMirror.persistReason)
+			: null,
 		list.length ? list.map((it) => h("div", {
 			key: it.nodeId || it.sessionId, "data-testid": "d-brief-item", "data-sid": it.sessionId,
 			style: {
@@ -348,17 +396,25 @@ function ScopeBrief({ tree, scope, onOpen }) {
 				h("span", { key: "c", style: { ...S.muted, marginLeft: "auto" } },
 					(it.count ? it.count + " 条" : "") + (it.lastTime ? " · " + fmt(it.lastTime) : ""))
 			]),
-			it.summary
-				? h("div", { key: "sm", style: { ...S.muted, marginBottom: 2 }, "data-kind": "summary" }, "总结：" + it.summary)
+			/* 🔴 第 40 轮：渲染口径收进 `briefLines()`（**唯一真相源** —— 组件与闸门读同一份，
+			 *    否则"行在不在"这件事会变成两处判据，纪律 126）。
+			 *    每行都带 `data-kind`，闸门据此断言**行级**存在性（不是"整块非空"）。 */
+			...briefLines(it).map((ln) => h("div", {
+				key: ln.kind, "data-kind": ln.kind,
+				style: ln.kind === "pending"
+					? { ...S.muted, marginBottom: 2, color: "var(--dp-dlg-warn, #e0b341)" }
+					: (ln.kind === "flow"
+						? { ...S.muted, color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", wordBreak: "break-all" }
+						: { ...S.muted, marginBottom: 2, wordBreak: "break-all" })
+			}, ln.text)),
+			/* I9 新鲜度：快照**早于**会话本身的更新 ⇒ 明说"可能过期"，
+			 *    否则用户会把旧读数当现状（这与"没数据"是两回事，必须可分）。 */
+			(it.snapAt && it.lastTime && it.lastTime > it.snapAt)
+				? h("div", { key: "stale", "data-kind": "stale", style: { ...S.muted, color: "var(--dp-dlg-warn, #e0b341)" } },
+					"⚠ 快照早于该对话最近更新，可能过期（打开该对话即可刷新）")
 				: null,
-			it.lastMessage
-				? h("div", { key: "lm", style: { ...S.muted, marginBottom: 2, wordBreak: "break-all" }, "data-kind": "last" }, "最后：" + it.lastMessage)
-				: null,
-			it.flowLine
-				? h("div", { key: "fl", style: { ...S.muted, color: "var(--dp-dlg-ac2, #b794f6)", wordBreak: "break-all" }, "data-kind": "flow" }, "流转：" + it.flowLine)
-				: null,
-			(!it.summary && !it.lastMessage && !it.flowLine)
-				? h("div", { key: "nv", style: { ...S.muted, color: "var(--dp-dlg-warn, #e0b341)" }, "data-kind": "none" },
+			(briefLines(it).length === 0 && !(it.snapAt && it.lastTime && it.lastTime > it.snapAt))
+				? h("div", { key: "nv", "data-kind": "none", style: { ...S.muted, color: "var(--dp-dlg-warn, #e0b341)" } },
 					"未采集 —— 点此行打开该对话即可刷新快照")
 				: null
 		])) : h("div", { key: "e", style: S.muted, "data-testid": "d-brief-empty" },
@@ -417,7 +473,7 @@ function ScopeMap({ tree, scope, onOpen }) {
 		}, [
 			/* 缩进 + 连线感：非根画 `└`，根画 `●` —— 用字符而不是 CSS 伪元素，
 			 * 因为宿主是编译后 `createElement` 形态，伪元素类名不可控。 */
-			h("span", { key: "g", style: { color: "var(--dp-dlg-ac2, #b794f6)", flex: "0 0 auto" } }, r.depth > 0 ? "└─" : "●"),
+			h("span", { key: "g", style: { color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", flex: "0 0 auto" } }, r.depth > 0 ? "└─" : "●"),
 			h("span", { key: "n", style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
 				String(r.title || r.sessionId).slice(0, 28)),
 			r.childrenCount ? h("span", { key: "c", style: { ...S.muted, flex: "0 0 auto" } }, "⑂" + r.childrenCount) : null,
@@ -434,7 +490,7 @@ function ScopeMap({ tree, scope, onOpen }) {
 /* ══════════════════════════════════════════════════════════════════
  * 子组件：左面板（R2 / R3 / R5 / R6 + 层级管理）
  * ══════════════════════════════════════════════════════════════════ */
-function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg, secs, onToggleSec, scopeNode, onOpenSession }) {
+function DirectorPanel({ node, tree, messages, msgSource, upstream, reviewResult, onReview, agentRuns, onCallAgent, engineStats, seg, setSeg, secs, onToggleSec, scopeNode, onOpenSession }) {
 	const counts = react.useMemo(() => countByLevel(tree), [tree]);
 	const [agentSeg, setAgentSeg] = react.useState("agents");
 	const [called, setCalled] = react.useState({});
@@ -444,7 +500,7 @@ function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview,
 	 *    拿来当三角箭头会带进一堆无关属性，改分段样式时箭头跟着变（隐式耦合）。 */
 	const caretStyle = {
 		display: "inline-block", minWidth: 12, marginRight: 3, textAlign: "center",
-		color: "var(--dp-dlg-ac2, #b794f6)", fontSize: 10.5
+		color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", fontSize: 10.5
 	};
 	/** 折叠区块的统一头部：整行可点，左右两端都表明"能收起/能展开" */
 	const secHead = (k, title, right) => h("div", {
@@ -457,6 +513,29 @@ function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview,
 		right || null,
 		h("span", { key: "h", style: { marginLeft: "auto", color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, sec(k) ? "已收起" : "点击收起")
 	]);
+
+	/* 🔴 22 号文 **G6**（doc19 §4 N5 第二方案）：「登记」只登记流转、**不写总监消息** ——
+	 *    这件事必须**在小结里说出来**，否则用户做完一个"有结果的动作"却看到消息数一动不动，
+	 *    读起来就是"又没持久化"。
+	 *
+	 * 🔴 为什么是**推导**而不是写一条库记录（两条判据同时成立的唯一解）：
+	 *    判据是「小结**出现**该行」**且**「`engineStats.conversations` **不增长**」——
+	 *    若真写一条消息，第二条必然失败。故这一行由**数据状态推导**（零写库）。
+	 *    推导口径全在 `logic/summary-notes.js#registerNote()`（离线闸门 `test-requirement22` 守）。
+	 *
+	 * ⚠️ 作用域取值与 `DirectorPage` 写流转时**同一个** `scopeKeyOf()`（同源，不另算）。
+	 * 🔴 **2026-09-18 修正（真机事故）**：第一版写的是
+	 *    `scopeKeyOf((scopeNode && scopeNode.id) || node.id, scopeNode)` ——
+	 *    只守了 `scopeNode`、**没守 `node`**；冷启动无作用域节点时 `node === null`
+	 *    ⇒ `Cannot read properties of null (reading 'id')` ⇒ 抛穿整棵弹窗子树
+	 *    ⇒ `SafeLayer` 隔离「dialog」层 ⇒ **总监弹窗打不开**（只剩一个小角标）。
+	 *    ⇒ 改为走**唯一实现** `scopeKeyForNode(scopeNode, node)`（`store/hierarchy.js`）：
+	 *      ① 两个入参都判空；② **第二参传"生效的那个节点"** —— 否则会话节点会退化成
+	 *      `se_` 前缀的树节点 id、与写侧的真实会话 id 差一个前缀 ⇒ 落到**另一个桶**。 */
+	const regNote = registerNote(
+		flowStore.ofSession(scopeKeyForNode(scopeNode, node)),
+		messages
+	);
 
 	return h("div", { style: S.body, "data-testid": "d-body" }, [
 		/* 分段：总监 / 导图 / 智能体
@@ -498,11 +577,27 @@ function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview,
 			h("div", { key: "r5", style: S.blk, "data-testid": "d-r5", "data-collapsed": sec("r5") ? "1" : "0" }, [
 				secHead("r5", "R5 总监对话区", h("span", { key: "x", style: { marginLeft: 6, color: "var(--dp-dlg-t3, var(--dsw-alias-label-tertiary, #8b9199))" } }, "只治理 · 不执行")),
 				h("div", { key: "b", style: { display: sec("r5") ? "none" : "block" } }, [
+					/* 🔴 22 号文 **G6**：这条**不是**库里的消息（`data-src="derived"` 就是给闸门与
+					 *    未来读代码的人看的）—— 消息数为 0 **不是**缺陷，是「登记」的设计语义；
+					 *    说出来的责任在界面，不在数据。 */
+					regNote ? h("div", {
+						key: "reg", "data-testid": "d-register-note", "data-src": "derived",
+						style: { ...S.muted, marginBottom: 5, padding: "4px 6px", borderRadius: 4,
+							border: "1px dashed var(--dp-dlg-line, #33383f)" }
+					}, regNote) : null,
+					/* 🔴 第 42 轮（需求 3）**继承来源标注**：本分支自己没有总监消息、
+					 *    展示的是上游分支的 ⇒ 必须说出来（否则用户会以为是自己发的）。
+					 *    `data-from` = 实际来源节点 id，闸门可对账"继承链是否真的上溯了"。 */
+					msgSource ? h("div", {
+						key: "inh", "data-testid": "d-msg-inherited", "data-from": msgSource.from || "",
+						style: { ...S.muted, marginBottom: 5, padding: "4px 6px", borderRadius: 4,
+							border: "1px dashed var(--dp-dlg-line, #33383f)" }
+					}, "↓ 以下总监对话继承自上游分支（" + (msgSource.from || "") + "）；本分支尚未产生自己的总监消息") : null,
 					messages.length
 						? messages.slice(-6).map((m) => h("div", { key: m.messageId || m.at, style: S.msg }, [
 							h("div", { key: "a", style: S.av(m.role) }, m.role === "user" ? "你" : "总"),
 							h("div", { key: "b", style: S.bub }, [
-								m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 3 } }, m.kind) : null,
+								m.kind ? h("div", { key: "k", style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", marginBottom: 3 } }, m.kind) : null,
 								h("span", { key: "t2" }, m.text)
 							])
 						]))
@@ -522,7 +617,7 @@ function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview,
 						key: u.messageId, "data-said": u.messageId, "data-from": u.from || "",
 						style: {
 							fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5,
-							color: "var(--dp-dlg-ac2, #b794f6)", marginBottom: 2, wordBreak: "break-all"
+							color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", marginBottom: 2, wordBreak: "break-all"
 						}
 					}, u.line)))) : null
 					])
@@ -577,7 +672,7 @@ function DirectorPanel({ node, tree, messages, upstream, reviewResult, onReview,
 							+ (a.noUse ? "｜不适用：" + a.noUse : ""),
 						"data-testid": "d-agent-" + a.key, "data-mode": a.mode,
 						onClick: () => { setCalled((c) => ({ ...c, [a.key]: true })); onCallAgent(a); }
-					}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-warn, #e0b341)") }), h("span", { key: "l" }, a.label)])
+					}, [h("i", { key: "d", style: S.dot(a.mode === "auto" ? "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" : "var(--dp-dlg-warn, #e0b341)") }), h("span", { key: "l" }, a.label)])
 				)
 			)]),
 			h("div", { key: "run", style: S.blk, "data-testid": "d-agent-runs", "data-run-total": agentRuns.length }, [
@@ -610,6 +705,9 @@ export function DirectorDialog(props = {}) {
 	const [tree, setTree] = react.useState(null);
 	const [crumbs, setCrumbs] = react.useState([]);
 	const [messages, setMessages] = react.useState([]);
+	/* 🔴 第 42 轮（需求 3）：消息**来源**。非空表示"这批消息继承自上游分支" ——
+	 *    继承读必须对用户可见，否则就是"悄悄把父亲的消息当自己的"（纪律 146）。 */
+	const [msgSource, setMsgSource] = react.useState(null);
 	const [stats, setStats] = react.useState(null);
 	const [reviewResult, setReviewResult] = react.useState(null);
 	const [routeResult, setRouteResult] = react.useState(null);
@@ -719,8 +817,13 @@ export function DirectorDialog(props = {}) {
 			const t = await loadTree();
 			setTree(t);
 			setCrumbs(await getBreadcrumb(nodeId));
-			const [msgs, s] = await Promise.all([listDirectorMessages(nodeId), pluginDbStats()]);
-			setMessages(msgs || []);
+			/* 🔴 第 42 轮（需求 3）：本桶为空 ⇒ 沿分支血缘上溯取最近的非空桶
+			 *    （「从 1 新建分支 2，2 的总监对话要和 1 一样」）。
+			 *    继承**必须可分辨** —— `inherited` 落进 `msgSource` 并在 R5 区标出来源，
+			 *    否则用户会把自己没发过的消息当成自己发的（纪律 146）。 */
+			const [inh, s] = await Promise.all([readDirectorMessages(nodeId), pluginDbStats()]);
+			setMessages(inh.rows || []);
+			setMsgSource(inh.inherited ? { from: inh.from, own: nodeId, chain: inh.chain } : null);
 			setStats(s);
 			/* 🔴 N3/R2：跨桶读**全部**消息 → 交给纯函数判"哪些是下游产出摘要"。
 			 *    全量读失败**不影响**主列表（降级可以，无声不行：`catch` 里留 `data-upstream-err`）。 */
@@ -980,7 +1083,13 @@ export function DirectorDialog(props = {}) {
 								messageId: recvId,
 								kind: "接收 · 转派",
 								role: "director",
-								text: "【总监接收】来自「" + String((node && node.name) || "总监") + "」的转派"
+								/* 🔴 22 号文 **G5**：首行固定为**目标侧凭证**「已接收 ← <来源>（维度 X）（HH:MM）」。
+								 *    改前只有下方那句「【总监接收】来自…」—— 信息在，但**措辞不固定**
+								 *    ⇒ 用户切到目标分支时读不出"这是同一件事的接收端"，
+								 *    闸门也没法用一条判据跨三个调用点守住（纪律 126）。
+								 *    ⚠️ **纯前缀追加**：下面的原句一字不动 ⇒ 既有断言（含「来自」「落地」）全部照旧。 */
+								text: acceptLine({ fromName: String((node && node.name) || ""), dimKey: dimKey }) + "\n"
+									+ "【总监接收】来自「" + String((node && node.name) || "总监") + "」的转派"
 									+ (dimKey ? "（维度 " + dimKey + "）" : "") + "："
 									+ String((src && src.fact && src.fact.reqText) || "") + "\n落地：" + how,
 								env: recvEnv,
@@ -996,7 +1105,12 @@ export function DirectorDialog(props = {}) {
 						ref: (src && src.messageId) ? src.messageId : "",
 						cause: recvEnv ? "" : "目标侧接收凭证未写入（目标节点不存在或写库失败）"
 					}, { self: nodeId });
-					await pushMsg("方案 · 派活", "路由已落实：" + summary + "（" + how + "）"
+					/* 🔴 22 号文 **G5 · 源侧**：首行固定为「已转交 → <目标>（维度 X）（HH:MM）」。
+					 *    与目标侧那句 `acceptLine()` **同源**（都出自 `logic/summary-notes.js`）
+					 *    ⇒ 上下游两句话的结构天然对齐，不靠"两边各自拼、期望拼得一样"。
+					 *    ⚠️ 纯前缀追加：下面的原句一字不动（既有断言照旧）。 */
+					await pushMsg("方案 · 派活", transferLine({ toName: String((targetNode && targetNode.name) || ""), dimKey: dimKey })
+						+ "\n路由已落实：" + summary + "（" + how + "）"
 						+ (recvEnv ? "\n目标总监已留接收凭证（血缘 " + String(recvEnv.root || "") + " · 轮次 " + recvEnv.round + "）"
 							: "\n⚠️ 目标侧接收凭证未写入（原因见该条 cause）"),
 						"assistant", ownEnv, (src && src.fact) ? src.fact : null);
@@ -1035,7 +1149,7 @@ export function DirectorDialog(props = {}) {
 				position: "absolute", right: 18, bottom: 18, pointerEvents: "auto", cursor: "pointer",
 				display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 20,
 				backgroundColor: "var(--dp-dlg-bg1, var(--dsw-alias-bg-layer-1, #23262c))", border: "1px solid rgba(137,87,229,.45)",
-				color: "var(--dp-dlg-ac2, #b794f6)", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
+				color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5
 			}
 		}, [
 			h("span", { key: "i" }, "◆"),
@@ -1083,7 +1197,7 @@ export function DirectorDialog(props = {}) {
 						"aria-pressed": st.dialogPinned ? "true" : "false", "data-on": st.dialogPinned ? "1" : "0",
 						title: st.dialogPinned ? "已固定（点此取消）" : "固定：点左侧不改变本页",
 						style: st.dialogPinned
-							? { ...S.btn, borderColor: "rgba(137,87,229,.75)", color: "var(--dp-dlg-ac2, #b794f6)" }
+							? { ...S.btn, borderColor: "rgba(137,87,229,.75)", color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" }
 							: S.btn,
 						onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); directorLayoutStore.toggleDialogPinned(); }
 					}, "📌"),
@@ -1129,7 +1243,7 @@ export function DirectorDialog(props = {}) {
 								? "已固定：点左侧对话 / 文件夹都不会改变本页 · 点此取消固定"
 								: "固定：点左侧对话 / 文件夹都不改变本页（不缩回、不换作用域）",
 							style: st.dialogPinned
-								? { ...S.btn, borderColor: "rgba(137,87,229,.75)", color: "var(--dp-dlg-ac2, #b794f6)" }
+								? { ...S.btn, borderColor: "rgba(137,87,229,.75)", color: "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" }
 								: S.btn,
 							onClick: () => directorLayoutStore.toggleDialogPinned()
 						}, "📌"),
@@ -1149,7 +1263,7 @@ export function DirectorDialog(props = {}) {
 
 				/* 面板主体 */
 				h(DirectorPanel, {
-					key: "body", node, tree, messages, upstream, reviewResult, onReview: doReview,
+					key: "body", node, tree, messages, msgSource, upstream, reviewResult, onReview: doReview,
 					agentRuns: runs, onCallAgent, engineStats: stats,
 					seg, setSeg: (s) => directorLayoutStore.setLeftTab(s),
 					/* 第 38 轮：三区块折叠（r2/r5/r6）+ 作用域概况 / 导图所需的两个入口 */
@@ -1178,7 +1292,7 @@ export function DirectorDialog(props = {}) {
 							fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, padding: "4px 7px", borderRadius: 5, whiteSpace: "nowrap",
 							border: "1px solid " + (st.focusTarget === "director" ? "rgba(137,87,229,.45)" : "rgba(47,111,235,.5)"),
 							background: st.focusTarget === "director" ? "rgba(137,87,229,.16)" : "rgba(47,111,235,.16)",
-							color: st.focusTarget === "director" ? "var(--dp-dlg-ac2, #b794f6)" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", cursor: "pointer"
+							color: st.focusTarget === "director" ? "var(--dp-dlg-ac2, var(--dsw-alias-brand-secondary, var(--dsw-alias-brand-primary, #b794f6)))" : "var(--dp-dlg-ac, var(--dsw-alias-brand-primary, #79a8ff))", cursor: "pointer"
 						},
 						title: "点击切换提交目标",
 						onClick: () => directorLayoutStore.setFocusTarget(st.focusTarget === "director" ? "chat" : "director")

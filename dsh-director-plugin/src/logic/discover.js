@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：真实会话 / 文件夹（workspace）数据源发现层
  * 引用：—
- * 上游：client-entry.js, components/OverviewDialog.js, logic/branch-tree.js, logic/sync.js
- * 下游：store/idb.js
+ * 上游：client-entry.js, components/OverviewDialog.js, logic/branch-tree.js, logic/director-inherit.js, logic/sync.js
+ * 下游：store/idb.js, logic/host-ctx.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -34,6 +34,9 @@
  */
 
 import { idbListFolders } from "../store/idb.js";
+/* 🔴 第 42 轮（需求 4）：工作区的**真实显示名**来自宿主服务 —— 收敛到唯一实现。
+ *    单向依赖：`host-ctx.js` **不** import 本模块 ⇒ 无循环。 */
+import { getHostCtx, workspaceEntities, workspaceNameById, workspaceAliases } from "./host-ctx.js";
 
 /** 稳定 id 前缀 */
 export const ID_PREFIX = { workspace: "ws_", session: "se_" };
@@ -129,16 +132,43 @@ export async function discover() {
 	if (view && view.data.sessionOrderByAccount) {
 		const order = view.data.sessionOrderByAccount || {};
 		const times = view.data.sessionUpdatedAtByAccount || {};
+		/* 🔴 第 42 轮（需求 4）：**真实文件夹名**。
+		 *   病灶（用户实测）：「标准左侧导航栏中的工作区，只有点击『未分组』的文件夹
+		 *   会有总监弹窗，其他的也需要有」—— 真因不在弹窗，在**名字对不上**：
+		 *     宿主侧栏分组标题 = `workspace.title`（缺失时回落 `basename(path)`）
+		 *       取证 `dsh-client-ui-workspace/lib/client.js:159`（`buildGroup` 第 5 参）
+		 *     而旧实现写的是 `"工作区 " + shortId(workspaceId)` —— 那是**截断的 uuid**，
+		 *       侧栏里根本不会出现这个字符串 ⇒ `nav-hook` 的名称匹配必然失配；
+		 *       只有 `""`（未分组）那一组因为**不含 uuid**才碰巧命中。
+		 *   ⚠️ 读不到宿主工作区服务（未注入 / 版本差异）⇒ **保留旧名**：
+		 *      降级必须可见（宁可与以前一样失效），不许"假装成功"。 */
+		const ctx = getHostCtx();
+		const nameMap = workspaceNameById(ctx);
+		const entityMap = new Map();
+		for (const e of (workspaceEntities(ctx) || [])) {
+			if (e && e.id != null) entityMap.set(String(e.id), e);
+		}
 		const workspaces = [];
 		const sessions = [];
 		for (const wsId of Object.keys(order)) {
 			const ids = Array.isArray(order[wsId]) ? order[wsId] : [];
 			const tmap = times[wsId] || {};
+			/* 未分组（key 为空串）在宿主侧是 **stray 分组**，**不在** `workspaces.list()` 里，
+			 * 故 nameMap 永远查不到它 ⇒ 单独走字面量（并把宿主英文常量 "Ungrouped" 收进别名）。 */
+			const legacyName = wsId ? ("工作区 " + shortId(wsId)) : "未分组";
+			const realName = wsId ? (nameMap.get(String(wsId)) || null) : null;
 			workspaces.push({
 				id: wsId || UNGROUPED_ID,
 				rawId: wsId,
 				nodeId: workspaceNodeId(wsId),
-				name: wsId ? ("工作区 " + shortId(wsId)) : "未分组",
+				name: realName || legacyName,
+				/* 别名 = 侧栏**可能显示的其它写法**（title / basename / 旧名 / "Ungrouped"）。
+				 * 这是为了让「点击行文本 → 节点」在宿主版本/命名差异下仍然成立，
+				 * 而不是把匹配放松成模糊猜测（判据不放宽，见 nav-hook 的头注）。 */
+				aliases: wsId
+					? workspaceAliases(entityMap.get(String(wsId)), legacyName)
+					: ["未分组", "Ungrouped"],
+				nameSource: realName ? "host" : "legacy",
 				sessionIds: ids.slice()
 			});
 			for (const sid of ids) {

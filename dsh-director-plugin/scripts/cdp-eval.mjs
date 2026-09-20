@@ -9,7 +9,10 @@
  */
 import { readFileSync } from "node:fs";
 
-const PORT = 9222;
+/* 🔴 端口口径必须与本仓一致（纪律 126）：`CDP_PORT` 优先、`DSH_CDP_PORT` 兜底（**顺序不可反**）。
+ * 原写法硬编码 9222 —— 而 `run-live.mjs` 在 9222 被**幽灵 pid** 占用时会改用 9223+
+ * ⇒ 本工具会连到"没人在听"的端口，或更糟：**另一个并行会话**的实例（静默跑错目标）。 */
+const PORT = Number(process.env.CDP_PORT || process.env.DSH_CDP_PORT || 9222);
 const args = process.argv.slice(2);
 let expr;
 if (args[0] === "--file") expr = readFileSync(args[1], "utf8");

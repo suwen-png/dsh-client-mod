@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>总监、神经链路与思维导图 —— 一套多智能体对话系统是怎么长出来的</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230e1116'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%235b8def'/%3E%3Ccircle cx='14' cy='16' r='4' fill='%23e0a458'/%3E%3Ccircle cx='50' cy='16' r='4' fill='%236fc98a'/%3E%3Ccircle cx='14' cy='48' r='4' fill='%23c98ac9'/%3E%3Ccircle cx='50' cy='48' r='4' fill='%23d97a6a'/%3E%3Cpath d='M28 28 L17 19 M36 28 L47 19 M28 36 L17 45 M36 36 L47 45' stroke='%236b7482' stroke-width='1.5'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0e1116; --panel:#151a22; --panel-2:#1b212c; --line:#262d39;
+    --txt:#e6e9ee; --txt-2:#9aa3b0; --txt-3:#6b7482;
+    --dir:#5b8def; --neuro:#e0a458; --map:#6fc98a; --studio:#c98ac9; --review:#d97a6a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--txt);
+    font-family:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,-apple-system,sans-serif;
+    line-height:1.8; font-size:16px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:64px 28px 96px}
+
+  header{margin-bottom:56px}
+  .kicker{font-size:13px;color:var(--txt-3);letter-spacing:.08em;margin-bottom:18px}
+  h1{font-size:34px;line-height:1.4;font-weight:700;letter-spacing:-.01em;margin-bottom:20px}
+  .lead{font-size:17px;color:var(--txt-2);max-width:680px}
+  .lead strong{color:var(--txt);font-weight:600}
+
+  section{margin-top:64px}
+  .sec-num{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:13px;color:var(--txt-3);margin-bottom:8px}
+  h2{font-size:24px;font-weight:700;margin-bottom:20px;line-height:1.4}
+  h2 .tag{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:4px;margin-right:10px;vertical-align:middle}
+  .tag.dir{background:rgba(91,141,239,.14);color:var(--dir)}
+  .tag.neuro{background:rgba(224,164,88,.14);color:var(--neuro)}
+  .tag.map{background:rgba(111,201,138,.14);color:var(--map)}
+  .tag.studio{background:rgba(201,138,201,.14);color:var(--studio)}
+  .tag.review{background:rgba(217,122,106,.14);color:var(--review)}
+
+  p{margin-bottom:16px}
+  p.muted{color:var(--txt-2)}
+  .hl-dir{color:var(--dir);font-weight:600}
+  .hl-neuro{color:var(--neuro);font-weight:600}
+  .hl-map{color:var(--map);font-weight:600}
+  .hl-studio{color:var(--studio);font-weight:600}
+  .hl-review{color:var(--review);font-weight:600}
+
+  blockquote{
+    border-left:3px solid var(--dir);background:rgba(91,141,239,.06);
+    padding:16px 22px;border-radius:0 8px 8px 0;margin:20px 0;
+    color:var(--txt);font-size:15.5px;
+  }
+  blockquote.amber{border-color:var(--neuro);background:rgba(224,164,88,.06)}
+  blockquote.green{border-color:var(--map);background:rgba(111,201,138,.06)}
+  blockquote.red{border-color:var(--review);background:rgba(217,122,106,.06)}
+  blockquote .who{display:block;font-size:12px;color:var(--txt-3);margin-bottom:6px;font-family:ui-monospace,Consolas,monospace}
+
+  .figure{
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:24px;margin:24px 0;
+  }
+  .figure .ft{font-size:12.5px;color:var(--txt-3);margin-bottom:14px;font-family:ui-monospace,Consolas,monospace}
+  .figure svg{display:block;width:100%;height:auto}
+
+  .pain{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:20px 24px;margin:20px 0}
+  .pain ul{list-style:none}
+  .pain li{padding:8px 0 8px 22px;position:relative;color:var(--txt-2);border-bottom:1px dashed var(--line);font-size:15px}
+  .pain li:last-child{border-bottom:none}
+  .pain li::before{content:"";position:absolute;left:0;top:17px;width:8px;height:8px;border-radius:50%;background:var(--review)}
+  .pain li b{color:var(--txt);font-weight:600}
+
+  table{width:100%;border-collapse:collapse;margin:20px 0;background:var(--panel);border-radius:8px;overflow:hidden;table-layout:fixed}
+  col.c1{width:20%}col.c2{width:18%}col.c3{width:62%}
+  th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line);font-size:14px}
+  th{background:var(--panel-2);color:var(--txt-3);font-weight:600;font-size:12.5px}
+  td{color:var(--txt-2)}
+  td b{color:var(--txt);font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .dim{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--dir)}
+
+  .steps{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:24px 0}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 12px;position:relative}
+  .step .n{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--txt-3);margin-bottom:6px}
+  .step .t{font-size:14px;font-weight:600;margin-bottom:6px}
+  .step .d{font-size:12.5px;color:var(--txt-2);line-height:1.6}
+  .step::after{content:"→";position:absolute;right:-9px;top:50%;transform:translateY(-50%);color:var(--txt-3);font-size:14px;z-index:1}
+  .step:last-child::after{display:none}
+
+  .vs{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0}
+  .vs .col{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px 20px}
+  .vs .bad{border-color:rgba(217,122,106,.35)}
+  .vs .good{border-color:rgba(111,201,138,.35)}
+  .vs h4{font-size:14px;margin-bottom:10px;font-weight:600}
+  .vs .bad h4{color:var(--review)}
+  .vs .good h4{color:var(--map)}
+  .vs p{font-size:13.5px;color:var(--txt-2);margin:0}
+
+  .roles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:24px 0}
+  .role{border-radius:8px;padding:18px;border:1px solid var(--line);background:var(--panel)}
+  .role .rt{font-size:14px;font-weight:700;margin-bottom:6px}
+  .role.dir .rt{color:var(--dir)}
+  .role.neuro .rt{color:var(--neuro)}
+  .role.map .rt{color:var(--map)}
+  .role .rd{font-size:13px;color:var(--txt-2);line-height:1.65}
+
+  .note{margin-top:32px;padding:18px 22px;background:rgba(224,164,88,.07);border-left:3px solid var(--neuro);border-radius:0 8px 8px 0;font-size:14px;color:var(--txt-2)}
+  .note b{color:var(--txt)}
+
+  footer{margin-top:72px;padding-top:24px;border-top:1px solid var(--line);font-size:12.5px;color:var(--txt-3)}
+
+  @media (max-width:720px){
+    .steps{grid-template-columns:1fr 1fr}
+    .step::after{display:none}
+    .vs,.roles{grid-template-columns:1fr}
+    h1{font-size:26px}
+    body{font-size:16px}
+    .step .d{font-size:13.5px}
+    th,td{font-size:13.5px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">项目讲解 · 从重复对话到贾维斯式总监系统</div>
+  <h1>这套系统不是设计出来的，是用着用着，<br>被重复、被打断、被混乱一点一点逼出来的。</h1>
+  <p class="lead">它跑在 DeepSeek Harness 里，由两个插件拼成：<strong>总监驾驶舱插件</strong>（含思维导图、设计图工作室）和 <strong>Hermes Command Center</strong>（记忆中枢）。下面按真实的使用顺序讲——先讲它从哪里来，再讲每个角色为什么必须存在。</p>
+</header>
+
+<!-- ═══════ 00 起点：重复 ═══════ -->
+<section>
+  <div class="sec-num">00 · 起点</div>
+  <h2>用着用着，发现自己在重复</h2>
+
+  <p>正常使用 AI 客户端的时候，最先冒出来的感觉不是"不够强"，而是<strong>重复</strong>。</p>
+  <div class="pain">
+    <ul>
+      <li><b>重复需求。</b>换了条对话，又得把项目背景、刚才做到哪、要什么效果从头讲一遍。</li>
+      <li><b>重复确认。</b>它理解得对不对？再追问两句确认一下，确认完又怕它跑偏，再纠一遍。</li>
+      <li><b>它总停下来。</b>你已经把需求讲清楚了，具体方案它做得比你好——但它总在半路上停下来问你"下一步怎么办"。</li>
+    </ul>
+  </div>
+
+  <p>这个阶段慢慢看清一件事：问题不在单个 AI 聪不聪明，而在<strong>对话的形态</strong>。一条对话就是一个 AI 从头到尾，这是"平铺"的。但你真正要做的事，本来就不是一个 AI 能扛的——它需要不同的智能体各管一摊，同时在后台协作。</p>
+
+  <blockquote>
+    <span class="who">使用中的体会</span>
+    不是平铺的，应该是<b>立体的结构</b>——同一个对话里，背后调用多个智能体，分别实现不同的功能。Harness 已经提供了"分支"的能力，但分支展现出来还是平铺的，没法用。
+  </blockquote>
+
+  <div class="figure">
+    <div class="ft">图 1 · 平铺 vs 立体</div>
+    <svg viewBox="0 0 800 240" xmlns="http://www.w3.org/2000/svg">
+      <!-- 左：平铺 -->
+      <text x="10" y="20" fill="#6b7482" font-size="12" font-family="ui-monospace,monospace">平铺：一条对话一个 AI，上下排开</text>
+      <rect x="10" y="35" width="340" height="28" rx="4" fill="#1b212c" stroke="#262d39"/>
+      <text x="20" y="53" fill="#9aa3b0" font-size="12">对话 A · 世界观</text>
+      <rect x="10" y="70" width="340" height="28" rx="4" fill="#1b212c" stroke="#262d39"/>
+      <text x="20" y="88" fill="#9aa3b0" font-size="12">对话 B · 剧情</text>
+      <rect x="10" y="105" width="340" height="28" rx="4" fill="#1b212c" stroke="#262d39"/>
+      <text x="20" y="123" fill="#9aa3b0" font-size="12">对话 C · 正文</text>
+      <rect x="10" y="140" width="340" height="28" rx="4" fill="#1b212c" stroke="#262d39"/>
+      <text x="20" y="158" fill="#9aa3b0" font-size="12">对话 D · 人物 ……</text>
+      <text x="10" y="195" fill="#d97a6a" font-size="12">谁和谁有关系？不知道。谁在做什么？得点开看。</text>
+
+      <!-- 分隔线 -->
+      <line x1="400" y1="10" x2="400" y2="230" stroke="#262d39" stroke-dasharray="3,3"/>
+
+      <!-- 右：立体 -->
+      <text x="420" y="20" fill="#6b7482" font-size="12" font-family="ui-monospace,monospace">立体：你说一句，背后多个智能体同时在跑</text>
+      <circle cx="600" cy="110" r="30" fill="#5b8def" opacity="0.9"/>
+      <text x="600" y="115" fill="#fff" font-size="13" text-anchor="middle" font-weight="600">你</text>
+      <line x1="580" y1="90" x2="490" y2="55" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="620" y1="90" x2="710" y2="55" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="580" y1="130" x2="490" y2="170" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="620" y1="130" x2="710" y2="170" stroke="#6b7482" stroke-width="1.5"/>
+      <circle cx="480" cy="50" r="22" fill="#e0a458" opacity="0.85"/>
+      <text x="480" y="54" fill="#0e1116" font-size="11" text-anchor="middle">世界观</text>
+      <circle cx="720" cy="50" r="22" fill="#6fc98a" opacity="0.85"/>
+      <text x="720" y="54" fill="#0e1116" font-size="11" text-anchor="middle">剧情</text>
+      <circle cx="480" cy="175" r="22" fill="#c98ac9" opacity="0.85"/>
+      <text x="480" y="179" fill="#0e1116" font-size="11" text-anchor="middle">正文</text>
+      <circle cx="720" cy="175" r="22" fill="#5b8def" opacity="0.85"/>
+      <text x="720" y="179" fill="#0e1116" font-size="11" text-anchor="middle">人物</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ═══════ 01 贾维斯 → 总监 ═══════ -->
+<section>
+  <div class="sec-num">01 · 从贾维斯开始想</div>
+  <h2>对话应该是什么样？第一个需求是"自己能选"</h2>
+
+  <p>想到这一步，开始认真想一个问题：<strong>我们想象中的贾维斯，到底是什么样的？</strong></p>
+  <p>它不会让你自己去十几个对话里挑"这条该发给谁"。它听你说一句，自己知道该交给谁。可现在的 AI 客户端正好反过来——你得自己记住"世界观那条在第三个 tab，剧情那条在收藏夹里"，你得自己切过去再说。</p>
+
+  <blockquote>
+    <span class="who">第一个冒出来的需求</span>
+    能<b>自己选择对话、切换对话</b>。然后由系统判断——我说的这句话，应该交给谁。
+  </blockquote>
+
+  <p>顺着这个念头，<span class="hl-dir">总监模式</span>就出来了：你不再对着十几个对话找入口，而是对着一个"总监"说话。它听完，判断该把这件事发给哪个对话。</p>
+</section>
+
+<!-- ═══════ 02 总监的分离设计 ═══════ -->
+<section>
+  <div class="sec-num">02 · 总监模式</div>
+  <h2><span class="tag dir">总监</span>先别急着派活，先把"你要什么"吃透</h2>
+
+  <p>这里做了一个关键的分离。最早的想法是"总监听完就分"，但试下来不行——如果总监自己都没理解准，分出去就是错上加错。于是定了一条规矩：</p>
+
+  <blockquote class="amber">
+    <span class="who">总监的第一职责</span>
+    总监<b>只做一件事：对话内容的整理</b>。它最大可能地理解你到底要什么，保证理解不偏差。理解不准，后面全白搭。
+  </blockquote>
+
+  <p>理解准了之后，才进入第二步：按已有的对话总结，结合不同职能，判断这件事该拆成哪几条分支。以写小说为例，它套用"八个智能体各管一摊"那套分工：</p>
+
+  <table>
+    <colgroup><col class="c1"><col class="c2"><col class="c3"></colgroup>
+    <thead><tr><th>分支</th><th>阶段</th><th>这条分支做什么</th></tr></thead>
+    <tbody>
+      <tr><td><span class="dim">A1</span> <b>世界观</b></td><td>设定</td><td>世界规则、地理、历史、势力</td></tr>
+      <tr><td><span class="dim">A2</span> <b>力量体系</b></td><td>设定</td><td>修行等级、技能、代价</td></tr>
+      <tr><td><span class="dim">A3</span> <b>剧情</b></td><td>骨架</td><td>Hook、分卷、章纲、支线</td></tr>
+      <tr><td><span class="dim">A4</span> <b>人物</b></td><td>骨架</td><td>角色心理档案、关系网</td></tr>
+      <tr><td><span class="dim">A5</span> <b>正文</b></td><td>落地</td><td>按章纲写，和前文一致</td></tr>
+      <tr><td><span class="dim">A6</span> <b>打磨</b></td><td>收尾</td><td>润色、去 AI 味</td></tr>
+      <tr><td><span class="dim">A7</span> <b>审查</b></td><td>收尾</td><td>剧情/人物/设定/文风/逻辑六关</td></tr>
+      <tr><td><span class="dim">A8</span> <b>蒸馏</b></td><td>收尾</td><td>把各分支产出汇成可复用记忆</td></tr>
+    </tbody>
+  </table>
+
+  <div class="figure">
+    <div class="ft">图 2 · 总监的判断链</div>
+    <svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="80" width="130" height="44" rx="6" fill="#1b212c" stroke="#5b8def" stroke-width="1.5"/>
+      <text x="75" y="99" fill="#e6e9ee" font-size="12.5" text-anchor="middle" font-weight="600">你说一句</text>
+      <text x="75" y="115" fill="#9aa3b0" font-size="10.5" text-anchor="middle">口语，可能带项目路径</text>
+
+      <line x1="140" y1="102" x2="180" y2="102" stroke="#6b7482" stroke-width="1.5" marker-end="url(#a)"/>
+
+      <rect x="185" y="70" width="150" height="64" rx="6" fill="rgba(91,141,239,.12)" stroke="#5b8def" stroke-width="1.5"/>
+      <text x="260" y="92" fill="#5b8def" font-size="12.5" text-anchor="middle" font-weight="600">总监理解 + 整理</text>
+      <text x="260" y="108" fill="#9aa3b0" font-size="10.5" text-anchor="middle">去噪、归要点、保真原文</text>
+      <text x="260" y="123" fill="#9aa3b0" font-size="10.5" text-anchor="middle">最大可能理解你要什么</text>
+
+      <line x1="335" y1="102" x2="380" y2="102" stroke="#6b7482" stroke-width="1.5" marker-end="url(#a)"/>
+
+      <rect x="385" y="70" width="150" height="64" rx="6" fill="#1b212c" stroke="#262d39"/>
+      <text x="460" y="92" fill="#e6e9ee" font-size="12.5" text-anchor="middle" font-weight="600">查已有对话</text>
+      <text x="460" y="108" fill="#9aa3b0" font-size="10.5" text-anchor="middle">这个项目下谁在做什么</text>
+      <text x="460" y="123" fill="#9aa3b0" font-size="10.5" text-anchor="middle">能复用就不新建</text>
+
+      <line x1="535" y1="102" x2="580" y2="102" stroke="#6b7482" stroke-width="1.5" marker-end="url(#a)"/>
+
+      <rect x="585" y="60" width="200" height="84" rx="6" fill="rgba(111,201,138,.1)" stroke="#6fc98a" stroke-width="1.5"/>
+      <text x="685" y="82" fill="#6fc98a" font-size="12.5" text-anchor="middle" font-weight="600">按职能派分支</text>
+      <text x="685" y="98" fill="#9aa3b0" font-size="10.5" text-anchor="middle">A1 世界观 · A3 剧情 · A5 正文</text>
+      <text x="685" y="113" fill="#9aa3b0" font-size="10.5" text-anchor="middle">… 各投到自己的对话</text>
+      <text x="685" y="130" fill="#9aa3b0" font-size="10.5" text-anchor="middle">复用 8 条 / 新建 0 条（实测）</text>
+
+      <defs>
+        <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="#6b7482"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <p>这一步最直观的读数：连续十轮派发里，<strong>复用 8 条、新建 0 条</strong>，宿主会话总数一个都没涨。之前那种"一次跑出一百多条重复会话"的问题，就是因为没有这个"先查再派"的环节。</p>
+</section>
+
+<!-- ═══════ 03 选模型/技能/智能体 ═══════ -->
+<section>
+  <div class="sec-num">03 · 增补判断</div>
+  <h2><span class="tag dir">总监</span>不止分活，还要替你挑模型、挑技能、挑角色</h2>
+
+  <p>"理解了再分"跑通之后，很快发现还差一层。同一个分支，用哪个模型、带哪个技能、套哪个角色智能体，结果差很多。于是又加了三道判断：</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="n">判断一</div>
+      <div class="t">挑模型</div>
+      <div class="d">不同大模型擅长的事不一样——写正文和做方案，各配各的模型档</div>
+    </div>
+    <div class="step">
+      <div class="n">判断二</div>
+      <div class="t">挑技能</div>
+      <div class="d">这件事需不需要带技能？用哪一个？由总监在整理上下文时一并决定</div>
+    </div>
+    <div class="step">
+      <div class="n">判断三</div>
+      <div class="t">挑角色</div>
+      <div class="d">套哪个智能体、哪个角色人格？不同分支挂不同角色，不一锅炖</div>
+    </div>
+    <div class="step">
+      <div class="n">判断四</div>
+      <div class="t">压上下文</div>
+      <div class="d">用缩减上下文的办法，只把这个分支用得上的片段带过去，不全塞</div>
+    </div>
+    <div class="step">
+      <div class="n">判断五</div>
+      <div class="t">只判断的模型</div>
+      <div class="d">最近加进来：一个只负责判断、不负责生成的小模型专司路由，省钱又快</div>
+    </div>
+  </div>
+
+  <p>这五件事合起来，目的只有一个：<span class="hl-dir">最大程度保证对话的准确性</span>。总监把话整理干净、把上下文筛干净，再配上最合适的模型、技能和角色，分支拿到手的就不是一句干巴巴的原话，而是一份"带齐装备的任务简报"。</p>
+</section>
+
+<!-- ═══════ 04 神经链路 ═══════ -->
+<section>
+  <div class="sec-num">04 · 记忆底座</div>
+  <h2><span class="tag neuro">神经链路</span>总监要派活，先得"记得住"</h2>
+
+  <p>回头看，总监那道"查已有对话"的动作，前提是它得知道每个对话里在做什么。光看会话标题没用——标题是模型随手起的。所以必须有一层东西，把<strong>每个项目、每个对话的内容总结</strong>存下来、连起来。</p>
+
+  <blockquote class="amber">
+    <span class="who">为什么会有这一层</span>
+    总监流转的核心动作是：结合"当前在哪个项目"和"这条对话在聊什么"，判断新进来的话该放哪。要做这个判断，就得有一张把所有项目记忆、对话总结连起来的网。<b>这张网就是 Hermes Command Center，也就是"神经链路"</b>。它最初的设计初衷，就是搭配总监流转用的。
+  </blockquote>
+
+  <p>它现在只读扫描本机的项目和记忆文件——<strong>6 个项目、33 个记忆文件、278 个技能</strong>——把"项目 / 记忆文件 / 记忆段落"抽成节点，把它们之间的关系抽成边，画成一张力导向图：</p>
+
+  <table>
+    <colgroup><col class="c1"><col class="c2"><col class="c3"></colgroup>
+    <thead><tr><th>边的类型</th><th>条数</th><th>它表示什么</th></tr></thead>
+    <tbody>
+      <tr><td><b>包含</b></td><td>173</td><td>一个记忆文件里有哪些段落</td></tr>
+      <tr><td><b>引用</b></td><td>75</td><td>这条记忆段落引用了哪条</td></tr>
+      <tr><td><b>同域</b></td><td>286</td><td>落在同一个目录 / 同一个主题下</td></tr>
+      <tr><td><b>项目</b></td><td>37</td><td>这些记忆归属于哪个项目</td></tr>
+    </tbody>
+  </table>
+
+  <p>整张图 <strong>212 个节点、571 条边</strong>。点一个节点展开它的段落，双击看正文；项目卡片点进去能看到这个项目的文档、脚本、记忆、待办完成率。总监派活前查的就是这张网；总监派完活、回收产出后，又把新的总结写回去——网越用越密。</p>
+</section>
+
+<!-- ═══════ 05 思维导图 ═══════ -->
+<section>
+  <div class="sec-num">05 · 让分支看得见</div>
+  <h2><span class="tag map">思维导图</span>流转跑通了，但平铺的对话根本分不清谁是谁</h2>
+
+  <p>总监能把一件事拆成七八条分支了，神经链路也记得住每条在做什么。可你回到界面上一看——还是那一条一条平铺的对话列表。<strong>七八条分支像散在地上的拼图，哪条对应哪个需求，完全认不出来。</strong></p>
+
+  <div class="vs">
+    <div class="col bad">
+      <h4>平铺列表的问题</h4>
+      <p>谁从谁分叉出来？父任务是哪条、子任务是哪条？哪条在跑、哪条停了？全靠猜，得逐条点开。</p>
+    </div>
+    <div class="col good">
+      <h4>思维导图的解法</h4>
+      <p>一个节点就是一条对话。父需求在中间，子分支向外展开。点哪个节点，就跳到哪条对话。</p>
+    </div>
+  </div>
+
+  <div class="figure">
+    <div class="ft">图 3 · 思维导图：一个需求拆出的分支长什么样</div>
+    <svg viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg">
+      <!-- 中心父节点 -->
+      <rect x="320" y="120" width="160" height="44" rx="8" fill="#5b8def" opacity="0.9"/>
+      <text x="400" y="140" fill="#fff" font-size="13" text-anchor="middle" font-weight="600">写一部修仙小说</text>
+      <text x="400" y="156" fill="rgba(255,255,255,.8)" font-size="10.5" text-anchor="middle">父需求 · 你最初说的那句</text>
+
+      <!-- 连线 -->
+      <path d="M 320 142 Q 220 80 150 60" stroke="#6b7482" stroke-width="1.5" fill="none"/>
+      <path d="M 320 142 Q 280 100 240 90" stroke="#6b7482" stroke-width="1.5" fill="none"/>
+      <path d="M 480 142 Q 520 100 560 90" stroke="#6b7482" stroke-width="1.5" fill="none"/>
+      <path d="M 480 142 Q 580 80 650 60" stroke="#6b7482" stroke-width="1.5" fill="none"/>
+      <path d="M 320 162 Q 220 220 150 240" stroke="#6b7482" stroke-width="1.5" fill="none"/>
+      <path d="M 480 162 Q 580 220 650 240" stroke="#6b7482" stroke-width="1.5" fill="none"/>
+
+      <!-- 子节点 -->
+      <rect x="80" y="40" width="140" height="40" rx="6" fill="rgba(224,164,88,.15)" stroke="#e0a458"/>
+      <text x="150" y="58" fill="#e0a458" font-size="12" text-anchor="middle" font-weight="600">A1 世界观</text>
+      <text x="150" y="73" fill="#9aa3b0" font-size="10" text-anchor="middle">进行中</text>
+
+      <rect x="180" y="70" width="120" height="36" rx="6" fill="rgba(224,164,88,.1)" stroke="#e0a458" stroke-dasharray="3,2"/>
+      <text x="240" y="86" fill="#e0a458" font-size="11.5" text-anchor="middle">A2 力量体系</text>
+      <text x="240" y="99" fill="#6b7482" font-size="9.5" text-anchor="middle">待启动</text>
+
+      <rect x="500" y="70" width="120" height="36" rx="6" fill="rgba(111,201,138,.15)" stroke="#6fc98a"/>
+      <text x="560" y="86" fill="#6fc98a" font-size="11.5" text-anchor="middle">A3 剧情</text>
+      <text x="560" y="99" fill="#9aa3b0" font-size="9.5" text-anchor="middle">已完成</text>
+
+      <rect x="600" y="40" width="140" height="40" rx="6" fill="rgba(201,138,201,.15)" stroke="#c98ac9"/>
+      <text x="670" y="58" fill="#c98ac9" font-size="12" text-anchor="middle" font-weight="600">A4 人物</text>
+      <text x="670" y="73" fill="#9aa3b0" font-size="10" text-anchor="middle">进行中</text>
+
+      <rect x="80" y="220" width="140" height="40" rx="6" fill="rgba(91,141,239,.15)" stroke="#5b8def"/>
+      <text x="150" y="238" fill="#5b8def" font-size="12" text-anchor="middle" font-weight="600">A5 正文</text>
+      <text x="150" y="253" fill="#9aa3b0" font-size="10" text-anchor="middle">进行中 · 第 3 章</text>
+
+      <rect x="600" y="220" width="140" height="40" rx="6" fill="rgba(217,122,106,.12)" stroke="#d97a6a" stroke-dasharray="3,2"/>
+      <text x="670" y="238" fill="#d97a6a" font-size="12" text-anchor="middle" font-weight="600">A7 审查</text>
+      <text x="670" y="253" fill="#9aa3b0" font-size="10" text-anchor="middle">等待回收</text>
+    </svg>
+  </div>
+
+  <p>几个具体做法：先按项目把节点分堆（不然二十多个框挤成一团），项目里再按维度分组；你用"1"开出"2、3、4"，那"1"就画在它们中间，不偏在一边；fork 出来的子会话和父会话之间连一条线，多层嵌套也追得到；节点可拖、可折、可缩放，Ctrl 滚轮看细、点空白看全。</p>
+
+  <p>每个节点下面还挂一行小字——"· 总监 A1 世界观"——这条会话归哪个职能管，不点开就知道。这行字和神经链路里那份"会话档案"是同一份数据：<strong>每个会话存自己的总监角色和自己的总结文档</strong>，导图上看得见，总监路由时也读得到。</p>
+</section>
+
+<!-- ═══════ 06 设计图工作室 ═══════ -->
+<section>
+  <div class="sec-num">06 · 把想法画出来</div>
+  <h2><span class="tag studio">设计图工作室</span>图不能只是图，它得带着逻辑</h2>
+
+  <p>前面这套跑通之后，还有一件事老卡壳：脑子里想的东西，落到对话里讲不清楚；讲不清楚，分出去的分支就跑偏。试过画设计图，但前几版设计稿都栽在同一个地方——<strong>图画归图，逻辑写在另一份文档里</strong>，两边靠"请在右区第三栏加个按钮"这种话互相对指，一改图逻辑就废。</p>
+
+  <blockquote>
+    <span class="who">设计图工作室要解决的</span>
+    图和逻辑<b>不能分家</b>。点开一个元素，左边就显示它的交互逻辑；改图就是改逻辑，导出就带着逻辑走。<b>设计图本身就是可执行的规格</b>，不是一张需要再解读的图片。
+  </blockquote>
+
+  <p>它是一个全屏工作室：顶栏切文档、加标准框架；左边工具栏选元素类型往里拖；中间画布随便摆；<strong>点中一个元素，左栏立刻显示它的交互逻辑（七元组，可编辑）</strong>；底部是一条设计图专用对话——只处理这张图的修订，不碰别的会话。元素支持 18 种类型、多层屏幕、版本快照，改坏了能回退。</p>
+
+  <p>它在整个链路里的位置是：<span class="hl-studio">把脑子里那个还说不清的需求，先画成一张带逻辑的图</span>，再交给总监去分。图清楚了，总监理解的偏差就小了。</p>
+</section>
+
+<!-- ═══════ 07 执行与审核 ═══════ -->
+<section>
+  <div class="sec-num">07 · 派出去之后</div>
+  <h2><span class="tag review">执行 + 审核</span>不是发出去就完事，回来还要对一遍</h2>
+
+  <p>总监把简报投到各分支之后，执行链是这样的：</p>
+
+  <div class="figure">
+    <div class="ft">图 4 · 一次派发的完整生命周期</div>
+    <svg viewBox="0 0 800 130" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="45" width="110" height="40" rx="6" fill="#1b212c" stroke="#5b8def"/>
+      <text x="65" y="62" fill="#e6e9ee" font-size="11.5" text-anchor="middle" font-weight="600">投递简报</text>
+      <text x="65" y="76" fill="#9aa3b0" font-size="9.5" text-anchor="middle">带文件边界</text>
+
+      <line x1="120" y1="65" x2="145" y2="65" stroke="#6b7482" stroke-width="1.5" marker-end="url(#b)"/>
+
+      <rect x="150" y="45" width="110" height="40" rx="6" fill="#1b212c" stroke="#262d39"/>
+      <text x="205" y="62" fill="#e6e9ee" font-size="11.5" text-anchor="middle" font-weight="600">分支自己跑</text>
+      <text x="205" y="76" fill="#9aa3b0" font-size="9.5" text-anchor="middle">用配好的模型/技能</text>
+
+      <line x1="260" y1="65" x2="285" y2="65" stroke="#6b7482" stroke-width="1.5" marker-end="url(#b)"/>
+
+      <rect x="290" y="45" width="110" height="40" rx="6" fill="rgba(224,164,88,.12)" stroke="#e0a458"/>
+      <text x="345" y="62" fill="#e0a458" font-size="11.5" text-anchor="middle" font-weight="600">回收产出</text>
+      <text x="345" y="76" fill="#9aa3b0" font-size="9.5" text-anchor="middle">读事件流，压摘要</text>
+
+      <line x1="400" y1="65" x2="425" y2="65" stroke="#6b7482" stroke-width="1.5" marker-end="url(#b)"/>
+
+      <rect x="430" y="45" width="120" height="40" rx="6" fill="rgba(217,122,106,.12)" stroke="#d97a6a"/>
+      <text x="490" y="62" fill="#d97a6a" font-size="11.5" text-anchor="middle" font-weight="600">总裁定 + 审核</text>
+      <text x="490" y="76" fill="#9aa3b0" font-size="9.5" text-anchor="middle">对照原始需求核一遍</text>
+
+      <line x1="550" y1="65" x2="575" y2="65" stroke="#6b7482" stroke-width="1.5" marker-end="url(#b)"/>
+
+      <rect x="580" y="45" width="120" height="40" rx="6" fill="rgba(111,201,138,.12)" stroke="#6fc98a"/>
+      <text x="640" y="62" fill="#6fc98a" font-size="11.5" text-anchor="middle" font-weight="600">写回档案</text>
+      <text x="640" y="76" fill="#9aa3b0" font-size="9.5" text-anchor="middle">喂回神经链路</text>
+
+      <!-- 回环箭头 -->
+      <path d="M 640 85 Q 640 115 65 115 Q 20 115 20 90" stroke="#6b7482" stroke-width="1.2" stroke-dasharray="3,3" fill="none" marker-end="url(#b)"/>
+      <text x="330" y="112" fill="#6b7482" font-size="10.5" text-anchor="middle">下次进来，总监记得这次干了什么</text>
+
+      <defs>
+        <marker id="b" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="#6b7482"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <p>审核这一环不能省。分支交回来之后，不是直接塞给你——<span class="hl-review">先对照你最初的需求核一遍</span>：理解偏了没有？答非所问了没有？具体到写小说，还有 A7 审查这一道，分剧情、人物、设定、文风、逻辑六关过。核完再做总裁定，把各分支产出汇成一句话结论给你。</p>
+
+  <p>另外，回收是<strong>显式动作</strong>，不是每条消息后自动跑——八个分支各读一次事件流就是八次后台调用，自动跑会把一次轻量发送变成八倍负载。所以你点一次"回收"，它一次把所有分支跑完、逐条记原因。</p>
+</section>
+
+<!-- ═══════ 08 嵌套总监 → 最终形态 ═══════ -->
+<section>
+  <div class="sec-num">08 · 嵌套与终点</div>
+  <h2>每个对话有自己的总监，每个项目也有总监——最后只剩一个对话</h2>
+
+  <p>底层流转跑顺之后，下一层想法是：<strong>总监不该只有一个。</strong></p>
+
+  <div class="figure">
+    <div class="ft">图 5 · 总监是嵌套的</div>
+    <svg viewBox="0 0 800 260" xmlns="http://www.w3.org/2000/svg">
+      <!-- 外层 -->
+      <rect x="220" y="15" width="360" height="56" rx="8" fill="rgba(91,141,239,.15)" stroke="#5b8def" stroke-width="1.5"/>
+      <text x="400" y="38" fill="#5b8def" font-size="13" text-anchor="middle" font-weight="700">外层 · 唯一的对话（贾维斯）</text>
+      <text x="400" y="56" fill="#9aa3b0" font-size="10.5" text-anchor="middle">你只和它说话 · 它替你做整理 / 选模型 / 挑上下文 / 给结果</text>
+
+      <line x1="400" y1="71" x2="400" y2="95" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="180" y1="95" x2="620" y2="95" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="180" y1="95" x2="180" y2="110" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="400" y1="95" x2="400" y2="110" stroke="#6b7482" stroke-width="1.5"/>
+      <line x1="620" y1="95" x2="620" y2="110" stroke="#6b7482" stroke-width="1.5"/>
+
+      <!-- 项目总监层 -->
+      <rect x="90" y="110" width="180" height="50" rx="6" fill="rgba(224,164,88,.12)" stroke="#e0a458"/>
+      <text x="180" y="130" fill="#e0a458" font-size="12" text-anchor="middle" font-weight="600">项目总监 · 小说</text>
+      <text x="180" y="146" fill="#9aa3b0" font-size="10" text-anchor="middle">管这个项目的所有分支</text>
+
+      <rect x="310" y="110" width="180" height="50" rx="6" fill="rgba(224,164,88,.12)" stroke="#e0a458"/>
+      <text x="400" y="130" fill="#e0a458" font-size="12" text-anchor="middle" font-weight="600">项目总监 · 另一个项目</text>
+      <text x="400" y="146" fill="#9aa3b0" font-size="10" text-anchor="middle">各管各的</text>
+
+      <rect x="530" y="110" width="180" height="50" rx="6" fill="rgba(224,164,88,.08)" stroke="#e0a458" stroke-dasharray="3,2"/>
+      <text x="620" y="130" fill="#e0a458" font-size="12" text-anchor="middle" font-weight="600">…</text>
+      <text x="620" y="146" fill="#6b7482" font-size="10" text-anchor="middle">项目可继续往上嵌套</text>
+
+      <!-- 对话总监层 -->
+      <line x1="180" y1="160" x2="180" y2="185" stroke="#6b7482" stroke-width="1.2"/>
+      <line x1="120" y1="185" x2="240" y2="185" stroke="#6b7482" stroke-width="1.2"/>
+      <line x1="120" y1="185" x2="120" y2="200" stroke="#6b7482" stroke-width="1.2"/>
+      <line x1="240" y1="185" x2="240" y2="200" stroke="#6b7482" stroke-width="1.2"/>
+
+      <rect x="70" y="200" width="100" height="40" rx="5" fill="rgba(111,201,138,.12)" stroke="#6fc98a"/>
+      <text x="120" y="217" fill="#6fc98a" font-size="11" text-anchor="middle">A1 总监</text>
+      <text x="120" y="231" fill="#9aa3b0" font-size="9.5" text-anchor="middle">只管这条对话</text>
+
+      <rect x="190" y="200" width="100" height="40" rx="5" fill="rgba(111,201,138,.12)" stroke="#6fc98a"/>
+      <text x="240" y="217" fill="#6fc98a" font-size="11" text-anchor="middle">A5 总监</text>
+      <text x="240" y="231" fill="#9aa3b0" font-size="9.5" text-anchor="middle">只管这条对话</text>
+    </svg>
+  </div>
+
+  <p>每一条对话，有它自己的总监——管这一条分支怎么跑。每个文件项目，也有自己的总监——管这个项目下所有对话怎么协同。再往上，项目和项目之间，也还有一层。一层一层套上去，最外面那一层，就是你每天面对的东西。</p>
+
+  <div class="figure">
+    <div class="ft">图 6 · 最终形态：你看到的界面</div>
+    <svg viewBox="0 0 800 240" xmlns="http://www.w3.org/2000/svg">
+      <!-- 左栏 -->
+      <rect x="10" y="15" width="240" height="210" rx="8" fill="#1b212c" stroke="#262d39"/>
+      <text x="25" y="38" fill="#9aa3b0" font-size="11.5" font-weight="600">项目 · 写一部修仙小说</text>
+      <line x1="25" y1="48" x2="235" y2="48" stroke="#262d39"/>
+
+      <rect x="25" y="58" width="210" height="22" rx="4" fill="rgba(217,122,106,.12)" stroke="#d97a6a"/>
+      <text x="32" y="73" fill="#d97a6a" font-size="10.5">置顶 · 第 3 章正文</text>
+
+      <rect x="25" y="86" width="210" height="22" rx="4" fill="rgba(91,141,239,.1)" stroke="#5b8def"/>
+      <text x="32" y="101" fill="#5b8def" font-size="10.5">今天在跑 · A1 世界观</text>
+
+      <text x="25" y="125" fill="#6b7482" font-size="10">待完成</text>
+      <text x="32" y="140" fill="#9aa3b0" font-size="10">· A2 力量体系</text>
+      <text x="32" y="155" fill="#9aa3b0" font-size="10">· A7 审查</text>
+
+      <text x="25" y="178" fill="#6b7482" font-size="10">已完成</text>
+      <text x="32" y="193" fill="#6fc98a" font-size="10">· A3 剧情 · A4 人物</text>
+
+      <!-- 右区：唯一对话 -->
+      <rect x="270" y="15" width="520" height="210" rx="8" fill="#1b212c" stroke="#5b8def" stroke-width="1.5"/>
+      <text x="290" y="45" fill="#e6e9ee" font-size="13" font-weight="600">你只需要面对这一个对话</text>
+      <text x="290" y="68" fill="#9aa3b0" font-size="11.5">"把第三章开头改一下，顺便看看新设定和第二章接不接得上。"</text>
+
+      <rect x="290" y="85" width="480" height="90" rx="6" fill="#0e1116" stroke="#262d39"/>
+      <text x="305" y="105" fill="#9aa3b0" font-size="10.5">总监在背后做了什么：</text>
+      <text x="305" y="123" fill="#9aa3b0" font-size="10.5">· 整理这句话 · 查 A1/A5 的档案 · 选写正文的模型</text>
+      <text x="305" y="140" fill="#9aa3b0" font-size="10.5">· 挑上下文（只带第 2、3 章）· 派给 A5 · 跑完审核</text>
+      <text x="305" y="160" fill="#5b8def" font-size="10.5" font-weight="600">→ 改完了，和第二章接上了，结论在下面。</text>
+
+      <rect x="290" y="185" width="480" height="28" rx="14" fill="#262d39"/>
+      <text x="530" y="203" fill="#6b7482" font-size="11" text-anchor="middle">直接说你要做什么就行</text>
+    </svg>
+  </div>
+
+  <p>这就是终点：<strong>整个外层只有一个对话</strong>。左边是项目面板——目前完成情况、待完成清单、已完成清单、今天正在进行的事、置顶的事项。你看着这个面板，直接和那个对话说。剩下的语言整理、模型选择、上下文处理、派给谁、跑完审核，全在背后发生，最后把结果给你。</p>
+</section>
+
+<!-- ═══════ 09 一句话收 ═══════ -->
+<section>
+  <div class="sec-num">09 · 现在站在哪</div>
+  <h2>三个角色各管一段，离那个终点还有多远</h2>
+  <div class="roles">
+    <div class="role dir">
+      <div class="rt">总监</div>
+      <div class="rd">已经在跑：理解你的话 → 查已有对话 → 选模型/技能/角色 → 派分支 → 回收审核。复用优先，不重复建会话。</div>
+    </div>
+    <div class="role neuro">
+      <div class="rt">神经链路</div>
+      <div class="rd">已经在扫：6 个项目、33 个记忆文件连成 212 节点的网，总监派活前查它，跑完的总结回喂它。</div>
+    </div>
+    <div class="role map">
+      <div class="rt">思维导图</div>
+      <div class="rd">已经在画：节点就是对话，父居中、子外展、血缘连线、状态一眼可见，点节点就切对话。</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>离终点还差的那一步：</b>现在总监插件管会话级的流转和档案，HCC 管项目级和记忆级那张网，两边各自采集。设计图工作室已经能把想法画成带逻辑的图。真正的终点——外层只剩一个对话、左边是项目面板、一层一层总监套上去——需要把会话总结也喂进 HCC 那张网，让项目记忆和对话记忆合成同一张；同时让"项目总监"和"对话总监"真正按层级跑起来。方向已经清楚，剩下的是把这几层接缝接上。
+  </div>
+</section>
+
+<footer>
+  本文按真实使用心路整理 · dsh-client-mod（总监驾驶舱插件 · 思维导图 · 设计图工作室）· hermes-command-center（神经链路）<br>
+  讲的是"为什么长这样"和"现在走到哪了"，不涉及测试闸门的技术细节。
+</footer>
+
+</div>
+</body>
+</html>

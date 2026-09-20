@@ -56,7 +56,7 @@ let TOTAL = 0, PASS = 0, FAIL = 0;
  *  取**实测值**：本套件静态只有 191 处 `ok(`，但大量断言写在**循环**里 ⇒ 实跑 **279** 条。
  *  ⇒ 下限只能来自**实跑读数**，**不许**拿静态枚举数来钉（那会把正常情况判红 —— 纪律 126 的反面）。
  *  ⚠️ 新增断言**必须**同步抬高它（不抬 = 把新段落的沉默合法化）。 */
-const MIN_ASSERTIONS = 279;
+const MIN_ASSERTIONS = 303;
 const FAILS = [];
 function ok(name, cond, evidence) {
 	TOTAL++;
@@ -783,7 +783,11 @@ const REQUIRED_TID = ["d-dialog", "d-hole", "d-panel", "d-level", "d-crumb", "d-
 	"d-focus", "d-input", "d-send", "d-toast", "d-collapse-left", "d-collapse-right",
 	"d-min", "d-reset", "d-close", "d-split", "d-left-rail", "d-right-rail", "d-right", "d-chip",
 	/* ── 第 38 轮新增：固定（d-pin）· 作用域概况（d-scope-brief）· 作用域导图（d-scope-map）── */
-	"d-pin", "d-scope-brief", "d-scope-map"];
+	"d-pin", "d-scope-brief", "d-scope-map",
+	/* ── 第 40 轮（22 号文 G6）：登记不写总监消息的**显式标注行**（推导行，非库消息）── */
+	"d-register-note",
+	/* ── 第 40 轮（22 号文 G1 家族）：概况的一键刷新落点 ── */
+	"d-brief-refresh"];
 const missingTid = REQUIRED_TID.filter((t) => !dlgSrc.includes(`"data-testid": "${t}"`));
 eqArr("H25 交互元素 testid 零缺失（真机逐交互脚本据此定位）", missingTid, []);
 ok("H25b 第 38 轮：「层级」段已撤除（`d-seg-levels` 在源码中零出现）",
@@ -798,6 +802,192 @@ ok("H25d r2/r5/r6 折叠头按统一模式拼接（d-sec-<k>-head）",
 ok("H25e 弹窗折叠白名单只认 r2/r5/r6（写别的键一律拒绝 —— 不产生静默垃圾字段）",
 	has(src("store/layout.js"), /\[\s*"r2"\s*,\s*"r5"\s*,\s*"r6"\s*\]\.indexOf\(k\)\s*<\s*0\)\s*return\s*false/, "命中白名单"),
 	"命中白名单（位于 store/layout.js#setDialogSection）");
+
+/* ══════════════════════════════════════════════════════════════════
+ * 🔴 第 40 轮 · 22 号文 **G5 / G6 / G7** —— 接线判据（源码级）
+ * ══════════════════════════════════════════════════════════════════
+ *  为什么这三条要在**弹窗闸门**里守：三个落点里有两个就在弹窗（R5 小结 + 转交确认卡），
+ *  第三个（总监页 R2 项目清单）与弹窗共用同一批纯函数 ⇒ 放在一起才能一次发现"两边漂移"。
+ *
+ *  🔴 本组最要紧的是 **G5a**：跨维度转交有 **3 个调用点**（弹窗 / 总监页 / 导图），
+ *     改前各自拼字符串 ⇒ 同一语义 3 份措辞、闸门没法用一个判据守住（纪律 126）。
+ *     所以先钉死"**字面量只有一份**"，再谈"三处都接上了"。
+ * ══════════════════════════════════════════════════════════════════ */
+const pageSrc = src("components/DirectorPage.js");
+const mmSrc = src("components/MindMap.js");
+const noteSrc = src("logic/summary-notes.js");
+const invSrc = src("logic/project-inventory.js");
+/* 引号包起来的**字面量**（注释里的「已转交 → …」不算 —— 那是说明，不是第二处构造点） */
+const handoffLit = /["'](已转交|已接收)["']/;
+
+ok("G5a 🔴 「已转交 / 已接收」的字面量**只在** logic/summary-notes.js 出现一份（三个调用点就地拼字符串 = 纪律 126 断链形态）",
+	handoffLit.test(noteSrc) && !handoffLit.test(dlgSrc) && !handoffLit.test(pageSrc) && !handoffLit.test(mmSrc),
+	"字面量唯一性：summary-notes=" + handoffLit.test(noteSrc)
+	+ " 弹窗=" + handoffLit.test(dlgSrc) + " 总监页=" + handoffLit.test(pageSrc) + " 导图=" + handoffLit.test(mmSrc));
+
+ok("G5b 三个调用点都**引用**同一个模块（而不是各自实现）",
+	/from "\.\.\/logic\/summary-notes\.js"/.test(dlgSrc)
+	&& /from "\.\.\/logic\/summary-notes\.js"/.test(pageSrc)
+	&& /from "\.\.\/logic\/summary-notes\.js"/.test(mmSrc),
+	"三处 import 同源：弹窗/总监页/导图 = 3 个 from summary-notes");
+
+ok("G5c 目标侧两处都用 acceptLine()（弹窗 + 总监页），且都写在 message 文本首位",
+	/acceptLine\(\{\s*fromName:/.test(dlgSrc) && /acceptLine\(\{\s*fromName:/.test(pageSrc),
+	"acceptLine 调用点命中 2 处");
+
+ok("G5d 源侧三处都用 transferLine()（弹窗 pushMsg / 总监页流转条目 / 导图流转条目）",
+	/transferLine\(\{\s*toName:/.test(dlgSrc) && /transferLine\(\{\s*toName:/.test(pageSrc)
+	&& /transferLine\(\{\s*toName:/.test(mmSrc),
+	"transferLine 调用点命中 3 处");
+
+ok("G6a 弹窗 R5 渲染 d-register-note，且标注 data-src=derived（**这一行不是库里的消息**）",
+	/"data-testid": "d-register-note"/.test(dlgSrc) && /"data-src": "derived"/.test(dlgSrc),
+	"命中 d-register-note + data-src=derived");
+
+/* `registerNote` 的函数体（从 `export function registerNote(` 到下一个行首 `}`）。
+ * ⚠️ 用"下一个行首 `}`"而不是括号配对：本仓源码缩进用 tab、函数闭合括号一律顶格
+ *    ⇒ 这个切法在**本仓**是稳的；若哪天格式改了，本断言会**显式红**（而不是静默放过）。 */
+const regNoteBody = (() => {
+	const i = noteSrc.indexOf("export function registerNote(");
+	if (i < 0) return null;
+	const j = noteSrc.indexOf("\n}", i);
+	return j > i ? noteSrc.slice(i, j) : null;
+})();
+const regNoteIO = regNoteBody ? /appendDirectorMessage|pPut\(|localStorage|indexedDB|fetch\(/.test(regNoteBody) : true;
+
+ok("G6b 🔴 registerNote 由**数据状态推导**而非写库（函数体内零 plugin-db / 零 IO）—— 否则与「conversations 不增长」的负对照自相矛盾",
+	regNoteBody !== null && !regNoteIO,
+	"body 长度=" + (regNoteBody ? regNoteBody.length : "null") + " · IO 命中=" + regNoteIO);
+
+/* ── G6c/G6d/G6e + CAL-G6c：作用域 key 的**空安全**（第 40 轮真机事故的回归判据）─────
+ * 🔴 事故原文（**实测**，不是推测）：弹窗一打开，`SafeLayer` 立刻报
+ *    `层「dialog」渲染异常已隔离（其余层不受影响）: Cannot read properties of null (reading 'id')`
+ *    ⇒ React 抛穿整棵弹窗子树 ⇒ **总监弹窗整个打不开**（用户侧只剩一个小角标）。
+ *    真因 = G6 的 `regNote` 接线写成
+ *      `scopeKeyOf((scopeNode && scopeNode.id) || node.id, scopeNode)`
+ *    —— 只守了 `scopeNode`、**没守 `node`**（冷启动时 `node` 为 null）。
+ * 🔴 为什么离线套件原先拦不住：上面 G6a/G6b 是**源码级**判据，谁也没**运行**那段表达式
+ *    ⇒ "接线在、措辞对、函数纯" 三条全绿，而它在真机上必崩（全绿 ≠ 能验收）。
+ *    ⇒ 这里补**行为级**判据：真的把退化入参喂进去，看它抛不抛。 */
+const sessProbe = HIER.makeNode({ id: "se_probe_r40", name: "探针会话", level: "session", parentId: "p_probe" });
+sessProbe.conversations = [{ conversationId: "session-probe-r40" }];
+
+const scopeCases = [
+	["(null,null)", () => HIER.scopeKeyForNode(null, null), true],
+	["(undefined,null)", () => HIER.scopeKeyForNode(undefined, null), true],
+	["(null,sess)", () => HIER.scopeKeyForNode(null, sessProbe), true],
+	["(sess,null)", () => HIER.scopeKeyForNode(sessProbe, null), true],
+	["({},[])", () => HIER.scopeKeyForNode({}, []), true],
+	["({id:''},null)", () => HIER.scopeKeyForNode({ id: "" }, null), true]
+];
+const scopeOut = {};
+for (const c of scopeCases) {
+	try { scopeOut[c[0]] = { ok: true, v: c[1]() }; } catch (e) { scopeOut[c[0]] = { ok: false, e: String((e && e.message) || e) }; }
+}
+const scopeAllSafe = typeof HIER.scopeKeyForNode === "function"
+	&& Object.keys(scopeOut).every((k) => scopeOut[k].ok && typeof scopeOut[k].v === "string" && scopeOut[k].v.length > 0);
+
+ok("G6c 🔴 scopeKeyForNode 空安全：六种退化入参**都不抛**且都返回非空字符串（含 (null,null) / (undefined,null) / ({},[])）",
+	scopeAllSafe, JSON.stringify(scopeOut));
+
+ok("G6d 🔴 第二参必须传「生效节点」：scopeKeyForNode(null, 会话节点) === scopeKeyOf(node.id, node) —— 解析出**真实会话 id**，而不是 `se_` 前缀的树节点 id（否则落到另一个桶、R5 一条读不到）",
+	scopeOut["(null,sess)"].ok && scopeOut["(null,sess)"].v === HIER.scopeKeyOf(sessProbe.id, sessProbe)
+	&& scopeOut["(null,sess)"].v === "session-probe-r40",
+	{ got: scopeOut["(null,sess)"], want: HIER.scopeKeyOf(sessProbe.id, sessProbe) });
+
+/* 剥注释后再匹配 —— 事故的**旧写法**必须留在源码注释里当路标，
+ * 若直接在原文上正则，判据会被自己的注释绊红（本仓对账惯例：静态枚举一律"已剥注释"）。 */
+const stripComments = (s) => String(s).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+const dlgCode = stripComments(dlgSrc);
+ok("G6e 接线：弹窗用 scopeKeyForNode(scopeNode, node) 取作用域 key，且**代码里**不再有未设防的 `|| node.id`（注释里的旧写法不算）",
+	/scopeKeyForNode\(scopeNode,\s*node\)/.test(dlgCode) && !/\|\|\s*node\.id/.test(dlgCode),
+	{ usesHelper: /scopeKeyForNode\(scopeNode,\s*node\)/.test(dlgCode), unguardedInCode: /\|\|\s*node\.id/.test(dlgCode) });
+
+/* 🔴 坏样本校准（纪律 ⑥/⑫）：把**旧写法**原样跑一遍，它**必须抛** ——
+ *    否则上面 G6c 的"不抛"就有可能是**空真绿**（比如断言根本没执行到那一步）。
+ *    ⚠️ 用**内存里的旧表达式**当坏样本（不 `git show HEAD`）：判据寿命不绑提交时机。 */
+const oldExprThrows = (() => {
+	try { HIER.scopeKeyOf((null && null.id) || null.id, null); return false; } catch (e) { return true; }
+})();
+ok("CAL-G6c ⚙ 坏样本校准：旧写法 `(scopeNode && scopeNode.id) || node.id` 在 (null, null) 上**必须抛** —— 证明 G6c 的「不抛」有分辨力",
+	oldExprThrows, "旧表达式抛异常=" + oldExprThrows);
+
+ok("G7a 总监页 R2 有常驻「项目清单」读数，且三个量**分别**暴露（闸门才能双向对账）",
+	/"data-testid": "dp-proj-inventory"/.test(pageSrc)
+	&& /"data-projects": String\(inv\.registered\)/.test(pageSrc)
+	&& /"data-sessions": String\(inv\.sessions\)/.test(pageSrc)
+	&& /"data-dangling": String\(inv\.dangling\)/.test(pageSrc),
+	"命中 dp-proj-inventory + data-projects/sessions/dangling");
+
+ok("G7b 🔴 读数取自**层级树** tree（不是宿主分支树 liveRows）—— 两个 tree 不同源，接错会恒空（纪律 27）",
+	/projectInventory\(tree,\s*\{\s*archivedIds\s*\}\)/.test(pageSrc),
+	"命中 projectInventory(tree, { archivedIds })");
+
+ok("G7c 归档集「读不到」与「确认为空」可分：三者都落 state，且 null 不回落成 []",
+	/setArchivedIds\(Array\.isArray\(arch\) \? arch : null\)/.test(pageSrc),
+	"命中 setArchivedIds 三态赋值");
+
+ok("G7d 两个新纯函数模块**零 IO 依赖**（不 import react / plugin-db / idb / localStorage）",
+	!/from "[^"]*(react|plugin-db|idb|bridge\/)[^"]*"/.test(noteSrc)
+	&& !/from "[^"]*(react|plugin-db|idb|bridge\/)[^"]*"/.test(invSrc),
+	"summary-notes / project-inventory 的 import 全部为纯逻辑");
+
+/* ── 接线层校准（纪律 ⑥/⑫）─────────────────────────────────────────
+ * 🔴 为什么必须有这一段：上面 G5c/G5d/G6a/G7a 都是**"新构造必须存在"**类判据 ——
+ *    这类判据最容易变成"永远绿"（正则写歪了、或者匹配到别处，都看不出来）。
+ *    ⇒ 在**源码副本**上把那个构造**摘掉**，判据**必须**随之变红。
+ *    ⚠️ 用内存副本、不碰工作区（也不 `git show HEAD`）：`git` 版本在校准里会让
+ *       判据寿命与**提交时机**绑定 —— 一旦提交，校准样本就"没了"，判据静默退化。
+ *        用副本 ⇒ 判据寿命与数据寿命一致（永久可校准）。 */
+const stripCall = (s, name) => s.replace(new RegExp(name + "\\(\\{\\s*[a-zA-Z]+:", "g"), "NOPE(");
+const stripTid = (s, tid) => s.split('"data-testid": "' + tid + '"').join('"data-testid": "X-"');
+
+ok("CAL-G5 ⚙ 校准：把 transferLine(/acceptLine( 调用点从总监页源码**副本**里摘掉 ⇒ G5c/G5d 的判据必须变红（撞不红 = 判据是空的）",
+	/transferLine\(\{\s*toName:/.test(pageSrc) && !/transferLine\(\{\s*toName:/.test(stripCall(pageSrc, "transferLine"))
+	&& /acceptLine\(\{\s*fromName:/.test(pageSrc) && !/acceptLine\(\{\s*fromName:/.test(stripCall(pageSrc, "acceptLine")),
+	"摘掉后 transferLine/acceptLine 判据均已变红");
+
+ok("CAL-G6 ⚙ 校准：把 d-register-note 的 testid 从弹窗源码副本里改名 ⇒ G6a / H25(testid 清单) 必须变红",
+	/"data-testid": "d-register-note"/.test(dlgSrc)
+	&& !/"data-testid": "d-register-note"/.test(stripTid(dlgSrc, "d-register-note")),
+	"改名后 d-register-note 判据已变红");
+
+ok("CAL-G7 ⚙ 校准：把 dp-proj-inventory 的 testid 从总监页源码副本里改名 ⇒ G7a 必须变红",
+	/"data-testid": "dp-proj-inventory"/.test(pageSrc)
+	&& !/"data-testid": "dp-proj-inventory"/.test(stripTid(pageSrc, "dp-proj-inventory")),
+	"改名后 dp-proj-inventory 判据已变红");
+
+/* ══════════════════════════════════════════════════════════════════
+ * 🔴 第 40 轮 · 22 号文 **G1 家族**（R21-05 概况）—— 补上**零判据**的落点
+ * ══════════════════════════════════════════════════════════════════
+ *  §0.2 的结论是「落点都在、闸门全绿、用户说差很多」⇒ 因为**闸门没覆盖**。
+ *  实测：`d-brief-refresh` 在 `scripts/**` 里**一处断言都没有**（本组就是补这个洞）。
+ * ══════════════════════════════════════════════════════════════════ */
+ok("G1a 概况渲染口径收进 briefLines()（组件与离线闸门 `brief-conv-snapshot` 读**同一份**，不各处自己排）",
+	/briefLines\(it\)\.map\(/.test(dlgSrc), "命中 briefLines(it).map(");
+
+ok("G1b 每行带 data-kind（闸门据此断言**行级**存在性 —— 只断「整块非空」的话，五行全空也过）",
+	/"data-kind": ln\.kind/.test(dlgSrc), "命中 data-kind=ln.kind");
+
+ok("G1c 一键刷新落点 d-brief-refresh 存在，且走**幂等**的 syncFromSource（不新开读盘通道）",
+	/"data-testid": "d-brief-refresh"/.test(dlgSrc) && /syncFromSource\(\)/.test(dlgSrc),
+	"命中 d-brief-refresh + syncFromSource");
+
+ok("G1d I9：快照早于会话更新时间 ⇒ 标 data-kind=stale（用户不会拿旧读数当现状）",
+	/"data-kind": "stale"/.test(dlgSrc), "命中 data-kind=stale");
+
+ok("G1e I9：采集失败可解释 ⇒ data-kind=why 且文案取自 conversationMirror.persistReason（不新写一份原因）",
+	/"data-kind": "why"/.test(dlgSrc) && /conversationMirror\.persistReason/.test(dlgSrc),
+	"命中 data-kind=why + persistReason");
+
+ok("G1f 🔴 「无概况」不渲染成空白：全空且无过期证据时给 data-kind=none 的**显式文案**（空块与「没渲染」同形）",
+	/"data-kind": "none"/.test(dlgSrc), "命中 data-kind=none");
+
+ok("CAL-G1 ⚙ 校准：把 briefLines( 调用从弹窗源码副本里改名 ⇒ G1a 必须变红（撞不红 = 判据是空的）",
+	/briefLines\(it\)\.map\(/.test(dlgSrc)
+	&& !/briefLines\(it\)\.map\(/.test(dlgSrc.split("briefLines(it).map(").join("X(it).map(")),
+	"改名后 G1a 判据已变红");
+
 ok("H26 spotlight 遮罩用超大 boxShadow 表达层次（不拦截点击）", has(dlgSrc, /boxShadow:\s*"0 0 0 9999px rgba\(0,0,0,\.34\)"/), "命中遮罩");
 ok("H27 遮罩层 pointerEvents:none（洞内保持可交互）", has(dlgSrc, /pointerEvents:\s*"none"/), "命中 pointerEvents");
 ok("H28 焦点路由用捕获阶段 pointerdown 且不拦截原生交互", (() => {

@@ -27,7 +27,7 @@
 import * as react from "react";
 import { buildOverview } from "../logic/overview.js";
 import { discover } from "../logic/discover.js";
-import { deliverToChat } from "../bridge/chat-bridge.js";
+import { deliverToChat, deliverModeOf } from "../bridge/chat-bridge.js";
 import { openSession } from "../logic/branch-tree.js";
 import { listDirectorMessages } from "../store/plugin-db.js";
 
@@ -142,7 +142,9 @@ export function OverviewDialog(props) {
 		setBusy(true);
 		try {
 			const r = await deliverToChat(t, { sessionId: sel, opener: openSession, autoSend: true });
-			setMode(r.mode === "sent" ? "sent" : (r.ok ? "filled" : "failed"));
+			/* 🔴 第 42 轮：归并收口到 `deliverModeOf`（唯一实现）—— 原先此处自行归并，
+			 *   会把测试干跑的 `dry-run` 折成 `filled`（与"真填好了"不可分）。 */
+			setMode(deliverModeOf(r));
 			if (onSay) onSay(r.ok ? (r.mode === "sent" ? "已发送修正" : "已填入输入框") : "未送达 · " + r.reason, r.ok ? "" : "warn");
 			setDraft("");
 		} finally { setBusy(false); }

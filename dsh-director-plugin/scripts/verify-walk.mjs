@@ -179,6 +179,10 @@ async function walkOverlay(name, openTid, rootSel, opts, closeTid) {
   await sleep(350); esc(); await sleep(180);
 }
 
+/* 🔴 进来时先记下**开合型**控件的状态（收尾要逐字对账 —— 见文件尾的「起点复原自检」）。
+ *   `null` = 元素不在页上（那就不比对，避免把"没这个控件"读成"没复原"）。 */
+const modeAtStart = await ev("(function(){var e=document.querySelector('[data-testid=\"dp-running\"]');return e? e.getAttribute('data-mode') : null;})()");
+
 // ① 总监页（已尝试切到总监 tab）
 surfaces.push(await walkSurface("总监页", '[data-testid="dp-root"]', {
   // 会真实发送/删除/导航/改职责链路的：cdp-click(I段)/verify-flow(G段) 已深度覆盖，广度不重复触发
@@ -186,8 +190,25 @@ surfaces.push(await walkSurface("总监页", '[data-testid="dp-root"]', {
   //   · dp-act-split   —— 点一下会**真建 8 个会话 + 各投一份简报**（宿主 sessions.create，不可逆）
   //   · dp-maint-clear —— 点一下会进入"清除消息"待确认态；本套件只点一次（不会执行），
   //                       但会把按钮留在 armed 状态最多 3 秒，污染其后同排按钮的读数 ⇒ 一律排除
-  skip: ["dp-act-del", "dp-send", "dp-act-next", "dp-sync", "dp-focus-native", "dp-register-flow", "dp-route-director", "dp-route-chat", "dp-act-split", "dp-maint-clear"],
-  toggle: ["dp-r2-toggle", "dp-r4-toggle", "dp-r7-toggle"]
+  // 第 41 批（批次 D · G2-A）新增第三类：**导航型** —— `dp-crumb-i`（作用域面包屑的非末级按钮）。
+  //   点一下会 `setActiveNode()`，**改写当前作用域**；而本函数是"先一次性枚举坐标、再逐个真点"，
+  //   坐标是**枚举时刻**的 ⇒ 一改作用域，其后所有元素的几何就过期（表现为「点了没反应」这类假红）。
+  //   ⇒ 与本套件"广度不重复触发"的既有原则一致：**排除**，改由 `verify-novel-split.mjs` 的
+  //     `NS-17e`（是可用按钮）/ `NS-17g`（**真点一次 ⇒ 作用域真的切过去 ⇒ 收尾复原**）**定点**深测。
+  //   ⚠️ 枚举本身按 `data-testid` **去重**（`seen[tid]`），所以这里只有一条会进列表；
+  //      但它一条就够制造上述假红，故必须排除。
+  skip: ["dp-act-del", "dp-send", "dp-act-next", "dp-sync", "dp-focus-native", "dp-register-flow", "dp-route-director", "dp-route-chat", "dp-act-split", "dp-maint-clear", "dp-crumb-i"],
+  toggle: ["dp-r2-toggle", "dp-r4-toggle", "dp-r7-toggle",
+    /* 🔴 第 41 批（批次 D）新增：`dp-running-min` —— 执行状态窗口头部的「—」。
+     *   它是**开合型**控件（点一下 `data-mode: collapsed → expanded`），而本函数的复位只做
+     *   「toggle 名单再点一次 / 其余发 Esc」⇒ 不列进来就会被**留在展开态**。
+     *   实测后果（`logs/_r41k-ns.out`）：窗口展开后（`z=15`）**盖住 `dp-act-collect`** ⇒
+     *   紧随其后的 `verify-novel-split` `NS-9a` 真实鼠标**落点命中 `div[dp-chain-empty]`**、
+     *   连带 `NS-7e`（落空记录必须为 0）一起红 —— 而两套在**没有 walk 在前**时都是绿的。
+     *   ⚠️ 这正是本套件既有的原则「**闸门不许成为产品的破坏者**」，也是
+     *     「逐个点击所有按钮必须排除或还原**开合型**按钮」的现场（同 ⚙ 设置 / 折叠头）。
+     *   点两次即按奇偶回到起始态（`NS-8d`/`NS-8f` 已证）⇒ 放进 toggle 名单即可。 */
+    "dp-running-min"],
 }));
 // ② 设计图工作室（添加/保存/新建/改名/删除/发送会改文档，verify-design-studio 深度覆盖；广度只点纯视图控件）
 await walkOverlay("设计图工作室", "d-open-design", '[data-testid="ds-root"]', {
@@ -206,6 +227,24 @@ await walkOverlay("总监弹窗", "d-open-director", '[data-testid="d-panel"]', 
 
 // 收尾：确保所有浮层关闭，回到干净态
 esc(); await sleep(200);
+
+/* 🔴 第 41 批（批次 D）· **起点复原自检**（纪律 129/141）：
+ *   本套件会**逐个真点**页面上的按钮，其中**开合型**控件（折叠头 / 最小化钮）点一下就把
+ *   状态翻过去 —— 复位靠 `toggle` 名单里再点一次。**名单漏一个**的后果不是本套件红，
+ *   而是**下一个套件红**：实测 `dp-running-min` 漏掉 ⇒ 执行状态窗口留在展开态（`z=15`）
+ *   盖住 `dp-act-collect` ⇒ 随后的 `verify-novel-split` `NS-9a`（真实鼠标落点未命中自己）
+ *   + `NS-7e`（落空记录必须为 0）一起红，而两套单独跑都是绿的 ——
+ *   也就是"**跑了哪些套件、按什么顺序**"又变成了输入（纪律 107/141 的测试面形态）。
+ *   ⇒ 本套件必须**自证**：收尾时执行状态窗口的 `data-mode` 必须与进来时**逐字相同**。
+ *     这一条把"漏登记 toggle"从"下一个人踩坑"变成"本套件当场红"。 */
+const modeNow = await ev("(function(){var e=document.querySelector('[data-testid=\"dp-running\"]');return e? e.getAttribute('data-mode') : null;})()");
+if (modeNow !== modeAtStart) {
+  failN++; failures.push({ surf: "收尾", tid: "dp-running", detail: "执行状态窗口开合态**未复原**：" + modeAtStart + " → " + modeNow + "（漏登记 toggle 名单？）" });
+  console.log(`  ✗ ${"dp-running".padEnd(22)} [收尾] 开合态未复原：${modeAtStart} → ${modeNow}`);
+} else {
+  passN++;
+  console.log(`  ✓ ${"dp-running".padEnd(22)} [收尾] 执行状态窗口开合态已复原（${modeNow}）—— 下一套件的起点不受本套件影响`);
+}
 
 console.log("\n───────────────────────────────────────────────");
 for (const s of surfaces) {

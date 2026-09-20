@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：A7 + A8 总监 store 的加载与保存
  * 引用：批次 3
- * 上游：client-entry.js, logic/process.js, store/create-store.js
- * 下游：store/messages.js, store/idb.js, store/cookie.js, store/file-adapter.js
+ * 上游：client-entry.js, logic/process.js, logic/store-care.js, logic/sync.js, store/create-store.js
+ * 下游：store/messages.js, store/store-health.js, store/idb.js, store/cookie.js, store/file-adapter.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -43,6 +43,8 @@
  */
 
 import { DIRECTOR_STORE_PREFIX } from "./messages.js";
+/* 第 41 轮：`dsh.director*` 桶枚举的**唯一实现**（原先本文件内有两份手写副本） */
+import { scanBuckets, liveStorageIO, describeBuckets } from "./store-health.js";
 import { idbSave, idbLoad } from "./idb.js";
 import { dshCookieSave, dshCookieLoad } from "./cookie.js";
 import { getCachedPayload, writePayload, getPersistState, DIRECTOR_DIR_NAME, DIRECTOR_STORE_FILENAME } from "./file-adapter.js";
@@ -195,19 +197,11 @@ export function loadDirectorStore(sessionId) {
 		const key = directorStorageKey(sessionId);
 		const raw = localStorage.getItem(key);
 		if (!raw) {
-			// V9.2：枚举所有 dsh.director* key 做诊断（宿主 6252-6258 原样）
-			let allKeys = "";
-			try {
-				for (let i = 0; i < localStorage.length; i++) {
-					const k = localStorage.key(i);
-					if (k && k.indexOf("dsh.director") === 0) {
-						allKeys += k + "(" + (localStorage.getItem(k) || "").length + "bytes) ";
-					}
-				}
-			} catch (e) {
-				allKeys = "enumerate failed: " + e.message;
-			}
-			plog("load: no data for key=" + key + " | all director keys: [" + (allKeys || "none") + "]");
+			/* 🔴 第 41 轮：这里原有一份**手写**的 `dsh.director*` 枚举 dump。
+			 *    它与本文件 save 后那份、`create-store.js` 退出前那份**三处重复**（纪律 126）
+			 *    ⇒ 收敛到 `store-health.js` 的**唯一实现**（同时把读数**结构化**给界面用）。 */
+			plog("load: no data for key=" + key + " | all director keys: ["
+				+ describeBuckets(scanBuckets(liveStorageIO())) + "]");
 			if (st) {
 				st.loadCount++;
 				st.lastLoadTime = Date.now();
@@ -281,21 +275,10 @@ export async function saveDirectorStore(sessionId, state) {
 		});
 		plog("V10 save to cookie: " + (cookieOk ? "OK" : "FAIL") + " msgs=" + state.messages.length);
 
-		// V9.2：保存后 dump localStorage（宿主 6306-6314 诊断逻辑原样）
-		let lsDump = "";
-		try {
-			for (let i = 0; i < localStorage.length; i++) {
-				const k = localStorage.key(i);
-				if (k && k.indexOf("dsh.director") === 0) {
-					lsDump += k + "(" + (localStorage.getItem(k) || "").length + "b) ";
-				}
-			}
-		} catch (e) {
-			lsDump = "dump failed: " + e.message;
-		}
+		// V9.2：保存后 dump localStorage（**第 41 轮：收敛到唯一实现**，原为手写 for 循环）
 		plog("save: key=" + key + " msgs=" + state.messages.length + " bytes=" + payload.length
 			+ " fileOk=" + fileOk + " lsOk=" + lsOk + " idbOk=" + idbOk
-			+ " | localStorage dump: [" + (lsDump || "empty") + "]");
+			+ " | localStorage dump: [" + describeBuckets(scanBuckets(liveStorageIO())) + "]");
 
 		if (st) {
 			st.saveCount++;

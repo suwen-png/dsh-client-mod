@@ -2,7 +2,7 @@
  * 职责：A9 `createDirectorStore` store 工厂
  * 引用：—
  * 上游：client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js
- * 下游：store/messages.js, store/persist.js, store/file-adapter.js
+ * 下游：store/messages.js, store/persist.js, store/file-adapter.js, store/store-health.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -42,6 +42,8 @@ import {
 	directorStorageKey
 } from "./persist.js";
 import { writePayload } from "./file-adapter.js";
+/* 第 41 轮：退出前 dump 改用唯一实现（原为手写 for 循环，全仓第三份重复） */
+import { scanBuckets, liveStorageIO, describeBuckets } from "./store-health.js";
 
 /** 记日志（scope 固定 "persist"，与宿主一致） */
 function plog(msg, data) {
@@ -196,18 +198,10 @@ export function installBeforeUnloadSave() {
 				// ② localStorage：同步写入（与宿主一致）
 				try { localStorage.setItem(lsKey, payload); } catch (e) { /* 忽略 */ }
 
-				// ③ 诊断 dump
-				let lsDump = "";
-				try {
-					for (let i = 0; i < localStorage.length; i++) {
-						const k = localStorage.key(i);
-						if (k && k.indexOf("dsh.director") === 0) {
-							lsDump += k + "(" + (localStorage.getItem(k) || "").length + "b) ";
-						}
-					}
-				} catch (e) { lsDump = "dump failed: " + e.message; }
+				/* ③ 诊断 dump —— **第 41 轮：收敛到唯一实现**（原为手写 for 循环，全仓第三份重复） */
 				plog("beforeunload save: key=" + lsKey + " msgs=" + state.messages.length
-					+ " fileDispatched=" + fileDispatched + " | localStorage dump: [" + (lsDump || "empty") + "]");
+					+ " fileDispatched=" + fileDispatched + " | localStorage dump: ["
+					+ describeBuckets(scanBuckets(liveStorageIO())) + "]");
 			}
 		} catch (e) {
 			pwarn("beforeunload failed: " + e.message);

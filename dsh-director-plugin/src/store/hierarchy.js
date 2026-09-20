@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：多层级总监结构（对话级 / 文件夹级 / 全局级）
  * 引用：要求 1 · 17 号文 §2.1 · T-PLUG-009
- * 上游：bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/MindMap.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js
+ * 上游：bridge/chat-bridge.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/MindMap.js, logic/dim-branch.js, logic/summarize.js, logic/sync.js, store/duty-config.js
  * 下游：store/idb.js, store/plugin-db.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -429,6 +429,38 @@ export function scopeKindOf(node) {
  */
 export function scopeKeyOf(nodeId, node) {
 	return nodeConversationId(node) || String(nodeId || GLOBAL_NODE_ID);
+}
+
+/**
+ * 作用域 key —— **从节点对象取**（空安全 · 唯一实现）
+ *
+ * 🔴 为什么必须有它（2026-09-18 第 40 轮真机事故，代价已付）：
+ *   `scopeKeyOf(nodeId, node)` 的第一参是**字符串**，而调用方手里往往只有**节点对象**
+ *   （而且可能是 `null`）。各调用点自己拼兜底表达式 ⇒ **只守一半**就崩：
+ *   当时的写法是 `scopeKeyOf((scopeNode && scopeNode.id) || node.id, scopeNode)` ——
+ *   守了 `scopeNode`，**没守 `node`**。冷启动时 `node` 为 `null`
+ *   ⇒ `Cannot read properties of null (reading 'id')`
+ *   ⇒ React 抛穿 `DirectorDialog` 的整棵子树 ⇒ `mount.js` 的 `SafeLayer` 把
+ *      **「dialog」层整个隔离** ⇒ **总监弹窗打不开**（用户侧症状：点开只有一个小角标）。
+ *   ⇒ 同一语义两处实现 = 隐式断链（纪律 126）。**收成这一处**。
+ *
+ * 🔴 第二个坑（别只修 `node.id` 的守卫就算完）：第二参**必须传"生效的那个节点"**。
+ *   若 scopeNode 为空却仍传 `null`，会话节点会退化成 `String(node.id)`（`se_` 前缀）
+ *   ⇒ 与写侧解析出的**真实会话 id** 差一个前缀 ⇒ **落在另一个桶**、R5 一条都读不到。
+ *    这正是本仓记过的「`se_` 前缀桶」缺陷（见 `DirectorPage` 的作用域注释块）。
+ *
+ * 兜底顺序：`primary`（通常是更具体的作用域节点）→ `fallback` → 全局根。
+ *
+ * @param {object|null} [primary]  首选节点（可为 null）
+ * @param {object|null} [fallback] 次选节点（可为 null）
+ * @returns {string} 作用域 key（永不为空串）
+ */
+export function scopeKeyForNode(primary, fallback) {
+	const p = primary && typeof primary === "object" ? primary : null;
+	const f = fallback && typeof fallback === "object" ? fallback : null;
+	const eff = p || f;
+	if (!eff) return scopeKeyOf(GLOBAL_NODE_ID, null);
+	return scopeKeyOf(eff.id || GLOBAL_NODE_ID, eff);
 }
 
 /** 该作用域下"有没有对话"（文件夹/全局没有 ⇒ UI 不显示对话区，不编空对话） */

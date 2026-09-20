@@ -2,7 +2,7 @@
  * 职责：总监页（宿主原生 tab 环里的第一个视图）
  * 引用：—
  * 上游：client-entry.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/routing.js, logic/branch-tree.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 九（编排入口按钮 + 与个性化设定互斥）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -66,9 +66,18 @@ import {
 } from "../store/layout.js";
 import { loadTree, getBreadcrumb, LEVEL_LABEL, GLOBAL_NODE_ID, countByLevel, SCOPE_KIND, scopeKindOf, scopeKeyOf, scopeHasConversation, findNodeBySessionId, findNodeById, attachSession } from "../store/hierarchy.js";
 import { onHierarchyChange } from "../util/bus.js";
-import { appendDirectorMessage, listDirectorMessages, pluginDbStats, makeId, listTodos, listReviews, clearDirectorMessages, readMessageBackup, restoreDirectorMessages } from "../store/plugin-db.js";
+import { appendDirectorMessage, listDirectorMessages, pluginDbStats, makeId, listTodos, listReviews, clearDirectorMessages, readMessageBackup, restoreDirectorMessages, backupOrphanBuckets, readBucketBackup } from "../store/plugin-db.js";
+/* 🔴 第 42 轮（需求 3）：**读展示**走分支继承链（本桶为空 ⇒ 上溯父会话）。
+ *    ⚠️ 维护类操作（`clearDirectorMessages` / `readMessageBackup` / `restoreDirectorMessages`
+ *       / `backupOrphanBuckets`）继续用**原始桶** —— 继承结果绝不能拿去删。 */
+import { readDirectorMessages } from "../logic/director-inherit.js";
 import { route, DESTINATION, DESTINATION_LABEL, review6, dimensionCandidates } from "../logic/routing.js";
-import { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession, hostCapabilities, archivedSessionIds } from "../logic/branch-tree.js";
+import { getBranchSnapshot, refreshBranchTree, subscribeBranch, watchCurrentSession, openSession, hostCapabilities, archivedSessionIds, rawSessionSummaries } from "../logic/branch-tree.js";
+/* 第 41 轮 `T-PLUG-048/049`：存储体检 + 孤儿桶治理（唯一实现见 logic/store-care.js）。
+ * ⚠️ 与 `store-health.js` 的 import **必须两行同在** —— 少了任一个，`liveStorageIO` /
+ *    `scanBuckets` 会变成未定义符号（`lint-undefined-symbols` 会抓）。 */
+import { healthOf, aliveTagsOf, clearOrphanBuckets, pickRestorableBuckets } from "../logic/store-care.js";
+import { liveStorageIO, scanBuckets } from "../store/store-health.js";
 import { plan as planSplit } from "../logic/split-dimensions.js";
 /* 🔴 19 号文 **N8**（人可感知层）：归属判定的**一句话读数** —— 纯函数，与判定同源
  *    （不是"另算一遍"，见 `attribution.js#attributionSummary` 头注释）。 */
@@ -93,7 +102,11 @@ import { planFor, auditRubric, RUBRIC, RUBRIC_MAX, summarizeRounds } from "../lo
 import {
 	flowStore, currentTaskOf, flowLine, DIM, DIM_LABEL, DIM_ICON, FLOW_STATUS_LABEL, clip, flowStats
 } from "../logic/flow.js";
-import { findComposer, readComposerText, deliverToChat, isAgentGenerating } from "../bridge/chat-bridge.js";
+/* 🔴 第 40 轮 · 22 号文 G5（转交凭证两行 · 与总监弹窗/导图**同源**，见 summary-notes.js 头注）
+ *    + G7（项目清单读数 · 纯函数，不新开读盘通道） */
+import { transferLine, acceptLine, registerToast } from "../logic/summary-notes.js";
+import { projectInventory, inventoryText, inventoryRows } from "../logic/project-inventory.js";
+import { findComposer, readComposerText, deliverToChat, deliverModeOf, isAgentGenerating } from "../bridge/chat-bridge.js";
 import { personalizeStore } from "../store/personalize.js";
 /* 浮动按钮组的横向占位（几何真相在 FloatDock.js，此处只消费）—— 见下方 dockReserve 注释 */
 import { FLOAT_DOCK_RESERVE } from "./FloatDock.js";
@@ -357,6 +370,11 @@ export function DirectorPage() {
 	 *       把"读不到"显示成 `0` 会让用户以为"没有归档"，而事实是"这一项没读到"
 	 *       （纪律 19/58：降级可以，无声不行 —— 这里用 `—` 而不是 `0`）。 */
 	const [archivedN, setArchivedN] = react.useState(null);
+	/* 🔴 第 40 轮 · 22 号文 **G7**（项目清单读数 · 悬空判定要用到**归档集本身**，不只是条数）。
+	 *    与 `archivedN` **同一次读取**、同一次落状态 ⇒ 两个读数不可能是"两次读盘"的产物
+	 *    （否则会出现"条数说 3、清单说悬空 0"这种自相矛盾）。
+	 *    三态同样可分：数组 = 读到了；`null` = **读不到**（此时不把任何会话判成悬空 —— 不猜）。 */
+	const [archivedIds, setArchivedIds] = react.useState(null);
 	/* 回收读数（第 17 批需求「产出回流」）：同样**必须可回读**。
 	 * 🔴 与 `splitInfo` 分开两块而不是并进一块：派发与回收是**两次独立动作**，
 	 *    并进一块会让"派发了还没回收"与"回收了但派发失败"在界面上长得一样。 */
@@ -374,6 +392,14 @@ export function DirectorPage() {
 	 *    用户点了「清除」之后**必须当场看到他还有没有退路**（纪律 57：闸门绿 ≠ 用户能验收）。 */
 	const [bakInfo, setBakInfo] = react.useState(null);
 	const [restoreInfo, setRestoreInfo] = react.useState(null);
+	/* 第 41 轮 `T-PLUG-048/049`：**存储体检**读数 + 孤儿桶清理的二次确认与结果。
+	 * 🔴 为什么必须落成界面读数：孤儿桶的病就是"**没有任何入口能读到它**" ——
+	 *    只加日志不算治（用户不看日志），必须在维护行上把「桶总数（孤儿 M）」说出来。 */
+	const [storeHealth, setStoreHealth] = react.useState(null);
+	const [orphanArm, setOrphanArm] = react.useState(0);
+	const [orphanInfo, setOrphanInfo] = react.useState(null);
+	const [orphanBak, setOrphanBak] = react.useState(null);
+	const [orphanRestore, setOrphanRestore] = react.useState(null);
 	/* 待确认**自动撤防**：超时未确认就复位。
 	 * 🔴 没有这条，按钮会**永久停在**"再点一次就删"的状态 —— 用户过一会儿回来点一下
 	 *    就真的把消息删了（而他以为那是第一次点）。 */
@@ -382,6 +408,12 @@ export function DirectorPage() {
 		const timer = setTimeout(() => { setClearArm(0); say("已取消清除（" + Math.round(CLEAR_ARM_MS / 1000) + " 秒内未确认）"); }, CLEAR_ARM_MS);
 		return () => clearTimeout(timer);
 	}, [clearArm]);
+	/* 同款自动撤防（孤儿桶清理）——**开合型控件必须当场还原**（否则用户以为"再点一次没事"）。 */
+	react.useEffect(() => {
+		if (!orphanArm) return undefined;
+		const timer = setTimeout(() => { setOrphanArm(0); say("已取消清理孤儿桶（" + Math.round(CLEAR_ARM_MS / 1000) + " 秒内未确认）"); }, CLEAR_ARM_MS);
+		return () => clearTimeout(timer);
+	}, [orphanArm]);
 	const [toast, setToast] = react.useState("");
 	const [pOpen, setPOpen] = react.useState(false);
 	/* 编排面板（2026-09-14 架构补全）：与个性化面板**互斥**，避免两个浮层叠在一起。
@@ -504,7 +536,9 @@ export function DirectorPage() {
 			const id = nodeIdRef.current;
 			setTree(await loadTree());
 			setCrumbs(await getBreadcrumb(id));
-			const list = (await listDirectorMessages(id)) || [];
+			/* 🔴 第 42 轮（需求 3）：「从 1 新建分支 2 ⇒ 2 的总监对话和 1 一样」——
+			 *    展示读走**继承链**（本桶为空且确有分支父时，读父链上最近的非空桶）。 */
+			const list = (await readDirectorMessages(id)).rows || [];
 			/* 同步 ref：runDirector 要在**上屏前**读「本条之前的上下文」，
 			 * 若用 state 会拿到闭包里的旧值（少一轮）。 */
 			msgsRef.current = list;
@@ -522,7 +556,10 @@ export function DirectorPage() {
 			try {
 				const arch = await archivedSessionIds();
 				setArchivedN(Array.isArray(arch) ? arch.length : null);
-			} catch (e) { setArchivedN(null); }
+				/* G7：归档集**本身**也落下来（悬空判定的输入）—— 同上，读不到就 `null`，不回落成 `[]`
+				 * （`[]` = "确实一条归档都没有"，与"没读到"是两件事）。 */
+				setArchivedIds(Array.isArray(arch) ? arch : null);
+			} catch (e) { setArchivedN(null); setArchivedIds(null); }
 		} catch (e) { /* 数据层异常不影响 UI */ }
 	}, [nodeId]);
 
@@ -1015,7 +1052,7 @@ export function DirectorPage() {
 		 *    `T-PLUG-050`（登记该不该产生总监消息）**尚未裁定** —— 写消息属语义扩展，
 		 *    不在本版单方决定；但"**不写**"这件事本身**必须说出来**（纪律 19：降级可以，无声不行）。
 		 *    提示里同时给出**可执行的替代路径**（用右侧「执行」），否则用户只知道"没反应"。 */
-		say("已登记流转 · " + String(txt).trim().length + " 字符（已进四维轨迹；「登记」**不产生总监消息** —— 要总监回应请用右侧「执行」）");
+		say(registerToast(String(txt).trim().length));
 	}
 
 	/** `runDirector` 需要的 store 适配器 —— 把 plugin-db 的消息面包装成 {getState,addMessage,setStatus} */
@@ -1032,6 +1069,10 @@ export function DirectorPage() {
 
 	/** 投递结果 → 一句短提示（**归因细节走 data-*，不占版面**） */
 	function deliverToast(d) {
+		/* 🔴 第 42 轮需求 1：干跑必须**在界面上说得出来**，不能只写进 data-* ——
+		 *   用户的原话是「你测试流转的时候没有标注测试或者其他的么，把我的额度跑没了」，
+		 *   要的就是"一眼看出这次没真发"（纪律 146：判据须对用户可见面）。 */
+		if (d.mode === "dry-run") return "测试干跑：已填入输入框，未发送（不消耗额度）";
 		if (d.mode === "sent") return "已发送到对话";
 		if (d.mode === "filled") return "已填入输入框";
 		return "未送达 · " + (d.reason || "未知");
@@ -1121,7 +1162,11 @@ export function DirectorPage() {
 
 			/* ④ 投递的是**处理后的指令**，不是原文 —— 这正是用户要的"经过处理然后发给对话执行" */
 			const d = await deliverToChat(r.instruction, { sessionId: scope, opener: openSession });
-			setDeliverMode(d.mode === "sent" ? "sent" : (d.ok ? "filled" : "failed"));
+			/* 🔴 第 42 轮：**收口到唯一实现** `deliverModeOf` —— 原先这里自己写
+			 *   `d.mode === "sent" ? "sent" : (d.ok ? "filled" : "failed")`，
+			 *   会把测试干跑的 `dry-run` **折成 filled** ⇒ 与"真填好了"不可分
+			 *   （用户抱怨的"测试没标注"，读数根因就在这里）。 */
+			setDeliverMode(deliverModeOf(d));
 			setDeliverVia(d.via || d.reason || "");
 
 			/* 结链：状态按「是否真的送进对话」定档 —— `filled` 只是**填进输入框**，
@@ -1133,14 +1178,19 @@ export function DirectorPage() {
 				grade: r.steps.some((s) => s.grade === "G1") ? "G1" : "G0",
 				model: r.model,
 				deliver: { mode: d.mode || "", via: d.via || "", reason: d.reason || "" },
-				note: d.ok ? "" : ("未送达：" + (d.reason || "未知"))
+				/* 干跑**必须留痕**：执行链是事后唯一能翻的账，写清楚"没发送是有意的"，
+				 * 否则以后回看会把它当成"未送达"（把有意跳过读成失败，纪律 58）。 */
+				note: d.mode === "dry-run" ? "测试干跑：未发送（不消耗额度）" : (d.ok ? "" : ("未送达：" + (d.reason || "未知")))
 			});
 
 			/* ⑤ 两跳流转：总监（已处理）→ 对话（已投递/未投递） */
 			const f = flowStore.push(t, { origin: DIM.DIRECTOR, sessionId: scope, note: "总监页执行" });
 			if (f) {
 				flowStore.move(f.flowId, DIM.DIRECTOR, "总监已处理", { status: "routed" });
-				if (d.ok) flowStore.move(f.flowId, DIM.CHAT, "已投递到对话", { status: "running", target: scope });
+				/* 🔴 干跑单独一支：`d.ok` 为真但**确实没投递**，写"已投递到对话"就是撒谎
+				 *   （且会被后续判据读成"送达"）。三态必须分开：送达 / 测试跳过 / 未送达。 */
+				if (d.mode === "dry-run") flowStore.move(f.flowId, DIM.CHAT, "测试干跑跳过（未投递）", { status: "routed", target: scope });
+				else if (d.ok) flowStore.move(f.flowId, DIM.CHAT, "已投递到对话", { status: "running", target: scope });
 				else flowStore.move(f.flowId, DIM.CHAT, "未投递：" + (d.reason || "未知"), { status: "routed", target: scope });
 			}
 			await refresh();
@@ -1196,7 +1246,9 @@ export function DirectorPage() {
 		let idea = String(readComposerText() || "").trim();
 		let from = "原生输入框";
 		if (!idea) {
-			const rows = await listDirectorMessages(nodeId);
+			/* 🔴 需求 3：与**界面展示同源** —— 用户在 R5 看到的最后一条，
+			 *    就是这里取来当分流依据的那一条（否则会出现"看到 A、实际按 B 分流"）。 */
+			const rows = (await readDirectorMessages(nodeId)).rows || [];
 			const last = rows.length ? rows[rows.length - 1] : null;
 			idea = String((last && last.text) || "").trim();
 			from = "总监消息最后一条";
@@ -1251,6 +1303,18 @@ export function DirectorPage() {
 			titleHit: !!(r.reusePlan && r.reusePlan.titleHit),
 			titleMissed: (r.reusePlan && r.reusePlan.titleMissed) ? r.reusePlan.titleMissed.slice() : [],
 			titlePoolN: (r.reusePlan && r.reusePlan.titlePoolN != null) ? Number(r.reusePlan.titlePoolN) : null,
+			/* 🔴 `T-PLUG-042`：**宿主改名结局**必须可回读（纪律 19/79）。
+			 *    `renameOk` 只出现在**新建**分支 ⇒ 复用条目里恒为 `null`（不算"失败"）。
+			 *    判据形态：`created>0 ⇒ renameOk + renameFail === created`；`renameFail>0 ⇒ why 非空`。
+			 *    ⚠️ 「没改名」与「改名失败」必须可分（纪律 140）—— 前者 `created=0`、三值全 0。 */
+			renameOkN: (r.items || []).filter((x) => x && x.renameOk === true).length,
+			renameFailN: (r.items || []).filter((x) => x && x.renameOk === false).length,
+			/* 🔴 第 41 轮 `T-PLUG-043`：**未派发**的第四种原因（配额预检拦下）。
+			 *    必须与 `kind:"none"`（没识别到）分开：前者要"充值/换模型"，后者要"补文档/意图"。
+			 *    判据形态：`quotaBlock=true ⇒ made=0 且 sent=0`（**零次投递**才是真的拦住了）。 */
+			quotaBlock: r.quotaBlock === true,
+			quotaReason: String(r.reason || ""),
+			renameWhy: ((r.items || []).map((x) => x && x.renameWhy).filter((w) => w && String(w).length)[0] || ""),
 			/* 靠标题救回来的**条数**（不是布尔）：索引补登记几条要对得上「新建 + 标题命中」 */
 			titleHits: (r.reusePlan && r.reusePlan.titleHits != null) ? Number(r.reusePlan.titleHits) : 0,
 			/* 🔴 第 36 轮：**项目级兜底复用的条数**。与 `titleHits` 分列 ——
@@ -1425,6 +1489,116 @@ export function DirectorPage() {
 			? ("已从备份恢复 " + r.restored + " 条（备份共 " + r.total + " 条"
 				+ (r.skipped ? "，其中 " + r.skipped + " 条已在库中 ⇒ 跳过（不产生副本）" : "") + "）")
 			: ("恢复未完成：" + String(r.reason || "未知")));
+	}
+
+	/* ══════════════════════════════════════════════════════════════════
+	 * 第 41 轮 · 存储体检与孤儿桶治理（`T-PLUG-048` + `T-PLUG-049`）
+	 *   `T-PLUG-048`：孤儿桶（所属会话已不在树上）**没有任何入口能读到**
+	 *                 ⇒ 既是"消息丢了"的错觉来源，又是配额只增不减的静默来源。
+	 *   `T-PLUG-049`：桶数**线性增长**且无上限 / 无淘汰 / 无用量读数。
+	 *   两件事共用**一次扫描**（唯一实现 `logic/store-care.js`），故合并在维护行。
+	 * ══════════════════════════════════════════════════════════════════ */
+
+	/** storage 的**读写**句柄（体检用只读的 `liveStorageIO`；清理才需要这个） */
+	function storageRW() {
+		return {
+			getAt: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+			remove: (k) => { localStorage.removeItem(k); },
+			/* 🔴 `has` 出错时返回 `true` = **安全方向**（会被记成"没删掉" ⇒ `ok:false`），
+			 *    返回 `false` 会把一次失败谎报成成功（纪律 58）。 */
+			has: (k) => { try { return localStorage.getItem(k) !== null; } catch (e) { return true; } }
+		};
+	}
+
+	/** 取「存活会话 id」（已排除归档）—— **读不到返回 null**（下游据此不判孤儿） */
+	async function aliveSessionIds() {
+		try {
+			const raws = rawSessionSummaries();
+			const ids = raws.map((s) => (s && s.id ? String(s.id) : "")).filter(Boolean);
+			let arch = null;
+			try { arch = await archivedSessionIds(); } catch (e) { arch = null; }
+			/* 归档集读不到 ⇒ **不过滤**（与 director-dispatch 同约定：不许把读不到放大成破坏性结论） */
+			return Array.isArray(arch) ? ids.filter((id) => arch.indexOf(id) < 0) : ids;
+		} catch (e) { return null; }
+	}
+
+	/** 跑一次存储体检（**只读**，不动任何数据） */
+	async function runStoreHealth() {
+		const alive = await aliveSessionIds();
+		const h = healthOf(liveStorageIO(), aliveTagsOf(alive));
+		/* 🔴 字段名**必须**与 `healthOf()` 的返回不重名（纪律 126：同一语义两个标识符 = 隐式断链）。
+		 *    初稿写的是 `{ at, alive: <会话数>, ...h }` ⇒ `h.alive`（**桶**存活数）把会话数**覆盖**了，
+		 *    而界面把 `data-alive-sessions` 与 `data-alive-buckets` 都读它 ⇒ 两个不同口径印成同一个数。
+		 *    修法：先铺 `h`，再挂**专属名** `aliveSessions`。 */
+		setStoreHealth({ ...h, at: Date.now(), aliveSessions: Array.isArray(alive) ? alive.length : null });
+		setOrphanBak(readBucketBackup());
+		dshLog("store-health", {
+			total: h.total, orphan: h.orphan, chars: h.chars, judged: h.judged,
+			overBudget: h.overBudget, failed: h.failed
+		});
+		/* 🔴 结果句必须把**降级**说出来（纪律 19）：读不到会话集时不判孤儿，必须当场讲明。 */
+		say(h.failed
+			? ("存储体检未完成：" + h.failed)
+			: ("存储体检：桶 " + h.total + " 个（"
+				+ (h.judged ? "存活 " + h.alive + " / 孤儿 " + h.orphan
+					: "未判定 " + h.unknown + "（读不到宿主会话集）")
+				+ "）· " + h.chars + " 字符"
+				+ (h.judged ? "" : " · ⚠ 读不到宿主会话集 ⇒ **本轮不判孤儿**")
+				+ (h.overBudget ? " · ⚠ 超预算（" + h.budget + " 字符）" : "")
+				+ (h.overBucketsWarn && h.overBucketsWarn.length ? " · ⚠ 有 " + h.overBucketsWarn.length + " 个单桶超过告警线" : "")));
+	}
+
+	/** 清理孤儿桶（二次确认 + **先备份再执行**，纪律 83） */
+	async function purgeOrphanBuckets() {
+		if (!orphanArm) {
+			setOrphanArm(Date.now());
+			say("再点一次「确认清理」以删除孤儿桶（**先自动备份**，" + Math.round(CLEAR_ARM_MS / 1000) + " 秒内有效）");
+			return;
+		}
+		setOrphanArm(0);
+		if (!storeHealth) { say("请先点「🔍 存储体检」——不知道有哪些孤儿桶就不许清"); return; }
+		if (!storeHealth.judged) { say("本轮**不判孤儿**（" + storeHealth.why + "）⇒ 拒绝执行清理"); return; }
+		const r = clearOrphanBuckets(storageRW(), storeHealth.orphans, {
+			note: "维护行·清理孤儿桶", backup: backupOrphanBuckets
+		});
+		setOrphanInfo({
+			at: Date.now(), planned: r.planned, removed: r.removed, kept: r.kept, ok: r.ok,
+			reason: r.reason, backupCount: (r.backup || {}).count || 0, backupOk: (r.backup || {}).ok === true,
+			backupReason: (r.backup || {}).reason || ""
+		});
+		dshLog("purge-orphan-buckets", { planned: r.planned, removed: r.removed, ok: r.ok, backup: (r.backup || {}).count || 0 });
+		/* 删后**必复核**：重扫一次，让读数来自现实而不是来自我刚执行的计划 */
+		await runStoreHealth();
+		say(r.ok
+			? ("已清理孤儿桶 " + r.removed + " 个（计划 " + r.planned + " 个）"
+				+ ((r.backup || {}).ok ? " · 已备份 " + r.backup.count + " 个，可点「↩ 恢复孤儿」还原" : ""))
+			: ("孤儿桶清理未完全成功：删除 " + r.removed + "/" + r.planned + " 个"
+				+ (r.reason ? "（" + r.reason + "）" : "") + (r.leftovers && r.leftovers.length ? " · 残留 " + r.leftovers.length + " 个" : "")));
+	}
+
+	/** 从桶备份恢复（**幂等**：已存在的 key 跳过 ⇒ 绝不覆盖比备份更新的内容） */
+	async function restoreOrphanBuckets() {
+		const bak = readBucketBackup();
+		if (!bak || !bak.buckets || !bak.buckets.length) { say("没有可恢复的孤儿桶备份（每次「清理孤儿桶」前会自动备份一次）"); return; }
+		const scan = scanBuckets(liveStorageIO());
+		const pick = pickRestorableBuckets(scan.keys, bak.buckets);
+		let restored = 0;
+		const failed = [];
+		for (let i = 0; i < pick.entries.length; i++) {
+			const e = pick.entries[i];
+			try {
+				localStorage.setItem(e.key, e.raw);
+				/* 🔴 **写后读回逐字节比对**（与 `saveDirectorStore` 的 lsOk 纪律同款）——
+				 *    不比对就报"已恢复"等于替一次失败作证（纪律 58）。 */
+				if (localStorage.getItem(e.key) === e.raw) restored++; else failed.push(e.key);
+			} catch (err) { failed.push(e.key); }
+		}
+		setOrphanRestore({ at: Date.now(), total: bak.buckets.length, restored: restored, skipped: pick.skipped, dropped: pick.dropped, failed: failed.length });
+		await runStoreHealth();
+		say("已恢复孤儿桶 " + restored + "/" + bak.buckets.length
+			+ (pick.skipped ? "（" + pick.skipped + " 个已存在 ⇒ 跳过，不覆盖新内容）" : "")
+			+ (pick.dropped ? "（" + pick.dropped + " 个备份项无效 ⇒ 丢弃）" : "")
+			+ (failed.length ? " · ⚠ " + failed.length + " 个写回失败" : ""));
 	}
 
 	/** 控制台动作：有真接口的做真事，没有的**写明缺什么**（不做假按钮） */
@@ -1606,7 +1780,11 @@ export function DirectorPage() {
 					});
 					const w = await appendDirectorMessage(targetNode.id, {
 						messageId: recvId, kind: "接收 · 转派", role: "director",
-						text: "【总监接收】来自总监页的转派" + (dimKey ? "（维度 " + dimKey + "）" : "") + "："
+						/* 🔴 22 号文 **G5 · 目标侧**：首行固定「已接收 ← <来源>（维度 X）（HH:MM）」。
+						 *    与总监弹窗那句**同一个纯函数**（`logic/summary-notes.js#acceptLine`）——
+						 *    两处各自拼字符串就是纪律 126 的形态（同一语义、两份措辞、都不报错）。 */
+						text: acceptLine({ fromName: String((node && node.name) || ""), dimKey: dimKey }) + "\n"
+							+ "【总监接收】来自总监页的转派" + (dimKey ? "（维度 " + dimKey + "）" : "") + "："
 							+ String((src && src.fact && src.fact.reqText) || "") + "\n落地：" + note,
 						env: recvEnv,
 						meta: (src && src.fact) ? { fact: src.fact } : {}
@@ -1615,8 +1793,22 @@ export function DirectorPage() {
 				} catch (e) { recvNote = " · ⚠️ 接收凭证未写入（" + String((e && e.message) || e) + "）"; }
 			}
 		}
+		/* 🔴 22 号文 **G5 · 源侧（总监页这条通道）**：真发生了跨分支转交时，
+		 *    流转条目上要留下**固定措辞**的「已转交 → <目标>（维度 X）（HH:MM）」——
+		 *    与弹窗那句 `transferLine()` **同一个纯函数**。
+		 *    ⚠️ 只在**真转交**时加（`hit` + 目标节点 ≠ 本节点）：判据的**负对照**是
+		 *       「没转发时两侧都不许出现该行」，无脑加会把这个负对照打穿。
+		 *    ⚠️ 走**流转条目**而不是新写一条总监消息：本页这条通道原本只有一句
+		 *       `say()`（**2.6 秒后消失的 toast**）⇒ 用户根本回看不到"转交给谁了"；
+		 *       流转条目本来就在 R5 常驻，零新增 IO、零写库。 */
+		const handed = (dest === DESTINATION.DIRECT || dest === DESTINATION.TRANSFER) && hit
+			&& targetNode && String(targetNode.id) !== String(nodeId);
+		const moveNote = handed
+			? transferLine({ toName: String((targetNode && targetNode.name) || ""), dimKey: dimKey })
+				+ "\n确认去向：" + DESTINATION_LABEL[dest] + " · " + why
+			: "确认去向：" + DESTINATION_LABEL[dest] + " · " + why;
 		if (latest) {
-			flowStore.move(latest.flowId, DIM.CHAT, "确认去向：" + DESTINATION_LABEL[dest] + " · " + why, { status, target });
+			flowStore.move(latest.flowId, DIM.CHAT, moveNote, { status, target });
 		}
 		say("已确认：" + DESTINATION_LABEL[dest] + " · " + why + note);
 		setRouteResult(null);
@@ -1629,6 +1821,19 @@ export function DirectorPage() {
 		{ k: "待办项", v: (node && node.todos ? node.todos.length : 0), src: "层级节点 todos" },
 		{ k: "活跃分支", v: activeBranches, color: "#3fb950", src: "宿主 sessions 血缘（有子节点的分支）" }
 	];
+
+	/* 🔴 第 40 轮 · 22 号文 **G7**（F7 项目把控）：总监**自己**读项目清单。
+	 *
+	 *   为什么不是 `projectRoot()`：那只给出「根 / 根\src」两个**字符串** ——
+	 *   是"把路径交给分支去看"，回答不了总监该回答的问题：
+	 *   「我手上登记了几个项目？各几个对话？有几个悬空？」
+	 *
+	 *   数据源 = **本页已经在用的层级树** `tree`（`loadTree()` 那份，与 R2 的「节点 / 消息」
+	 *   同源）⇒ **零新增读盘**（22 号文 I12：上一轮用户刚投诉"量太多不一致"）。
+	 *   ⚠️ 别与「现存会话 N」搞混：那是**宿主分支树** `liveRows`，两个 tree 不同源（纪律 27）。
+	 *   ⚠️ 归档集 `archivedIds === null` ⇒ **不判悬空**（读不到就不猜，见 PI-6）。 */
+	const inv = projectInventory(tree, { archivedIds });
+	const invText = inventoryText(inv);
 
 	/* ── 模型选择（第 6 批需求 8）────────────────────────────────────
 	 * 🔴 本轮发现（**"看起来有、实际没有"的标本**）：
@@ -2138,6 +2343,61 @@ export function DirectorPage() {
 						onClick: () => { setOOpen((v) => !v); setPOpen(false); }
 					}, "⧉ 编排")
 				]),
+				/* 🆕 **G2-A（批次 D）· 可见的「文件夹 → 多项目 → 对话」三级作用域面包屑**
+				 *
+				 *   用户需求原文：
+				 *     · 「标准客户端左侧导航栏的**工作区**，不允许**文件夹嵌套**和对话分支层级，**能调整么**」
+				 *     · 「novels 下面有多个项目，我应该可以**再打开不同项目**处理问题」
+				 *   ⇒ 项目已落死「主管道 = 官方 client 插件，**不改宿主编译产物**」（`AGENTS.md` §〇）
+				 *     ⇒ 该能力**在插件侧完整承载**，并**如实标注**宿主侧栏的限制（不许假装做到了）。
+				 *
+				 *   ⚠️ 38 轮曾把路径塞进上方下拉的 `title`（**要悬停才看得见**）——
+				 *      用户实测仍反馈"没完成" ⇒ 本轮恢复**可见**形态：
+				 *      逐级可点跳转 · 当前级高亮且不可点 · **深度不限**（嵌套目录全链呈现）。
+				 *
+				 *   🔴 DOM 契约（改名/删除前先 `grep -rln <名字> scripts/`，纪律 7）：
+				 *      `dp-crumb`[`data-depth`] 容器 · 各级 `dp-crumb-i`[`data-level`][`data-current`]
+				 *      · 宿主限制标注 `dp-crumb-host`。 */
+				crumbs.length ? h("div", {
+					key: "cr", "data-testid": "dp-crumb", "data-depth": String(crumbs.length),
+					style: {
+						display: "flex", alignItems: "center", gap: 3, flexWrap: "wrap", marginTop: 4,
+						fontSize: "calc(10.5px * var(--dp-font,1))", color: "var(--dp-t3, #8b9199)"
+					}
+				}, crumbs.reduce((acc, c, i) => {
+					const last = i === crumbs.length - 1;
+					if (i) acc.push(h("span", { key: "s" + i, style: { opacity: 0.55 }, "aria-hidden": "true" }, "›"));
+					acc.push(h(last ? "span" : "button", {
+						key: "c" + i,
+						"data-testid": "dp-crumb-i",
+						/* 🔴 `data-node-id` = **身份**（节点 id），与呈现文字分开。
+						 *   为什么必须单独给：闸门要对账「面包屑末级 == 作用域下拉选中项」，
+						 *   而两者的**文字**不同源 —— 下拉项是 `"　".repeat(d) + LEVEL_LABEL + " · " + name`
+						 *   （见 `buildOptions`），拿"文字相等"判会**必然假红**。
+						 *   ⇒ 身份层用 id 对 id（无格式、无歧义），文字层另出一条呈现判据。 */
+						"data-node-id": String(c.id || ""),
+						"data-level": String(c.level || ""),
+						"data-current": last ? "1" : "0",
+						title: (LEVEL_LABEL[c.level] || c.level || "") + "：" + (c.name || "(未命名)")
+							+ (last ? "（当前作用域）" : "（点击跳转到这一级）"),
+						style: last
+							? { color: "var(--dp-t1, #e8eaed)", fontWeight: 600 }
+							: { ...S.btn, height: 15, padding: "0 5px", fontSize: "calc(10px * var(--dp-font,1))", cursor: "pointer" },
+						/* 当前级不设 onClick（它是"你在这里"，不是跳转目标）——
+						 * 点了也没变化，留着会让人以为没响应。 */
+						onClick: last ? undefined : () => { directorLayoutStore.setActiveNode(c.id); }
+					}, c.name || "(未命名)"));
+					return acc;
+				}, []).concat([
+					/* 🔴 如实标注（需求 14/15）：宿主侧栏**确实**不支持文件夹嵌套。
+					 *    不写这句 = 让用户以为"宿主那边也能嵌套了"，属于纪律 57「全绿 ≠ 能验收」的用户侧形态。 */
+					h("span", {
+						key: "host", "data-testid": "dp-crumb-host", style: { marginLeft: 4, opacity: 0.85 },
+						title: "项目落死：主管道 = 官方 client 插件，不改宿主 workspace/** 编译产物"
+							+ "（git 无法回滚）⇒ 宿主左侧栏的「工作区」保持原生行为（不支持文件夹嵌套）；"
+							+ "文件夹 → 多项目 → 对话三级由本插件承载。"
+					}, "· 宿主侧栏不支持文件夹嵌套（三级由插件承载）")
+				])) : null,
 				h("div", { key: "c", style: { display: collapsed.r2 ? "none" : "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, [
 					...CONSOLE_ACTIONS.map((a) => h("button", {
 						key: a.key, style: {
@@ -2173,6 +2433,11 @@ export function DirectorPage() {
 						"data-title-missed": (splitInfo.titleMissed || []).join(","),
 						"data-title-pool": splitInfo.titlePoolN == null ? "" : splitInfo.titlePoolN,
 						"data-dims": (splitInfo.dims || []).join(","),
+						/* 🔴 `T-PLUG-042`：**宿主改名结局**（离线只能守接线，真机必须能读到结局）。
+						 *    `created=0`（全复用）时三值全 0 / 空 —— 「**没改名**」与「**改名失败**」可分。 */
+						"data-rename-ok": splitInfo.renameOkN == null ? "" : String(splitInfo.renameOkN),
+						"data-rename-fail": splitInfo.renameFailN == null ? "" : String(splitInfo.renameFailN),
+						"data-rename-why": String(splitInfo.renameWhy || ""),
 					"data-kind": splitInfo.kind || "",
 					/* 🔴 第 24 批：**分辨原因必须可断言**（第二十四轮 · 40 轮连跑驱动）。
 					 *    旧状态：`kind=noise` 只是"我没派"，**说不出为什么**；
@@ -2192,6 +2457,12 @@ export function DirectorPage() {
 						 * 否则"完全成功"与"建出但没挂工作区"在界面上长得一样。 */
 						"data-attachfail": splitInfo.attachFail == null ? "" : splitInfo.attachFail,
 						"data-via": splitInfo.via || "",
+						/* 🔴 第 41 轮 `T-PLUG-043`：**配额预检是否拦下了**（+ 原文原因）。
+						 *    `data-quota-block="1"` 必须**同时**伴随 `made=0 / sent=0 / created=0` ——
+						 *    只报"拦住了"而不报"一条都没投"的话，闸门断不了"拦住了"与"拦了但还在投"。
+						 *    ⚠️ 两者**同时**给值才算接线（纪律 79：写好了 ≠ 接进去了）。 */
+						"data-quota-block": splitInfo.quotaBlock ? "1" : "0",
+						"data-quota-reason": splitInfo.quotaBlock ? String(splitInfo.quotaReason || "") : "",
 						/* 失败必须**可读**：本轮真机第一次跑就是"建了 8 条但读数没出现"，
 						 * 界面上与"什么都没发生"完全一样。`data-error` 让这种状态可断言。 */
 						"data-error": splitInfo.error || "",
@@ -2203,12 +2474,16 @@ export function DirectorPage() {
 						title: "最近一次派发：" + (splitInfo.error ? "⚠ " + splitInfo.error
 							: (splitInfo.reuseNote || splitInfo.note || ((splitInfo.dims || []).join(" / ") || "（无维度）")))
 					}, splitInfo.error ? "🌿 派发中断"
-						: (splitInfo.made === 0 && (splitInfo.kind === "noise" || splitInfo.kind === "none"))
-							? (splitInfo.kind === "noise" ? "🚫 无意义输入 · 未派发" : "🚫 未识别到意图 · 未派发")
-							: ("🌿 派发 " + splitInfo.made
-								+ (splitInfo.reused ? " · 复用 " + splitInfo.reused : "")
-								+ (splitInfo.created ? " · 新建 " + splitInfo.created : "")
-								+ (splitInfo.failed ? " · 失败 " + splitInfo.failed : ""))) : null,
+						/* 🔴 第 41 轮 `T-PLUG-043`：**配额预检拦下**必须自成一档 ——
+						 *    它与「没识别到意图」的动作相反（前者充值/换模型，后者补文档/意图），
+						 *    混在一起用户会去改输入（纪律 140：两种原因必须可分）。 */
+						: splitInfo.quotaBlock ? "⛔ 配额不足 · 未派发"
+							: (splitInfo.made === 0 && (splitInfo.kind === "noise" || splitInfo.kind === "none"))
+								? (splitInfo.kind === "noise" ? "🚫 无意义输入 · 未派发" : "🚫 未识别到意图 · 未派发")
+								: ("🌿 派发 " + splitInfo.made
+									+ (splitInfo.reused ? " · 复用 " + splitInfo.reused : "")
+									+ (splitInfo.created ? " · 新建 " + splitInfo.created : "")
+									+ (splitInfo.failed ? " · 失败 " + splitInfo.failed : ""))) : null,
 					/* 回收读数（第 17 批）：`data-read` / `data-unread` 是**两个不同的数** ——
 					 * 合并成一个 "已回收 N 条"会让"8 条里只读到 3 条"看起来像"8 条都读到了"。 */
 					collectInfo ? h("span", {
@@ -2274,6 +2549,86 @@ export function DirectorPage() {
 						"data-skipped": restoreInfo.skipped, "data-ok": restoreInfo.ok ? "1" : "0",
 						title: restoreInfo.reason || ""
 					}, "已恢复 " + restoreInfo.restored + "/" + restoreInfo.total) : null,
+					/* 第 41 轮 · 存储体检（`T-PLUG-048` + `T-PLUG-049`）
+					 *   `T-PLUG-048` 的病是「**没有任何入口能读到**孤儿桶」⇒ 光加日志不算治
+					 *   （用户不看日志）⇒ 必须把 `桶 N（孤儿 M）` 变成**界面上一行读数**。
+					 *   `T-PLUG-049` 的病是「桶数只增不减且无用量读数」⇒ 同一次扫描顺带给出
+					 *   **总字符数 + 超预算标记**（淘汰计划在 `logic/store-care.js`，默认不自动执行）。 */
+					h("button", {
+						key: "sh", style: { ...S.btn, height: 18, padding: "0 7px", fontSize: "calc(10.5px * var(--dp-font,1))" },
+						"data-testid": "dp-maint-health",
+						title: "扫描 localStorage 里所有 dsh.director.store.* 桶：总数 / 孤儿 / 用量。"
+							+ "**只读**，不动任何数据；孤儿 = 所属会话已不在树上（已排除归档）。",
+						onClick: runStoreHealth
+					}, "🔍 存储体检"),
+					storeHealth ? h("span", {
+						key: "shr", style: { ...S.muted }, "data-testid": "dp-store-health",
+						"data-total": storeHealth.total, "data-orphan": storeHealth.orphan,
+						"data-alive-buckets": storeHealth.alive, "data-chars": storeHealth.chars,
+						"data-orphan-chars": storeHealth.orphanChars, "data-nonstore": storeHealth.nonStore,
+						"data-unknown": storeHealth.unknown,
+						/* 🔴 `data-judged="0"` = **读不到宿主会话集 ⇒ 本轮不判孤儿**（纪律 19）。
+						 *    闸门据此断言"降级时不判孤儿"，而不是拿 0 个孤儿当"干净"。 */
+						"data-judged": storeHealth.judged ? "1" : "0",
+						"data-over-budget": storeHealth.overBudget ? "1" : "0",
+						"data-alive-sessions": storeHealth.aliveSessions == null ? "" : storeHealth.aliveSessions,
+						"data-failed": storeHealth.failed || "",
+						/* 「查看孤儿桶」的**读数通道**（鼠标悬停 + 闸门可断言同一份数据） */
+						"data-orphan-keys": (storeHealth.orphans || []).slice(0, 20).map((o) => o.key).join(","),
+						title: (storeHealth.judged ? "" : "⚠ " + storeHealth.why + " ｜ ")
+							+ "桶 " + storeHealth.total + " 个（存活 " + storeHealth.alive + " / 孤儿 " + storeHealth.orphan + "）· "
+							+ storeHealth.chars + " 字符（孤儿占 " + storeHealth.orphanChars + "）"
+							+ ((storeHealth.orphans || []).length
+								? " ｜ 孤儿桶：" + storeHealth.orphans.slice(0, 8).map((o) => o.key + "(" + o.msgs + "条/" + o.chars + "c)").join(" ")
+								: "")
+							+ (storeHealth.failed ? " ｜ 枚举失败：" + storeHealth.failed : "")
+					}, storeHealth.judged
+						/* 🔴 判不了的时候**不许印「孤儿 0」** —— 那会被读成"很干净"（纪律 19/58）。 */
+						? ("🧮 桶 " + storeHealth.total + " · 孤儿 " + storeHealth.orphan + " · " + storeHealth.chars + " 字符")
+						: ("🧮 桶 " + storeHealth.total + " · ⚠ 未判定（读不到会话集）· " + storeHealth.chars + " 字符")) : null,
+					h("button", {
+						key: "so",
+						style: {
+							...S.btn, height: 18, padding: "0 7px", fontSize: "calc(10.5px * var(--dp-font,1))",
+							borderColor: orphanArm ? "rgba(229,83,75,.85)" : "rgba(229,83,75,.45)",
+							color: "#e5534b", fontWeight: orphanArm ? 700 : undefined
+						},
+						"data-testid": "dp-maint-orphans", "data-armed": orphanArm ? "1" : "0",
+						"data-can-clean": (storeHealth && storeHealth.judged && storeHealth.orphan) ? "1" : "0",
+						title: "删除**孤儿桶**（所属会话已不在树上的消息桶）。"
+							+ "点一次进入待确认、再点一次执行；**执行前自动备份**（纪律 83），"
+							+ Math.round(CLEAR_ARM_MS / 1000) + " 秒未确认自动撤防。",
+						onClick: purgeOrphanBuckets
+					}, orphanArm ? "⚠ 确认清理？" : "🧹 清孤儿"),
+					orphanInfo ? h("span", {
+						key: "sor", style: { ...S.muted }, "data-testid": "dp-orphan-result",
+						"data-planned": orphanInfo.planned, "data-removed": orphanInfo.removed,
+						"data-kept": orphanInfo.kept, "data-ok": orphanInfo.ok ? "1" : "0",
+						"data-backup-count": orphanInfo.backupCount, "data-backup-ok": orphanInfo.backupOk ? "1" : "0",
+						title: (orphanInfo.reason || "") + (orphanInfo.backupReason ? " ｜ 备份：" + orphanInfo.backupReason : "")
+					}, "已清 " + orphanInfo.removed + "/" + orphanInfo.planned) : null,
+					h("button", {
+						key: "sr",
+						style: {
+							...S.btn, height: 18, padding: "0 7px", fontSize: "calc(10.5px * var(--dp-font,1))",
+							borderColor: (orphanBak && orphanBak.count) ? "rgba(63,185,80,.6)" : "rgba(150,150,150,.35)",
+							color: (orphanBak && orphanBak.count) ? "#3fb950" : undefined
+						},
+						"data-testid": "dp-maint-orphan-restore",
+						"data-has-backup": (orphanBak && orphanBak.count) ? "1" : "0",
+						"data-backup-count": (orphanBak && orphanBak.count) || 0,
+						title: (orphanBak && orphanBak.count)
+							? ("从「清孤儿」前自动落的备份恢复 " + orphanBak.count + " 个桶（备份于 "
+								+ new Date(orphanBak.at).toLocaleString() + "）· 已存在的 key **跳过**，可重复点")
+							: "当前没有孤儿桶备份（每次「清孤儿」前会自动备份一次）",
+						onClick: restoreOrphanBuckets
+					}, "↩ 恢复孤儿" + ((orphanBak && orphanBak.count) ? " " + orphanBak.count : "")),
+					orphanRestore ? h("span", {
+						key: "srr", style: { ...S.muted }, "data-testid": "dp-orphan-restore-result",
+						"data-restored": orphanRestore.restored, "data-total": orphanRestore.total,
+						"data-skipped": orphanRestore.skipped, "data-dropped": orphanRestore.dropped,
+						"data-failed": orphanRestore.failed
+					}, "已恢复 " + orphanRestore.restored + "/" + orphanRestore.total) : null,
 					h("button", { key: "m", style: S.btn, "data-testid": "dp-open-mindmap", onClick: () => directorLayoutStore.toggleOverlay("mindmap") }, "🧠 打开分支导图"),
 					h("button", { key: "d", style: S.btn, "data-testid": "dp-open-design", onClick: () => directorLayoutStore.toggleOverlay("design") }, "🖌 打开设计图"),
 					h("button", { key: "s", style: S.btn, "data-testid": "dp-sync", onClick: () => { refresh(); refreshBranchTree(); say("已刷新数据"); } }, "↻ 同步")
@@ -2365,8 +2720,31 @@ export function DirectorPage() {
 					h("span", { key: "lib", style: { marginLeft: "auto" }, title: "数据落在插件独立库（IndexedDB）" },
 						"库 " + ((stats && stats.name) || "—"))
 				]),
+				/* 🔴 第 40 轮 · 22 号文 **G7**：常驻「项目清单」读数。
+				 *    `data-projects` / `data-sessions` / `data-dangling` 三个量**分别**暴露给闸门
+				 *    ⇒ 断言可以做**双向对账**（读数 === 树的直接 project 级子节点数），
+				 *    而不是只断"这行存在"（后者写死数字也能过 —— 22 号文 J5 的反例）。
+				 *    逐项目行来自 `inventoryRows()`，与 `inventoryText()` **同源**（不另拼）。 */
+				h("div", {
+					key: "inv", "data-testid": "dp-proj-inventory",
+					"data-projects": String(inv.registered),
+					"data-sessions": String(inv.sessions),
+					"data-dangling": String(inv.dangling),
+					"data-archived-known": inv.archivedKnown ? "1" : "0",
+					style: { ...S.muted, marginTop: 6, paddingTop: 5, borderTop: "1px dashed var(--dp-line, #31343a)" }
+				}, [
+					h("div", { key: "t" }, "项目清单 · " + invText
+						+ (inv.archivedKnown ? "" : " · 归档集未读到 ⇒ 未判归档型悬空")),
+					/* 逐项目行：**空 ⇒ 不渲染**（不画空壳 —— 空壳会让"没有项目"与"没渲染"同形） */
+					inv.rows.length
+						? h("div", {
+							key: "r", "data-testid": "dp-proj-rows", "data-count": String(inv.rows.length),
+							style: { fontFamily: "ui-monospace,Consolas,monospace", fontSize: 10.5, marginTop: 2 }
+						}, inventoryRows(inv).join(" ｜ "))
+						: null
+				]),
 				h("div", { key: "s", style: S.src }, "数据源：" + metrics.map((m) => m.k + " ← " + m.src).join(" ｜ ")
-					+ " ｜ 库计数 ← pluginDbStats()")
+					+ " ｜ 库计数 ← pluginDbStats() ｜ 项目清单 ← loadTree() 层级树（logic/project-inventory.js）")
 			])
 		]),
 

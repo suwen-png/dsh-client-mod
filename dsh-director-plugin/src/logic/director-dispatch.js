@@ -30,12 +30,12 @@
 
 import { plan, briefOf, branchTitle, briefTitlePrefix, organize } from "./split-dimensions.js";
 import { planReuse, directorRoleOf, reuseSummary } from "./director-reuse.js";
-import { createSession, rawSessionSummaries, refreshBranchTree, sessionsAvailable, archivedSessionIds } from "./branch-tree.js";
+import { createSession, renameSession, rawSessionSummaries, refreshBranchTree, sessionsAvailable, archivedSessionIds } from "./branch-tree.js";
 import { sendToSession, findSummary, stateOfSummary } from "../bridge/session-io.js";
 import {
 	recordDispatch, refreshStates, patchDispatchItem, readDispatchLog, dispatchItemOf
 } from "../store/dispatch-log.js";
-import { recordSplits, readSplitIndex, forgetSplits } from "../store/split-index.js";
+import { recordSplits, readSplitIndex, forgetSplits, readQuotaMemo } from "../store/split-index.js";
 import { putDossier, dossierOf } from "../store/session-dossier.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -130,6 +130,32 @@ export async function dispatchBranches(text, opts = {}) {
 	}
 
 	/* ══════════════════════════════════════════════════════════════════
+	 * 🔴 第 41 轮 `T-PLUG-043`：**派发前配额预检**（零成本）
+	 *   实测（第十九轮）：模型侧 `QUOTA` 时，插件仍会把 8 条简报**全投出去**，
+	 *   8 次运行全失败 ⇒ 用户看到 8 个失败框，还得自己猜是配额问题。
+	 *   预检源 = `store/split-index.js` 的**配额备忘**（上次观测到的 `turn/end` 失败，
+	 *   由 `director-collect.js` 落盘、任何一次成功即清、30 分钟 TTL）。
+	 *   🔴 **零成本**：只读一条 localStorage 记录，**不调模型、不建会话、不投简报**。
+	 *   🔴 拦下时**必须把原因原样带出来**（`code`/`message`/`status`）——
+	 *      只说"配额不足"会让用户不知道是哪个额度、该找谁（纪律 18）。
+	 *   ⚠️ 这不是"产品坏了"：`kind:"quota"` 与 `kind:"none"` 必须**可分**（纪律 140 同族）。
+	 * ══════════════════════════════════════════════════════════════════ */
+	const quota = (() => { try { return readQuotaMemo(); } catch (e) { return null; } })();
+	if (quota) {
+		const why = "模型侧配额不足 ⇒ **未派发**（零成本预检拦下）"
+			+ (quota.message ? "：宿主上次运行失败 —— " + quota.message : "")
+			+ (quota.code ? "（" + quota.code + (quota.status ? " " + quota.status : "") + "）" : "")
+			+ " ｜ 处置：充值或换模型后再派发（备忘 " + Math.max(0, Math.round((Date.now() - quota.at) / 60000)) + " 分钟前）";
+		return {
+			ok: false, kind: "quota", quotaBlock: true, quota: quota,
+			name: p.name || "", dims: p.dims, made: 0, failed: 0,
+			confirmed: 0, unconfirmed: 0, items: [], reused: 0, created: 0,
+			organized: { lines: org.lines.length, noise: org.noiseLines.length, dup: org.droppedDup, intent: org.intent },
+			reason: why
+		};
+	}
+
+	/* ══════════════════════════════════════════════════════════════════
 	 * 🔴 第 19 批：派发前**先考虑目前存在的会话**（用户原话逐字）
 	 *    「我需要的是总监确认完需求之后先考虑目前存在的会话,然后没有才是新建会话」
 	 *
@@ -202,6 +228,9 @@ export async function dispatchBranches(text, opts = {}) {
 		let reused = false;
 		let attachFail = false;
 		let attachWhy = "";
+		/* T-PLUG-042：宿主侧改名结果（`null` = **未尝试**，只对新建会话尝试） */
+		let renameOk = null;
+		let renameWhy = "";
 		if (dec.action === "reuse" && dec.sessionId) {
 			/* **复用已有会话 ⇒ 一条新会话都不建** —— 这正是本批要治的病 */
 			sessionId = String(dec.sessionId);
@@ -215,6 +244,15 @@ export async function dispatchBranches(text, opts = {}) {
 			sessionId = String(cs.sessionId);
 			attachFail = cs.attached === false;
 			attachWhy = String(cs.reason || "");
+			/* 🔴 `T-PLUG-042`（第 41 轮）：把维度标签**写回宿主标题**。
+			 *    宿主 `sessions.rename` 确实存在（第十九轮实测更正，见 `split-index.js` 头部事实①②），
+			 *    而插件侧 `applySplitLabels` 只改**血缘树显示** ⇒ 宿主自己的会话列表 / 搜索里
+			 *    仍是默认标题 —— 那正是"一百多个会话分不清"的一半原因。
+			 *    ⚠️ **只对刚建出来的空会话**调：复用的会话可能被用户改过标题，不许动（纪律 82）。
+			 *    失败**不改**"分支已建出"这一事实，但必须**降级可见**（纪律 19）。 */
+			const rn = await renameSession(sessionId, label);
+			renameOk = rn.ok === true;
+			renameWhy = rn.ok ? "" : String(rn.why || "");
 		}
 		/* 🔴 19 号文 §3.5 **P3**（对话持续性）：简报必须在 **sessionId 定下来之后**才构造 ——
 		 *    「上一轮结论」只有**复用同一会话**时才存在；新建会话本就没有历史。
@@ -244,7 +282,8 @@ export async function dispatchBranches(text, opts = {}) {
 			prevSummaryLen: prevSummary.length,
 			directorRole: role,
 			sentOk: sent.ok === true, sentVia: String(sent.via || ""), sentReason: String(sent.reason || ""),
-			attachFail: attachFail, attachWhy: attachWhy, name: p.name
+			attachFail: attachFail, attachWhy: attachWhy, name: p.name,
+			renameOk: renameOk, renameWhy: renameWhy
 		};
 		made.push(info);
 		/* 外部挂载钩子（总监页 → 插件层级树）。钩子抛错**不许**打断派发，

@@ -22,12 +22,13 @@
  *   MC-1 P3 `briefOf` 第 7 参 `prevSummary`（含**逐字同源** / 负对照 / 向后兼容）
  *   MC-2 N6 判据 3 `dossierStats` **逐会话对账**（两条恒等式 + `missingIds` 逐条核对）
  *   MC-3 N6 判据 1/2 逐会话断言 + 两条路径**同源对账**（纪律 78）
- *   MC-4 P1 触点显式标注 + 接线（源码 + 产物两层）
+ *   MC-4 P1 触点显式标注 + 接线（**真相源** + 接线 + 反向禁副本；另加产物层）
  *   MC-5 编号唯一（本文件内置重号自检；另附一条汇总读数）
  *
  * 校准（纪律 32）：
  *   `MC_NEG=1` ⇒ `prevSummary` 被**二次格式化**（截断 10 字）⇒ 必须精确红 MC-1b
  *   `MC_NEG=2` ⇒ 不传 `aliveIds` 时也数 `missingAlive` ⇒ 必须精确红 MC-2d
+ *   `MC_NEG=3` ⇒ 从登记提示正文里**摘掉**「不写总监消息」标注 ⇒ 必须精确红 MC-4a
  *
  * 用法：node scripts/test-message-continuity.mjs ｜ 退出码 0 全绿 / 1 有红
  */
@@ -47,6 +48,8 @@ const { briefOf } = await import("../src/logic/split-dimensions.js");
 const {
 	putDossier, readDossiers, applyDossiers, dossierStats, clearDossiers, resetDossierCache
 } = await import("../src/store/session-dossier.js");
+/* 🔴 第 41 轮：G6 提示语的**唯一构造点**（`MC-4a` 必须读它，不许在消费端找副本） */
+const notes = await import("../src/logic/summary-notes.js");
 
 const NEG = String(process.env.MC_NEG || "").trim();
 
@@ -64,7 +67,8 @@ console.log("  19 号文 §3.5 N5（P1/P2/P3 · 对话持续性）+ N6（会话�
 console.log("═══════════════════════════════════════════════════════════");
 if (NEG) console.log("  [校准] MC_NEG=" + NEG + " ⇒ " + (NEG === "1"
 	? "`prevSummary` **二次格式化**（截断 10 字）坏版"
-	: "**把「不知道」当成「全缺」**坏版"));
+	: NEG === "2" ? "**把「不知道」当成「全缺」**坏版"
+	: "**从提示正文里摘掉「不写总监消息」标注**坏版"));
 
 /* ══════════════════ MC-1 · P3 跨轮上下文 ══════════════════
  * 判据（19 号文 §3.5 P3）：「第 N 轮简报含第 N−1 轮结论摘要（session-dossier 的总结），
@@ -225,9 +229,31 @@ const bundle = (() => {
 	catch (e) { return ""; }
 })();
 
-t("MC-4a", "P1：总监页「登记为流转」的提示**显式标注**了「不产生总监消息」（并把可执行替代路径写出来）",
-	srcPage.indexOf("不产生总监消息") >= 0 && srcPage.indexOf("要总监回应请用右侧「执行」") >= 0,
-	{ bytes: srcPage.length });
+/* 🔴 第 41 轮修（纪律 126 / 132）—— 本断言原来在 `DirectorPage.js` 里找**字面量副本**
+ *    （「不产生总监消息」/「要总监回应请用右侧「执行」」），而那恰是**漂移的那一份**：
+ *    真相源常量写的是「本动作**不写**总监消息」/「要总监回应请用**「执行」**」。
+ *    提示语收口到 `summary-notes.js#registerToast()`（唯一构造点）后副本消失
+ *    ⇒ 旧判据**必然红**，而它红的时候产品其实**是对的**（假红）。
+ *    修法 = 锚定「**唯一真相源 + 拼接关系 + 接线**」，并**反向禁止副本回来**。 */
+const BODY = notes.registerBody();
+const bodyBad = NEG === "3" ? BODY.replace(notes.NO_DIRECTOR_MSG_TAG, "") : BODY;
+const bodyHasTag = bodyBad.indexOf(notes.NO_DIRECTOR_MSG_TAG) >= 0;
+
+t("MC-4a", "P1：登记提示**显式标注**「不写总监消息」并给出**可执行替代路径**（读唯一真相源，不在消费端找副本）",
+	bodyHasTag
+	&& notes.NO_DIRECTOR_MSG_TAG.indexOf("总监消息") >= 0
+	&& notes.REGISTER_HINT.indexOf("执行") >= 0
+	&& bodyBad.indexOf(notes.REGISTER_HINT) >= 0
+	&& srcPage.indexOf("registerToast(") >= 0,
+	{ tag: notes.NO_DIRECTOR_MSG_TAG, hint: notes.REGISTER_HINT, wired: srcPage.indexOf("registerToast(") >= 0 });
+
+t("MC-4d", "🔴 反向（纪律 126）：`DirectorPage.js` 里**不许再有**该提示的字面量副本（两处措辞 = 漂移温床）",
+	srcPage.indexOf("不产生总监消息") < 0 && srcPage.indexOf("要总监回应请用右侧") < 0,
+	{ bytes: srcPage.length, hasOldCopy: srcPage.indexOf("不产生总监消息") >= 0 });
+
+t("CAL-MC-4a", "校准（纪律 32）：把标注从提示正文里摘掉 ⇒ `MC-4a` **必须**变红（证明它不是恒真）",
+	NEG === "3" ? bodyHasTag === false : bodyHasTag === true,
+	{ MC_NEG: NEG, bodyHasTag: bodyHasTag });
 
 t("MC-4b", "P3 接线：`director-dispatch.js` 的 `briefOf` 调用点传了**第 7 参**（`prevSummary`），且 `prevSummaryLen` 读数落地",
 	/briefOf\(dim, src, p\.name, project, org, null, prevSummary\)/.test(srcDisp)

@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：插件**自有**数据元层（独立数据库）
  * 引用：V16 诉求 7（落死：数据不丢） · 要求 1 · 17 号文 §2.2 · 17 号文 §2.3 · 17 号文 §1 · T-PLUG-009
- * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/routing.js, store/design.js, store/hierarchy.js
+ * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-inherit.js, logic/routing.js, store/design.js, store/hierarchy.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 D7（锚点契约 · 设计图冷备库）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -387,6 +387,62 @@ export function readMessageBackup() {
 		const rec = JSON.parse(raw);
 		if (!rec || !Array.isArray(rec.rows)) return null;
 		return { at: rec.at || 0, note: String(rec.note || ""), count: Number(rec.count) || rec.rows.length, bytes: raw.length, rows: rec.rows };
+	} catch (e) { return null; }
+}
+
+/* ── 第 41 轮：**孤儿桶**备份（`T-PLUG-048` 的退路）─────────────────────
+ *   与消息备份同款策略（同层、写后读回、超限如实上报），只是载荷是
+ *   「桶 key → 桶原文」的映射 —— 恢复时**按 key 写回**（不解析消息，逐字节还原）。
+ *   🔴 为什么必须逐字节还原而不是"重新序列化"：桶里可能存着**旧版格式**
+ *      （`persist.js` 有向前兼容读取），重新序列化会**升级格式**⇒ 不是还原而是改写。
+ *   故这里存 `raw` 字符串本身，恢复 = `setItem(key, raw)`。
+ */
+export const BUCKET_BACKUP_KEY = "dsh.director.buckets.backup";
+/** 上限（与消息备份同量级；留足余量给其它键） */
+export const BUCKET_BACKUP_MAX_BYTES = 3 * 1024 * 1024;
+
+/**
+ * 备份即将被删的桶。
+ * @param {Array<{key:string, raw:string|null}>} entries
+ * @param {string} note
+ * @returns {{ok:boolean, count:number, bytes:number, key:string, reason:string}}
+ */
+export function backupOrphanBuckets(entries, note) {
+	const list = (Array.isArray(entries) ? entries : []).filter((e) => e && e.key && typeof e.raw === "string");
+	let text = "";
+	try {
+		text = JSON.stringify({ v: 1, at: Date.now(), note: String(note == null ? "" : note), count: list.length, buckets: list });
+	} catch (e) {
+		return { ok: false, count: 0, bytes: 0, key: BUCKET_BACKUP_KEY, reason: "序列化失败：" + String((e && e.message) || e) };
+	}
+	const bytes = text.length;
+	if (!list.length) return { ok: true, count: 0, bytes: 0, key: BUCKET_BACKUP_KEY, reason: "本次没有可备份的桶" };
+	if (bytes > BUCKET_BACKUP_MAX_BYTES) {
+		return { ok: false, count: 0, bytes: bytes, key: BUCKET_BACKUP_KEY, reason: "超出备份上限（" + bytes + "B > " + BUCKET_BACKUP_MAX_BYTES + "B）⇒ 未写入备份" };
+	}
+	try {
+		if (typeof localStorage === "undefined") return { ok: false, count: 0, bytes: bytes, key: BUCKET_BACKUP_KEY, reason: "无 localStorage" };
+		localStorage.setItem(BUCKET_BACKUP_KEY, text);
+		const back = localStorage.getItem(BUCKET_BACKUP_KEY);
+		return { ok: back === text, count: list.length, bytes: bytes, key: BUCKET_BACKUP_KEY, reason: back === text ? "" : "写后读回不一致" };
+	} catch (e) {
+		return { ok: false, count: 0, bytes: bytes, key: BUCKET_BACKUP_KEY, reason: "写入抛错：" + String((e && e.message) || e) };
+	}
+}
+
+/** 读桶备份（无 / 损坏 ⇒ null，调用方必须能区分"没有"与"读不到"） */
+export function readBucketBackup() {
+	try {
+		if (typeof localStorage === "undefined") return null;
+		const raw = localStorage.getItem(BUCKET_BACKUP_KEY);
+		if (!raw) return null;
+		const rec = JSON.parse(raw);
+		if (!rec || !Array.isArray(rec.buckets)) return null;
+		return {
+			at: rec.at || 0, note: String(rec.note || ""),
+			count: Number(rec.count) || rec.buckets.length, bytes: raw.length,
+			buckets: rec.buckets
+		};
 	} catch (e) { return null; }
 }
 

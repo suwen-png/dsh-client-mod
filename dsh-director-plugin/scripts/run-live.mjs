@@ -30,8 +30,24 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, openSync, closeSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { PLUGIN_ROOT, listSuites, artifactStamp, srcStamp, loadLedger, saveLedger, record } from "./_test-ledger.mjs";
+import { cdpAlive, portBusy } from "./_harness.mjs";
 
-const PORT = Number(process.env.CDP_PORT || 9222);
+/* ══ 🔴 `T-PLUG-065`：端口来源必须**能自己找到活端点** ═══════════════════════════
+ * 原写法 `Number(process.env.CDP_PORT || 9222)` 有两个洞：
+ *   ① **顺序**：本仓唯一口径是 `CDP_PORT` 优先、`DSH_CDP_PORT` 兜底（**纪律 126**，顺序不可反）；
+ *   ② **硬编码起点**：目标端口被**幽灵 pid** 占着时（纪律 119），脚本只会去连一个**没人在听**的端口，
+ *      症状是整套 `INVALID`「连不上 CDP」—— **看起来像环境坏了**，与产品无关。
+ * 修法 = 复用 `_harness.mjs` 已有的 `cdpAlive`（**唯一实现**，纪律 132）在 `base..base+顺移位` 探活：
+ *   · 探到 ⇒ 用它，并如实打印"顺移 n 位"；
+ *   · 全没探到 ⇒ 保留 base 供**自启**用，但把「已探测范围」写进 INVALID 文案
+ *     ⇒ 「**没人在听**」与「**连不上**」在文案层面可分（纪律 140 同族）。 */
+const BASE_PORT = Number(process.env.CDP_PORT || process.env.DSH_CDP_PORT || 9222);
+const PORT_SHIFT_MAX = Number(process.env.CDP_SHIFT_MAX || 4);
+let PORT = BASE_PORT;
+let PORT_SHIFTED_BY = -1;
+for (let i = 0; i <= PORT_SHIFT_MAX; i++) {
+	if (await cdpAlive(BASE_PORT + i)) { PORT = BASE_PORT + i; PORT_SHIFTED_BY = i; break; }
+}
 const HARNESS_DIR = process.env.HARNESS_DIR || "D:/软件安装/DeepSeek-Harness-Desktop/DeepSeek Harness";
 const HARNESS_EXE = "DeepSeek Harness.exe";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,6 +64,9 @@ if (has("--help") || has("-h")) {
 const stamp = artifactStamp(), src = srcStamp();
 console.log("══ 真机批次 ══");
 console.log("  产物指纹: " + (stamp || "(无)") + " ｜ src 指纹: " + (src || "(无)"));
+if (PORT_SHIFTED_BY > 0) console.log("  端口: 起始 " + BASE_PORT + " **无 CDP** ⇒ 顺移 " + PORT_SHIFTED_BY + " 位到 **" + PORT + "**（T-PLUG-065）");
+else if (PORT_SHIFTED_BY === 0) console.log("  端口: " + PORT + "（CDP 已在跑）");
+else console.log("  端口: " + BASE_PORT + "–" + (BASE_PORT + PORT_SHIFT_MAX) + " **均无 CDP 端点**（尚未启动 ⇒ 待自启）");
 if (!stamp) { console.error("INVALID：产物不存在 ⇒ 先跑 node build/build.mjs"); process.exit(2); }
 if (src && stamp !== src) {
 	if (has("--plan")) {
@@ -120,7 +139,20 @@ async function pageUp() {
 	} catch (e) { return false; }
 }
 if (!(await cdpUp())) {
-	if (has("--no-start")) { console.error("INVALID：CDP 未就绪且指定了 --no-start"); process.exit(2); }
+	if (has("--no-start")) {
+		const ghost = await portBusy(BASE_PORT);
+		console.error("INVALID：CDP 未就绪（已探测 " + BASE_PORT + "–" + (BASE_PORT + PORT_SHIFT_MAX) + "，**均无端点**）");
+		console.error("  ⇒ 这不是「连不上」，是**没人在听**"
+			+ (ghost ? "；且 " + BASE_PORT + " 端口**被占用但非 CDP** ⇒ 幽灵 pid / 其它进程（纪律 119）" : "")
+			+ "。**与产品无关**（T-PLUG-065）。");
+		console.error("  处置：先 `node scripts/stop-harness.mjs`（验证式停机），再 `RH_RESTART=1` 重跑。");
+		process.exit(2);
+	}
+	/* 🔴 自启端口必须是**空位**：`base` 被幽灵 pid 占着时直接起会失败，且报错很难读 */
+	let startPort = BASE_PORT;
+	while (startPort <= BASE_PORT + PORT_SHIFT_MAX && (await portBusy(startPort))) startPort++;
+	if (startPort !== BASE_PORT) console.log("  ⚠️ " + BASE_PORT + " 已被占用（非 CDP）⇒ **自启改用 " + startPort + "**");
+	PORT = startPort;
 	console.log("  启动 Harness（只启动这一次）…");
 	const { spawn } = await import("node:child_process");
 	const child = spawn(HARNESS_EXE, ["--remote-debugging-port=" + String(PORT)], {
@@ -158,7 +190,44 @@ const results = [];
 const LOG_DIR = join(PLUGIN_ROOT, "logs");
 try { mkdirSync(LOG_DIR, { recursive: true }); } catch (e) { /* 已存在 */ }
 
+let _idx = 0;
 for (const n of suites) {
+	/* ══ 🔴 批内**起点守卫**（第 41 轮新增 · 一次连跑里救回 38 条假红）══════════════
+	 * 本批真机实测的故障链（无一条是产品缺陷，但读起来全是"产品坏了"）：
+	 *   `verify-design-studio`（第 3 套）自己红了（工作室没挂载）**且没有复原页面**
+	 *   ⇒ `verify-director-logic`（第 4 套）`DL-1a 起点：dp-root 在 DOM` 红 ⇒ **21 条级联 + INVALID**
+	 *   ⇒ `verify-flow`（第 5 套）**17 条红**。
+	 *   ⚠️ 而这两套在上一批**都是绿的** ⇒ 它们的红全是"**起点被前一套改了**"。
+	 *
+	 * 本脚本原先的分工是"**首套负责自举起点**，后续套件秒过判定" —— 这个分工里
+	 * 藏着一个未设防的假设：**每个套件跑完都把页面留在总监页上**。警告早就写在下面
+	 * （"两边会互相改页面状态，结果不可信"），但**只警告、不防御**。
+	 *
+	 * ⇒ 纪律（第 41 轮）：**一个套件的失败不许改变下一个套件的起点。**
+	 *   否则"本轮跑哪些套件、按什么顺序"也成了输入 ⇒ 与纪律 107（构建面内不许有
+	 *   随跑程变化的输入）同族，只是发生在**测试面**。
+	 *
+	 * 实现：复用**唯一实现** `_cdp-startup.mjs#ensureDirectorPage`（纪律 98，
+	 * 不新写第二份自举）。薄壳 `_ensure-page.mjs` 只做接线 + 用**退出码**表态：
+	 *   0 起点在位/已恢复 · 1 起点**无法恢复** · 2 环境不可用。
+	 * ⚠️ 恢复失败时**不静默**、也**不改写套件自己的结论** —— 只在状态行上打
+	 *    `⚠️起点未恢复`，让人一眼知道这一行**不可信**（纪律 54）。 */
+	let _guardNote = "";
+	if (_idx > 0) {
+		const g = spawnSync(process.execPath, [join(PLUGIN_ROOT, "scripts", "_ensure-page.mjs")], {
+			cwd: PLUGIN_ROOT, encoding: "utf8", timeout: 300000,
+			env: { ...process.env, CDP_PORT: String(PORT) }
+		});
+		const gOut = String((g.stdout || "") + (g.stderr || "")).split(/\r?\n/).filter((l) => l.trim());
+		const gLine = gOut.length ? gOut[gOut.length - 1].trim() : "(无输出)";
+		if (g.status === 0) console.log("  · " + gLine);
+		else {
+			_guardNote = "⚠️起点未恢复 ";
+			console.log("  ⚠️ 起点守卫 exit=" + g.status + "：" + gLine);
+			console.log("     ⇒ 本套结果**不可信**（起点被前一套改变了，不是产品坏）—— 见 logs/_ensure-page 的逐步输出");
+		}
+	}
+	_idx++;
 	const fp = join(PLUGIN_ROOT, "scripts", n);
 	const outFile = join(LOG_DIR, "_run-live-" + n.replace(/\.mjs$/, "") + ".out");
 	const t0 = Date.now();
@@ -178,7 +247,7 @@ for (const n of suites) {
 	const invalid = code === 2 || /INVALID/.test(out.slice(-600));
 	const okFlag = code === 0;
 	const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-3).join(" ｜ ");
-	console.log("  " + (okFlag ? "OK     " : invalid ? "INVALID" : "FAIL   ") + " " + n.padEnd(30)
+	console.log("  " + _guardNote + (okFlag ? "OK     " : invalid ? "INVALID" : "FAIL   ") + " " + n.padEnd(30)
 		+ " exit=" + String(code).padEnd(2) + " " + String(isPass ? "IS_PASS" : "-").padEnd(8) + Math.round((Date.now() - t0) / 1000) + "s ｜ " + tail.slice(0, 110));
 	/* 非绿时把**完整输出**的位置直接指出来（查的时候才有用；绿的时候不必占一行） */
 	if (!okFlag) console.log("          └ 完整输出：" + outFile + "（" + out.length + " B）");
@@ -186,6 +255,19 @@ for (const n of suites) {
 	if (has("--record") && !invalid) record(ledger, n, okFlag, stamp);
 }
 if (has("--record")) { saveLedger(ledger); console.log("\n  台账已更新（INVALID 的套件不记 —— 没跑成不能算通过）"); }
+
+/* 🔴 第 42 轮收尾：**清掉测试干跑键**（`sessionStorage['dsh.director.testDryRun']`）。
+ *   为什么必须在这一步做：干跑键为了**跨 reload 存活**而落进 `sessionStorage`，而它同标签
+ *   存活 ⇒ 若不清，用户**不重启宿主**直接用同一个窗口时，插件会"填了不发"（像产品坏了）。
+ *   停机（`stop-harness.mjs`）也能清，但**不能假设调用方一定停机** ⇒ 在批结束处显式清。
+ *   ⚠️ 清键失败**不当作套件失败**（这是清理，不是判据）—— 只提示一行，不改变退出码。 */
+{
+	const c = spawnSync(process.execPath, [join(PLUGIN_ROOT, "scripts", "cdp-eval.mjs"),
+		"(function(){try{var k='dsh.director.testDryRun';var had=window.sessionStorage.getItem(k);window.sessionStorage.removeItem(k);window.__dshDirectorDryRun=false;return 'cleared:'+had;}catch(e){return 'ERR:'+e.message;}})()"],
+		{ cwd: PLUGIN_ROOT, encoding: "utf8", timeout: 30000, env: { ...process.env, CDP_PORT: String(PORT) } });
+	const o = String((c.stdout || "") + (c.stderr || "")).split(/\r?\n/).filter((l) => l.trim()).slice(-1)[0] || "";
+	console.log("\n  收尾：测试干跑键清除" + (c.status === 0 ? "（" + o.trim().slice(0, 60) + "）" : "**未确认**（⚠️ 请确认已 `stop-harness.mjs` 停机）"));
+}
 
 /* ── 4. 汇总（逐套标状态，INVALID 单独一列 —— 「没跑成」与「失败」必须可分） ── */
 const okN = results.filter((r) => r.ok).length;

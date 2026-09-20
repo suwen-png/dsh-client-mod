@@ -2,7 +2,7 @@
  * 职责：「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）
  * 引用：要求 7/9
  * 上游：client-entry.js, mount.js
- * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js, logic/nav-intent.js
+ * 下游：bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js, logic/nav-intent.js, logic/host-ctx.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -37,6 +37,9 @@ import { dshLog } from "../util/debug.js";
  *    （"该缩不缩 / 点了没反应"都是这一族）。搬走后**离线闸门与真机用同一份实现**。
  *    这里 `export` 一次，保持既有 `window.__dshNavApi.navIntent` 契约逐字不变。 */
 import { navIntent } from "../logic/nav-intent.js";
+/* 🔴 第 42 轮（需求 4）：拍平候选时按 id **现取**宿主工作区当前名（`workspace.title`）——
+ *    落库的 `node.name` 是"同步那一刻"的，而宿主侧栏显示的是"此刻的"，两者可能不同。 */
+import { getHostCtx, workspaceNameById } from "../logic/host-ctx.js";
 export { navIntent };
 
 const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
@@ -58,8 +61,45 @@ export function extractRowText(target) {
 /** 拍平层级树为候选列表 */
 export function flattenTree(root) {
 	const out = [];
+	/* 🔴 第 42 轮（需求 4 的**决定性补丁**）：匹配面必须在「**点击的那一刻**」现取宿主工作区名。
+	 *
+	 *   真机取证（`logs/_r42w-ws.out`，页面**就绪后**读）：
+	 *     `ctx.workspaces.list.getSnapshot()` = `{ phase:"ready", items:[
+	 *        { id:"a11caaed-1926-4572-85c2-889744833227", title:"novels" },
+	 *        { id:"ecf0d762-de80-488c-9a48-5047e1a2fa77", title:"workspace" } ] }`
+	 *   而**冷启动早期同一个服务是 `state:"loading" / phase:"pending"`、`items` 为空**
+	 *   ⇒ `discover()` 那会儿只能回落旧名 `工作区 a11caaed`，并**把它落库**。
+	 *
+	 *   ⇒ 于是形成一条"过期事实"：`node.name` 是**落库那一刻**的名字，而宿主侧栏显示的是
+	 *     **此刻**的 `workspace.title` ⇒ 用户点侧栏行时必然失配。
+	 *     这正是用户实测「只有『未分组』的文件夹有总监弹窗，其他的也需要有」的成因 ——
+	 *     「未分组」在宿主侧是**字面量常量**（不依赖加载时机），所以唯独它能命中。
+	 *
+	 *   ⇒ 修法：拍平候选时按 **id（`ws_<rawId>` ⇒ rawId）** 现查宿主当前名，并进 `aliases`。
+	 *     ⚠️ 只**追加候选**、**不改 `name`** —— 判据仍是"精确 / 最长包含"，没有放宽（纪律 4d 负对照仍在）。
+	 *     ⚠️ 读不到（未就绪 / 无 ctx）⇒ Map 为空，行为与改动前**逐字一致**（零回归）。 */
+	let liveWs = null;
+	try { liveWs = workspaceNameById(getHostCtx()); } catch (e) { liveWs = null; }
+	const liveOf = (id) => {
+		if (!liveWs || !id) return null;
+		const s = String(id);
+		const raw = s.indexOf("ws_") === 0 ? s.slice(3) : s;
+		return liveWs.get(raw) || liveWs.get(s) || null;
+	};
 	const walk = (n, depth) => {
-		out.push({ id: n.id, name: String(n.name || ""), level: n.level, depth });
+		/* 带出 `meta.aliases` —— 侧栏可能把同一个节点显示成多种写法
+		 * （`title` / 路径 basename / 历史旧名），只认 `name` 一种会在"宿主换了显示口径"时
+		 * **静默失配**（用户实测：只有『未分组』点得出弹窗）。 */
+		const base = Array.isArray(n.meta && n.meta.aliases) ? n.meta.aliases.map(String) : [];
+		const live = liveOf(n.meta && n.meta.rawId ? n.meta.rawId : n.id);
+		const aliases = live && base.indexOf(live) < 0 ? base.concat([live]) : base;
+		out.push({
+			id: n.id,
+			name: String(n.name || ""),
+			level: n.level,
+			depth,
+			aliases
+		});
 		(n.childNodes || []).forEach((c) => walk(c, depth + 1));
 	};
 	if (root) walk(root, 0);
@@ -68,20 +108,28 @@ export function flattenTree(root) {
 
 /**
  * 名称匹配（纯函数，便于离线断言）
+ *
+ * 匹配面 = `name` ∪ `aliases`。**判据本身不放宽**：仍然是
+ * 「行文本与某个节点名有确定对应（相等，或一者完整包含另一者且取最长）」，
+ * 而不是模糊/相似度猜测 —— 放宽的只是"一个节点可能有几个合法写法"。
  * @returns {{id:string,name:string,level:string}|null}
  */
 export function matchRowToNode(rowText, nodes) {
 	const text = String(rowText || "").trim();
 	if (!text) return null;
+	const candsOf = (n) => [n.name].concat(Array.isArray(n.aliases) ? n.aliases : []).map((v) => String(v == null ? "" : v).trim());
 	// ① 精确
-	const exact = (nodes || []).find((n) => n.name === text);
+	const exact = (nodes || []).find((n) => candsOf(n).indexOf(text) >= 0);
 	if (exact) return exact;
 	// ② 包含（取最长匹配；长度 <2 的名称不参与，避免噪声）
 	let best = null;
+	let bestLen = 0;
 	for (const n of nodes || []) {
-		if (!n.name || n.name.length < 2) continue;
-		if (text.indexOf(n.name) >= 0 || n.name.indexOf(text) >= 0) {
-			if (!best || n.name.length > best.name.length) best = n;
+		for (const c of candsOf(n)) {
+			if (c.length < 2) continue;
+			if (text.indexOf(c) >= 0 || c.indexOf(text) >= 0) {
+				if (c.length > bestLen) { best = n; bestLen = c.length; }
+			}
 		}
 	}
 	return best;

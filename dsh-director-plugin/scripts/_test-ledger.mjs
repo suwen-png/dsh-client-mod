@@ -85,12 +85,14 @@ export function stripComments(s) {
 }
 
 /** @returns {{files:string[], structural:boolean, readsArtifact:boolean}} */
-export function surfaceOf(suite) {
+export function surfaceOf(suite, opts) {
 	const code = stripComments(suite.text);
 	const files = new Set();
 	let m;
-	SRC_ANY.lastIndex = 0;
-	while ((m = SRC_ANY.exec(code))) {
+	/* 🔴 `opts.srcAny` 只给 `selfCheck()` 的**植入缺陷校准**用（正常调用不传 ⇒ 零行为变化） */
+	const re = (opts && opts.srcAny) || SRC_ANY;
+	re.lastIndex = 0;
+	while ((m = re.exec(code))) {
 		const p = "src/" + m[1];
 		/* 只收真实存在的 src 文件（挡掉 `docs/xx/src/yy.js` 这类误命中） */
 		if (existsSync(join(PLUGIN_ROOT, p))) files.add(p);
@@ -138,3 +140,49 @@ export function record(l, name, ok, stamp, extra) {
 }
 
 /* ── 5. 改动集由调用方（test-plan.mjs）用 spawnSync 取，本模块不掺和进程 ── */
+
+/* ── 6. 🔴 `T-PLUG-062`：覆盖面提取器 `surfaceOf()` 的**植入缺陷校准** ──────
+ * `surfaceOf()` 是增量测试判据（"这次该跑哪些套件"）的**唯一依据**。它一旦整体失效
+ * （正则改坏 / 路径断言写错），会把**所有**套件**静默**判成「与本改动无交集」而全跳过
+ * —— **假跳过比假红危险**（22 号文 §十）。
+ * 用 5 组**已知答案**的样本校准它：①真引用必须收；②注释里的路径（假覆盖）**不许**收；
+ * ③不存在的路径**不许**收；④变量拼路径 —— 提取器要**承认抓不到**（这正是它会被按
+ * 「structural / 改动集兜底」处理的原因，不许假装命中）；⑤辅助函数式相对路径要能补前缀命中。
+ * `--inject-broken` 用一条**故意写坏**的正则重跑 ⇒ **必须变红**（否则说明校准自身没在守，纪律 32）。 */
+const SELF_CHECK_CANDIDATES = [
+	"logic/branch-tree.js", "logic/director-dispatch.js", "logic/scope-tree.js",
+	"logic/mindmap-group.js", "logic/grouping.js", "logic/nav-intent.js", "util/safe-area.js"
+];
+export function selfCheck(opts) {
+	const real = SELF_CHECK_CANDIDATES.find((p) => existsSync(join(PLUGIN_ROOT, "src", p)));
+	if (!real) return { ok: false, rows: [], why: "找不到任何示例 src 文件 ⇒ 无法校准（INVALID）" };
+	const samples = [
+		{ name: "① 真引用（代码里出现**存在的** src 路径）", text: 'import x from "../src/' + real + '";', want: true },
+		{ name: "② 坏样本·注释里的路径（假覆盖，必须剥掉）", text: "/* 见 src/" + real + " */\nconst a = 1;", want: false },
+		{ name: "③ 坏样本·**不存在**的路径（不得计入）", text: 'const p = "src/logic/__no_such_file__.js";', want: false },
+		{ name: "④ 坏样本·变量拼路径（抓不到就得**承认**，不许假装命中）", text: 'const p = "src/" + name + ".js";', want: false },
+		{ name: "⑤ 辅助函数式相对路径（应补 `src/` 前缀后命中）", text: 'read("' + real + '");', want: true }
+	];
+	const rows = samples.map((s) => {
+		const got = surfaceOf({ text: s.text }, opts).files.length > 0;
+		return { name: s.name, want: s.want, got: got, ok: got === s.want };
+	});
+	return { ok: rows.every((r) => r.ok), rows: rows, why: "" };
+}
+
+/* CLI：`node scripts/_test-ledger.mjs --self-check [--inject-broken]`（纯离线、不碰 CDP） */
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	const inject = process.argv.includes("--inject-broken");
+	console.log("══ 覆盖面提取器自检（T-PLUG-062 · 植入缺陷校准）══");
+	if (inject) console.log("  [注入缺陷] 把 `SRC_ANY` **写窄**（要求路径以 `__nm__` 开头）⇒ 真引用被漏收 ⇒ 样本 ① 必须变红");
+	/* 注入的正则：**写窄**（真引用一条也收不到）—— 这正是"假跳过"的成因形态。
+	 * ⚠️ 最初我用"去掉 `src/` 的斜杠"当缺陷，**实测在校准里不会变红**：
+	 *    Windows 的 `path.join` 会把 `src//logic/x.js` **归一**成 `src\logic\x.js` ⇒ `existsSync` 照样为真。
+	 *    ⇒ 教训：**注入的缺陷必须真能翻转结论**，否则"校准通过"是假的（纪律 108 同族）。 */
+	const r = selfCheck(inject ? { srcAny: /src\/__nm__([\w\-.\/]+\.js)/g } : null);
+	if (!r.rows.length) { console.error("  ❌ " + r.why); console.log("IS_PASS: FALSE"); process.exit(2); }
+	for (const x of r.rows) console.log("  " + (x.ok ? "✅" : "❌") + " " + x.name + "（期望 " + (x.want ? "收录" : "不收录") + " / 实得 " + (x.got ? "收录" : "不收录") + "）");
+	const pass = inject ? !r.ok : r.ok;
+	console.log("IS_PASS: " + (pass ? "TRUE" : "FALSE"));
+	process.exit(pass ? 0 : 1);
+}

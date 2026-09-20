@@ -2,7 +2,7 @@
  * 职责：插件浏览器侧入口（批次 1 已落地）
  * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
  * 上游：（无：插件入口层）
- * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
+ * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 十（7 个内核 API 逐模块 try/catch 挂载）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -151,6 +151,12 @@ import { DirectorPage, DIRECTOR_PAGE_ID } from "./components/DirectorPage.js";
  * 组件：components/ModelSeat.js（含纯函数 selectedModelOf / applyModelChoice / modelOptions） */
 import { ModelSeat, MODEL_SEAT_SLOT } from "./components/ModelSeat.js";
 import { installBranchTreeApi } from "./logic/branch-tree.js";
+/* 🔴 第 42 轮（需求 2/3/4）：
+ *   `installHostCtxApi(ctx)` —— 宿主服务读取（会话显示名 / 分支血缘 / 工作区真实名）的装载口。
+ *   `installDirectorInheritApi()` —— 总监对话**分支继承读**的契约口（真机套件可探）。
+ *   两者都**只读**：不写任何会话 / 消息 / 桶。 */
+import { installHostCtxApi } from "./logic/host-ctx.js";
+import { installDirectorInheritApi } from "./logic/director-inherit.js";
 import { MindMap, MINDMAP_ID } from "./components/MindMap.js";
 // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）──
 //    个性化：store/personalize.js（CSS 变量 + 注入样式表）→ components/PersonalizePanel.js（右上角）
@@ -162,6 +168,15 @@ import { installBranchFocusApi } from "./logic/branch-focus.js";
 import { installLineageApi } from "./logic/lineage.js";
 import { installDimBranchApi } from "./logic/dim-branch.js";
 import { installOverviewApi } from "./logic/overview.js";
+/* 🔴 第 40 轮 · 22 号文 G5/G6/G7 的两个纯函数模块 —— 必须在这里装载：
+ *    它们各自带 `installXxxApi()`（挂 `window.__dshSummaryNotes` / `window.__dshProjectInventory`），
+ *    不装载就是**定义了没人用**的死代码（本仓栽过：`verify-bundle` 不管、
+ *    `lint-undefined-symbols` 也不管"定义了没人用"⇒ 只有人肉读得出来）。
+ *    真机闸门 `verify-req22.mjs` 靠这两个口**在页内**复算读数（证明装机包就是新代码）。 */
+import { installSummaryNotesApi } from "./logic/summary-notes.js";
+import { installProjectInventoryApi } from "./logic/project-inventory.js";
+/* 🔴 第 40 轮：启动期 cookie **预算自愈**（见下方 boot 段的调用点注释） */
+import { dshCookieEnforceBudget } from "./store/cookie.js";
 import { installOrchestrateApi } from "./logic/orchestrate.js";
 import { NodeDetailPanel, NODE_DETAIL_ID } from "./components/NodeDetailPanel.js";
 /* ── 批次 16 多智能体编排内核（2026-09-14 架构补全）──
@@ -364,6 +379,9 @@ export function installBatch1(options = {}) {
 		window.__dshLineage = installLineageApi();
 		window.__dshDimBranch = installDimBranchApi();
 		window.__dshOverview = installOverviewApi();
+		/* 第 40 轮 · 22 号文 G5/G6/G7：小结行与项目清单的两个纯函数口 */
+		window.__dshSummaryNotes = installSummaryNotesApi();
+		window.__dshProjectInventory = installProjectInventoryApi();
 		window.__dshOrchestrate = installOrchestrateApi();
 		// ── 批次 16 多智能体编排内核（2026-09-14 架构补全）──
 		//    四层组织 window.__dshRoles      → 角色注册表（Agent Card · 三层渐进式披露 · 路由）
@@ -393,12 +411,35 @@ export function installBatch1(options = {}) {
 			}
 		}
 		window.__dshOrchestratorPanel = OrchestratorPanel;
+
+		/* ── 启动期 cookie **预算自愈**（第 40 轮 · 真机实测发现）────────────────────
+		 * 🔴 缺陷形态：`dshCookieEnforceBudget()` 原先**只在 `dshCookieSave()` 里**调用
+		 *    ⇒ 只要这一轮没有新的 cookie 写入，超预算的总量就会**一直保持超着**
+		 *    （实测：`dsh_director_*` = **14,627 B** / 自设预算 **12,288 B** / 宿主硬上限 16,384 B
+		 *      ⇒ 已经站在「宿主回 431 ⇒ 白屏」那条线的 **89%** 处）。
+		 * 🔴 为什么必须在**启动时**做：预算存在的**唯一理由**就是防那次白屏，而白屏正是
+		 *    【文档请求带着超标 Cookie 头】那一刻发生的 —— 等"下一次写入"再去裁，
+		 *    就已经错过了它要防的那个时点（判据的寿命不许短于它要守的故障窗口）。
+		 *    ⚠️ 诚实的边界：启动**之前**的那次文档请求本插件管不到（代码还没加载，鸡生蛋）；
+		 *       本段保证的是**启动后立刻把不变量建起来**，后续请求不再撞 431。
+		 * 🔴 只碰 cookie 这一层「同步兜底」（OPFS / 文件适配器仍是主存储），
+		 *    且 `cookieWarn()` 每次淘汰都告警（降级可以，无声不行）—— 与既有实现同一口径。 */
+		try {
+			const evicted = dshCookieEnforceBudget(null);
+			window.__dshCookieBudget = evicted;
+			if (evicted && evicted.evicted && evicted.evicted.length) {
+				dshLog("boot", "cookie 启动期自愈：淘汰 " + evicted.evicted.length + " 组最旧（"
+					+ evicted.before + " → " + evicted.total + " B，详见 store/cookie.js 的 COOKIE_TOTAL_BUDGET）");
+			}
+		} catch (e) { /* 自愈失败不阻断启动（与 dshCookieSave 的容错口径一致） */ }
 	} else {
 		// 无 DOM 环境（离线测试）：仍要建立 store，保证 import 侧行为一致
 		installPersonalizeApi();
 		installFlowApi();
 		installBranchFocusApi();
 		installOverviewApi();
+		installSummaryNotesApi();
+		installProjectInventoryApi();
 		installOrchestrateApi();
 		for (const fn of [installRolesApi, installDagApi, installVerifyApi, installDelegateApi,
 			installTaskStateApi, installCheckpointApi, installPolicyApi]) {
@@ -588,7 +629,10 @@ export function installBatch1(options = {}) {
 		 *   仍不行          → 如实报因（不许静默） */
 		channels: ["host-send", "direct", "open-then-send"],
 		attr: "data-deliver-mode",
-		modes: ["idle", "sent", "filled", "failed"],
+		/* 🔴 第 42 轮：新增 `dry-run`（测试干跑：只填进 composer、不发送 ⇒ 零模型调用）。
+		 *   它与 `filled` **必须能分开** —— 否则"测试跳过"与"真填好了等你发送"在读数上
+		 *   长得一样，用户抱怨的"测试没标注"就还是没解决（纪律 58/146）。 */
+		modes: ["idle", "sent", "filled", "failed", "dry-run"],
 		anchor: { send: "dp-send", router: "mm-ov-send", nodeSend: "nd-send" }
 	};
 	installed.branchFocus = {
@@ -844,11 +888,16 @@ export {
 	installDesignApi, DESIGN_KEY,                       // 设计图数据层
 	DesignStudio, STUDIO_ID,                            // 设计图全屏工作室
 	installBranchTreeApi, MindMap, MINDMAP_ID,          // 分支血缘导图
+	// ── 第 42 轮（需求 2/3/4）：宿主服务读取 + 总监对话分支继承 ──
+	installHostCtxApi,                                  // 会话显示名 / 血缘 / 工作区真实名
+	installDirectorInheritApi,                          // 总监对话继承读（只读上溯）
 	FloatDock, FLOATDOCK_ID,                            // 浮动按钮组（设计图 / 导图 / 总监）
 	DirectorPage, DIRECTOR_PAGE_ID,                     // 总监页（R1–R8）
 	// ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）──
 	installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID,
 	installFlowApi, flowStore, DIM, DIM_LABEL,
+	// ── 第 40 轮 · 22 号文 G5/G6/G7（小结行与项目清单 · 纯函数）──
+	installSummaryNotesApi, installProjectInventoryApi,
 	NodeDetailPanel, NODE_DETAIL_ID,
 	installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册
 	// ── 批次 12 · 第 4 批界面调整（2026-09-14）──

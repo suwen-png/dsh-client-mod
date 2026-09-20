@@ -2,7 +2,7 @@
  * 职责：「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）
  * 引用：要求 5 · 要求 3
  * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, mount.js
- * 下游：bridge/split.js, util/debug.js
+ * 下游：bridge/split.js, util/debug.js, logic/branch-tree.js, store/hierarchy.js, logic/conv-snapshot.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -33,6 +33,14 @@
 
 import { getSplitRootRect, findChatRoot, isPluginNode } from "./split.js";
 import { dshLog } from "../util/debug.js";
+/* ── 第 40 轮（需求 21-R21-05）：把「对话镜像」采集到的**最后一次我发的 + 结果**
+ *    落到该会话的**层级节点**上 —— 这是"关掉对话之后还能看见"的唯一通道。
+ *    为什么放在这里：镜像是**唯一**读得到"用户 ↔ AI 对话"的地方
+ *    （`readConversationItems()` 读当前打开会话的 DOM），而它只在**对话页签**才取数
+ *    ⇒ 只有在这里顺手落盘，才不新增 IO 通道、也不新增轮询。 */
+import { currentSessionId } from "../logic/branch-tree.js";
+import { findNodeBySessionId, saveNode, loadTree } from "../store/hierarchy.js";
+import { pickLastExchange, mergeSnapshot } from "../logic/conv-snapshot.js";
 
 const hasDom = () => typeof window !== "undefined" && typeof document !== "undefined";
 
@@ -127,11 +135,69 @@ export function readComposerText() {
 	return ed.tagName === "TEXTAREA" || ed.tagName === "INPUT" ? String(ed.value || "") : String(ed.textContent || "");
 }
 
+/* 🔴 第 42 轮（需求 1：**测试别烧额度**）────────────────────────────────
+ * 背景（用户原话）：「你测试流转的时候 没有标注测试或者其他的么，把我的额度跑没了」。
+ *
+ * 真因（取证，不是猜）：本插件的"流转"是**真实投递** —— 最终落到
+ *   `submitComposer()`（点宿主原生发送按钮）或 `sendToHost()`（直投宿主会话口），
+ * 宿主收到就**真的发起一次模型调用**。全量真机批（16 套）里有若干段会走到这里
+ *   ⇒ 每跑一轮就实打实消耗用户的模型额度，且测试产生的会话/消息**不带任何标记**，
+ *   事后无法与用户真实使用区分（"没标注测试"正是这句抱怨的由来）。
+ *
+ * 处置：加**干跑开关**（默认**关**，绝不影响正常使用）——
+ *   开启时：文本**照旧填进 composer**（界面反馈、以及"能读到输入"这类判据仍然有效），
+ *   但**不点发送、不直投宿主** ⇒ 不产生任何模型调用。
+ *   · 真机套件启动时置 `window.__dshDirectorDryRun = true`（见 `scripts/_ensure-page.mjs`）。
+ *   · 需要真发时显式置回 false（例如专门验"发送链路"的那一条）。
+ * ⚠️ 开关**只拦"发送"这一个动作**，不改任何其它行为 —— 不产生副作用、可随时回退。
+ *
+ * 🔴 第 42 轮补丁：**跨页面重载必须存活**。
+ *   真因（取证）：`verify-v17-sync.mjs` / `verify-director-logic.mjs` 等套件会在**套件内部**
+ *     执行 `location.reload()` 来复位成"干净起点"。`window.__dshDirectorDryRun` 是
+ *     **页面全局**，reload 之后**必然丢失** ⇒ 该套件 reload 之后的每一次"流转"都会
+ *     **真发**（额度就是这样被悄悄烧掉的：批内每套之前有守卫会重设，套件**内部**那段没有）。
+ *   ⇒ 加 `sessionStorage` 兜底：**同标签 reload 存活、关标签/重启宿主即清**。
+ *   为什么不用 `localStorage`：它会**长期残留**，用户在同一台机上正常使用时会"发不出去"
+ *     却查不出原因 —— 那等于把测试痕迹留进了产品。`sessionStorage` 的生命周期
+ *     恰好覆盖"一次测试会话"，与纪律 99（判据生命周期 = 数据生命周期）同族。
+ *   · 读法：**内存 → 页面全局 → sessionStorage** 三级，任一为真即干跑。
+ *   · 产品默认不受影响：正常使用不会写入该键 ⇒ `false`（回归判据见 `test-r42-req.mjs` R42-6f/6g）。
+ */
+const DRY_SS_KEY = "dsh.director.testDryRun";
+let dryRunFlag = false;
+
+/** 开/关干跑（返回生效值）。同时镜像到 `window.__dshDirectorDryRun` + `sessionStorage` 供 CDP 侧读写。 */
+export function setDryRun(v) {
+	dryRunFlag = v === true;
+	try { if (typeof window !== "undefined") window.__dshDirectorDryRun = dryRunFlag; } catch (e) { /* 无 window：仅内存态 */ }
+	try {
+		if (typeof window !== "undefined" && window.sessionStorage) {
+			if (dryRunFlag) window.sessionStorage.setItem(DRY_SS_KEY, "1");
+			else window.sessionStorage.removeItem(DRY_SS_KEY);
+		}
+	} catch (e) { /* 隐私模式/配额：降级为仅内存态，不影响主流程 */ }
+	return dryRunFlag;
+}
+
+/** 是否干跑（内存标记 **或** 页面全局标记 **或** sessionStorage 兜底 —— 后两者让真机脚本无需触碰模块内部） */
+export function isDryRun() {
+	if (dryRunFlag) return true;
+	try {
+		if (typeof window === "undefined") return false;
+		if (window.__dshDirectorDryRun === true) return true;
+		const ss = window.sessionStorage;
+		return !!(ss && ss.getItem(DRY_SS_KEY) === "1");
+	} catch (e) { return false; }
+}
+
 /**
- * 提交 composer
+ * 点原生"发送"按钮（**唯一的提交实现点**）。
  * @returns {{ok:boolean, reason?:string, via?:string}}
  */
 export function submitComposer() {
+	/* 干跑：**不点发送** ⇒ 不触发模型调用。
+	 * 返回专门的原因串 `dry-run`，让读数能区分"被有意跳过"与"真失败"（纪律 58）。 */
+	if (isDryRun()) return { ok: false, reason: "dry-run", via: "dry-run" };
 	const btn = findSendButton();
 	if (!btn) return { ok: false, reason: "send-button-not-found" };
 	if (btn.disabled) return { ok: false, reason: "send-button-disabled", via: "disabled" };
@@ -253,10 +319,39 @@ export async function deliverToChat(text, opts = {}) {
 	return r;
 }
 
+/**
+ * 投递结果 → **展示等级**（`data-deliver-mode` 的取值）。**唯一实现** —— 三个展示端共用。
+ *
+ * 🔴 为什么必须收口（第 42 轮需求 1）：`dry-run` 曾被三个展示端**各自**折成 `filled`
+ *   （写法都是 `r.mode === "sent" ? "sent" : (r.ok ? "filled" : "failed")`），
+ *   于是"**测试干跑跳过**"与"**真的填进输入框等你发送**"在读数上**完全同形**
+ *   ⇒ 用户抱怨的「你测试流转的时候没有标注测试」（额度被跑没、事后还分不出哪些是测试）
+ *      **在读数层面根本没解决**（纪律 126：同一语义两处实现 = 隐式断链；146：判据须对可见面）。
+ *
+ * @param {{ok?:boolean, mode?:string}} r `deliverToChat` / `sendToChat` 的返回值
+ * @returns {"sent"|"dry-run"|"filled"|"failed"}
+ */
+export function deliverModeOf(r) {
+	if (!r) return "failed";
+	if (r.mode === "sent") return "sent";
+	if (r.mode === "dry-run") return "dry-run";   // 有意跳过 ≠ 送达 ≠ 失败（纪律 58）
+	return r.ok ? "filled" : "failed";
+}
+
 /** `deliverToChat` 的实现体（外层包一层只为记录 `lastDeliver`） */
 async function deliverImpl(text, opts = {}) {
 	const t = String(text == null ? "" : text);
 	if (!t.trim()) return { ok: false, mode: "failed", reason: "empty-text" };
+
+	/* 🔴 干跑（需求 1）：**只填不发** —— 界面反馈照旧（用户/闸门都能看到文本进了输入框），
+	 *    但不点发送、不直投宿主 ⇒ **零模型调用**。
+	 *    返回 `mode:"dry-run"` 而不是 failed：这是**有意为之**的跳过，不是失败
+	 *    （纪律 58：没跑成 ≠ 失败，两者必须可分）。 */
+	if (isDryRun() && opts.autoSend !== false) {
+		let filled = false;
+		try { filled = Boolean(setComposerText(t)); } catch (e) { filled = false; }
+		return { ok: true, mode: "dry-run", via: "composer-only", dryRun: true, filled, opened: false };
+	}
 
 	/* ① 宿主直投：指令已由插件侧处理完，应**直接**进对话域，
 	 *    不再经 InputBar（否则会被宿主的旧版总监再处理一次，见 sendToHost 论证）。 */
@@ -525,8 +620,65 @@ export const conversationMirror = {
 	items: [], total: 0, at: 0, tab: null,
 	syncs: 0, misses: 0,
 	/** null = 上一次同步成功；否则是失败原因（可显示） */
-	reason: "尚未同步（宿主【对话】页签未激活过）"
+	reason: "尚未同步（宿主【对话】页签未激活过）",
+	/* ── 第 40 轮：落盘状态（可分辨，供面板/闸门读；不额外读盘）── */
+	/** 最后一次落盘的快照（`lastUser`/`lastResult`/`pending`） */
+	persisted: null,
+	/** null = 落盘成功；否则是**可分辨**的原因（不是"静默没落"） */
+	persistReason: "尚未落盘（宿主【对话】页签未激活过）",
+	persistAt: 0
 };
+
+/**
+ * 把「最后一次我发的 + 结果」落到**当前会话**的层级节点（异步 · **绝不抛**）
+ *
+ * 🔴 为什么必须落盘：`readConversationItems()` 读的是**当前打开会话**的 DOM，
+ *    一切离开这个会话就没了。用户要的是"点文件夹就能看见**所有**对话在做什么"
+ *    ⇒ 只能在"读到的那一刻"顺手存下来。
+ * 🔴 为什么绝不抛：本函数在 `setInterval` 回调链上；抛出去会打断轮询
+ *    （本项目已有同型事故：`startConversationMirror` 的注释记着"整条安装链被打断"）。
+ * 🔴 为什么 `lastUser` 为空就不写：空快照写进去 = 用"没有"覆盖"有"
+ *    ⇒ 用户会看到内容**间歇消失**，且无法归因。宁可不写。
+ *
+ * @param {Array} items `readConversationItems()` 的产物
+ * @returns {Promise<boolean>} 是否真的落盘
+ */
+export function persistConversationSnapshot(items) {
+	const snap = pickLastExchange(items);
+	conversationMirror.persisted = snap;
+	conversationMirror.persistAt = Date.now();
+	if (!snap.lastUser) {
+		conversationMirror.persistReason = "本次镜像里没有『我发的』消息 ⇒ 无可落（不写空快照）";
+		return Promise.resolve(false);
+	}
+	let sid = null;
+	try { sid = currentSessionId(); } catch (e) { sid = null; }
+	if (!sid) {
+		conversationMirror.persistReason = "拿不到当前会话 id（宿主 sessions 快照不可用）";
+		return Promise.resolve(false);
+	}
+	return Promise.resolve()
+		.then(() => loadTree())
+		.then((root) => {
+			const node = findNodeBySessionId(root, sid);
+			if (!node) {
+				conversationMirror.persistReason = "当前会话尚未同步到层级树（先跑一次「同步真实会话」）";
+				return false;
+			}
+			const prev = (Array.isArray(node.conversations) && node.conversations[0]) || null;
+			node.conversations = [mergeSnapshot(
+				prev || { conversationId: sid, title: node.name }, snap, Date.now()
+			)];
+			return saveNode(node).then(() => {
+				conversationMirror.persistReason = null;
+				return true;
+			});
+		})
+		.catch((e) => {
+			conversationMirror.persistReason = "落盘失败：" + ((e && e.message) || e);
+			return false;
+		});
+}
 
 /**
  * 同步一次镜像。**幂等**：在场则刷新、不在场则**保留**上一次快照并记原因。
@@ -542,6 +694,9 @@ export function syncConversationMirror(limit) {
 		conversationMirror.at = Date.now();
 		conversationMirror.syncs++;
 		conversationMirror.reason = null;
+		/* 第 40 轮（需求 21-R21-05）：读到就落盘 —— 不 await（不拖慢轮询），
+		 * 失败原因写进 `persistReason`（**不静默**，面板可显示）。 */
+		try { persistConversationSnapshot(live.items); } catch (e) { /* 绝不抛穿 */ }
 	} else {
 		conversationMirror.misses++;
 		conversationMirror.reason = live.reason;
@@ -666,7 +821,10 @@ export function installChatBridgeApi() {
 		isAgentGenerating,
 		readConversation, observeConversation,
 		/* 第 6 批需求 7：R5「对话」视图的数据源与镜像（闸门 / 探针要用，**不要改名**） */
-		readConversationItems, conversationMirror, syncConversationMirror, startConversationMirror
+		readConversationItems, conversationMirror, syncConversationMirror, startConversationMirror,
+		/* 🔴 第 42 轮（需求 1）：干跑开关 —— 真机套件启动时置 true，
+		 *    即可让所有"流转"只填不发 ⇒ **不消耗模型额度**。 */
+		setDryRun, isDryRun
 	};
 	window.__dshChatBridge = api;
 	dshLog("bridge", "chat-bridge 已安装（composer 锚点：" + COMPOSER_PLACEHOLDER + " / " + SEND_ARIA + "）");

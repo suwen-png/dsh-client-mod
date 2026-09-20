@@ -54,6 +54,9 @@ console.log("开场：源码常量 RAIL MIN=" + RAIL_MIN + " MAX=" + RAIL_MAX + 
 
 /* ── ② CDP 骨架（与 verify-v17-sync 同套路）──────────────────────────────── */
 import { PORT } from "./cdp-port.mjs";
+/* 🔴 `T-PLUG-053 ④` / `T-PLUG-070`：「派发后等到位」的**唯一实现**（`scripts/_cdp-wait.mjs`）。
+ *    本文件用它建立「栏已展开且盒宽可读」的**显式前提** —— 而不是靠固定 `sleep` 赌。 */
+import { until } from "./_cdp-wait.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0, skip = 0; const failures = [];
 function t(id, name, cond, detail) {
@@ -178,6 +181,48 @@ const textOf = (sel) => ev(`(function(){var e=document.querySelector(${JSON.stri
 /* 几何 + 命中诊断（坐标必须命中选择器自身，否则读数是"事件打空"而非"功能坏了"） */
 const geoOf = (sel) => ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;var r=e.getBoundingClientRect();if(r.width<3)return null;var x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);var hit=document.elementFromPoint(x,y);return {x:x,y:y,vw:window.innerWidth,vh:window.innerHeight,hitTid:hit?(hit.getAttribute&&hit.getAttribute('data-testid'))||hit.tagName:null,inside:!!(hit&&(hit===e||(hit.closest&&hit.closest(${JSON.stringify(sel)}))))};})()`);
 
+/** 🔴 在元素矩形内找一个**真正命中自身**的采样点（多点 · 由中心向外）。
+ *
+ * 为什么必须多点（第四十一轮批次 D 续 · 整批实测的**真因**）：
+ *   总监页的**浮动入口**（`d-open-design` 等三件套）与 **R7 缩回栏**落在**同一个 x 带**内，
+ *   而缩回栏只有 26×151 ⇒ 它的**矩形中心点**恰好压在浮动入口按钮上。
+ *   于是 `geoOf` 取到的"中心"一点下去 ——
+ *     `elementFromPoint` 命中 `d-open-design` ⇒ **每次点击都在「打开设计图工作室」**
+ *     ⇒ 大覆盖层（`ds-canvas-wrap`）盖住右侧 ⇒ 其后**所有**探针被吃掉。
+ *   读数看起来是「R7 展开功能坏了 / R7 宽度还原不了」（`V-B0`/`V-F1` 两条红），
+ *   而**产品完全正常**（纪律 58：没跑成 ≠ 失败）。
+ *   ⚠️ 我加的第一层兜底（失败后关浮层重试）**无效** —— 因为它把浮层关了、下一点又打开，
+ *      循环 3 次都是"我自己打开的"。**真因是选点，不是残留**。
+ *
+ * 口径：
+ *   · 采样顺序 = **由中心向外**（中心的判别力最强），命中自身即返回；
+ *   · 全部采样点都被别人接走 ⇒ 返回 `{none:true, hits}` —— **如实报前提缺失**，
+ *     绝不"随便挑一个点硬点"（那会把"点不到"伪装成"点了没反应"，纪律 22）；
+ *   · 若 rail 的高度内**一个自命中点都没有** ⇒ 那可能是**真的产品缺陷**
+ *     （浮动入口遮挡缩回栏 ⇒ 用户也点不到）⇒ 由调用方原样报红，本函数**不掩盖**。
+ * @returns {Promise<null|{none:true,hits:any[],tried:number}|{x:number,y:number,hitTid:string,inside:true,offset:number[],vw:number,vh:number,tried:number}>}
+ */
+const pickSelf = (sel) => ev(`(function(){
+	var e=document.querySelector(${JSON.stringify(sel)});
+	if(!e)return null;
+	var r=e.getBoundingClientRect();
+	if(r.width<3||r.height<3)return null;
+	var vw=window.innerWidth||1400, vh=window.innerHeight||900;
+	var FX=[0.5,0.5,0.5,0.3,0.7,0.15,0.85,0.5,0.5], FY=[0.5,0.25,0.75,0.5,0.5,0.5,0.5,0.12,0.88];
+	var hits=[],tried=0;
+	for(var i=0;i<FX.length;i++){
+		var x=Math.round(r.x+r.width*FX[i]), y=Math.round(r.y+r.height*FY[i]);
+		if(x<1||y<1||x>vw-2||y>vh-2) continue;          // 视口外 ⇒ 派发必丢，不做无意义采样
+		tried++;
+		var h=document.elementFromPoint(x,y);
+		var tid=h?((h.getAttribute&&h.getAttribute('data-testid'))||h.tagName):null;
+		if(h&&(h===e||(h.closest&&h.closest(${JSON.stringify(sel)})))){
+			return {x:x,y:y,hitTid:tid,inside:true,offset:[FX[i],FY[i]],vw:vw,vh:vh,tried:tried};
+		}
+		hits.push({x:x,y:y,hit:tid});
+	}
+	return {none:true,hits:hits,tried:tried,vw:vw,vh:vh};})()`);
+
 /** 命中失败 ⇒ **一次**自恢复：关浮层 → 重新滚入视口 → 重探。
  *  🔴 只恢复一次，且把 `recovered` 记进读数：恢复后仍不命中 ⇒ 说明不是浮层罩着，
  *     该报的缺陷照报（不把自恢复写成"永远绿"）。 */
@@ -185,19 +230,20 @@ async function reseat(sel) {
 	await closeOverlays();
 	await ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(e&&e.scrollIntoView)e.scrollIntoView({block:"center"});return 1;})()`);
 	await sleep(180);
-	const c = await geoOf(sel);
+	const c = await pickSelf(sel);
 	return c ? { ...c, recovered: true } : null;
 }
 
-/* 带命中诊断的真实点击 */
+/* 带命中诊断的真实点击（选点走 `pickSelf`：**必须命中自身**才点，见其注释） */
 async function clickSelProbe(sel) {
 	await ev(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(e&&e.scrollIntoView)e.scrollIntoView({block:"center"});return 1;})()`);
 	await sleep(140);
-	let c = await geoOf(sel);
+	let c = await pickSelf(sel);
 	if (!c) return { ok: false, why: "no-geo" };
-	if (!c.inside) { const c2 = await reseat(sel); if (c2) c = c2; }
+	if (c.none) { const c2 = await reseat(sel); if (c2 && !c2.none) c = c2; }
+	if (c.none) return { ok: false, why: "no-self-hit", hits: c.hits, tried: c.tried };
 	await clickXY(c.x, c.y); await sleep(240);
-	return { ok: true, hit: c.hitTid, inside: c.inside, recovered: !!c.recovered };
+	return { ok: true, hit: c.hitTid, inside: true, offset: c.offset, tried: c.tried, recovered: !!c.recovered };
 }
 
 /**
@@ -207,9 +253,10 @@ async function clickSelProbe(sel) {
  *    Chromium 的命中测试，把"坐标算错"读成"功能坏了"（纪律 22）。
  */
 async function dragBy(sel, dx, dy, steps = 6) {
-	let c = await geoOf(sel);
+	let c = await pickSelf(sel);
 	if (!c) return { ok: false, why: "no-geo" };
-	if (!c.inside) { const c2 = await reseat(sel); if (c2) c = c2; }
+	if (c.none) { const c2 = await reseat(sel); if (c2 && !c2.none) c = c2; }
+	if (c.none) return { ok: false, why: "no-self-hit", hits: c.hits, tried: c.tried };
 	/* 🔴 落点必须**钳在视口内**：本段故意"超量拖动"（如 -1200px）来验证 clamp，
 	 *    而超量后的坐标会跑到视口外 ⇒ Chromium 会丢弃该次派发，
 	 *    于是"没 clamp"与"事件根本没送到"读数完全一样（空真）⇒ 先钳位再派发。 */
@@ -287,7 +334,19 @@ async function closeOverlays() {
 	return r + (orchWas ? "+orch-closed" : "");
 }
 
-/** 采样三个点：最上层元素必须落在 `dp-root` 内；同时报出浮层锚点是否在 DOM 里 */
+/** 采样三个点：最上层元素必须落在 `dp-root` 内；同时报出浮层锚点是否在 DOM 里。
+ *
+ * 🔴 缩回栏采样**必须多点且口径唯一**（第四十一轮批次 D 续 · 整批实测更正）：
+ *   旧实现把采样点钉成 `(b.x + b.width/2, b.y + 26)`，而 B 段 `expandForMeasure`
+ *   取的是**矩形中心** `(b.x + b.width/2, b.y + b.height/2)` ——
+ *   **同一语义（"这根缩回栏到底能不能被点到"）两套口径**，实测后果：
+ *     · 这里（y = b.y+26，靠上）→ **绿**
+ *     · B 段（y = 中心）→ 中心点压在总监页**浮动入口** `d-open-design` 上 → **红**
+ *   于是一次跑出两种结论，谁都说不清产品到底行不行（纪律 126／139 的教科书形态）。
+ *   ⇒ 统一为**多点采样、任一点命中自身即可点**（与 `pickSelf` 同口径）；
+ *     反过来这也**更严**：若整条栏内一个自命中点都没有，说明浮动入口真的把缩回栏挡住了
+ *     —— 用户也点不到 ⇒ **该红就红**，不因为"换个点能点到"就放行。
+ *   ⚠️ 本注释写在模板串**之外**（模板串内不许有反引号，含注释）。 */
 const hitProbe = () => ev(`(function(){
 	var root=document.querySelector('[data-testid=dp-root]');
 	var studio=document.querySelector('[data-testid=ds-root]');
@@ -306,18 +365,29 @@ const hitProbe = () => ev(`(function(){
 	 *    但真正会被吃掉的交互点是**两栏自己的探针点** —— 只要有一个非本体
 	 *    元素（比如并发工作线的 OrchestratorPanel，锚点 dp-orch-panel）压在栏上，
 	 *    悬停/拖动就会整条打空，而"整页三点"照样全绿（实测就是这样漏过去的）。
-	 *    ⇒ 对每个已存在的缩回栏，取其探针点，最上层必须落在**该栏内部**。 */
+	 *    ⇒ 对每个已存在的缩回栏做**多点**采样（由中心向外），
+	 *      任一点命中自身即算可点；一个都没有才算前提不成立。
+	 *    ⚠️ 采样点**不许钉死**（旧写法把 y 钉成 b.y+26 ⇒ 与 B 段的中心点口径不同源，
+	 *       同一根栏这里绿、那里红 —— 详情见本函数定义之前的 JS 注释）。 */
 	var rails=[];
+	var FX=[0.5,0.5,0.5,0.3,0.7,0.15,0.85,0.5,0.5], FY=[0.5,0.25,0.75,0.5,0.5,0.5,0.5,0.12,0.88];
 	["r4","r7"].forEach(function(side){
 		var rl=document.querySelector('[data-testid=dp-rail-'+side+']');
 		if(!rl) { rails.push({side:side, present:false}); return; }
 		var b=rl.getBoundingClientRect();
 		if(b.width<3||b.height<3){ rails.push({side:side, present:true, why:"zero-size"}); return; }
-		var px=Math.round(b.x+b.width/2), py=Math.round(b.y+26);
-		var h=document.elementFromPoint(px,py);
-		var inRail=!!(h&&(h===rl||(h.closest&&h.closest('[data-testid=dp-rail-'+side+']'))));
-		rails.push({side:side, present:true, x:px, y:py, inRail:inRail,
-			hit:h?((h.getAttribute&&h.getAttribute("data-testid"))||String(h.tagName)):null});
+		var self=null, blk=[], tried=0;
+		for(var i=0;i<FX.length && !self;i++){
+			var px=Math.round(b.x+b.width*FX[i]), py=Math.round(b.y+b.height*FY[i]);
+			if(px<1||py<1||px>(window.innerWidth||1400)-2||py>(window.innerHeight||900)-2) continue;
+			tried++;
+			var h=document.elementFromPoint(px,py);
+			var hit=h?((h.getAttribute&&h.getAttribute("data-testid"))||String(h.tagName)):null;
+			if(h&&(h===rl||(h.closest&&h.closest('[data-testid=dp-rail-'+side+']')))) self={x:px,y:py};
+			else blk.push({x:px,y:py,hit:hit});
+		}
+		rails.push({side:side, present:true, inRail:!!self, selfCount:tried-blk.length, tried:tried,
+			pt:self, blocker:blk.length?blk[0]:null});
 	});
 	var railBad=rails.filter(function(o){return o.present && o.inRail!==true;});
 	return {ok:bad.length===0 && railBad.length===0, studio:!!studio, dsEls:dsEls, bad:bad,
@@ -521,22 +591,44 @@ async function forceRetract(side) {
 	for (let k = 0; k < 2; k++) {
 		if (!(await exists(panelSel))) return true;
 		await setPin(side, false);
-		const g = await ev(`(function(){var e=document.querySelector(${JSON.stringify(railSel)})||document.querySelector(${JSON.stringify(panelSel)});
-			if(!e)return null;var r=e.getBoundingClientRect();if(r.width<3||r.height<3)return null;
-			return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+26)};})()`);
-		if (!g) break;
-		mouse("mouseMoved", g.x, g.y, 0);
+		let c = await pickSelf(railSel);
+		if (c && c.none) c = await pickSelf(panelSel);   // `{none:true}` 是 truthy ⇒ 必须显式判，不能靠 `||`
+		if (!c || c.none) break;
+		mouse("mouseMoved", c.x, c.y, 0);
 		await sleep(RETRACT_MS + 260);
 		await neutral(HOVER_MS + 260);
 	}
 	return !(await exists(panelSel));
 }
+/** 浮层快照（**只读** · 用于把"进来就开着"与"我的操作之后才开"分开 —— 纪律 130 对照） */
+const overlaySnap = () => ev(`(function(){
+	var st=(window.__directorLayoutStore&&typeof window.__directorLayoutStore.getState==='function')?window.__directorLayoutStore.getState():{};
+	return {
+		ds:!!document.querySelector('[data-testid=ds-root]'), dsOpen:(st.designStudioOpen===true),
+		mm:!!document.querySelector('[data-testid=mm-root]'), mmOpen:(st.mindmapOpen===true),
+		orch:!!document.querySelector('[data-testid=dp-orch-panel]')
+	};})()`);
+
 async function openRail(side) {
 	for (let i = 0; i < 3; i++) {
 		if (await exists("[data-testid=dp-" + side + "]")) return true;
 		await setPin(side, false);           // 保证"点一下 = 开"
 		await clickSelProbe("[data-testid=dp-rail-" + side + "]");
 		await sleep(340);
+		/* 🔴 **每次点击后查一次浮层** —— 点击"打偏"最危险的后果不是没生效，而是
+		 *    **误开一个覆盖层**：它会让其后**所有**采样点的探针被吃掉，
+		 *    于是读数看起来是"产品坏了"（这条套件前半段的所有前提断言都已绿，
+		 *    却仍读到 `probeHit:"ds-canvas-wrap"` —— 覆盖层是本段自己弄出来的）。
+		 *    实测（第四十一轮批次 D 续整批）：`r7` 缩回栏的探针点被 `ds-canvas-wrap`
+		 *    （设计图工作室的画布容器 · `ds-root` 的孩子）接走，而 `r4` 正常
+		 *    —— 两侧唯一差别就是 x 位置（左 vs 右边缘）。
+		 * ⇒ 既**定案**（日志会写明是第几次点击之后出现的）又**自愈**（当场关掉，
+		 *    让后续点击回到干净前提）。⚠️ 关掉 ≠ 放松判据：仍要求两栏真在 DOM。 */
+		const ov = await overlaySnap();
+		if (ov && (ov.ds || ov.mm || ov.orch)) {
+			console.log("      [B 诊断] 🔴 openRail(" + side + ") 第 " + i + " 次点击后**出现覆盖层** ⇒ 已关闭 · " + JSON.stringify(ov));
+			await closeOverlays();
+		}
 	}
 	return await exists("[data-testid=dp-" + side + "]");
 }
@@ -556,6 +648,131 @@ async function shapeRails(openWanted) {
 	 *    500ms 后把它重新打开。必须**移开 → 等过悬停窗口**，再断言，
 	 *    否则把"刚被路过打开"读成"没关上"（跑第 1 次绿、第 2 次红的经典偶发）。 */
 	await neutral(HOVER_MS + 260);
+}
+
+/** 🔴 `T-PLUG-070`：读**真实盒宽**之前，把「两栏已展开」从*趁还开着*改成**显式锁定的前提**。
+ *
+ * 病根（同一份代码 4 次跑出 6红 / 全绿 / 2红 / 5红 的真因之一）：
+ *   A 段刚刚验过「鼠标移开 ⇒ 栏自动缩回」，而 B~E 段读几何时**鼠标位置不受控** ⇒
+ *   悬停闸门（`HOVER_MS`）随时可能把栏缩回 ⇒ `dp-r4/dp-r7` 离开 DOM ⇒
+ *   `box4/box7` 读成 `null` ⇒ `Math.abs(null − 210)` 得 **210** ⇒ 判失败，
+ *   而读数里 `store` / `dp-cols` 属性**明明都已正确** ——
+ *   这就是「**读数与状态不同源**」（纪律 23）：读起来像「拖动坏了」，其实是前提在漂。
+ *
+ * 修法（两条都不用放松判据）：
+ *   ① 用产品**自己的**「固定」能力（`setRailPinned(side,true)`）锁住展开态 ——
+ *      它**不改变任何被断言的量**（宽度 / 无缝拼接 / 清单内容都与钉住无关），
+ *      只是一个"栏不会自己跑掉"的前提；
+ *   ② 用 `until` 轮询到**读数**确认「两栏在 DOM 且盒宽是数字」才继续 ——
+ *      **不是**发完指令就认为好了（纪律 133：起点建立 ≠ 页面就绪）。
+ *
+ * ⚠️ 钉住是**临时**的：收尾由 F 段按 `ORIG.pin` 还原（已有逻辑，不动）。
+ * ⚠️ `openRail()` 内部会把 pin 设 false（保证"点一下 = 开"）⇒ 必须**先开栏、后钉住**，顺序不可反。
+ * @returns {Promise<{ok:boolean, val:any, waited:number, rounds:number}>} 超时 ⇒ `ok:false`（**不抛**）
+ */
+/** 🔴 展开失败的**唯一诊断读法** —— 不改判据，只让失败自解释。
+ *
+ * 为什么必须有（第四十一轮批次 D 续 · 整批实测）：批跑里只留下这一行读数 ——
+ *   `[B 诊断] 展开前提未在预算内成立：{"open4":true,"open7":false,"box4":200,"box7":null,"pin":{"r4":true,"r7":true}}`
+ * 读起来像「产品没实现 R7 展开」，而真因可能是
+ *   ① `dp-rail-r7`（缩回栏）压根不在 DOM，或 ② 在但探针点被别的东西接走
+ *   —— **三者修法完全不同**（查产品 / 查渲染 / 查覆盖层），只报 `open7:false` 等于没归因
+ *   （纪律 131 家族：捕获了却只留一行结论 = 悬案成因）。
+ * ⚠️ `pin` 是**旁证不是结论**：`setRailPinned(true)` 只保证"不缩回"，**不会把关着的栏打开**
+ *   ⇒ `pin.r7 === true` 且 `open7 === false` 是**自洽的**，不能据此说产品坏了。
+ *
+ * 🔴 覆盖层字段（`dsRootInDom` / `dsOpen` / `mmRootInDom` / `orchInDom`）**必须一起报**：
+ *   批实测只留下 `probeHit:"ds-canvas-wrap"`（设计图工作室的画布容器，`ds-root` 的孩子）
+ *   —— 知道"**谁**吃掉了命中"还不够，还要知道"**它是不是本段自己的操作打开的**"。
+ *   ⚠️ 这两问的修法完全不同 ⇒ 与 `overlaySnap` 的**前后对照**配套才有归因力（纪律 130）。
+ * ⚠️ 本注释**写在模板串之外**是刻意的：模板串**内部**不许出现反引号（**含注释**）——
+ *   反引号会提前结束外层模板串，把剩余的"字符串内容"变成真代码（本仓既有纪律）。
+ *   本轮我就把本段注释一度写在模板串内、并用了反引号包裹 `ds-root` ⇒ `lint-syntax` 精确报
+ *   `SyntaxError: missing ) after argument list`（**闸门在真机之前拦住，零成本**）。 */
+const railDiag = (side) => ev(`(function(){
+	var rail=document.querySelector('[data-testid=dp-rail-${side}]');
+	var panel=document.querySelector('[data-testid=dp-${side}]');
+	var root=document.querySelector('[data-testid=dp-root]');
+	var st=(window.__directorLayoutStore&&typeof window.__directorLayoutStore.getState==='function')?window.__directorLayoutStore.getState():{};
+	var rb=rail?rail.getBoundingClientRect():null;
+	var hx=rb?Math.round(rb.x+rb.width/2):null, hy=rb?Math.round(rb.y+rb.height/2):null;
+	var h=(hx===null)?null:document.elementFromPoint(hx,hy);
+	return {
+		railInDom:!!rail, panelInDom:!!panel, rootInDom:!!root,
+		railBox:rb?[Math.round(rb.width),Math.round(rb.height)]:null,
+		probe:[hx,hy],
+		probeHit:h?(h.getAttribute&&h.getAttribute('data-testid'))||h.tagName:null,
+		probeInsideRail:!!(h&&rail&&rail.contains(h)),
+		dsRootInDom:!!document.querySelector('[data-testid=ds-root]'),
+		dsOpen:(st.designStudioOpen===true),
+		mmRootInDom:!!document.querySelector('[data-testid=mm-root]'),
+		orchInDom:!!document.querySelector('[data-testid=dp-orch-panel]'),
+		pin:(st.railPinned||{})['${side}'], w:(st.railWidth||{})['${side}']
+	};})()`);
+
+/** 展开的**第二条路径**：真实悬停（产品自己的 `railEnter → 过 HOVER_MS → 展开`）。
+ *
+ * 和点击路径**不是替代关系**，是互补 —— 点击撞的是 `railTogglePin` 的**奇偶翻转**
+ * （`openRail` 已用"先钉到必然为 false 的一侧"化解），而悬停撞的是**覆盖层/焦点**。
+ * A 段 `V-A3` 实测已证"鼠标停靠 ≥ HOVER_MS ⇒ 栏真的展开"，故这条路径在本仓是**已验证的**。
+ * ⚠️ 不放松任何判据：仍然要求"两栏都在 DOM 且盒宽可读"（`until` 读法不变）。 */
+async function openRailByHover(side) {
+	const c = await pickSelf("[data-testid=dp-rail-" + side + "]");
+	if (!c || c.none) {
+		if (c && c.none) console.log("      [B 诊断] `dp-rail-" + side + "` 高度内**无自命中采样点**（被浮动入口等接走）· hits="
+			+ JSON.stringify(c.hits));
+		return false;
+	}
+	await setPin(side, false);
+	mouse("mouseMoved", c.x, c.y, 0);
+	await sleep(HOVER_MS + 420);
+	return await exists("[data-testid=dp-" + side + "]");
+}
+
+async function expandForMeasure(tag) {
+	/* 🔴 **进入本段时的浮层快照**（只读）—— 与下面的失败诊断**成对**才有意义：
+	 *    若进来是 `ds:false` 而失败时 `dsRootInDom:true` ⇒ 是**本段自己的操作**把它打开的
+	 *    （而不是"前一段遗留"）；这两者的修法完全不同（纪律 130：归因要过对照）。 */
+	console.log("      [B 诊断] 展开前浮层：" + JSON.stringify(await overlaySnap()));
+	for (const side of ["r4", "r7"]) {
+		if (await exists("[data-testid=dp-" + side + "]")) continue;
+		if (await openRail(side)) continue;
+		/* 第一次失败 ⇒ **再关一次浮层**后重试。与 `clickSelProbe` 的 `reseat` 同一思路：
+		 * 把前提**重新建立一次**，**不放松任何判据**（仍是"两栏都在 DOM 且盒宽可读"）。 */
+		console.log("      [B 诊断] `" + side + "` 点击路径未展开（openRail=false）· 关浮层后重试…");
+		await closeOverlays();
+		if (await openRail(side)) {
+			console.log("      [B 诊断] `" + side + "` 关浮层后**已展开** ⇒ 真因 = 覆盖层残留（不是产品缺陷）· 浮层="
+				+ JSON.stringify(await overlaySnap()));
+			continue;
+		}
+		console.log("      [B 诊断] `" + side + "` 关浮层后仍失败 · 改走真实悬停…");
+		if (await openRailByHover(side)) {
+			console.log("      [B 诊断] `" + side + "` 悬停路径**已展开** ⇒ 点击路径是缺口（前提建立问题），不是产品缺陷");
+			continue;
+		}
+		console.log("      [B 诊断] `" + side + "` 两条路径都未展开：" + JSON.stringify(await railDiag(side)));
+	}
+	await ev(`(function(){var s=window.__directorLayoutStore;
+		s.setRailPinned('r4',true);s.setRailPinned('r7',true);return 1;})()`);
+	const r = await until(async () => {
+		const s = await readRails();
+		return {
+			open4: !!(s && s.open4), open7: !!(s && s.open7),
+			box4: s ? s.box4 : null, box7: s ? s.box7 : null, pin: s ? s.pin : null
+		};
+	}, (v) => v.open4 && v.open7 && typeof v.box4 === "number" && typeof v.box7 === "number",
+		{ tag, budgetMs: 4000, stepMs: 120 });
+	/* 到点仍未成立 ⇒ 把"谁没开、为什么"一次打全（下游 V-B0 只报 `open7:false` 太粗）。 */
+	if (!r.ok) {
+		for (const side of ["r4", "r7"]) {
+			if (!(await exists("[data-testid=dp-" + side + "]"))) {
+				console.log("      [B 诊断] `" + side + "` 在 " + r.waited + "ms 就绪窗口内仍未展开："
+					+ JSON.stringify(await railDiag(side)));
+			}
+		}
+	}
+	return r;
 }
 
 const snap = await readRails();
@@ -586,7 +803,7 @@ t("V-S0b", "起点自证：store 宽度确实等于默认值（不赌 establishS
  *    ⇒ 其下真拖/真点**整体打空**，读数与"产品坏了"完全一样（本次时红时绿的真因）。
  *    ⇒ 必须先证明"起点没有覆盖层"，再谈后面每一条鼠标断言（纪律 23）。 */
 const hp0 = await hitProbe();
-t("V-S3", "🔴 起点**覆盖层前提**：① `dp-root` 内三个采样点最上层都落在 `dp-root` 内；② **两栏缩回栏的探针点必须命中该栏自身**；③ 浮层根 `ds-root` 与 `dp-orch-panel` 都不在 DOM —— 否则其下所有点击/拖动/悬停被吃掉，读数伪装成产品缺陷",
+t("V-S3", "🔴 起点**覆盖层前提**：① `dp-root` 内三个采样点最上层都落在 `dp-root` 内；② **两栏缩回栏内至少有一个自命中采样点**（多点采样 · 与 B 段 `pickSelf` **同口径**；一个都没有 ⇒ 可能是浮动入口真的挡住了栏）；③ 浮层根 `ds-root` 与 `dp-orch-panel` 都不在 DOM —— 否则其下所有点击/拖动/悬停被吃掉，读数伪装成产品缺陷",
 	!!hp0 && hp0.ok === true && hp0.studio === false && hp0.orch === false, hp0);
 t("V-S4", "🔴 起点**闲态前提**：总监页自报 `data-busy=0` 且 `data-ledger-ok=1` 并**连续两次读数一致**（挂载 ≠ 闲下来；未闲时 500ms 悬停闸门会被排挤 ⇒ V-A3 假红）",
 	idleOk === true, { idleOk: idleOk, 轮次: idleRounds, diag: idleDiag });
@@ -664,8 +881,14 @@ if (railBox && Number.isFinite(hv.hoverMs)) {
 		tries = k;
 		armed = await ev(ARM);
 		hitInfo = await ev(HIT);
-		/* 前提不成立（命中不是缩回栏）⇒ 换几何重来，别把"覆盖层/几何变了"读成"没送达" */
-		const pt = (hitInfo && hitInfo.inRail) ? hitInfo : null;
+		/* 前提不成立（命中不是缩回栏）⇒ 换几何重来，别把"覆盖层/几何变了"读成"没送达"。
+		 * 🔴 选点改走 `pickSelf`（**必须命中自身**）—— 旧写法把 y **钉成 `r.y+26`**，
+		 *    而总监页的浮动入口（`d-open-design` 三件套）与缩回栏同处一条 x 带
+		 *    ⇒ 若浮动入口正好压在那个 y 上，`inRail` 恒为 false
+		 *    ⇒ `V-A3p` 被读成「悬停事件没送达」（**假红**，把环境说成输入通道坏）。
+		 *    `hitInfo` 仍保留作读数（它回答的是"那个固定点上站着谁"，对归因有用）。 */
+		const self = await pickSelf("[data-testid=dp-rail-r4]");
+		const pt = (self && !self.none) ? self : null;
 		if (!pt) { await sleep(500); continue; }
 		const rst = await ev(`(function(){var e=document.querySelector('[data-testid=dp-r5]');if(!e)return null;var r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+Math.round(r.height/2))};})()`);
 		if (rst) { mouse("mouseMoved", rst.x, rst.y, 0); await sleep(240); }
@@ -725,12 +948,14 @@ const hpB = await hitProbe();
 t("V-B0b", "B 段前置：鼠标段开始前**无覆盖层**（浮层会吃掉真拖 —— 本次时红时绿的真因）",
 	!!hpB && hpB.ok === true && hpB.studio === false, hpB);
 /* 用 `openRail`（确定性）而不是直接点缩回栏：直接点会撞上 `railTogglePin` 的奇偶翻转 */
-const p1 = await openRail("r4");
-const p2 = await openRail("r7");
-if (!p1 || !p2) console.log("      [B 诊断] 展开结果：r4=" + p1 + " r7=" + p2);
+/* 🔴 `T-PLUG-070`：本段起，**所有盒宽读数**都在"两栏被显式锁定展开"的前提下进行 ——
+ *    否则悬停闸门会在两次读数之间把栏缩回，`box` 读成 `null`（读数与状态不同源）。 */
+const preB = await expandForMeasure("B 段读盒宽前提（T-PLUG-070）");
+if (!preB.ok) console.log("      [B 诊断] 展开前提未在预算内成立：" + JSON.stringify(preB.val));
 const mid = await readRails();
 const bOpen = !!(mid && mid.open4 && mid.open7);
-t("V-B0", "前置：R4 与 R7 均已展开（两栏真实在 DOM）", bOpen, mid && { open4: mid.open4, open7: mid.open7 });
+t("V-B0", "前置：R4 与 R7 均已展开（两栏真实在 DOM；且已用产品「固定」锁住展开态 ⇒ 盒宽读数不再受悬停缩回干扰）",
+	bOpen, mid && { open4: mid.open4, open7: mid.open7, 展开前提: preB.ok, 等待ms: preB.waited, pin: mid.pin });
 if (bOpen) {
 	t("V-B1", "展开宽度 = 源码默认值（r4=" + DEF_M4 + " r7=" + DEF_M7 + "）且 **store / DOM 属性 / 真实盒宽 三面同源**",
 		mid.store.r4 === DEF_M4 && mid.attr4 === DEF_M4 && Math.abs(mid.box4 - DEF_M4) <= 1
@@ -939,7 +1164,10 @@ console.log("\n══ F. 收尾复原（闸门不许成为产品的破坏者）�
  *    ⇒ `box4/box7` 读成 `null` ⇒ `Math.abs(null − 210)` 得 210 直接判失败，
  *    而读数里 store 明明已经正确 —— 是"判据把缩回当成了没还原"。
  *    ⇒ ① 先只还原**宽度**，趁栏还开着读**三面**（store / DOM 属性 / 真实盒宽）；
- *       ② 再还原**钉住态**并让栏按用户的偏好收尾。 */
+ *       ② 再还原**钉住态**并让栏按用户的偏好收尾。
+ * 🔴 `T-PLUG-070` 追加：① 里的"趁栏还开着"**不再靠运气** —— 自 B 段起两栏就被
+ *    `expandForMeasure()` 用产品「固定」锁住（悬停缩回不再发生），故此处读三面是**确定可读**的。
+ *    这样 V-F1 的红只可能来自"宽度真的没还原"，不会再来自"栏恰好缩回了"。 */
 await ev(`(function(){var s=window.__directorLayoutStore;s.setRailWidth('r4',${ORIG.r4});s.setRailWidth('r7',${ORIG.r7});return 1;})()`);
 await sleep(260);
 const finW = await readRails();

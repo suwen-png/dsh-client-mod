@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：自动同步：让**每一个**对话 / 文件夹都拥有总监
  * 引用：—
- * 上游：client-entry.js, components/DirectorHierarchy.js
- * 下游：store/hierarchy.js, logic/discover.js, store/idb.js, util/debug.js, util/bus.js
+ * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js
+ * 下游：store/hierarchy.js, logic/discover.js, logic/host-ctx.js, store/idb.js, store/persist.js, logic/conv-snapshot.js, util/debug.js, util/bus.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -29,7 +29,12 @@ import {
 	ensureGlobal, listAllNodes
 } from "../store/hierarchy.js";
 import { discover, workspaceNodeId, sessionNodeId, shortId, sessionLabel } from "./discover.js";
+/* 🔴 第 42 轮（需求 2/3）：会话**显示文本**与**分支父级**一律从唯一实现取
+ *    （宿主 `ctx.sessions` 快照：`displayTitle` / `parentId`）。 */
+import { sessionIndex, sessionDisplayName, sessionParentId } from "./host-ctx.js";
 import { idbLoad } from "../store/idb.js";
+import { directorStorageKey } from "../store/persist.js";
+import { mergeSnapshot } from "./conv-snapshot.js";
 import { dshLog } from "../util/debug.js";
 import { emitHierarchyChange } from "../util/bus.js";
 
@@ -71,17 +76,21 @@ export async function syncFromSource(opts = {}) {
 
 	for (const ws of disc.workspaces) {
 		const id = ws.__nodeId;
+		/* 🔴 第 42 轮（需求 4）：别名（侧栏可能显示的其它写法）随节点落库 ——
+		 *    `bridge/nav-hook.js` 只读得到**点击到的行文本**，没有别名就只能猜一种写法。 */
+		const wsMeta = {
+			sourceId: ws.rawId ?? ws.id, source: "workspace", autoName: true, order: ws.__order,
+			aliases: Array.isArray(ws.aliases) ? ws.aliases.slice() : [],
+			nameSource: ws.nameSource || "legacy"
+		};
 		let node = await getNode(id);
 		if (!node) {
-			node = makeNode({
-				id, name: ws.name, level: LEVEL.PROJECT, parentId: GLOBAL_NODE_ID,
-				meta: { sourceId: ws.rawId ?? ws.id, source: "workspace", autoName: true, order: ws.__order }
-			});
+			node = makeNode({ id, name: ws.name, level: LEVEL.PROJECT, parentId: GLOBAL_NODE_ID, meta: wsMeta });
 			stats.created++;
 		} else {
 			if (node.meta && node.meta.autoName !== false && node.name !== ws.name) node.name = ws.name;
 			node.parentId = GLOBAL_NODE_ID;
-			node.meta = { ...(node.meta || {}), sourceId: ws.rawId ?? ws.id, source: "workspace", order: ws.__order };
+			node.meta = { ...(node.meta || {}), ...wsMeta };
 			stats.updated++;
 		}
 		await saveNode(node);
@@ -99,6 +108,10 @@ export async function syncFromSource(opts = {}) {
 	}
 
 	let sIdx = 0;
+	/* 🔴 第 42 轮：**循环外**建一次会话快照索引（避免循环内 N 次全量扫描）。
+	 *    `sessionIndex()` 读不到（未注入 / 版本差异）⇒ 空 Map ⇒ 全部退回 `sessionLabel`，
+	 *    行为与改动前一致（降级可见、不假装成功）。 */
+	const sessMeta = sessionIndex();
 	for (const s of disc.sessions) {
 		const id = s.nodeId || sessionNodeId(s.id);
 		const parentId = workspaceNodeId(s.workspaceId);
@@ -107,41 +120,80 @@ export async function syncFromSource(opts = {}) {
 		const realParent = parentOk ? parentId : GLOBAL_NODE_ID;
 		if (!parentOk) rootChildren.add(id);
 
-		// 会话消息统计（宿主 directorStores 有则取，无则为 0；失败静默）
+		/* ── 会话快照 ──────────────────────────────────────────────────────
+		 * 🔴 2026-09-18（第 40 轮）**真缺陷修复**：原实现读 `idbLoad(s.id)`
+		 *    —— **裸会话 id**；而写入侧（`store/persist.js#save`）用的是
+		 *    `directorStorageKey(sid)` = `"dsh.director.store." + safeDirectorKey(sid)`。
+		 *    ⇒ **两端键不同源** ⇒ 读取**必然 miss** ⇒ `store === null`
+		 *      ⇒ `messageCount / lastMessage` **恒 0 / 空**，**且不抛、不告警（静默）**。
+		 *    用户可见后果：需求 5 的「对话概况」**恒显示"未采集"**
+		 *      ⇒ 用户实测判定"我上面描述的要求并没有完成，差很多"。
+		 *    修法 = **复用同一键构造**（`directorStorageKey`），不另写第二份（纪律 126）。
+		 *
+		 * ⚠️ 口径：这里读到的是**总监侧**消息（`state.messages`），**不是**用户与 AI 的对话
+		 *    ⇒ UI 必须标「总监：」，**不许**标成「最后：」（两件事不同源，混标即误导）。
+		 *    「最后一个**我发的** + 结果」由**对话镜像**采集，经 `mergeSnapshot` 落到本节点。
+		 */
 		let messageCount = 0;
 		let lastMessage = "";
+		let storeHit = false;
 		try {
-			const store = await idbLoad(s.id);
+			const store = await idbLoad(directorStorageKey(s.id));
 			if (store && Array.isArray(store.messages)) {
+				storeHit = true;
 				messageCount = store.messages.length;
 				const last = store.messages[store.messages.length - 1];
-				if (last) lastMessage = String(last.content || last.text || "").slice(0, 200);
+				if (last) {
+					const raw = last.text != null ? last.text : (last.content == null ? "" : last.content);
+					lastMessage = String(raw).slice(0, 200);
+				}
 			}
-		} catch (e) { /* 无该会话的本地 store，属正常 */ }
+		} catch (e) { /* 无该会话的本地 store，属正常（不是缺陷） */ }
+		if (storeHit) stats.snapshotHit = (stats.snapshotHit || 0) + 1;
 
+		/* 🔴 第 42 轮（需求 2）：「在总监中的文档选择 现在里面的是会话ID ⇒ 改成会话文本」。
+		 *    会话节点名原先**恒为** `sessionLabel(sessionId)`（= `"会话 " + id 前 8 位`）——
+		 *    那是**兜底标签**，不是会话文本 ⇒ 总监弹窗的层级下拉（`d-level`）、面包屑、
+		 *    导图行显示的全是 id。宿主自己显示的是 `displayTitle`
+		 *    （取证 `dsh-client-ui-workspace/lib/client.js` 的 `sessionTitle()`）
+		 *    ⇒ 这里取**同一个量**；只有宿主读不到时才退回 `sessionLabel`。
+		 *    ⚠️ 同时落 `meta.parentSessionId`（宿主 `parentId` = **分支血缘**）——
+		 *       需求 3「同一分支迁移出来的总监对话要一样」靠它上溯。 */
+		const realTitle = sessionDisplayName(s.id, sessionLabel, sessMeta);
+		const hostParent = sessionParentId(s.id) || "";
 		let node = await getNode(id);
 		if (!node) {
 			node = makeNode({
 				id,
-				name: sessionLabel(s.id),
+				name: realTitle,
 				level: LEVEL.SESSION,
 				parentId: realParent,
-				meta: { sourceId: s.id, source: "session", autoName: true, order: sIdx }
+				meta: { sourceId: s.id, source: "session", autoName: true, order: sIdx, parentSessionId: hostParent }
 			});
 			stats.created++;
 		} else {
-			if (node.meta && node.meta.autoName !== false) node.name = sessionLabel(s.id);
+			if (node.meta && node.meta.autoName !== false) node.name = realTitle;
 			node.parentId = realParent;
-			node.meta = { ...(node.meta || {}), sourceId: s.id, source: "session", order: sIdx };
+			node.meta = { ...(node.meta || {}), sourceId: s.id, source: "session", order: sIdx, parentSessionId: hostParent };
 			stats.updated++;
 		}
-		node.conversations = [{
+		/* 🔴 **接住**对话镜像写入的快照（`lastUser`/`lastResult`/`snapAt`）——
+		 *    本函数每轮都**整体重写** `node.conversations`；若不接住，
+		 *    用户点开对话刚采集到的东西会被**下一次同步静默抹掉**
+		 *    （症状："刚点开有内容，过一会儿又变未采集" ⇒ 无法归因）。 */
+		const prevConv = (Array.isArray(node.conversations) && node.conversations[0]) || null;
+		node.conversations = [mergeSnapshot({
 			conversationId: s.id,
 			title: node.name,
 			lastMessage,
 			lastTime: s.updatedAt || 0,
 			messageCount
-		}];
+		}, prevConv ? {
+			lastUser: prevConv.lastUser,
+			lastResult: prevConv.lastResult,
+			pending: prevConv.lastPending,
+			count: prevConv.messageCount
+		} : null, prevConv ? prevConv.snapAt : 0)];
 		node.meta.orphaned = false;
 		await saveNode(node);
 		stats.sessions++;

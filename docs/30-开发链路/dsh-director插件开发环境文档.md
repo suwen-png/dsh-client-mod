@@ -1,5 +1,14 @@
 # dsh-director 插件开发环境文档
 
+> 🔴 **本文件整体已过时（`T-DOC-001 B4` 收口 · 2026-09-18 · 加横幅、不回改）**
+> 本文描述的是**旧插件工程形态**：根目录 `D:\hermes-data\dsh-director`（**该目录不存在**）、
+> `src/client/components/director/*.tsx`（TS 源码 + esbuild）。
+> **现行工程形态完全不同**：根 = **`D:\hermes-data\dsh-client-mod\dsh-director-plugin\`**，
+> 源码 = **`src/**`（JS，自研 `h()`，非 JSX/TS）**，产物 = **`lib/client.js`（单文件 bundle）**，
+> 构建 = `build/build.mjs`，装机 = `plugin-install.mjs --apply`。
+> ⇒ 🔴 **不要按本文的目录结构或构建方式操作**；现行全链见仓库根 **`AGENTS.md`** 与锚点 §四。
+> 本文仅作**历史环境考古**保留（当时的 junction / esbuild / 热更手法有一条演进线索）。
+
 **创建时间**: 2026-09-06
 **适用项目**: dsh-client-mod / dsh-director
 **文档版本**: V1.0

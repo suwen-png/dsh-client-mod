@@ -507,8 +507,12 @@ check("window.__dshDirectorBatch15 === installed（别名一致，不是另一�
 	windowStub.__dshDirectorBatch15 === windowStub.__dshDirectorBatch1 ? "同一引用" : "引用不同");
 check("installed.deliver 三通道且首选项 = host-send（宿主直投，避开 InputBar 的总监劫持）",
 	(() => { const d = applied?.deliver || {};
+		/* 🔴 第 42 轮：`modes` 由 4 项（idle/sent/filled/failed）增为 5 项 —— 多了 `dry-run`
+		 *   （测试干跑：只填不发，需求 1）。判据顺带**断言内容**而不只看条数，
+		 *   免得将来又塞一个别的进去也照样绿。 */
 		return Array.isArray(d.channels) && d.channels.length === 3 && d.channels[0] === "host-send"
-		&& d.attr === "data-deliver-mode" && Array.isArray(d.modes) && d.modes.length === 4; })(),
+		&& d.attr === "data-deliver-mode" && Array.isArray(d.modes) && d.modes.length === 5
+		&& d.modes.indexOf("dry-run") >= 0 && d.modes.indexOf("sent") >= 0; })(),
 	JSON.stringify(applied?.deliver));
 check("installed.branchFocus / overview / orchestrate 三组契约齐备",
 	!!applied?.branchFocus?.bar && Array.isArray(applied?.overview?.columns)

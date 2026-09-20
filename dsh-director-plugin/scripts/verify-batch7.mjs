@@ -78,7 +78,14 @@ ok("无数据源时返回 source=none 且不抛错", has(S.discover, /source:\s*
 ok("🔴 sessionLabel 剥离 session- 前缀（否则所有会话同名）",
 	has(S.discover, /export function sessionLabel/) && has(S.discover, /replace\(\/\^session-\/, ""\)/),
 	"实测：直接截断前8位会得到常量前缀，8 个会话全部同名");
-ok("sync 用 sessionLabel 命名会话节点", has(S.sync, /name: sessionLabel\(s\.id\)/));
+/* 🔴 第 42 轮（需求 2）**口径已变** —— 原断言是 `name: sessionLabel(s.id)`。
+ *   那是"用截断的**会话 id** 当会话名"，用户实测症状就是总监里的会话选择器显示 id 而不是
+ *   会话文本（原话：「在总监中的文档选择 现在里面的是会话ID ⇒ 改成会话文本」）。
+ *   宿主自己显示的是 `displayTitle`（取证 `dsh-client-ui-workspace` 的 `sessionTitle()`）
+ *   ⇒ 新口径 = **取同一个量**，`sessionLabel` 降级为兜底。 */
+ok("🔴 会话节点名 = 宿主会话文本 displayTitle（sessionLabel 仅兜底）",
+	has(S.sync, /name: realTitle/) && has(S.sync, /sessionDisplayName\(s\.id, sessionLabel/),
+	"第 42 轮需求 2：显示会话文本，不再显示截断的会话 id");
 ok("workspace=文件夹级 / session=对话级（语义注释留痕）",
 	has(S.discover, /workspace\s*=\s*文件夹级/) && has(S.discover, /session\s*=\s*对话级/));
 

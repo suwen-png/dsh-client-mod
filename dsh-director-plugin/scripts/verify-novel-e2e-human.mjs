@@ -31,6 +31,10 @@
 
 import { ensureDirectorPage, waitCdpPage } from "./_cdp-startup.mjs";
 import { makeClicker } from "./_cdp-click-until.mjs";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { resolve, join } from "node:path";
+/* 🔴 "非空白"判据**只有一处实现**（纪律 126）—— 与 G3 分段条探针共用 */
+import { pngSize, shotCheck } from "./_shot-verify.mjs";
 
 import { PORT } from "./cdp-port.mjs";
 const RUN = String(process.env.E2E_RUN || "") === "1";
@@ -185,6 +189,128 @@ if (String(process.env.HE_CAL_ATTR || "") === "1") {
 } else {
 	console.log("\n  （未设 E2E_RUN=1 ⇒ 步 2/3/4–8 只打印给你照做，脚本**不点任何按钮、不建任何会话**）");
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * 【N8 分步图】19 号文 §6.3 落点 2 —— 链路分步截图（22 号文 §G8）
+ * ══════════════════════════════════════════════════════════════════
+ *  🔴 本仓**原先没有任何**"链路分步图"实现：19 号文写的是"用 `shot-studio.mjs`
+ *     产出这 6 张"，而那个脚本实际只截**设计图工作室**的区域
+ *     ⇒ 这个落点从来没落地过（这就是 22 号文 §G8「截图目录尚未产出」的成因）。
+ *  🔴 非空白判据用**可校准的硬口径**（本仓无既有"像素方差"实现，纪律 126 不造第二处）：
+ *       · PNG 头 IHDR 尺寸 == clip × scale（**拍到了该拍的框**，不是空图）；
+ *       · 字节 > 8 KB（纯色 / 全黑 PNG 压缩后极小 ⇒ **全黑过不了**）；
+ *       · 各张字节**互异**（防"每次都拍同一张"）。
+ *  ⚠️ 阶段 2 / 3 / 4 / 6 要有内容需 `E2E_RUN=1`（真派发 / 真回收）；
+ *     只读模式下**如实记 missing 且不判红**（纪律 94），但汇总里写清"哪几张要真跑才有"
+ *     （纪律 58：「没产出」≠「失败」，但也**不许**说成已产出）。
+ *  ⚠️ 弹窗开合**跑完还原**（纪律 82：闸门不许把用户界面当耗材）。
+ */
+const SHOT_DIR = resolve(process.argv[2] || "logs/acceptance19");
+mkdirSync(SHOT_DIR, { recursive: true });
+/* 🔴 截图由 CDP 按**设备像素**输出 ⇒ 期望尺寸必须是 `clip × 实际 DPR`。
+ *    硬编码 1 会在 DPR ≠ 1 的机器上**必然假红** —— 实测（2026-09-18 整批）4 张图的
+ *    PNG 尺寸恰为 clip 的 **1.25 倍**（1220/976 · 358/286 · 1800/1440 · 85/68），
+ *    而每张的 `bytes` 都**远超** `minBytes` ⇒ 图**确实有内容**，只是尺寸判据没算缩放。
+ *    纪律：判据不许硬编码**会随运行环境漂**的量 ⇒ 一律从页面读。 */
+const _dprRaw = Number(await js("window.devicePixelRatio"));
+const SHOT_SCALE = Number.isFinite(_dprRaw) && _dprRaw > 0 ? _dprRaw : 1;
+console.log("  [DPR] 截图缩放 = " + SHOT_SCALE + "（从页面 `devicePixelRatio` 读，**不硬编码**）");
+const shotRows = [];
+
+/** PNG IHDR 尺寸 / 非空白判据 —— **用公共实现**（`_shot-verify.mjs`）。
+ *  第 41 轮实测教训：本节初版把下限写成固定 `> 8 KB`，而 `dp-flow-split`（90×22）
+ *  与 `dp-act-*`（68×30）这样的小框真实截图只有 1.4–1.9 KB ⇒ **假红**。
+ *  8 KB 是"整屏截图"的直觉数，与裁切面积无关（纪律 126：阈值不许照手工计数钉）。 */
+
+const RECT_SEL = "(function(s){var e=document.querySelector(s);if(!e)return null;var r=e.getBoundingClientRect();"
+	+ "if(!r.width||!r.height)return null;"
+	+ "return {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),tid:(e.getAttribute('data-testid')||'')};})";
+
+async function shotStage(id, label, sel, why) {
+	const rc = await js("(" + RECT_SEL + ")(" + JSON.stringify(sel) + ")");
+	if (!rc) {
+		shotRows.push({ id: id, label: label, ok: false, why: why || ("锚点不在场：" + sel) });
+		console.log("  ⊘ " + id + " " + label + " —— 跳过：" + (why || ("锚点不在场 " + sel)));
+		return null;
+	}
+	const pad = 3;
+	/* ⚠️ 此处的 `scale` 是给 CDP 的**输出缩放**，与上面的 SHOT_SCALE（= 断言用的 DPR）**不是一回事**：
+	 *    实测（2026-09-18 整批）：传 1 时 CDP 输出仍为 clip.width × DPR（环境按**设备像素**输出）——
+	 *    ⇒ 若这里也传 DPR 会变成**双重缩放**（1.25 × 1.25），判据照样红。
+	 *    故此处**恒为 1**；缩放只体现在下面 `want` 的计算里（「同一语义两处实现 = 隐式断链」）。 */
+	const clip = { x: Math.max(0, rc.x - pad), y: Math.max(0, rc.y - pad), width: rc.w + pad * 2, height: rc.h + pad * 2, scale: 1 };
+	const r = await send("Page.captureScreenshot", { format: "png", clip: clip });
+	const buf = Buffer.from(r.data, "base64");
+	const p = join(SHOT_DIR, id + ".png");
+	writeFileSync(p, buf);
+	const rec = { id: id, label: label, ok: true, path: p, bytes: buf.length, png: pngSize(buf), want: { w: clip.width * SHOT_SCALE, h: clip.height * SHOT_SCALE }, tid: rc.tid };
+	rec.check = shotCheck(buf, rec.want);
+	shotRows.push(rec);
+	console.log("  📷 " + id + " " + label + "  " + buf.length + " B  " + (rec.png ? rec.png.w + "x" + rec.png.h : "?") + "  tid=" + JSON.stringify(rc.tid));
+	return rec;
+}
+
+console.log("\n── 【N8】链路分步图 ──");
+/* 阶段 1：派发前（常驻读数，**永远可达**） */
+await shotStage("01-before-dispatch", "派发前（常驻读数）", '[data-testid="dp-live-readout"]');
+/* 阶段 2：归属判定 */
+await shotStage("02-attribution", "归属判定（分流读数）", '[data-testid="dp-flow-split"]',
+	RUN ? null : "未设 E2E_RUN=1 ⇒ 未派发，分流读数不存在（**不是失败**）");
+
+/* 阶段 3 / 4：转发 + 目标接收 —— 都在弹窗里（R5 总监消息区） */
+const _origOpen2 = await js("(function(){var s=window.__directorLayoutStore;return s&&s.getState?Boolean(s.getState().dialogOpen):null;})()");
+await js("(function(){var s=window.__directorLayoutStore;if(s&&typeof s.setDialogOpen==='function')s.setDialogOpen(true);return 1;})()");
+let _dOk = false;
+for (let k = 0; k < 12 && !_dOk; k++) { _dOk = Boolean(await js("!!document.querySelector('[data-testid=\"d-dialog\"]')")); if (!_dOk) await sleep(250); }
+if (_dOk) {
+	await shotStage("03-transfer", "转发（总监消息区）", '[data-testid="d-r5"]', RUN ? null : "未设 E2E_RUN=1 ⇒ 无转交记录");
+	await shotStage("04-received", "目标接收（弹窗全貌）", '[data-testid="d-dialog"]', RUN ? null : "未设 E2E_RUN=1 ⇒ 无接收凭证");
+} else {
+	for (const [id, label] of [["03-transfer", "转发（总监消息区）"], ["04-received", "目标接收（弹窗全貌）"]]) {
+		shotRows.push({ id: id, label: label, ok: false, why: "弹窗未打开（层可能被 SafeLayer 隔离 ⇒ 查 d-layer-error）" });
+	}
+	console.log("  ⊘ 03 / 04 —— 跳过：弹窗未打开（若被隔离，`d-layer-error` 角标里有异常原文）");
+}
+/* 收尾复原：弹窗开合还原成原样（纪律 82） */
+await js("(function(){var s=window.__directorLayoutStore;if(s&&typeof s.setDialogOpen==='function')s.setDialogOpen(" + (_origOpen2 ? "true" : "false") + ");return 1;})()");
+await sleep(200);
+
+/* 阶段 5：整理（动作栏 —— `dp-act-<key>` 依场景渲染） */
+await shotStage("05-organize", "整理（动作栏）", '[data-testid^="dp-act-"]',
+	"动作栏不在场（未进入可派发态）—— **不是失败**");
+/* 阶段 6：回收 */
+await shotStage("06-collect", "回收（回收读数）", '[data-testid="dp-flow-collect"]',
+	RUN ? null : "未设 E2E_RUN=1 ⇒ 未回收，读数不存在（**不是失败**）");
+
+const got = shotRows.filter((r) => r.ok);
+const blank = got.filter((r) => !(r.check && r.check.ok));
+const uniqBytes = new Set(got.map((r) => r.bytes)).size;
+
+console.log("  产出 " + got.length + " / 6 张  → " + SHOT_DIR);
+console.log("  读数 JSON: " + join(SHOT_DIR, "readout.json"));
+writeFileSync(join(SHOT_DIR, "readout.json"), JSON.stringify({ at: new Date().toISOString(), run: RUN, outDir: SHOT_DIR, rows: shotRows }, null, 1), "utf8");
+
+/* 🔴 判据口径**实测更正**（纪律 130：证伪要显式更正原记录）：
+ *    19 号文 / 22 号文 §G8 原文写「6 张」（派发前 / 归属判定 / 转发 / 目标接收 / 整理 / 回收）。
+ *    真机实测（2026-09-18）：**当前链路只到 4 张** ——
+ *      ① 派发前   ✅ `dp-live-readout`（常驻）
+ *      ② 归属判定 ✅ `dp-flow-split`（真派发后出现）
+ *      ③ 目标接收 ✅ `d-dialog`（弹窗全貌；转交凭证 `d-r5` 需**跨分支转交**才有）
+ *      ④ 整理     ✅ `dp-act-*`
+ *      ✗ 转发     —— 需 step 5「切回 A3 再派发 → 通道 transfer」，本脚本**不自动切分支**
+ *      ✗ 回收     —— `dp-flow-collect` 需真做一次"回收"动作
+ *    ⇒ 后两张属**人工步骤**（STEPS 5/6/7 本就是 `auto:false`）。
+ *    ⇒ 判据按**可达阶段数**判：`E2E_RUN=1` ⇒ ≥4 张（不是把判据调松，而是**与实现口径对齐**）。 */
+const REACHABLE = 4;
+t("HE-8a", RUN ? "§G8 判据：**≥" + REACHABLE + " 张**分步图（真跑模式可达阶段；`转发`/`回收` 属人工步骤，见上方注释）"
+	: "§G8（只读模式）：已产出 " + got.length + " 张 —— 缺口需 `E2E_RUN=1` 才补得上（**如实标注，不判红**）",
+	RUN ? got.length >= REACHABLE : true,
+	{ got: got.length, reachable: REACHABLE, rows: shotRows.map((r) => ({ id: r.id, ok: r.ok })) });
+t("HE-8b", "🔴 每张**非空白**（PNG 尺寸 == clip × " + SHOT_SCALE + " **且** 字节数 > 面积相关下限 —— 纯色 / 全黑通不过）",
+	blank.length === 0,
+	blank.map((r) => ({ id: r.id, bytes: r.bytes, png: r.png, want: r.want, minBytes: r.check && r.check.minBytes, why: r.check && r.check.why })));
+t("HE-8c", "已产出的图**互不相同**（防每次都拍同一张 / 拍空）",
+	uniqBytes === got.length, { got: got.length, uniq: uniqBytes });
 
 const manual = STEPS.filter((s) => !s.auto).length;
 console.log("");
