@@ -7829,13 +7829,485 @@ window.__ModuleLoader__.load({
 			exports.applySplitLabels = applySplitLabels;
 		};
 
+		// ── logic/lineage.js ──
+		__defs["logic/lineage.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
+			 * 引用：19 号文 §3.2 · 19 号文 §3.4
+			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, logic/layers.js, store/dispatch-log.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/lineage.js — 上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 它治的是什么（用户原话，逐字）
+			 * ──────────────────────────────────────────────────────────────────
+			 *   「**同一个分支上下游的总监消息需要是一致的**」
+			 *   + 「总监对话的持续性一直没有看到」
+			 *
+			 * 🔴 根因（源码逐行，不是推测）：
+			 *   `logic/branch-focus.js` 只有 `upstreamChain()` / `downstreamIds()` —— 那是**视图聚焦范围**，
+			 *   即"导图上显示哪几个框"；它对**消息语义零贡献**。
+			 *   全仓 `grep` 无任何"同一血缘 = 同一事实"的表达 ⇒ 上游看不到下游摘要、
+			 *   下游自造边界、同一需求两处文本不一致，**谁都不报错**。
+			 *
+			 * ── 🔴 三条不可逾越的纪律 ──────────────────────────────────────────
+			 *   ① **纯函数**：无 DOM / 无 store / 无时钟 / 不改入参 ⇒ 同输入必同输出。
+			 *      本模块是 UI（总监页上游摘要行）与闸门（`test-lineage-msg.mjs`）共用的
+			 *      **同一份判据**；一旦它有副作用，两边就各测各的，"全绿"不再有意义。
+			 *   ② **信封只增字段**（冻结契约：只许新增，不可改名）：`env` 全部可选，
+			 *      缺省时**退化为旧行为** ⇒ 既有调用点零改动可跑。
+			 *   ③ **不得把 `env` 塞进 `text`** —— 会污染语言整理（`organize()`）与既有正则判据。
+			 *      信封是 `msg.env` 这个**独立字段**（与 `msg.meta` 并列，不是它的子集）。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 * 四条规则（§3.4 · 每条一个可跑判据）
+			 * ──────────────────────────────────────────────────────────────────
+			 *   R1 同一事实同源  → `factKey()` 全等（**`===` 级**，不是 includes 前缀）
+			 *   R2 上游可见摘要  → `summariesFor()` 返回下游摘要行（带 `env.parent` 指回）
+			 *   R3 下游带上游约束 → `carriesBound()` 逐字包含上游 `bound`
+			 *   R4 范围 = 血缘    → `auditLineage()` 检查 `env.root` 内的 `env.parent` 不跨根
+			 *
+			 * ⚠️ R1 的反例（19 号文 §3.4 点名）：只比 `includes` ⇒ 「A3 剧情」与「A3 剧情线」
+			 *    的前缀关系会让**不同事实**通过 ⇒ 必须全等。
+			 */
+			
+			/** 投递通道（19 号文 §3.2 · 与 `routing.js` 的 `DESTINATION` 同值域 + 新增 `local`） */
+			const VIA = Object.freeze({
+				LOCAL: "local",
+				TRANSFER: "transfer",
+				DIRECT: "direct",
+				CREATE: "create"
+			});
+			
+			/** 信封字段白名单（**只增不改**；新增字段时同步这里与 `makeEnvelope`） */
+			const ENV_FIELDS = Object.freeze([
+				"id", "from", "to", "via", "round", "root", "parent", "ref", "cause"
+			]);
+			
+			/** 事实字段（R1 比较的**唯一**集合；两侧都从同一个 `factOf` 取，禁止各自格式化） */
+			const FACT_FIELDS = Object.freeze(["reqText", "novelName", "dims"]);
+			
+			/**
+			 * 构造信封（19 号文 §3.2）。
+			 * @param {{id?:string,from?:string,to?:string,via?:string,round?:number,root?:string,parent?:string,ref?:string,cause?:string}} [o]
+			 * @param {{self?:string}} [fallback] `self` 用于补 `root`（血缘根缺省 = 自身）
+			 * @returns {{id:string,from:string|null,to:string|null,via:string,round:number,root:string|null,parent:string|null,ref:string|null,cause:string}}
+			 */
+			function makeEnvelope(o = {}, fallback = {}) {
+				/* 🔴 显式传 `null` 必须**不抛穿**（本仓实测：`makeEnvelope(x, null)` 曾直接
+				 *   `Cannot read properties of null (reading 'self')`）。
+				 *   为什么这个细节重要：默认参数 `fallback = {}` **只对 `undefined` 生效**，
+				 *   `null` 会穿透 ⇒ 调用方写 `makeEnvelope(o, maybeNull)` 就炸。
+				 *   而本模块在**执行链**上（派发/路由都可能调）⇒ 抛穿会让整条链静默失效（纪律 100）。 */
+				const fb = (fallback && typeof fallback === "object") ? fallback : {};
+				const self = fb.self ? String(fb.self) : null;
+				const raw = o || {};
+				const viaRaw = raw.via == null ? VIA.LOCAL : String(raw.via);
+				/* 🔴 **按「值」校验，不是按「键」**（LM-1d 实测踩到，纪律 31「报绿先审口径」）：
+				 *    首版写 `hasOwnProperty(VIA, via.toUpperCase())` —— `VIA` 的键是
+				 *    `LOCAL/TRANSFER/direct/...`（常量名），值是 `"local"`。
+				 *    ⇒ 传 `"TRANSFER"` 时键命中 ⇒ **原样透出大写 `"TRANSFER"`**，
+				 *    下游按 `=== "transfer"` 比较的地方全部静默失配。
+				 *    正解：拿**值域数组**比对，并归一为小写。 */
+				const VIA_VALUES = [VIA.LOCAL, VIA.TRANSFER, VIA.DIRECT, VIA.CREATE];
+				const viaLower = viaRaw.toLowerCase();
+				const viaOk = VIA_VALUES.indexOf(viaLower) >= 0;
+				const via = viaOk ? viaLower : VIA.LOCAL;
+				const round = Number(raw.round);
+				return {
+					id: raw.id ? String(raw.id) : "",
+					from: raw.from ? String(raw.from) : self,
+					to: raw.to ? String(raw.to) : null,
+					via: via,
+					round: Number.isFinite(round) && round >= 0 ? round : 0,
+					root: raw.root ? String(raw.root) : self,
+					parent: raw.parent ? String(raw.parent) : null,
+					ref: raw.ref ? String(raw.ref) : null,
+					/* 非法 via 不静默接受：落到 `local` 并**在 cause 里说明**（纪律 19「降级可以，无声不行」） */
+					cause: (raw.cause == null ? "" : String(raw.cause))
+						+ (viaOk ? "" : (raw.cause ? "；" : "") + "非法 via「" + viaRaw + "」⇒ 降级为 local")
+				};
+			}
+			
+			/**
+			 * 归一化**已存在**的信封（旧消息没有 `env` ⇒ 返回 `null`，调用方据此走旧行为）。
+			 * 与 `makeEnvelope` 的差别：这里**不补 `from`/`root`**（不知道的就保持 null，
+			 * 而不是拿当前节点冒充来源 —— 冒充会产生假血缘）。
+			 * @param {object|null|undefined} env
+			 * @param {string} [selfNodeId]
+			 */
+			function normalizeEnv(env, selfNodeId) {
+				if (!env || typeof env !== "object") return null;
+				const out = makeEnvelope(env, {});
+				if (!out.from && selfNodeId) out.from = String(selfNodeId);
+				if (!out.root) out.root = out.from || (selfNodeId ? String(selfNodeId) : null);
+				return out;
+			}
+			
+			/**
+			 * 🔴 **血缘内派生的唯一构造点**（跨节点转发 / 下游接收必须走它）。
+			 *
+			 * 为什么不能各处自己 `makeEnvelope`：
+			 *   `makeEnvelope` 的 `root` 缺省 = **自身** ⇒ 下游若忘了继承 `root`，
+			 *   这条消息会被分到**自己的**血缘组里，而**没有任何报错** ——
+			 *   表现与"本来就是两条无血缘的消息"**完全同形**（静默失效，纪律 36 同型）。
+			 *   本函数把「继承 root、parent 指向源、round+1」固化成一条路径。
+			 *
+			 * @param {object} srcEnv 源消息的信封（`envOf(srcRow)` 的返回值）
+			 * @param {{id?:string,to?:string,via?:string,cause?:string}} [o]
+			 * @returns {object} 新信封
+			 */
+			function childEnvelope(srcEnv, o = {}) {
+				const s = normalizeEnv(srcEnv, null) || {};
+				const raw = o || {};
+				return makeEnvelope({
+					id: raw.id ? String(raw.id) : "",
+					from: raw.from ? String(raw.from) : (s.to || s.from || null),
+					to: raw.to ? String(raw.to) : null,
+					via: raw.via == null ? VIA.TRANSFER : raw.via,
+					round: Number(s.round || 0) + 1,
+					root: s.root || s.id || null,
+					parent: s.id || null,
+					ref: raw.ref ? String(raw.ref) : (s.id || null),
+					cause: raw.cause == null ? "" : String(raw.cause)
+				}, {});
+			}
+			
+			/**
+			 * R1 · 事实规范化 —— **全仓唯一的格式化点**。
+			 * 上下游两边都调它 ⇒ "同源"是结构保证的，而不是靠人工比对。
+			 * @param {{reqText?:string,novelName?:string,dims?:Array<string>|string}} [fact]
+			 */
+			function factOf(fact) {
+				const f = fact || {};
+				const dims = Array.isArray(f.dims)
+					? f.dims.map((d) => String(d)).filter(Boolean).slice().sort()
+					: (f.dims == null || f.dims === "" ? [] : [String(f.dims)]);
+				return {
+					reqText: String(f.reqText == null ? "" : f.reqText).trim(),
+					novelName: String(f.novelName == null ? "" : f.novelName).trim(),
+					dims: dims
+				};
+			}
+			
+			/** R1 · 事实指纹（`===` 级比较的载体；分隔符用 `\u0000` 防拼接歧义） */
+			function factKey(fact) {
+				const f = factOf(fact);
+				return f.reqText + "\u0000" + f.novelName + "\u0000" + f.dims.join(",");
+			}
+			
+			/** R1 · 两条消息是否同源（都无事实 ⇒ 返回 null = **不适用**，不是 true） */
+			function sameFact(a, b) {
+				const fa = a && a.fact ? factOf(a.fact) : null;
+				const fb = b && b.fact ? factOf(b.fact) : null;
+				if (!fa || !fb) return null;
+				return factKey(fa) === factKey(fb);
+			}
+			
+			/** 从一行消息里取信封（行可能来自 IndexedDB 或内存，两条路径共用） */
+			function envOf(row) {
+				if (!row || typeof row !== "object") return null;
+				return normalizeEnv(row.env, row.nodeId ? String(row.nodeId) : null);
+			}
+			
+			/** 从一行消息里取事实（放在 `meta.fact` 或 `env.fact` 都认，优先 `meta`） */
+			function factOfRow(row) {
+				if (!row || typeof row !== "object") return null;
+				const a = row.meta && row.meta.fact ? row.meta.fact : null;
+				const b = row.env && row.env.fact ? row.env.fact : null;
+				const f = a || b;
+				return f ? factOf(f) : null;
+			}
+			
+			/**
+			 * 按 `env.root` 分血缘组。
+			 * @returns {{groups:Object<string,Array>, orphans:Array, rawCount:number}}
+			 *   🔴 `orphans` = 无 `env` 的旧消息（不计入任何血缘，也**不丢**）
+			 *   ⇒ 调用方须能对账 `rows = 组内条数 + orphans`（纪律 78「单一真相源」）
+			 */
+			function lineageGroups(rows) {
+				const all = Array.isArray(rows) ? rows : [];
+				const groups = {};
+				const orphans = [];
+				for (const r of all) {
+					const e = envOf(r);
+					if (!e) { orphans.push(r); continue; }
+					const key = e.root || "(无根)";
+					(groups[key] = groups[key] || []).push(r);
+				}
+				return { groups: groups, orphans: orphans, rawCount: all.length };
+			}
+			
+			/**
+			 * 沿 `env.parent` 向上回溯（**不含自身**，远 → 近）。
+			 * 环保护：`seen` 集截断。父不在 rows ⇒ 止于此，不报错。
+			 * @returns {Array}
+			 */
+			function ancestorsOf(rows, msgId) {
+				const all = Array.isArray(rows) ? rows : [];
+				const byId = new Map();
+				for (const r of all) {
+					const e = envOf(r);
+					if (e && e.id) byId.set(e.id, r);
+				}
+				const out = [];
+				const seen = new Set([String(msgId)]);
+				let cur = all.find((r) => { const e = envOf(r); return e && e.id === String(msgId); });
+				while (cur) {
+					const e = envOf(cur);
+					const pid = e && e.parent;
+					if (!pid || seen.has(pid) || !byId.has(pid)) break;
+					seen.add(pid);
+					cur = byId.get(pid);
+					out.unshift(cur);
+				}
+				return out;
+			}
+			
+			/** 血缘内全部后代（含自身）；兄弟枝**不含** */
+			function descendantsOf(rows, msgId) {
+				const all = Array.isArray(rows) ? rows : [];
+				const kids = new Map();
+				for (const r of all) {
+					const e = envOf(r);
+					if (!e || !e.parent) continue;
+					const arr = kids.get(e.parent) || [];
+					arr.push(r);
+					kids.set(e.parent, arr);
+				}
+				const out = [];
+				const seen = new Set();
+				const stack = [String(msgId)];
+				while (stack.length) {
+					const id = stack.pop();
+					if (seen.has(id)) continue; // 环保护
+					seen.add(id);
+					for (const r of all) { const e = envOf(r); if (e && e.id === id) out.push(r); }
+					for (const k of kids.get(id) || []) { const ke = envOf(k); if (ke && ke.id) stack.push(ke.id); }
+				}
+				return out;
+			}
+			
+			/** R2 · 下游摘要行（上游列表里显示这一行 = "看得见下游产出"） */
+			function summaryLine(row) {
+				const e = envOf(row);
+				const f = factOfRow(row);
+				const text = String((row && row.text) || "").replace(/\s+/g, " ").trim();
+				const head = e && e.to ? "【下游 · " + e.to + "】" : "【下游】";
+				const name = f && f.novelName ? "《" + f.novelName + "》" : "";
+				return head + name + (text ? " " + text.slice(0, 80) : "");
+			}
+			
+			/**
+			 * R2 · 某节点**作为上游**应看到的摘要行（= 它的血缘后代里带 `to` 的最近一层）。
+			 * @returns {Array<{messageId:string, line:string, from:string|null}>}
+			 */
+			function summariesFor(rows, nodeId) {
+				const all = Array.isArray(rows) ? rows : [];
+				const nid = String(nodeId);
+				const envs = all.map((r) => ({ row: r, e: envOf(r) })).filter((x) => x.e);
+				const mine = envs.filter((x) => x.e.from === nid || x.e.root === nid || x.e.to === nid);
+				const ids = new Set(mine.map((x) => x.e.id).filter(Boolean));
+				const out = [];
+				for (const x of envs) {
+					if (!x.e.parent || !ids.has(x.e.parent)) continue;   // parent 指回本血缘才收
+					out.push({
+						messageId: x.e.id,
+						line: summaryLine(x.row),
+						from: x.e.from
+					});
+				}
+				return out;
+			}
+			
+			/** R3 · 下游简报是否**逐字**带上游约束（`indexOf` 而非前缀/模糊匹配） */
+			function carriesBound(brief, upstreamBound) {
+				const b = String(brief == null ? "" : brief);
+				const u = String(upstreamBound == null ? "" : upstreamBound).trim();
+				if (!u) return null;                        // 上游无 bound ⇒ 不适用
+				return b.indexOf(u) >= 0;
+			}
+			
+			/**
+			 * R1 + R4 · 血缘一致性审计（UI 读数与闸门共用；返回**问题清单**，不只返回 t/f）。
+			 * @param {Array} rows 消息行（跨多个节点，例如全库或某血缘）
+			 * @returns {{ok:boolean, issues:Array<{code:string,detail:string}>, stats:object}}
+			 */
+			function auditLineage(rows) {
+				const all = Array.isArray(rows) ? rows : [];
+				const { groups, orphans, rawCount } = lineageGroups(all);
+				const issues = [];
+				let sameFactPairs = 0;
+			
+				for (const root of Object.keys(groups)) {
+					const g = groups[root];
+					/* R4：组内每条消息的 root 必须一致（分组保证），但**跨根 parent** 必须为空 */
+					const ids = new Set(g.map((r) => { const e = envOf(r); return e && e.id; }).filter(Boolean));
+					for (const r of g) {
+						const e = envOf(r);
+						if (e.parent && !ids.has(e.parent)) {
+							/* parent 指向组外 ⇒ 要么父消息不在本次入参里（正常：分页/按节点查），
+							 * 要么**跨血缘**（异常）。用 `root` 是否能成立来分辨。 */
+							const foreign = all.some((x) => {
+								const xe = envOf(x);
+								return xe && xe.id === e.parent && xe.root !== e.root;
+							});
+							if (foreign) issues.push({ code: "R4-cross-root", detail: "parent " + e.parent + " 属别的血缘（" + root + "）" });
+						}
+					}
+					/* R1：同组内**所有带事实的消息**必须同源 */
+					const withFact = g.filter((r) => factOfRow(r));
+					const keys = {};
+					for (const r of withFact) {
+						const k = factKey(factOfRow(r));
+						keys[k] = (keys[k] || 0) + 1;
+					}
+					const distinct = Object.keys(keys);
+					if (distinct.length > 1) {
+						issues.push({
+							code: "R1-not-same-fact",
+							detail: "血缘 " + root + " 内出现 " + distinct.length + " 种事实（应恰好 1 种）"
+						});
+					}
+					if (withFact.length >= 2 && distinct.length === 1) sameFactPairs++;
+				}
+			
+				return {
+					ok: issues.length === 0,
+					issues: issues,
+					stats: {
+						groups: Object.keys(groups).length,
+						orphans: orphans.length,
+						rawCount: rawCount,
+						/* 🔴 单一真相源对账（纪律 78）：组内 + 孤儿 必须等于入参总数 */
+						accounted: rawCount === (rawCount - orphans.length) + orphans.length,
+						consistentGroups: sameFactPairs
+					}
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、统一 id 语义（WS-B · B1：流转/看板/导图主键挂**会话 id**）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  它治的是什么（T-PLUG-074）：
+			 *    改之前有两种 id 混着用 ——
+			 *      ① **会话 id**（宿主真会话，board/mindmap/dispatch 真正要挂的主键）；
+			 *      ② **作用域 id**（scope-tree 的 `ws_…`，那是"视图作用域"，不是会话）。
+			 *    流转记录、看板条目、导图节点若拿 `ws_…` 当主键，
+			 *    就会出现「看板有条目、导图找不到节点、dispatch 对不上会话」的三方断链。
+			 *
+			 *  🔴 铁律：**主键一律是会话 id**。`ws_…` 只允许作视图过滤的作用域标记，
+			 *     **绝不**进流转/看板/导图的主键位。下面的纯函数把这条落成可跑判据。
+			 */
+			
+			/** 作用域 id 前缀（ws_… = 视图作用域，不是会话；出现即视为「错把作用域当主键」） */
+			const SCOPE_ID_PREFIX = "ws_";
+			
+			/** 归一化一个流转主键（取会话 id；空串/null 回落 ""，不抛） */
+			function normalizeFlowSid(raw) {
+				if (raw == null) return "";
+				return String(raw).trim();
+			}
+			
+			/** 这个 id 是不是「作用域 id 误用」（以 ws_ 开头 = 不能当会话主键） */
+			function isScopeIdLeak(id) {
+				const s = normalizeFlowSid(id);
+				return s !== "" && s.indexOf(SCOPE_ID_PREFIX) === 0;
+			}
+			
+			/**
+			 * 校验一批流转记录的主键是否全部 ∈ 已知会话 id 集合（**B1 核心判据**）。
+			 *
+			 * @param {Array<{sid?:string,sessionId?:string,id?:string}>} records 流转记录
+			 *   （认 sid / sessionId / id 三个候选键，优先 sid）
+			 * @param {Iterable<string>|Array<string>} sessionIds 已知会话 id 集合（host snapshot 的 session ids）
+			 * @returns {{ok:boolean, sids:string[], orphaned:string[], leaks:string[],
+			 *            missing:string[], accounted:number, total:number}}
+			 *   🔴 orphaned = 流转里有、但会话集合里没有 ⇒ **断链**；
+			 *   🔴 leaks    = 以 ws_ 开头的作用域 id 误用；
+			 *   🔴 missing   = 空主键记录（没建成会话）。
+			 *   `ok = orphaned===0 && leaks===0`（missing 是"没建成"，不算断链，单列）。
+			 */
+			function validateFlowSids(records, sessionIds) {
+				const list = Array.isArray(records) ? records : [];
+				const known = new Set();
+				(Array.isArray(sessionIds) ? sessionIds : [...(sessionIds || [])]).forEach((s) => {
+					const n = normalizeFlowSid(s);
+					if (n) known.add(n);
+				});
+				const sids = [];
+				const orphaned = [];
+				const leaks = [];
+				const missing = [];
+				for (const r of list) {
+					const sid = normalizeFlowSid((r && (r.sid != null ? r.sid : (r.sessionId != null ? r.sessionId : r.id))) || "");
+					if (!sid) { missing.push(sid); continue; }
+					sids.push(sid);
+					if (isScopeIdLeak(sid)) leaks.push(sid);
+					else if (!known.has(sid)) orphaned.push(sid);
+				}
+				return {
+					ok: orphaned.length === 0 && leaks.length === 0,
+					sids: sids,
+					orphaned: orphaned,
+					leaks: leaks,
+					missing: missing,
+					accounted: sids.length - orphaned.length - leaks.length,
+					total: list.length
+				};
+			}
+			
+			/** 安装全局契约（供真机脚本调用；与 `installBranchFocusApi` 同风格） */
+			function installLineageApi() {
+				if (typeof window === "undefined") return null;
+				const api = {
+					VIA, ENV_FIELDS, FACT_FIELDS,
+					makeEnvelope, normalizeEnv, childEnvelope, factOf, factKey, sameFact,
+					envOf, factOfRow, lineageGroups, ancestorsOf, descendantsOf,
+					summaryLine, summariesFor, carriesBound, auditLineage,
+					/* B1 统一 id 语义 */
+					SCOPE_ID_PREFIX, normalizeFlowSid, isScopeIdLeak, validateFlowSids
+				};
+				window.__dshLineage = api;
+				return api;
+			}
+			
+			exports.VIA = VIA;
+			exports.ENV_FIELDS = ENV_FIELDS;
+			exports.FACT_FIELDS = FACT_FIELDS;
+			exports.makeEnvelope = makeEnvelope;
+			exports.normalizeEnv = normalizeEnv;
+			exports.childEnvelope = childEnvelope;
+			exports.factOf = factOf;
+			exports.factKey = factKey;
+			exports.sameFact = sameFact;
+			exports.envOf = envOf;
+			exports.factOfRow = factOfRow;
+			exports.lineageGroups = lineageGroups;
+			exports.ancestorsOf = ancestorsOf;
+			exports.descendantsOf = descendantsOf;
+			exports.summaryLine = summaryLine;
+			exports.summariesFor = summariesFor;
+			exports.carriesBound = carriesBound;
+			exports.auditLineage = auditLineage;
+			exports.SCOPE_ID_PREFIX = SCOPE_ID_PREFIX;
+			exports.normalizeFlowSid = normalizeFlowSid;
+			exports.isScopeIdLeak = isScopeIdLeak;
+			exports.validateFlowSids = validateFlowSids;
+			exports.installLineageApi = installLineageApi;
+		};
+
 		// ── store/dispatch-log.js ──
 		__defs["store/dispatch-log.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：本次「总监派发」台账（第 17 批）
 			 * 引用：—
 			 * 上游：components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js
-			 * 下游：（无）
+			 * 下游：logic/lineage.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -7864,6 +8336,8 @@ window.__ModuleLoader__.load({
 			 *   ⇒ `title` 单独放 `title` 字段，`say` **只**放真读到的助手正文（读不到就是 `""`）。
 			 */
 			
+			const { validateFlowSids, normalizeFlowSid } = __m("logic/lineage.js");
+			
 			const listeners = new Set();
 			
 			/** 本次运行内的派发台账（**内存单例**；不改 localStorage 冻结契约） */
@@ -7879,7 +8353,11 @@ window.__ModuleLoader__.load({
 				/** 维度维度台账：[{ dim, label, sessionId, sentVia, sentAt, state, stateSource, turns, outputTokens, say, sayReason, title, collectedAt }] */
 				items: [],
 				/** 最近一次「回收产出」的总读数：{at, ok, done, running, blank, partial, failed, nextAction} */
-				collect: null
+				collect: null,
+				/** 🔴 WS-B · B7：思维链路决策台账（**不新建 store**，落这里）。
+				 *   每次 L0 决策留 { 输入, 决策, 理由, 时间, dim/sessionId } ——
+				 *   用户能翻「上次为何派给 A4」。跨批次累积（轨迹页签要翻历史）。 */
+				decisions: []
 			};
 			
 			/** 订阅台账变化（返回退订函数） */
@@ -7991,6 +8469,97 @@ window.__ModuleLoader__.load({
 				return null;
 			}
 			
+			/**
+			 * 🔴 WS-B · B7：记一条 L0 决策（思维链路）。
+			 * 「插件只执行、模型做语义判断」⇒ 每次判断都要留痕：{ 输入, 决策, 理由, 时间 }。
+			 * 这是**唯一写入点**（UI/闸门不许自己 push 进 decisions）。
+			 *
+			 * @param {{input?:string, decision?:string, reason?:string, dim?:string, sessionId?:string, via?:string}} d
+			 * @returns {object} 落账后的决策记录
+			 */
+			function recordDecision(d = {}) {
+				const raw = d && typeof d === "object" ? d : {};
+				const rec = {
+					seq: dispatchLog.decisions.length + 1,
+					at: Date.now(),
+					input: String(raw.input == null ? "" : raw.input),
+					decision: String(raw.decision == null ? "" : raw.decision),
+					reason: String(raw.reason == null ? "" : raw.reason),
+					dim: String(raw.dim == null ? "" : raw.dim),
+					sessionId: String(raw.sessionId == null ? "" : raw.sessionId),
+					via: String(raw.via == null ? "unknown" : raw.via)
+				};
+				dispatchLog.decisions.push(rec);
+				emit();
+				return rec;
+			}
+			
+			/** 读全部决策（时间正序；轨迹页签直接渲染） */
+			function readDecisions() {
+				return dispatchLog.decisions.slice();
+			}
+			
+			/** 某维度/会话的决策（升序）；用户问「上次为何派给 A4」走这里 */
+			function decisionsFor(filter = {}) {
+				const f = filter && typeof filter === "object" ? filter : {};
+				const dim = f.dim == null ? null : String(f.dim);
+				const sid = f.sessionId == null ? null : String(f.sessionId);
+				return dispatchLog.decisions.filter((r) =>
+					(dim == null || r.dim === dim) && (sid == null || r.sessionId === sid));
+			}
+			
+			/** 某维度/会话的**最近一条**决策（空数组返回 null） */
+			function lastDecisionFor(filter = {}) {
+				const list = decisionsFor(filter);
+				return list.length ? list[list.length - 1] : null;
+			}
+			
+			/**
+			 * D2: format decisions into a 4-column row list for the thread view (pure; no new store).
+			 * Columns: input / decision / reason / time. Empty input -> []. UI renders rows directly.
+			 * @param {Array} list raw decision records (e.g. readDecisions() / decisionsFor(...))
+			 */
+			function decisionRows(list = []) {
+				const arr = Array.isArray(list) ? list : [];
+				const pad = (n) => String(n).padStart(2, "0");
+				return arr.map((r) => {
+					const rec = r && typeof r === "object" ? r : {};
+					const at = Number(rec.at) || 0;
+					let time = "";
+					if (at) { const d = new Date(at); time = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()); }
+					return {
+						seq: Number(rec.seq) || 0,
+						input: String(rec.input || ""),
+						decision: String(rec.decision || ""),
+						reason: String(rec.reason || ""),
+						dim: String(rec.dim || ""),
+						sessionId: String(rec.sessionId || ""),
+						time: time
+					};
+				});
+			}
+			
+			/**
+			 * WS-B · B1：把台账 items 当作「流转记录」做统一 id 语义校验。
+			 *
+			 * 🔴 主键必须是**会话 id**（sid/sessionId），不是 `ws_…` 作用域 id。
+			 *    这里复用 `logic/lineage.js#validateFlowSids`（唯一判据，纪律 126）——
+			 *    看板/导图/派发的三方对账都走它，不另写一份"sid 在不在集合里"。
+			 *
+			 * @param {Iterable<string>} sessionIds host 快照里的真实会话 id 集合
+			 * @returns {object} validateFlowSids 的返回体（ok / orphaned / leaks / missing…）
+			 */
+			function validateLogSids(sessionIds) {
+				return validateFlowSids(dispatchLog.items || [], sessionIds);
+			}
+			
+			/** 取台账里全部流转主键（sessionId），供看板/导图对账「条目数 == 会话数」 */
+			function flowSids() {
+				return (dispatchLog.items || [])
+					.map((it) => normalizeFlowSid(it && it.sessionId))
+					.filter(Boolean);
+			}
+			
 			/** 清空台账（**只清内存**；宿主里的分支会话不因此消失，这是刻意的） */
 			function clearDispatchLog() {
 				dispatchLog.at = 0;
@@ -7999,6 +8568,7 @@ window.__ModuleLoader__.load({
 				dispatchLog.kind = "";
 				dispatchLog.items = [];
 				dispatchLog.collect = null;
+				dispatchLog.decisions = [];
 				emit();
 				return dispatchLog;
 			}
@@ -8059,6 +8629,13 @@ window.__ModuleLoader__.load({
 			exports.patchDispatchItem = patchDispatchItem;
 			exports.setDispatchCollect = setDispatchCollect;
 			exports.dispatchItemOf = dispatchItemOf;
+			exports.recordDecision = recordDecision;
+			exports.readDecisions = readDecisions;
+			exports.decisionsFor = decisionsFor;
+			exports.lastDecisionFor = lastDecisionFor;
+			exports.decisionRows = decisionRows;
+			exports.validateLogSids = validateLogSids;
+			exports.flowSids = flowSids;
 			exports.clearDispatchLog = clearDispatchLog;
 			exports.applyDispatchLabels = applyDispatchLabels;
 		};
@@ -9902,14 +10479,22 @@ window.__ModuleLoader__.load({
 				const t = String(text == null ? "" : text);
 				if (!t.trim()) return { ok: false, mode: "failed", reason: "empty-text" };
 			
-				/* 🔴 干跑（需求 1）：**只填不发** —— 界面反馈照旧（用户/闸门都能看到文本进了输入框），
-				 *    但不点发送、不直投宿主 ⇒ **零模型调用**。
-				 *    返回 `mode:"dry-run"` 而不是 failed：这是**有意为之**的跳过，不是失败
-				 *    （纪律 58：没跑成 ≠ 失败，两者必须可分）。 */
-				if (isDryRun() && opts.autoSend !== false) {
+				/* 🔴 干跑（需求 1）：**零模型调用** —— 只填不发，界面反馈照旧（用户/闸门都能看到文本进了输入框），
+				 *    但不点发送、不直投宿主。返回 `mode:"dry-run"`：这是**有意为之**的跳过，不是失败
+				 *    （纪律 58：没跑成 ≠ 失败，两者必须可分）。
+				 *
+				 * 🔴 T-PLUG-075 可读性收紧：旧守卫 `isDryRun() && opts.autoSend !== false` 把
+				 *    "要不要干跑"与"本会不会自动发"**焊在一起** —— 读起来像"干跑还要看 autoSend"。
+				 *    拆成一句：**干跑判据只看 `isDryRun()`**；`autoSend === false` 是另一件事
+				 *    （调用方本来就只要"填了等我手动发"）⇒ 它的返回**必须仍是 `filled`**，
+				 *    不能被短路成 `dry-run`（verify-flow G2 按 mode∈{sent,filled,failed,dry-run} 对账）。 */
+				if (isDryRun()) {
 					let filled = false;
 					try { filled = Boolean(setComposerText(t)); } catch (e) { filled = false; }
-					return { ok: true, mode: "dry-run", via: "composer-only", dryRun: true, filled, opened: false };
+					/* autoSend===false：契约 = `filled`（填了不发，等用户手动发）；否则 = `dry-run` */
+					return opts.autoSend === false
+						? { ok: true, mode: "filled", via: "composer-only", dryRun: true, filled, opened: false }
+						: { ok: true, mode: "dry-run", via: "composer-only", dryRun: true, filled, opened: false };
 				}
 			
 				/* ① 宿主直投：指令已由插件侧处理完，应**直接**进对话域，
@@ -12497,401 +13082,6 @@ window.__ModuleLoader__.load({
 			exports.DIM_BRANCH_ORIGIN = DIM_BRANCH_ORIGIN;
 			exports.dimBranchContext = dimBranchContext;
 			exports.installDimBranchApi = installDimBranchApi;
-		};
-
-		// ── logic/lineage.js ──
-		__defs["logic/lineage.js"] = function (exports) {
-			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
-			 * 职责：上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
-			 * 引用：19 号文 §3.2 · 19 号文 §3.4
-			 * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js
-			 * 下游：（无）
-			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
-			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
-			 * @map:end */
-			/**
-			 * logic/lineage.js — 上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 * 它治的是什么（用户原话，逐字）
-			 * ──────────────────────────────────────────────────────────────────
-			 *   「**同一个分支上下游的总监消息需要是一致的**」
-			 *   + 「总监对话的持续性一直没有看到」
-			 *
-			 * 🔴 根因（源码逐行，不是推测）：
-			 *   `logic/branch-focus.js` 只有 `upstreamChain()` / `downstreamIds()` —— 那是**视图聚焦范围**，
-			 *   即"导图上显示哪几个框"；它对**消息语义零贡献**。
-			 *   全仓 `grep` 无任何"同一血缘 = 同一事实"的表达 ⇒ 上游看不到下游摘要、
-			 *   下游自造边界、同一需求两处文本不一致，**谁都不报错**。
-			 *
-			 * ── 🔴 三条不可逾越的纪律 ──────────────────────────────────────────
-			 *   ① **纯函数**：无 DOM / 无 store / 无时钟 / 不改入参 ⇒ 同输入必同输出。
-			 *      本模块是 UI（总监页上游摘要行）与闸门（`test-lineage-msg.mjs`）共用的
-			 *      **同一份判据**；一旦它有副作用，两边就各测各的，"全绿"不再有意义。
-			 *   ② **信封只增字段**（冻结契约：只许新增，不可改名）：`env` 全部可选，
-			 *      缺省时**退化为旧行为** ⇒ 既有调用点零改动可跑。
-			 *   ③ **不得把 `env` 塞进 `text`** —— 会污染语言整理（`organize()`）与既有正则判据。
-			 *      信封是 `msg.env` 这个**独立字段**（与 `msg.meta` 并列，不是它的子集）。
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 * 四条规则（§3.4 · 每条一个可跑判据）
-			 * ──────────────────────────────────────────────────────────────────
-			 *   R1 同一事实同源  → `factKey()` 全等（**`===` 级**，不是 includes 前缀）
-			 *   R2 上游可见摘要  → `summariesFor()` 返回下游摘要行（带 `env.parent` 指回）
-			 *   R3 下游带上游约束 → `carriesBound()` 逐字包含上游 `bound`
-			 *   R4 范围 = 血缘    → `auditLineage()` 检查 `env.root` 内的 `env.parent` 不跨根
-			 *
-			 * ⚠️ R1 的反例（19 号文 §3.4 点名）：只比 `includes` ⇒ 「A3 剧情」与「A3 剧情线」
-			 *    的前缀关系会让**不同事实**通过 ⇒ 必须全等。
-			 */
-			
-			/** 投递通道（19 号文 §3.2 · 与 `routing.js` 的 `DESTINATION` 同值域 + 新增 `local`） */
-			const VIA = Object.freeze({
-				LOCAL: "local",
-				TRANSFER: "transfer",
-				DIRECT: "direct",
-				CREATE: "create"
-			});
-			
-			/** 信封字段白名单（**只增不改**；新增字段时同步这里与 `makeEnvelope`） */
-			const ENV_FIELDS = Object.freeze([
-				"id", "from", "to", "via", "round", "root", "parent", "ref", "cause"
-			]);
-			
-			/** 事实字段（R1 比较的**唯一**集合；两侧都从同一个 `factOf` 取，禁止各自格式化） */
-			const FACT_FIELDS = Object.freeze(["reqText", "novelName", "dims"]);
-			
-			/**
-			 * 构造信封（19 号文 §3.2）。
-			 * @param {{id?:string,from?:string,to?:string,via?:string,round?:number,root?:string,parent?:string,ref?:string,cause?:string}} [o]
-			 * @param {{self?:string}} [fallback] `self` 用于补 `root`（血缘根缺省 = 自身）
-			 * @returns {{id:string,from:string|null,to:string|null,via:string,round:number,root:string|null,parent:string|null,ref:string|null,cause:string}}
-			 */
-			function makeEnvelope(o = {}, fallback = {}) {
-				/* 🔴 显式传 `null` 必须**不抛穿**（本仓实测：`makeEnvelope(x, null)` 曾直接
-				 *   `Cannot read properties of null (reading 'self')`）。
-				 *   为什么这个细节重要：默认参数 `fallback = {}` **只对 `undefined` 生效**，
-				 *   `null` 会穿透 ⇒ 调用方写 `makeEnvelope(o, maybeNull)` 就炸。
-				 *   而本模块在**执行链**上（派发/路由都可能调）⇒ 抛穿会让整条链静默失效（纪律 100）。 */
-				const fb = (fallback && typeof fallback === "object") ? fallback : {};
-				const self = fb.self ? String(fb.self) : null;
-				const raw = o || {};
-				const viaRaw = raw.via == null ? VIA.LOCAL : String(raw.via);
-				/* 🔴 **按「值」校验，不是按「键」**（LM-1d 实测踩到，纪律 31「报绿先审口径」）：
-				 *    首版写 `hasOwnProperty(VIA, via.toUpperCase())` —— `VIA` 的键是
-				 *    `LOCAL/TRANSFER/direct/...`（常量名），值是 `"local"`。
-				 *    ⇒ 传 `"TRANSFER"` 时键命中 ⇒ **原样透出大写 `"TRANSFER"`**，
-				 *    下游按 `=== "transfer"` 比较的地方全部静默失配。
-				 *    正解：拿**值域数组**比对，并归一为小写。 */
-				const VIA_VALUES = [VIA.LOCAL, VIA.TRANSFER, VIA.DIRECT, VIA.CREATE];
-				const viaLower = viaRaw.toLowerCase();
-				const viaOk = VIA_VALUES.indexOf(viaLower) >= 0;
-				const via = viaOk ? viaLower : VIA.LOCAL;
-				const round = Number(raw.round);
-				return {
-					id: raw.id ? String(raw.id) : "",
-					from: raw.from ? String(raw.from) : self,
-					to: raw.to ? String(raw.to) : null,
-					via: via,
-					round: Number.isFinite(round) && round >= 0 ? round : 0,
-					root: raw.root ? String(raw.root) : self,
-					parent: raw.parent ? String(raw.parent) : null,
-					ref: raw.ref ? String(raw.ref) : null,
-					/* 非法 via 不静默接受：落到 `local` 并**在 cause 里说明**（纪律 19「降级可以，无声不行」） */
-					cause: (raw.cause == null ? "" : String(raw.cause))
-						+ (viaOk ? "" : (raw.cause ? "；" : "") + "非法 via「" + viaRaw + "」⇒ 降级为 local")
-				};
-			}
-			
-			/**
-			 * 归一化**已存在**的信封（旧消息没有 `env` ⇒ 返回 `null`，调用方据此走旧行为）。
-			 * 与 `makeEnvelope` 的差别：这里**不补 `from`/`root`**（不知道的就保持 null，
-			 * 而不是拿当前节点冒充来源 —— 冒充会产生假血缘）。
-			 * @param {object|null|undefined} env
-			 * @param {string} [selfNodeId]
-			 */
-			function normalizeEnv(env, selfNodeId) {
-				if (!env || typeof env !== "object") return null;
-				const out = makeEnvelope(env, {});
-				if (!out.from && selfNodeId) out.from = String(selfNodeId);
-				if (!out.root) out.root = out.from || (selfNodeId ? String(selfNodeId) : null);
-				return out;
-			}
-			
-			/**
-			 * 🔴 **血缘内派生的唯一构造点**（跨节点转发 / 下游接收必须走它）。
-			 *
-			 * 为什么不能各处自己 `makeEnvelope`：
-			 *   `makeEnvelope` 的 `root` 缺省 = **自身** ⇒ 下游若忘了继承 `root`，
-			 *   这条消息会被分到**自己的**血缘组里，而**没有任何报错** ——
-			 *   表现与"本来就是两条无血缘的消息"**完全同形**（静默失效，纪律 36 同型）。
-			 *   本函数把「继承 root、parent 指向源、round+1」固化成一条路径。
-			 *
-			 * @param {object} srcEnv 源消息的信封（`envOf(srcRow)` 的返回值）
-			 * @param {{id?:string,to?:string,via?:string,cause?:string}} [o]
-			 * @returns {object} 新信封
-			 */
-			function childEnvelope(srcEnv, o = {}) {
-				const s = normalizeEnv(srcEnv, null) || {};
-				const raw = o || {};
-				return makeEnvelope({
-					id: raw.id ? String(raw.id) : "",
-					from: raw.from ? String(raw.from) : (s.to || s.from || null),
-					to: raw.to ? String(raw.to) : null,
-					via: raw.via == null ? VIA.TRANSFER : raw.via,
-					round: Number(s.round || 0) + 1,
-					root: s.root || s.id || null,
-					parent: s.id || null,
-					ref: raw.ref ? String(raw.ref) : (s.id || null),
-					cause: raw.cause == null ? "" : String(raw.cause)
-				}, {});
-			}
-			
-			/**
-			 * R1 · 事实规范化 —— **全仓唯一的格式化点**。
-			 * 上下游两边都调它 ⇒ "同源"是结构保证的，而不是靠人工比对。
-			 * @param {{reqText?:string,novelName?:string,dims?:Array<string>|string}} [fact]
-			 */
-			function factOf(fact) {
-				const f = fact || {};
-				const dims = Array.isArray(f.dims)
-					? f.dims.map((d) => String(d)).filter(Boolean).slice().sort()
-					: (f.dims == null || f.dims === "" ? [] : [String(f.dims)]);
-				return {
-					reqText: String(f.reqText == null ? "" : f.reqText).trim(),
-					novelName: String(f.novelName == null ? "" : f.novelName).trim(),
-					dims: dims
-				};
-			}
-			
-			/** R1 · 事实指纹（`===` 级比较的载体；分隔符用 `\u0000` 防拼接歧义） */
-			function factKey(fact) {
-				const f = factOf(fact);
-				return f.reqText + "\u0000" + f.novelName + "\u0000" + f.dims.join(",");
-			}
-			
-			/** R1 · 两条消息是否同源（都无事实 ⇒ 返回 null = **不适用**，不是 true） */
-			function sameFact(a, b) {
-				const fa = a && a.fact ? factOf(a.fact) : null;
-				const fb = b && b.fact ? factOf(b.fact) : null;
-				if (!fa || !fb) return null;
-				return factKey(fa) === factKey(fb);
-			}
-			
-			/** 从一行消息里取信封（行可能来自 IndexedDB 或内存，两条路径共用） */
-			function envOf(row) {
-				if (!row || typeof row !== "object") return null;
-				return normalizeEnv(row.env, row.nodeId ? String(row.nodeId) : null);
-			}
-			
-			/** 从一行消息里取事实（放在 `meta.fact` 或 `env.fact` 都认，优先 `meta`） */
-			function factOfRow(row) {
-				if (!row || typeof row !== "object") return null;
-				const a = row.meta && row.meta.fact ? row.meta.fact : null;
-				const b = row.env && row.env.fact ? row.env.fact : null;
-				const f = a || b;
-				return f ? factOf(f) : null;
-			}
-			
-			/**
-			 * 按 `env.root` 分血缘组。
-			 * @returns {{groups:Object<string,Array>, orphans:Array, rawCount:number}}
-			 *   🔴 `orphans` = 无 `env` 的旧消息（不计入任何血缘，也**不丢**）
-			 *   ⇒ 调用方须能对账 `rows = 组内条数 + orphans`（纪律 78「单一真相源」）
-			 */
-			function lineageGroups(rows) {
-				const all = Array.isArray(rows) ? rows : [];
-				const groups = {};
-				const orphans = [];
-				for (const r of all) {
-					const e = envOf(r);
-					if (!e) { orphans.push(r); continue; }
-					const key = e.root || "(无根)";
-					(groups[key] = groups[key] || []).push(r);
-				}
-				return { groups: groups, orphans: orphans, rawCount: all.length };
-			}
-			
-			/**
-			 * 沿 `env.parent` 向上回溯（**不含自身**，远 → 近）。
-			 * 环保护：`seen` 集截断。父不在 rows ⇒ 止于此，不报错。
-			 * @returns {Array}
-			 */
-			function ancestorsOf(rows, msgId) {
-				const all = Array.isArray(rows) ? rows : [];
-				const byId = new Map();
-				for (const r of all) {
-					const e = envOf(r);
-					if (e && e.id) byId.set(e.id, r);
-				}
-				const out = [];
-				const seen = new Set([String(msgId)]);
-				let cur = all.find((r) => { const e = envOf(r); return e && e.id === String(msgId); });
-				while (cur) {
-					const e = envOf(cur);
-					const pid = e && e.parent;
-					if (!pid || seen.has(pid) || !byId.has(pid)) break;
-					seen.add(pid);
-					cur = byId.get(pid);
-					out.unshift(cur);
-				}
-				return out;
-			}
-			
-			/** 血缘内全部后代（含自身）；兄弟枝**不含** */
-			function descendantsOf(rows, msgId) {
-				const all = Array.isArray(rows) ? rows : [];
-				const kids = new Map();
-				for (const r of all) {
-					const e = envOf(r);
-					if (!e || !e.parent) continue;
-					const arr = kids.get(e.parent) || [];
-					arr.push(r);
-					kids.set(e.parent, arr);
-				}
-				const out = [];
-				const seen = new Set();
-				const stack = [String(msgId)];
-				while (stack.length) {
-					const id = stack.pop();
-					if (seen.has(id)) continue; // 环保护
-					seen.add(id);
-					for (const r of all) { const e = envOf(r); if (e && e.id === id) out.push(r); }
-					for (const k of kids.get(id) || []) { const ke = envOf(k); if (ke && ke.id) stack.push(ke.id); }
-				}
-				return out;
-			}
-			
-			/** R2 · 下游摘要行（上游列表里显示这一行 = "看得见下游产出"） */
-			function summaryLine(row) {
-				const e = envOf(row);
-				const f = factOfRow(row);
-				const text = String((row && row.text) || "").replace(/\s+/g, " ").trim();
-				const head = e && e.to ? "【下游 · " + e.to + "】" : "【下游】";
-				const name = f && f.novelName ? "《" + f.novelName + "》" : "";
-				return head + name + (text ? " " + text.slice(0, 80) : "");
-			}
-			
-			/**
-			 * R2 · 某节点**作为上游**应看到的摘要行（= 它的血缘后代里带 `to` 的最近一层）。
-			 * @returns {Array<{messageId:string, line:string, from:string|null}>}
-			 */
-			function summariesFor(rows, nodeId) {
-				const all = Array.isArray(rows) ? rows : [];
-				const nid = String(nodeId);
-				const envs = all.map((r) => ({ row: r, e: envOf(r) })).filter((x) => x.e);
-				const mine = envs.filter((x) => x.e.from === nid || x.e.root === nid || x.e.to === nid);
-				const ids = new Set(mine.map((x) => x.e.id).filter(Boolean));
-				const out = [];
-				for (const x of envs) {
-					if (!x.e.parent || !ids.has(x.e.parent)) continue;   // parent 指回本血缘才收
-					out.push({
-						messageId: x.e.id,
-						line: summaryLine(x.row),
-						from: x.e.from
-					});
-				}
-				return out;
-			}
-			
-			/** R3 · 下游简报是否**逐字**带上游约束（`indexOf` 而非前缀/模糊匹配） */
-			function carriesBound(brief, upstreamBound) {
-				const b = String(brief == null ? "" : brief);
-				const u = String(upstreamBound == null ? "" : upstreamBound).trim();
-				if (!u) return null;                        // 上游无 bound ⇒ 不适用
-				return b.indexOf(u) >= 0;
-			}
-			
-			/**
-			 * R1 + R4 · 血缘一致性审计（UI 读数与闸门共用；返回**问题清单**，不只返回 t/f）。
-			 * @param {Array} rows 消息行（跨多个节点，例如全库或某血缘）
-			 * @returns {{ok:boolean, issues:Array<{code:string,detail:string}>, stats:object}}
-			 */
-			function auditLineage(rows) {
-				const all = Array.isArray(rows) ? rows : [];
-				const { groups, orphans, rawCount } = lineageGroups(all);
-				const issues = [];
-				let sameFactPairs = 0;
-			
-				for (const root of Object.keys(groups)) {
-					const g = groups[root];
-					/* R4：组内每条消息的 root 必须一致（分组保证），但**跨根 parent** 必须为空 */
-					const ids = new Set(g.map((r) => { const e = envOf(r); return e && e.id; }).filter(Boolean));
-					for (const r of g) {
-						const e = envOf(r);
-						if (e.parent && !ids.has(e.parent)) {
-							/* parent 指向组外 ⇒ 要么父消息不在本次入参里（正常：分页/按节点查），
-							 * 要么**跨血缘**（异常）。用 `root` 是否能成立来分辨。 */
-							const foreign = all.some((x) => {
-								const xe = envOf(x);
-								return xe && xe.id === e.parent && xe.root !== e.root;
-							});
-							if (foreign) issues.push({ code: "R4-cross-root", detail: "parent " + e.parent + " 属别的血缘（" + root + "）" });
-						}
-					}
-					/* R1：同组内**所有带事实的消息**必须同源 */
-					const withFact = g.filter((r) => factOfRow(r));
-					const keys = {};
-					for (const r of withFact) {
-						const k = factKey(factOfRow(r));
-						keys[k] = (keys[k] || 0) + 1;
-					}
-					const distinct = Object.keys(keys);
-					if (distinct.length > 1) {
-						issues.push({
-							code: "R1-not-same-fact",
-							detail: "血缘 " + root + " 内出现 " + distinct.length + " 种事实（应恰好 1 种）"
-						});
-					}
-					if (withFact.length >= 2 && distinct.length === 1) sameFactPairs++;
-				}
-			
-				return {
-					ok: issues.length === 0,
-					issues: issues,
-					stats: {
-						groups: Object.keys(groups).length,
-						orphans: orphans.length,
-						rawCount: rawCount,
-						/* 🔴 单一真相源对账（纪律 78）：组内 + 孤儿 必须等于入参总数 */
-						accounted: rawCount === (rawCount - orphans.length) + orphans.length,
-						consistentGroups: sameFactPairs
-					}
-				};
-			}
-			
-			/** 安装全局契约（供真机脚本调用；与 `installBranchFocusApi` 同风格） */
-			function installLineageApi() {
-				if (typeof window === "undefined") return null;
-				const api = {
-					VIA, ENV_FIELDS, FACT_FIELDS,
-					makeEnvelope, normalizeEnv, childEnvelope, factOf, factKey, sameFact,
-					envOf, factOfRow, lineageGroups, ancestorsOf, descendantsOf,
-					summaryLine, summariesFor, carriesBound, auditLineage
-				};
-				window.__dshLineage = api;
-				return api;
-			}
-			
-			exports.VIA = VIA;
-			exports.ENV_FIELDS = ENV_FIELDS;
-			exports.FACT_FIELDS = FACT_FIELDS;
-			exports.makeEnvelope = makeEnvelope;
-			exports.normalizeEnv = normalizeEnv;
-			exports.childEnvelope = childEnvelope;
-			exports.factOf = factOf;
-			exports.factKey = factKey;
-			exports.sameFact = sameFact;
-			exports.envOf = envOf;
-			exports.factOfRow = factOfRow;
-			exports.lineageGroups = lineageGroups;
-			exports.ancestorsOf = ancestorsOf;
-			exports.descendantsOf = descendantsOf;
-			exports.summaryLine = summaryLine;
-			exports.summariesFor = summariesFor;
-			exports.carriesBound = carriesBound;
-			exports.auditLineage = auditLineage;
-			exports.installLineageApi = installLineageApi;
 		};
 
 		// ── logic/director-inherit.js ──
@@ -19630,6 +19820,11 @@ window.__ModuleLoader__.load({
 					thread: Array.isArray(p.thread) ? p.thread : [],
 					/* 版本快照：新建图**无版本**（= 还没保存过）⇒ 顶栏显示"未保存"而不是"v0" */
 					versions: Array.isArray(p.versions) ? p.versions.map(normalizeVersion).filter(Boolean) : [],
+					/* D1: design artifact = L2 output; carry branch/version lineage. Written only via setBranchMeta(). */
+					branchId: p.branchId == null ? "" : String(p.branchId),
+					branchDim: p.branchDim == null ? "" : String(p.branchDim),
+					branchLabel: p.branchLabel == null ? "" : String(p.branchLabel),
+					producedAt: Number.isFinite(p.producedAt) ? Number(p.producedAt) : 0,
 					createdAt: p.createdAt || now,
 					updatedAt: now,
 					revision: Number(p.revision || 0) + 1
@@ -19652,10 +19847,32 @@ window.__ModuleLoader__.load({
 					 *    此处补空数组而不是补一个"自动版本" —— 补出来的版本会让用户以为曾经保存过。
 					 *    代价是首次升级时所有图显示"未保存"，属**正确**的诚实显示。 */
 					versions: (raw.versions || []).map(normalizeVersion).filter(Boolean),
+					/* D1 back-compat: docs frozen before this change have no branch meta; default empty (no invented lineage). */
+					branchId: raw.branchId == null ? "" : String(raw.branchId),
+					branchDim: raw.branchDim == null ? "" : String(raw.branchDim),
+					branchLabel: raw.branchLabel == null ? "" : String(raw.branchLabel),
+					producedAt: Number.isFinite(raw.producedAt) ? Number(raw.producedAt) : 0,
 					createdAt: raw.createdAt || Date.now(),
 					updatedAt: raw.updatedAt || Date.now(),
 					revision: Number(raw.revision || 0)
 				};
+			}
+			
+			/**
+			 * D1 single write point: stamp branch/version lineage onto a design doc (immutable, returns new doc).
+			 * Whitelisted fields only; UI must never write doc.branchId directly (discipline 126). Parallels task-state#setField.
+			 * @param {object} doc
+			 * @param {{branchId?:string,branchDim?:string,branchLabel?:string,producedAt?:number}} meta
+			 */
+			function setBranchMeta(doc, meta = {}) {
+				const d = doc && typeof doc === "object" ? doc : {};
+				const m = meta && typeof meta === "object" ? meta : {};
+				const next = { ...d, thread: Array.isArray(d.thread) ? d.thread.slice() : [], versions: Array.isArray(d.versions) ? d.versions.slice() : [] };
+				if (Object.prototype.hasOwnProperty.call(m, "branchId")) next.branchId = m.branchId == null ? "" : String(m.branchId);
+				if (Object.prototype.hasOwnProperty.call(m, "branchDim")) next.branchDim = m.branchDim == null ? "" : String(m.branchDim);
+				if (Object.prototype.hasOwnProperty.call(m, "branchLabel")) next.branchLabel = m.branchLabel == null ? "" : String(m.branchLabel);
+				if (Object.prototype.hasOwnProperty.call(m, "producedAt")) next.producedAt = Number.isFinite(m.producedAt) ? Number(m.producedAt) : (next.producedAt || 0);
+				return next;
 			}
 			
 			/** 文档统计（左侧面板与状态栏显示用） */
@@ -19709,6 +19926,7 @@ window.__ModuleLoader__.load({
 			exports.versionSummary = versionSummary;
 			exports.createDesignDoc = createDesignDoc;
 			exports.normalizeDoc = normalizeDoc;
+			exports.setBranchMeta = setBranchMeta;
 			exports.docStats = docStats;
 		};
 
@@ -22215,7 +22433,9 @@ window.__ModuleLoader__.load({
 						key: "top", style: { ...S.top, paddingRight: Math.max(10, inset + 10) }, "data-testid": "ds-top"
 					}, [
 						/* ── 域标识（V17 P0：用户始终知道自己在哪个域） ── */
-						h("span", { key: "dom", style: { fontSize: "calc(10.5px * var(--dp-font))", fontWeight: 600, color: "#7fe3e8", marginRight: 4, letterSpacing: ".3px", whiteSpace: "nowrap" }, "data-testid": "ds-domain" }, "◈ 设计图"),
+						h("span", { key: "dom", style: { fontSize: "calc(10.5px * var(--dp-font))", fontWeight: 600, color: "#7fe3e8", marginRight: 4, letterSpacing: ".3px", whiteSpace: "nowrap" }, "data-testid": "ds-domain" }, "◈ 设计图"),,
+						/* D1: branch/version lineage badge. Hidden when the doc has no branch meta (honest empty state). */
+						(doc && (doc.branchLabel || doc.branchDim)) ? h("span", { key: "bm", "data-testid": "ds-branch-meta", "data-branch-id": doc.branchId || "", "data-branch-dim": doc.branchDim || "", style: { fontSize: "calc(10.5px * var(--dp-font))", color: "#9fb4ff", marginRight: 4, whiteSpace: "nowrap", opacity: .9 } }, "分支 " + (doc.branchDim ? doc.branchDim + " · " : "") + (doc.branchLabel || "")) : null,
 						/* ── ① 保存：**按钮即状态** ────────────────────────────────────────
 						 * 脏（有未保存改动）= 主色实心「● 保存」（最需要被看见）
 						 * 净（已保存）    = 绿色描边「✓ 已保存 vN」
@@ -24058,13 +24278,604 @@ window.__ModuleLoader__.load({
 			exports.NodeDetailPanel = NodeDetailPanel;
 		};
 
+		// ── logic/task-state.js ──
+		__defs["logic/task-state.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：任务状态机
+			 * 引用：—
+			 * 上游：client-entry.js, components/Board.js, components/DirectorPage.js, components/MindMap.js
+			 * 下游：（无）
+			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 六（A2A 九态机 · 两种暂停态 · 乐观并发）】
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/task-state.js — 任务状态机
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么需要它
+			 * ══════════════════════════════════════════════════════════════════
+			 *  改之前：任务在界面上只有三种样子 —— 「转圈」「有字了」「报错了」。
+			 *  用户看到转圈时无法分辨：是在跑？在等我点确认？还是在等我补一句输入？
+			 *  这三件事在 UI 上**必须不一样**，否则「驾驶舱」这个产品名就落不到实处。
+			 *
+			 *  A2A 协议把这件事定成了九态，其中关键的是把暂停拆成两个：
+			 *    INPUT_REQUIRED（在等你给信息） 与 AUTH_REQUIRED（在等你批准）
+			 *  ⇒ 界面因此可以给出两种不同的动作按钮，而不是一个笼统的「继续」。
+			 *
+			 * ══════════════════════════════════════════════════════════════════
+			 *  九态与三组
+			 * ══════════════════════════════════════════════════════════════════
+			 *   Running   SUBMITTED → WORKING
+			 *   Paused    INPUT_REQUIRED / AUTH_REQUIRED
+			 *   Finished  COMPLETED / FAILED / CANCELED / REJECTED
+			 *
+			 *  🔴 两条规则（都是「防止静默」）：
+			 *   ① **终态不可再转移** —— 已完成的活儿被偷偷改回 WORKING，
+			 *      会让时间线与统计全部失真。
+			 *   ② **自转移只有 WORKING → WORKING 合法**（表示进度更新）；
+			 *      其余自转移一律拒绝，因为它们通常是**状态没变却记了一笔**的 bug。
+			 *
+			 * ⚠️ 本文件**零 import**（同规，便于离线单测）。
+			 */
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、状态定义
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 九态 */
+			const STATE = Object.freeze({
+				SUBMITTED: "SUBMITTED",
+				WORKING: "WORKING",
+				INPUT_REQUIRED: "INPUT_REQUIRED",
+				AUTH_REQUIRED: "AUTH_REQUIRED",
+				COMPLETED: "COMPLETED",
+				FAILED: "FAILED",
+				CANCELED: "CANCELED",
+				REJECTED: "REJECTED"
+			});
+			
+			/** 状态分组 */
+			const GROUP = Object.freeze({ RUNNING: "running", PAUSED: "paused", FINISHED: "finished" });
+			
+			/** 状态元数据：label 给界面，group 给筛选，action 给按钮文案 */
+			const STATES = Object.freeze([
+				{ key: STATE.SUBMITTED, label: "已提交", group: GROUP.RUNNING, icon: "⏱", action: "" },
+				{ key: STATE.WORKING, label: "执行中", group: GROUP.RUNNING, icon: "▶", action: "" },
+				{ key: STATE.INPUT_REQUIRED, label: "待补充信息", group: GROUP.PAUSED, icon: "✎", action: "补充信息" },
+				{ key: STATE.AUTH_REQUIRED, label: "待批准", group: GROUP.PAUSED, icon: "⛨", action: "批准 / 驳回" },
+				{ key: STATE.COMPLETED, label: "已完成", group: GROUP.FINISHED, icon: "✓", action: "" },
+				{ key: STATE.FAILED, label: "失败", group: GROUP.FINISHED, icon: "✕", action: "重试" },
+				{ key: STATE.CANCELED, label: "已取消", group: GROUP.FINISHED, icon: "⊘", action: "" },
+				{ key: STATE.REJECTED, label: "已驳回", group: GROUP.FINISHED, icon: "⊖", action: "重做" }
+			]);
+			
+			const BY_KEY = new Map(STATES.map((s) => [s.key, s]));
+			
+			/** 取状态元数据（未知态回落 SUBMITTED，不返回 undefined） */
+			function stateOf(key) {
+				return BY_KEY.get(key) || STATES[0];
+			}
+			
+			/** 是否终态（不可再转移） */
+			function isTerminal(key) {
+				return stateOf(key).group === GROUP.FINISHED;
+			}
+			
+			/** 是否暂停态（等人） */
+			function isPaused(key) {
+				return stateOf(key).group === GROUP.PAUSED;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、合法转移表
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 合法转移。
+			 * 🔴 WORKING → WORKING 合法（进度更新，不会推进时间线但会记一笔事件）；
+			 *    其余自转移非法（通常是「状态没变却记了一笔」的 bug）。
+			 */
+			const TRANSITIONS = Object.freeze({
+				SUBMITTED: [STATE.WORKING, STATE.FAILED, STATE.CANCELED, STATE.REJECTED],
+				WORKING: [STATE.WORKING, STATE.INPUT_REQUIRED, STATE.AUTH_REQUIRED, STATE.COMPLETED, STATE.FAILED, STATE.CANCELED],
+				INPUT_REQUIRED: [STATE.WORKING, STATE.CANCELED, STATE.FAILED],
+				AUTH_REQUIRED: [STATE.WORKING, STATE.COMPLETED, STATE.REJECTED, STATE.CANCELED, STATE.FAILED],
+				COMPLETED: [],
+				FAILED: [],
+				CANCELED: [],
+				REJECTED: []
+			});
+			
+			/**
+			 * 能否从 from 转到 to。
+			 * @returns {{ok:boolean, reason:string}}
+			 */
+			function canTransition(from, to) {
+				const a = stateOf(from).key;
+				const b = stateOf(to).key;
+				const allowed = TRANSITIONS[a] || [];
+				if (isTerminal(a)) return { ok: false, reason: "「" + stateOf(a).label + "」是终态，不可再转移" };
+				if (a === b && a !== STATE.WORKING) return { ok: false, reason: "自转移非法（" + stateOf(a).label + " → 自身）；只有执行中→执行中（进度更新）允许" };
+				if (!allowed.includes(b)) {
+					return { ok: false, reason: "非法转移：" + stateOf(a).label + " → " + stateOf(b).label + "（允许：" + (allowed.map((x) => stateOf(x).label).join("、") || "无") + "）" };
+				}
+				return { ok: true, reason: stateOf(a).label + " → " + stateOf(b).label };
+			}
+			
+			/** 所有合法转移（UI 上画状态机图用；来自同一真相源，不单独维护一份） */
+			function transitionTable() {
+				return Object.entries(TRANSITIONS).map(([from, tos]) => ({
+					from,
+					fromLabel: stateOf(from).label,
+					to: tos.slice(),
+					toLabels: tos.map((t) => stateOf(t).label)
+				}));
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、任务对象与事件流
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 新建一个任务 */
+			function createTask(init = {}) {
+				const t = init && typeof init === "object" ? init : {};
+				return {
+					id: t.id ? String(t.id) : ("task-" + Date.now().toString(36)),
+					title: t.title ? String(t.title) : "",
+					sessionId: t.sessionId ? String(t.sessionId) : "",
+					state: Object.values(STATE).includes(t.state) ? t.state : STATE.SUBMITTED,
+					createdAt: Number.isFinite(t.createdAt) ? t.createdAt : Date.now(),
+					updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : Date.now(),
+					/* 未决的人工请求：**必须跟着任务一起持久化** ——
+					 * 否则用户关掉面板再打开，那个待审批项就丢了（AutoGen/MAF 的 checkpoint 教训） */
+					pending: t.pending && typeof t.pending === "object" ? { ...t.pending } : null,
+					transitions: Array.isArray(t.transitions) ? t.transitions.slice() : [],
+					error: t.error ? String(t.error) : "",
+					/* 看板层字段（WS-B · B2；createTask 必须保留，否则 setField 一归一就丢） */
+					pinned: t.pinned === true,
+					summary: t.summary ? String(t.summary) : "",
+					projectRoot: t.projectRoot ? String(t.projectRoot) : "",
+					partial: t.partial === true
+				};
+			}
+			
+			/**
+			 * 执行一次状态转移。**不做就地修改**（返回新对象），便于快照与撤销。
+			 *
+			 * @param {object} task
+			 * @param {string} to
+			 * @param {object} [meta] { at?:number, expected?:string, note?:string, pending?:object }
+			 * @returns {{ok:boolean, task:object, event:object|null, reason:string}}
+			 */
+			function transition(task, to, meta = {}) {
+				const t = createTask(task);
+				const chk = canTransition(t.state, to);
+				const at = Number.isFinite(meta.at) ? meta.at : Date.now();
+			
+				if (!chk.ok) {
+					return {
+						ok: false, task: t, event: null,
+						reason: chk.reason
+					};
+				}
+			
+				/* 乐观并发：调用方声明的 expected 与当前不符 ⇒ 拒绝（防止基于陈旧状态写入） */
+				if (meta.expected && meta.expected !== t.state) {
+					return {
+						ok: false, task: t, event: null,
+						reason: "状态已变（期望 " + stateOf(meta.expected).label + "，实际 " + stateOf(t.state).label + "）⇒ 拒绝写入"
+					};
+				}
+			
+				const event = {
+					seq: t.transitions.length + 1,
+					from: t.state,
+					to: stateOf(to).key,
+					at,
+					note: meta.note ? String(meta.note) : ""
+				};
+			
+				const next = {
+					...t,
+					state: event.to,
+					updatedAt: at,
+					transitions: t.transitions.concat(event),
+					error: event.to === STATE.FAILED ? (meta.note || t.error || "未说明原因") : t.error,
+					pending: Object.prototype.hasOwnProperty.call(meta, "pending") ? meta.pending : t.pending
+				};
+				/* 离开暂停态 ⇒ 清掉未决请求（否则界面上会一直挂着"待批准"） */
+				if (isPaused(t.state) && !isPaused(event.to)) next.pending = null;
+			
+				return { ok: true, task: next, event, reason: chk.reason };
+			}
+			
+			/**
+			 * D3 执行逻辑：幂等推进薄壳（**复用** transition/canTransition，不另造转移表 —— 纪律126）。
+			 *  ① 幂等：已是目标态 ⇒ 原样返回、不记新事件、不报错（WORKING 进度心跳是唯一例外：meta.heartbeat 才记一笔）。
+			 *  ② blocked 必带因：to 落到失败态（看板 BLOCKED）时 meta.reason/note 必须非空，否则拒绝 —— 失败不静默。
+			 *  ③ 可回放：成功仍走 transition 追加事件，timeline() 可完整重放。
+			 * @returns {{ok:boolean, task:object, event:object|null, reason:string}}
+			 */
+			function advance(task, to, meta = {}) {
+				const t = createTask(task);
+				const toKey = stateOf(to).key;
+				const reason = meta.reason ? String(meta.reason) : "";
+				/* ① 幂等：已是目标态 ⇒ 无副作用返回 */
+				if (t.state === toKey) {
+					if (t.state === STATE.WORKING && meta.heartbeat === true) return transition(t, to, meta);
+					return { ok: true, task: t, event: null, reason: "幂等：已是「" + stateOf(t.state).label + "」，不重复推进" };
+				}
+				/* ② blocked 必带因 */
+				if (toKey === STATE.FAILED) {
+					const why = (reason || (meta.note ? String(meta.note) : "")).trim();
+					if (!why) return { ok: false, task: t, event: null, reason: "blocked 必带因：转「失败」必须给 meta.reason（失败不静默）" };
+				}
+				/* reason 兜底进 note，让 transition 把原因写进 task.error */
+				const merged = (meta.note || !reason) ? meta : Object.assign({}, meta, { note: reason });
+				return transition(t, to, merged);
+			}
+			
+			/**
+			 * 状态时间线（UI 直接渲染）：每条带可读文案。
+			 * @returns {Array<{seq:number, at:number, label:string, fromLabel:string, toLabel:string, note:string, waitMs:number}>}
+			 */
+			function timeline(task) {
+				const t = createTask(task);
+				return t.transitions.map((e, i) => {
+					const prevAt = i > 0 ? t.transitions[i - 1].at : t.createdAt;
+					return {
+						seq: e.seq,
+						at: e.at,
+						fromLabel: stateOf(e.from).label,
+						toLabel: stateOf(e.to).label,
+						label: stateOf(e.from).label + " → " + stateOf(e.to).label,
+						note: e.note,
+						waitMs: Math.max(0, e.at - prevAt)
+					};
+				});
+			}
+			
+			/** 任务摘要（给列表用） */
+			function taskSummary(task) {
+				const t = createTask(task);
+				const meta = stateOf(t.state);
+				const paused = isPaused(t.state);
+				return {
+					id: t.id,
+					title: t.title,
+					state: t.state,
+					label: meta.label,
+					group: meta.group,
+					icon: meta.icon,
+					/* 暂停态时告诉界面该显示什么按钮 —— 两个暂停态的按钮**不一样** */
+					action: paused ? (t.pending && t.pending.action ? String(t.pending.action) : meta.action) : "",
+					pending: paused ? t.pending : null,
+					elapsedMs: Math.max(0, (t.updatedAt || t.createdAt) - t.createdAt),
+					steps: t.transitions.length,
+					error: t.error
+				};
+			}
+			
+			/**
+			 * 按组筛选（界面上的三个筛选页签）。
+			 * @param {Array} tasks
+			 */
+			function groupTasks(tasks) {
+				const out = { [GROUP.RUNNING]: [], [GROUP.PAUSED]: [], [GROUP.FINISHED]: [] };
+				for (const t of (Array.isArray(tasks) ? tasks : [])) {
+					const s = taskSummary(t);
+					out[s.group].push(s);
+				}
+				return out;
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、一致性检查（这套状态机自己也要被验）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 状态机结构自检。四条：
+			 *   ① 每个状态的转移目标都是**已定义的状态**
+			 *   ② 终态出边为 0
+			 *   ③ 从 SUBMITTED 可达全部**非终态**（否则有些状态永远进不去 = 死代码）
+			 *   ④ 每个非终态都能抵达至少一个终态（否则任务永远结束不了）
+			 * @returns {{ok:boolean, fails:string[]}}
+			 */
+			function auditMachine() {
+				const fails = [];
+				const keys = Object.keys(TRANSITIONS);
+			
+				for (const [from, tos] of Object.entries(TRANSITIONS)) {
+					for (const to of tos) {
+						if (!BY_KEY.has(to)) fails.push(from + " 指向未定义状态：" + to);
+					}
+					if (isTerminal(from) && tos.length > 0) fails.push(from + " 是终态却仍有出边：" + tos.join("、"));
+				}
+			
+				/* ③ 可达性 */
+				const seen = new Set([STATE.SUBMITTED]);
+				const q = [STATE.SUBMITTED];
+				while (q.length) {
+					const cur = q.shift();
+					for (const nxt of (TRANSITIONS[cur] || [])) {
+						if (!seen.has(nxt)) { seen.add(nxt); q.push(nxt); }
+					}
+				}
+				for (const k of keys) {
+					if (!seen.has(k)) fails.push("状态不可达（死代码）：" + k);
+				}
+			
+				/* ④ 每个非终态必须能到某个终态 */
+				for (const k of keys) {
+					if (isTerminal(k)) continue;
+					const seen2 = new Set([k]);
+					const q2 = [k];
+					let canFinish = false;
+					while (q2.length) {
+						const cur = q2.shift();
+						if (isTerminal(cur)) { canFinish = true; break; }
+						for (const nxt of (TRANSITIONS[cur] || [])) {
+							if (!seen2.has(nxt)) { seen2.add(nxt); q2.push(nxt); }
+						}
+					}
+					if (!canFinish) fails.push("非终态无法抵达任何终态（任务永远结束不了）：" + k);
+				}
+			
+				return { ok: fails.length === 0, fails };
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 六、看板层（WS-B · B2：board 只读视图 + 单一写入点）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  为什么需要它：
+			 *    上面九态机是 **A2A 执行态**（SUBMITTED/WORKING/INPUT_REQUIRED…）；
+			 *    看板要给人看的是 **六档结果态**（草稿/进行中/完成/部分/阻塞/中止）。
+			 *    两者**不是一一对应**，且看板还要带「置顶/摘要/项目根」三个 UI 字段。
+			 *
+			 *  🔴 两条铁律（贯穿 B2/B3/B4）：
+			 *    ① **单一写入点**：pin/summary/projectRoot/partial 一律走 `setPinned()` /
+			 *       `setField()` 等纯函数（返回新对象，**绝不就地改**）。
+			 *       UI 组件不得自己 `task.pinned = true` —— 那是纪律 126 的隐式断链。
+			 *    ② **看板只读 store**：`boardView()` 是**唯一**的分组拼装点。
+			 *       Board.js / MindMap.js 只**消费**它的返回值，不自己再 group/sort ——
+			 *       否则「看板分组」与「导图分组」又会各长各的。
+			 */
+			
+			/** 看板六档结果态（人读；与九态机解耦，但由它派生） */
+			const BOARD_STATE = Object.freeze({
+				DRAFT: "draft",       // 待办（SUBMITTED：派了还没跑）
+				RUNNING: "running",   // 进行中（WORKING 或暂停态：在跑/在等人）
+				DONE: "done",         // 已完成（COMPLETED）
+				PARTIAL: "partial",   // 部分完成（partial 标记：一部分分支成了一部分没成）
+				BLOCKED: "blocked",   // 阻塞（FAILED：红角标）
+				ABORTED: "aborted"    // 已中止（CANCELED / REJECTED）
+			});
+			
+			/** 看板组（Board.js 的四个折叠段；与 BOARD_STATE 的对应写死在这里，UI 不另推） */
+			const BOARD_GROUP = Object.freeze({
+				PINNED: "pinned",     // 置顶（跨组：任何档只要 pinned 就进这里，显示在最上）
+				RUNNING: "running",   // 进行中
+				TODO: "todo",         // 待完成（draft）
+				DONE: "done"          // 已完成（done/partial；blocked/aborted 仍归原档但带角标）
+			});
+			
+			/**
+			 * 九态 → 看板六档（**唯一派生点**）。
+			 * 🔴 partial 优先级高于 COMPLETED：一个任务部分分支成、部分没成，
+			 *    就该挂「部分」而不是绿勾（否则用户以为全成了）。
+			 */
+			function boardBucketOf(task) {
+				const t = createTask(task);
+				if (t.partial === true) return BOARD_STATE.PARTIAL;
+				switch (t.state) {
+					case STATE.COMPLETED: return BOARD_STATE.DONE;
+					case STATE.FAILED: return BOARD_STATE.BLOCKED;
+					case STATE.CANCELED:
+					case STATE.REJECTED: return BOARD_STATE.ABORTED;
+					case STATE.WORKING:
+					case STATE.INPUT_REQUIRED:
+					case STATE.AUTH_REQUIRED: return BOARD_STATE.RUNNING;
+					case STATE.SUBMITTED:
+					default: return BOARD_STATE.DRAFT;
+				}
+			}
+			
+			/** 看板组归位（pinned 单独抽出；其余按六档映射到四个折叠段） */
+			function boardGroupOf(task) {
+				const t = createTask(task);
+				if (t.pinned === true) return BOARD_GROUP.PINNED;
+				const bucket = boardBucketOf(t);
+				if (bucket === BOARD_STATE.RUNNING) return BOARD_GROUP.RUNNING;
+				if (bucket === BOARD_STATE.DRAFT) return BOARD_GROUP.TODO;
+				return BOARD_GROUP.DONE; // done / partial / blocked / aborted 都进「已完成」段（带角标）
+			}
+			
+			/**
+			 * 单一写入点：改任务的任意可选字段（pin/summary/projectRoot/partial）。
+			 * 🔴 返回**新对象**，不改入参（与 `transition` 同范式：可快照可撤销）。
+			 * 只允许改这四个白名单字段，其余字段不许借这个口子写（纪律 126）。
+			 */
+			function setField(task, patch = {}) {
+				const t = createTask(task);
+				const p = (patch && typeof patch === "object") ? patch : {};
+				const next = { ...t, transitions: t.transitions.slice() };
+				if (Object.prototype.hasOwnProperty.call(p, "pinned")) next.pinned = Boolean(p.pinned);
+				if (Object.prototype.hasOwnProperty.call(p, "summary")) next.summary = p.summary == null ? "" : String(p.summary);
+				if (Object.prototype.hasOwnProperty.call(p, "projectRoot")) next.projectRoot = p.projectRoot == null ? "" : String(p.projectRoot);
+				if (Object.prototype.hasOwnProperty.call(p, "partial")) next.partial = Boolean(p.partial);
+				return next;
+			}
+			
+			/** 单一写入点：置顶开关（语义糖，走 setField） */
+			function setPinned(task, pinned) {
+				return setField(task, { pinned: pinned });
+			}
+			
+			/**
+			 * 看板只读视图（**唯一分组拼装点**）。
+			 * Board.js / MindMap.js 只消费它，不自己 group/sort。
+			 *
+			 * @param {Array} tasks
+			 * @returns {{pinned:Array, running:Array, todo:Array, done:Array,
+			 *            counts:Object, total:number}}  每元素 = taskSummary + bucket/group
+			 */
+			function boardView(tasks) {
+				const all = Array.isArray(tasks) ? tasks : [];
+				const out = {
+					[BOARD_GROUP.PINNED]: [],
+					[BOARD_GROUP.RUNNING]: [],
+					[BOARD_GROUP.TODO]: [],
+					[BOARD_GROUP.DONE]: []
+				};
+				const counts = { pinned: 0, running: 0, todo: 0, done: 0, blocked: 0, aborted: 0, partial: 0 };
+				for (const raw of all) {
+					const t = createTask(raw);
+					const bucket = boardBucketOf(t);
+					const grp = boardGroupOf(t);
+					counts[bucket] = (counts[bucket] || 0) + 1;
+					counts[grp] = (counts[grp] || 0) + 1;
+					out[grp].push({
+						id: t.id,
+						title: t.title,
+						sessionId: t.sessionId,
+						state: t.state,
+						bucket: bucket,
+						pinned: t.pinned === true,
+						partial: t.partial === true,
+						summary: t.summary || "",
+						projectRoot: t.projectRoot || "",
+						updatedAt: t.updatedAt
+					});
+				}
+				/* 组内排序：置顶/进行中按 updatedAt 倒序（新的在前）；已完成同 */
+				for (const k of Object.keys(out)) {
+					out[k].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+				}
+				return {
+					pinned: out[BOARD_GROUP.PINNED],
+					running: out[BOARD_GROUP.RUNNING],
+					todo: out[BOARD_GROUP.TODO],
+					done: out[BOARD_GROUP.DONE],
+					counts: counts,
+					total: all.length
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 七、导图节点 ↔ 看板同源（WS-B · B4：导图任务态语义与看板同一真相源）
+			 * ══════════════════════════════════════════════════════════════════
+			 *  导图节点上的 `dispatchState`（来自 store/dispatch-log.js#applyDispatchLabels）
+			 *  与看板六档不是同一份字符串：导图用 running/done/failed/blank/partial，
+			 *  看板用 draft/running/done/blocked/partial/aborted。
+			 *  这个翻译必须只有一处（纪律 126），否则导图和看板又各长各的。
+			 */
+			
+			/** 导图 dispatchState → 看板六档（唯一翻译点；B4 同源渲染的真相源） */
+			function boardBucketOfNode(node) {
+				const n = (node && typeof node === "object") ? node : {};
+				const ds = String(n.dispatchState || "").toLowerCase();
+				if (ds === "done" || ds === "completed" || ds === "success") return BOARD_STATE.DONE;
+				if (ds === "partial") return BOARD_STATE.PARTIAL;
+				if (ds === "failed" || ds === "error" || ds === "blocked") return BOARD_STATE.BLOCKED;
+				if (ds === "running" || ds === "working" || ds === "submitted") return BOARD_STATE.RUNNING;
+				if (ds === "aborted" || ds === "canceled" || ds === "cancelled") return BOARD_STATE.ABORTED;
+				return BOARD_STATE.DRAFT;
+			}
+			
+			/** 导图节点视觉（icon + 颜色；与 Board.js 同语义，B4 同源） */
+			function boardVisualOfNode(node) {
+				const bucket = boardBucketOfNode(node);
+				const n = (node && typeof node === "object") ? node : {};
+				const pinned = n.pinned === true;
+				const V = {
+					done: { icon: "\u2713", color: "#2e7d32" },
+					running: { icon: "\u25b6", color: "#1565c0" },
+					draft: { icon: "\u2610", color: "#8a8a8a" },
+					partial: { icon: "\u25d0", color: "#ef6c00" },
+					blocked: { icon: "\u26a0", color: "#c62828" },
+					aborted: { icon: "\u2298", color: "#6b6b6b" }
+				};
+				const v = V[bucket] || V.draft;
+				return { bucket: bucket, icon: pinned ? "\u2b50" : v.icon, color: pinned ? "#f9a825" : v.color, pinned: pinned };
+			}
+			/* ══════════════════════════════════════════════════════════════════
+			 * 五、全局契约
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
+			/** 分支行（mindmap-schema#stateOfRow：running/review/done/idle）→ 看板任务（唯一适配器）。
+			 *  主键挂会话 id（row.sessionId）；UI 不许再各自造 task。
+			 *
+			 *  🔴 WS-C · C1（G1「结果」采集通道）：L1 回收产出经 `dispatch-log#applyDispatchLabels`
+			 *     落到 `row.dispatchSay`（唯一来源 = `it.say`，真读到的助手正文摘要）。
+			 *     本适配器把它**经单一写入点 `setField` 写进 task.summary** —— 不另造字段、不另开 store
+			 *     （纪律 126）。没有 `dispatchSay` 的行 summary 保持 ""（"没结果"是缺席，不是未知）。 */
+			function boardTasksFromRows(rows) {
+				const arr = Array.isArray(rows) ? rows : [];
+				return arr.map((r) => {
+					const row = r || {};
+					const sid = row.sessionId != null ? String(row.sessionId) : (row.id != null ? String(row.id) : "");
+					let st = STATE.SUBMITTED;
+					if (row.state === "running" || row.running === true) st = STATE.WORKING;
+					else if (row.state === "review" || row.pending === true) st = STATE.INPUT_REQUIRED;
+					else if (row.state === "done" || row.completed === true) st = STATE.COMPLETED;
+					const base = { id: sid, sessionId: sid, title: row.title || row.displayTitle || sid || "(未命名)", state: st, pinned: row.pinned === true, updatedAt: row.updatedAt || 0 };
+					const summary = String(row.dispatchSay || "");
+					/* 🔴 经单一写入点写 summary（即使为空也走同一口子，保持"唯一写入点"承诺） */
+					return setField(base, { summary: summary });
+				});
+			}
+			function installTaskStateApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshTaskState = {
+					STATE, GROUP, STATES, TRANSITIONS,
+					stateOf, isTerminal, isPaused,
+					canTransition, transitionTable,
+					createTask, transition, advance, timeline, taskSummary, groupTasks,
+					auditMachine,
+					/* 看板层（B2） */
+					BOARD_STATE, BOARD_GROUP, boardBucketOf, boardGroupOf,
+					setField, setPinned, boardView, boardBucketOfNode, boardVisualOfNode, boardTasksFromRows
+				};
+				return window.__dshTaskState;
+			}
+			
+			exports.STATE = STATE;
+			exports.GROUP = GROUP;
+			exports.STATES = STATES;
+			exports.stateOf = stateOf;
+			exports.isTerminal = isTerminal;
+			exports.isPaused = isPaused;
+			exports.TRANSITIONS = TRANSITIONS;
+			exports.canTransition = canTransition;
+			exports.transitionTable = transitionTable;
+			exports.createTask = createTask;
+			exports.transition = transition;
+			exports.advance = advance;
+			exports.timeline = timeline;
+			exports.taskSummary = taskSummary;
+			exports.groupTasks = groupTasks;
+			exports.auditMachine = auditMachine;
+			exports.BOARD_STATE = BOARD_STATE;
+			exports.BOARD_GROUP = BOARD_GROUP;
+			exports.boardBucketOf = boardBucketOf;
+			exports.boardGroupOf = boardGroupOf;
+			exports.setField = setField;
+			exports.setPinned = setPinned;
+			exports.boardView = boardView;
+			exports.boardBucketOfNode = boardBucketOfNode;
+			exports.boardVisualOfNode = boardVisualOfNode;
+			exports.boardTasksFromRows = boardTasksFromRows;
+			exports.installTaskStateApi = installTaskStateApi;
+		};
+
 		// ── components/MindMap.js ──
 		__defs["components/MindMap.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
 			 * 引用：—
 			 * 上游：client-entry.js, mount.js
-			 * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+			 * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, logic/task-state.js, components/PersonalizePanel.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -24147,6 +24958,7 @@ window.__ModuleLoader__.load({
 			const { directorLayoutStore } = __m("store/layout.js");
 			const { personalizeStore } = __m("store/personalize.js");
 			const { NodeDetailPanel } = __m("components/NodeDetailPanel.js");
+			const { boardVisualOfNode, boardBucketOfNode } = __m("logic/task-state.js");
 			const { PersonalizePanel } = __m("components/PersonalizePanel.js");
 			
 			const h = react.createElement;
@@ -25210,6 +26022,7 @@ window.__ModuleLoader__.load({
 										const cDetail = ctrls.find((c) => c.key === "detail");
 										const cFork = ctrls.find((c) => c.key === "fork");
 										const cOpen = ctrls.find((c) => c.key === "open");
+									const bv = boardVisualOfNode(r); // WS-B B4：节点视觉吃唯一翻译点（不另写状态样式）
 										return h("div", {
 											key: r.sessionId,
 											style: {
@@ -25236,6 +26049,8 @@ window.__ModuleLoader__.load({
 											 * 🔴 `data-said` 空串 = **确实没读到产出**（不是"未派发"）；
 											 *    未派发的节点该字段也是空串 ⇒ 判"有没有产出"必须**先看 `data-dispatch` 非空**。 */
 											"data-dispatch": r.dispatchId || "", "data-branch-state": r.dispatchState || "",
+										/* WS-B B4：看板同源六档（与 Board.js 同一 boardVisualOfNode），真机可对账 */
+										"data-board-bucket": bv.bucket, "data-board-icon": bv.icon, "data-board-color": bv.color, "data-board-pinned": bv.pinned ? "1" : "0",
 											"data-said": r.dispatchSay || "",
 											/* 第 21 批：**会话档案**（R2/R3）可见性 —— 用户原话「（每个会话）都有自己的
 											 * 总监，存在自己的会话总结文档」。字段由 `applyDossiers` 在**唯一摄取点**
@@ -25658,9 +26473,14 @@ window.__ModuleLoader__.load({
 			const MINDMAP_BTN_ID = "dsh-mindmap-launcher";
 			
 			/** 浮动组横向占位（px）—— 页面右端内容按此留白，见下方 🔴 容器 pointerEvents 注释
-			 *  实测容器宽 98（最长的一颗是「🧠 思维导图」），加 8px 间隙、再取整 ⇒ 108。
-			 *  由 components/DirectorPage.js 的 R6 / R8 消费（`paddingRight`）。 */
-			const FLOAT_DOCK_RESERVE = 108;
+			 *  🔴 真实足迹 = `right:18`（贴视口右的偏移）+ 容器宽 98（最长一颗是「🧠 思维导图」）
+			 *     ⇒ 浮动组左边缘距**视口右** = 18 + 98 = 116 px。
+			 *     旧值 108 = 98+8，**漏算了 `right:18` 那 18px** ⇒ 内容多探进浮动盒约 8px。
+			 *     （2026-09-20 真机取证：dp-flow-empty 叶子右缘 1387 vs 浮动盒左缘 1324，实际压 63px ——
+			 *      真因不只是常数少 8，而是这个预留**根本没落到 R5 所在的 cols 网格**，见 DirectorPage.js。）
+			 *  消费方：DirectorPage.js 的 cols 网格 `paddingRight`（R4/R5/R7 三栏整体避让）
+			 *    与运行窗定位 `right`；client-entry.js 只把它记进几何契约（不写第二份真相）。 */
+			const FLOAT_DOCK_RESERVE = 116;
 			
 			/* 🔴 字体色**不能写死浅色**（2026-09-12 随总监页背景改浅一起暴露的缺陷）——
 			 *   三颗药丸原先的 `color: "#7fe3e8" / "#9fc2ff" / "#b794f6"` 是**给深色底配的浅色字**。
@@ -30473,6 +31293,135 @@ window.__ModuleLoader__.load({
 			exports.collectChannels = collectChannels;
 		};
 
+		// ── components/Board.js ──
+		__defs["components/Board.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：左侧常驻看板（WS-B · B3）
+			 * 引用：—
+			 * 上游：client-entry.js, components/DirectorPage.js
+			 * 下游：logic/task-state.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * components/Board.js — 左侧常驻看板（WS-B · B3）
+			 *
+			 * ── 它治的是什么 ────────────────────────────────────────────────────
+			 *   用户要一个「一眼看到全部活干到哪一步」的常驻看板：
+			 *     置顶 ⭐ / 进行中 ▶ / 待完成 ☐ / 已完成 ✓（折叠四段），
+			 *     阻塞 ⚠ 红角标、部分 ◐、中止 ⊘。
+			 *
+			 * ── 🔴 两条铁律（贯穿 B2/B3/B4，纪律 126）──────────────────────────
+			 *   · **看板只读 store、不自拼**：本组件**不**自己 group/sort。
+			 *     所有分组/排序都交给 `logic/task-state.js#boardView()`（唯一拼装点），
+			 *     本组件只**渲染**它的返回值 —— 这样看板与导图（B4）必然同源。
+			 *   · **主键挂会话 id**：每行的 `onSelect` 回调回传 `sessionId`
+			 *     （不是 `ws_…` 作用域 id；见 lineage.js#validateFlowSids）。
+			 *
+			 * @param {object} props
+			 * @param {Array}  props.tasks  任务数组（boardView 的入参；调用方喂 dispatchLog.items / 导图行）
+			 * @param {(sessionId:string)=>void} [props.onSelect] 点条目回调（定位导图节点）
+			 * @param {boolean} [props.compact] 紧凑模式（窄列时用）
+			 * @returns {object} React 元素
+			 */
+			const react = require("react");
+			const react_jsx_runtime = require("react/jsx-runtime");
+			const { boardView } = __m("logic/task-state.js");
+			
+			/** 各档的视觉（icon + 颜色；唯一一份，B4 导图同源复用同一套语义） */
+			const BUCKET_VISUAL = {
+				done:    { icon: "✓", color: "#2e7d32", label: "已完成" },
+				running: { icon: "▶", color: "#1565c0", label: "进行中" },
+				draft:   { icon: "☐", color: "#8a8a8a", label: "待完成" },
+				partial: { icon: "◐", color: "#ef6c00", label: "部分" },
+				blocked: { icon: "⚠", color: "#c62828", label: "阻塞" },
+				aborted: { icon: "⊘", color: "#6b6b6b", label: "中止" }
+			};
+			
+			/** 一个折叠段（头 + 可折叠体；默认展开，点头折叠） */
+			function BoardSection({ title, icon, color, rows, onSelect, compact }) {
+				const [open, setOpen] = (0, react.useState)(true);
+				const h = compact ? 24 : 28;
+				return (0, react_jsx_runtime.jsxs)("div", {
+					"data-board-section": title,
+					style: { borderBottom: "1px solid rgba(128,128,128,0.15)" },
+					children: [
+						(0, react_jsx_runtime.jsx)("div", {
+							onClick: () => setOpen(!open),
+							style: {
+								display: "flex", alignItems: "center", gap: 6, height: h,
+								padding: "0 8px", cursor: "pointer", userSelect: "none",
+								fontSize: compact ? 11 : 12, fontWeight: 600, color: "#333"
+							},
+							children: (open ? "▾ " : "▸ ") + icon + " " + title + " (" + rows.length + ")"
+						}),
+						open ? (0, react_jsx_runtime.jsx)("div", {
+							style: { padding: compact ? "2px 4px 6px" : "2px 8px 8px" },
+							children: rows.length === 0
+								? (0, react_jsx_runtime.jsx)("div", { style: { fontSize: compact ? 10 : 11, color: "#aaa", padding: "2px 4px" }, children: "（空）" })
+								: rows.map((r) => {
+									const v = BUCKET_VISUAL[r.bucket] || BUCKET_VISUAL.draft;
+									/* 🔴 WS-C · C1：回收摘要（task.summary，经 setField 单一写入点）作次行展示 —— G1「结果」可见落点 */
+									const hasSummary = Boolean(r.summary && String(r.summary).trim());
+									return (0, react_jsx_runtime.jsx)("div", {
+										"data-board-row": "1",
+										"data-session-id": r.sessionId || "",
+										"data-board-bucket": r.bucket,
+										"data-pinned": r.pinned ? "1" : "0",
+										"data-board-summary": hasSummary ? "1" : "0",
+										onClick: () => { if (r.sessionId && onSelect) onSelect(r.sessionId); },
+										style: {
+											display: "flex", alignItems: "center", gap: 6,
+											padding: compact ? "3px 4px" : "4px 6px", borderRadius: 4,
+											fontSize: compact ? 11 : 12, color: "#222", cursor: r.sessionId ? "pointer" : "default"
+										},
+										children: [
+											(0, react_jsx_runtime.jsx)("span", { style: { color: r.pinned ? "#f9a825" : v.color, width: 14, flex: "0 0 auto" }, children: r.pinned ? "⭐" : v.icon }),
+											(0, react_jsx_runtime.jsxs)("div", { style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }, children: [
+												(0, react_jsx_runtime.jsx)("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: r.title || "(未命名)" }),
+												hasSummary ? (0, react_jsx_runtime.jsx)("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: compact ? 9 : 10, color: "#888" }, children: r.summary }) : null
+											] })
+										]
+									}, r.id || r.sessionId || (r.title + Math.random()));
+								})
+						}) : null
+					]
+				});
+			}
+			
+			function Board({ tasks = [], onSelect = null, compact = false }) {
+				/* 🔴 唯一拼装点：不自拼，全交给 boardView()（B2 的只读视图） */
+				const view = boardView(tasks);
+				return (0, react_jsx_runtime.jsxs)("div", {
+					"data-board": "1",
+					"data-board-total": view.total,
+					style: { display: "flex", flexDirection: "column", width: "100%", height: "100%", overflowY: "auto" },
+					children: [
+						(0, react_jsx_runtime.jsx)(BoardSection, {
+							title: "置顶", icon: "⭐", color: "#f9a825", rows: view.pinned,
+							onSelect: onSelect, compact: compact
+						}),
+						(0, react_jsx_runtime.jsx)(BoardSection, {
+							title: "进行中", icon: "▶", color: "#1565c0", rows: view.running,
+							onSelect: onSelect, compact: compact
+						}),
+						(0, react_jsx_runtime.jsx)(BoardSection, {
+							title: "待完成", icon: "☐", color: "#8a8a8a", rows: view.todo,
+							onSelect: onSelect, compact: compact
+						}),
+						(0, react_jsx_runtime.jsx)(BoardSection, {
+							title: "已完成", icon: "✓", color: "#2e7d32", rows: view.done,
+							onSelect: onSelect, compact: compact
+						})
+					]
+				});
+			}
+			
+			__defaults["components/Board.js"] = Board;
+			
+			exports.Board = Board;
+		};
+
 		// ── logic/orchestrate.js ──
 		__defs["logic/orchestrate.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -30940,7 +31889,7 @@ window.__ModuleLoader__.load({
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：角色注册表（Agent Card）
 			 * 引用：—
-			 * 上游：client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js
+			 * 上游：client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/layers.js, logic/model-tier.js, logic/policy.js
 			 * 下游：（无）
 			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 二（四层组织 · 12 角色 Agent Card · L1 预算）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -33735,26 +34684,27 @@ window.__ModuleLoader__.load({
 			/** 关键文件表（字节降序） */
 			const KEY_FILES = Object.freeze([
 				// prettier-ignore
-				{ f: "src/components/DirectorPage.js", bytes: 221011, lines: 3212, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
-				{ f: "src/components/MindMap.js", bytes: 96901, lines: 1542, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js" },
+				{ f: "src/components/DirectorPage.js", bytes: 226950, lines: 3275, duty: "总监页（宿主原生 tab 环里的第一个视图）", up: "client-entry.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, components/Board.js, logic/task-state.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js" },
+				{ f: "src/components/MindMap.js", bytes: 97409, lines: 1546, duty: "分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）", up: "client-entry.js, mount.js", down: "logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, logic/task-state.js, components/PersonalizePanel.js" },
 				{ f: "src/components/DirectorDialog.js", bytes: 96087, lines: 1367, duty: "总监弹窗（要求 5 / 6 / 7 / 8 / 9 / 10 / 11 的落位）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, store/hierarchy.js, util/bus.js, bridge/split.js, bridge/chat-bridge.js, logic/branch-tree.js, logic/scope-tree.js, logic/conv-snapshot.js, logic/sync.js, logic/routing.js, logic/split-dimensions.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, store/plugin-db.js, logic/director-inherit.js, components/DirectorWorkbench.js, components/DirectorHierarchy.js, util/debug.js, logic/flow.js, logic/summary-notes.js, components/PersonalizePanel.js, util/safe-area.js, store/agent-runs.js, logic/catalog.js" },
-				{ f: "src/components/DesignStudio.js", bytes: 94481, lines: 1407, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
+				{ f: "src/components/DesignStudio.js", bytes: 94987, lines: 1409, duty: "设计图工作室（铺满全屏 · 可拖拽编辑 · 左侧交互逻辑 · 底部专用对话）", up: "client-entry.js, mount.js", down: "store/design-schema.js, store/design.js, util/debug.js, logic/flow.js, util/safe-area.js, components/VersionPanel.js, components/PersonalizePanel.js" },
 				{ f: "src/store/design.js", bytes: 63926, lines: 1231, duty: "设计图数据层（文档 CRUD + 元素操作 + 专用临时对话）", up: "client-entry.js, components/DesignStudio.js, mount.js", down: "store/design-schema.js, store/plugin-db.js" },
-				{ f: "src/client-entry.js", bytes: 61739, lines: 919, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js" },
+				{ f: "src/client-entry.js", bytes: 62359, lines: 929, duty: "插件浏览器侧入口（批次 1 已落地）", up: "（无：插件入口层）", down: "util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, logic/layers.js, logic/model-tier.js, components/OrchestratorPanel.js, components/Board.js" },
 				{ f: "src/bridge/host-director-column.js", bytes: 54930, lines: 1110, duty: "对话页**宿主左栏（总监列）**的几何接管 + 记忆面板时序", up: "client-entry.js", down: "store/layout.js, util/dom-style.js, bridge/host-panel-trim.js" },
 				{ f: "src/logic/branch-tree.js", bytes: 54646, lines: 984, duty: "分支血缘树（导图态的数据源）", up: "bridge/chat-bridge.js, bridge/session-io.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-collect.js, logic/director-dispatch.js, logic/mindmap-render.js", down: "logic/discover.js, logic/host-ctx.js, store/mindmap-schema.js, store/split-index.js, store/dispatch-log.js, store/session-dossier.js" },
 				{ f: "src/store/layout.js", bytes: 50379, lines: 858, duty: "A11 布局 store（弹窗三态扩展版）", up: "bridge/host-director-column.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, mount.js", down: "（无）" },
-				{ f: "src/bridge/chat-bridge.js", bytes: 43103, lines: 833, duty: "「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, mount.js", down: "bridge/split.js, util/debug.js, logic/branch-tree.js, store/hierarchy.js, logic/conv-snapshot.js" },
-				{ f: "src/logic/roles.js", bytes: 42326, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js", down: "（无）" },
-				{ f: "src/store/design-schema.js", bytes: 42225, lines: 770, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
+				{ f: "src/store/design-schema.js", bytes: 44174, lines: 797, duty: "「标准设计图框架」的数据映射（设计图插件的原子层）", up: "components/DesignStudio.js, store/design.js", down: "（无）" },
+				{ f: "src/bridge/chat-bridge.js", bytes: 43792, lines: 841, duty: "「双向联动」通道（要求 5：右栏与对话 tab 互相传送消息）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, components/NodeDetailPanel.js, components/OverviewDialog.js, mount.js", down: "bridge/split.js, util/debug.js, logic/branch-tree.js, store/hierarchy.js, logic/conv-snapshot.js" },
+				{ f: "src/logic/roles.js", bytes: 42364, lines: 790, duty: "角色注册表（Agent Card）", up: "client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/layers.js, logic/model-tier.js, logic/policy.js", down: "（无）" },
 				{ f: "src/logic/split-dimensions.js", bytes: 39697, lines: 576, duty: "按维度拆线（**纯函数**：无 DOM、无 store、无副作用）", up: "components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js, logic/attribution.js, logic/director-dispatch.js", down: "logic/attribution.js" },
 				{ f: "src/store/personalize.js", bytes: 39417, lines: 702, duty: "个性化设定（右上角「⚙ 个性化」的单一真相源）", up: "client-entry.js, components/DirectorPage.js, components/MindMap.js, components/PersonalizePanel.js", down: "（无）" },
 				{ f: "src/bridge/host-panel-trim.js", bytes: 33183, lines: 618, duty: "显示层裁剪宿主残留区块", up: "bridge/host-director-column.js, client-entry.js", down: "（无）" },
+				{ f: "src/logic/director-dispatch.js", bytes: 30007, lines: 443, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 				{ f: "src/components/OrchestratorPanel.js", bytes: 29870, lines: 523, duty: "多智能体编排面板", up: "client-entry.js, components/DirectorPage.js", down: "logic/roles.js, logic/dag.js, logic/policy.js, logic/delegate.js, logic/verify.js, logic/orchestrate.js, logic/director-chain.js" },
-				{ f: "src/logic/director-dispatch.js", bytes: 28690, lines: 431, duty: "总监 → 职能分支的**派发**（第 17 批）", up: "client-entry.js, components/DirectorPage.js", down: "logic/split-dimensions.js, logic/director-reuse.js, logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
 				{ f: "src/store/plugin-db.js", bytes: 28413, lines: 553, duty: "插件**自有**数据元层（独立数据库）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js, components/OverviewDialog.js, logic/director-inherit.js, logic/routing.js, store/design.js, store/hierarchy.js", down: "（无）" },
 				{ f: "src/store/mindmap-schema.js", bytes: 28381, lines: 435, duty: "思维导图元素库（导图态的「原子词汇表」，纯数据）", up: "components/MindMap.js, components/NodeDetailPanel.js, logic/branch-tree.js, logic/mindmap-render.js", down: "（无）" },
 				{ f: "src/logic/routing.js", bytes: 27973, lines: 498, duty: "智能路由（要求 8）＋ 六维审核（要求 3）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/plugin-db.js" },
+				{ f: "src/logic/task-state.js", bytes: 26395, lines: 560, duty: "任务状态机", up: "client-entry.js, components/Board.js, components/DirectorPage.js, components/MindMap.js", down: "（无）" },
 				{ f: "src/logic/director-reuse.js", bytes: 25342, lines: 410, duty: "「先考虑目前存在的会话」（第 19 批 · **纯函数**）", up: "logic/director-dispatch.js", down: "logic/grouping.js" },
 				{ f: "src/logic/attribution.js", bytes: 22786, lines: 371, duty: "归属判定（19 号文 §3.3 / N1 · **纯函数**）", up: "components/DirectorPage.js, logic/split-dimensions.js", down: "logic/split-dimensions.js" },
 				{ f: "src/logic/director-run.js", bytes: 21909, lines: 454, duty: "总监预处理中枢（03号文 §1.2 五步标准执行逻辑）", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js", down: "logic/duties.js, config/model.js, logic/director-chain.js, logic/dag.js, util/debug.js" },
@@ -33762,24 +34712,25 @@ window.__ModuleLoader__.load({
 				{ f: "src/components/DirectorHierarchy.js", bytes: 21623, lines: 381, duty: "多层级总监面板（方案 C：层级树 + 主内容区）", up: "client-entry.js, components/DirectorDialog.js", down: "store/hierarchy.js, logic/summarize.js, logic/sync.js, util/bus.js, components/DirectorWorkbench.js, util/debug.js" },
 				{ f: "src/logic/dag.js", bytes: 21502, lines: 492, duty: "声明式步骤图", up: "client-entry.js, components/OrchestratorPanel.js, logic/director-run.js", down: "（无）" },
 				{ f: "src/logic/director-collect.js", bytes: 21264, lines: 389, duty: "分支产出回收 + 总裁定（第 17 批）", up: "components/DirectorPage.js", down: "logic/branch-tree.js, bridge/session-io.js, store/dispatch-log.js, store/split-index.js, store/session-dossier.js" },
+				{ f: "src/components/FloatDock.js", bytes: 20824, lines: 317, duty: "右下角浮动按钮组（全屏能力的统一入口）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, logic/flow.js, util/debug.js" },
+				{ f: "src/logic/lineage.js", bytes: 20346, lines: 445, duty: "上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, logic/layers.js, store/dispatch-log.js", down: "（无）" },
 				{ f: "src/logic/policy.js", bytes: 20333, lines: 407, duty: "执行模式与策略", up: "client-entry.js, components/OrchestratorPanel.js", down: "logic/roles.js" },
-				{ f: "src/components/FloatDock.js", bytes: 20274, lines: 312, duty: "右下角浮动按钮组（全屏能力的统一入口）", up: "client-entry.js, components/DirectorPage.js, mount.js", down: "store/layout.js, logic/flow.js, util/debug.js" },
 				{ f: "src/logic/verify.js", bytes: 20226, lines: 433, duty: "双层验收与评审去偏", up: "client-entry.js, components/OrchestratorPanel.js", down: "（无）" },
 				{ f: "src/logic/flow.js", bytes: 20038, lines: 434, duty: "四维消息流转（总监 / 对话 / 思维导图 / 设计图 的**同一条消息**）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/FloatDock.js, components/MindMap.js, components/NodeDetailPanel.js", down: "（无）" },
 				{ f: "src/components/NodeDetailPanel.js", bytes: 19481, lines: 334, duty: "导图右侧「该框的对话」面板", up: "client-entry.js, components/MindMap.js", down: "logic/flow.js, logic/branch-tree.js, bridge/chat-bridge.js, store/plugin-db.js, logic/director-inherit.js, store/mindmap-schema.js" },
 				{ f: "src/store/agent-runs.js", bytes: 17554, lines: 413, duty: "总监执行状态（智能体 / 技能调用）唯一真相源", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "logic/catalog.js" },
 				{ f: "src/logic/host-ctx.js", bytes: 17091, lines: 359, duty: "宿主 cordis 服务读取的**唯一实现**", up: "bridge/nav-hook.js, client-entry.js, logic/branch-tree.js, logic/director-inherit.js, logic/discover.js, logic/sync.js", down: "（无）" },
 				{ f: "src/components/ModelSeat.js", bytes: 16861, lines: 336, duty: "标准模型选择席位（第 6 批需求 8）", up: "client-entry.js, components/DirectorPage.js", down: "config/model.js" },
-				{ f: "src/logic/lineage.js", bytes: 16773, lines: 372, duty: "上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "（无）" },
 				{ f: "src/store/file-adapter.js", bytes: 16333, lines: 407, duty: "A6 持久化探测 + 文件通道适配器", up: "client-entry.js, store/create-store.js, store/persist.js", down: "（无）" },
 				{ f: "src/components/PersonalizePanel.js", bytes: 16083, lines: 296, duty: "右上角「⚙ 个性化」面板（四个界面共用一个组件）", up: "client-entry.js, components/DesignStudio.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "store/personalize.js" },
+				{ f: "src/logic/router-decision.js", bytes: 15680, lines: 305, duty: "「模型语义路由」判断层（**纯函数**：无 DOM、无 store、无副作用）", up: "（无：插件入口层）", down: "（无）" },
 				{ f: "src/store/session-dossier.js", bytes: 15657, lines: 326, duty: "会话档案（第 19 批）", up: "client-entry.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/bridge/session-io.js", bytes: 15567, lines: 315, duty: "逐会话读写通道（第 17 批）", up: "logic/director-collect.js, logic/director-dispatch.js", down: "logic/branch-tree.js" },
 				{ f: "src/bridge/host-composer-slot.js", bytes: 15417, lines: 331, duty: "把插件控件注入**宿主底部统计行之前**", up: "client-entry.js, components/DirectorPage.js", down: "util/dom-style.js" },
 				{ f: "src/logic/checkpoint.js", bytes: 15008, lines: 315, duty: "不可变快照链", up: "client-entry.js", down: "（无）" },
 				{ f: "src/store/split-index.js", bytes: 14923, lines: 308, duty: "分流标签索引", up: "components/DirectorDialog.js, components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/mount.js", bytes: 14690, lines: 262, duty: "总监弹窗的挂载层（T-PLUG-015 起：弹窗形态为主通道）", up: "client-entry.js", down: "components/DirectorDialog.js, components/DesignStudio.js, components/MindMap.js, components/FloatDock.js, store/layout.js, store/design.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, util/debug.js, util/bus.js" },
-				{ f: "src/logic/task-state.js", bytes: 14416, lines: 330, duty: "任务状态机", up: "client-entry.js", down: "（无）" },
+				{ f: "src/store/dispatch-log.js", bytes: 14338, lines: 318, duty: "本次「总监派发」台账（第 17 批）", up: "components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "logic/lineage.js" },
 				{ f: "src/bridge/split.js", bytes: 14292, lines: 309, duty: "「左栏分屏」通道（要求 5：左侧总监 / 右侧对话数据）", up: "bridge/chat-bridge.js, bridge/nav-hook.js, client-entry.js, components/DirectorDialog.js, mount.js", down: "util/debug.js" },
 				{ f: "src/store/persist.js", bytes: 14105, lines: 304, duty: "A7 + A8 总监 store 的加载与保存", up: "client-entry.js, logic/process.js, logic/store-care.js, logic/sync.js, store/create-store.js", down: "store/messages.js, store/store-health.js, store/idb.js, store/cookie.js, store/file-adapter.js" },
 				{ f: "src/components/DirectorWorkbench.js", bytes: 13819, lines: 259, duty: "总监工作台（方案 E · 文档 06 §五）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorHierarchy.js", down: "logic/duties.js, store/duty-config.js, logic/director-run.js, store/create-store.js, store/use-store.js, store/hierarchy.js, config/model.js, util/debug.js" },
@@ -33793,8 +34744,8 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/grouping.js", bytes: 11953, lines: 216, duty: "「作品 / 维度」归一化与归属（**唯一真相源**）", up: "logic/director-reuse.js, logic/mindmap-group.js", down: "（无）" },
 				{ f: "src/components/OverviewDialog.js", bytes: 11651, lines: 218, duty: "总览弹窗（R10）", up: "components/MindMap.js", down: "logic/overview.js, logic/discover.js, bridge/chat-bridge.js, logic/branch-tree.js, store/plugin-db.js" },
 				{ f: "src/bridge/nav-hook.js", bytes: 11635, lines: 224, duty: "「点击文件夹 / 项目 → 展示该层级总监」（要求 7 / 9）", up: "client-entry.js, mount.js", down: "bridge/split.js, store/hierarchy.js, store/layout.js, util/debug.js, logic/nav-intent.js, logic/host-ctx.js" },
+				{ f: "src/logic/layers.js", bytes: 11146, lines: 218, duty: "三层职责边界 + 跨层消息信封（**纯函数**：无 DOM / 无 store / 无副作用）", up: "client-entry.js", down: "logic/roles.js, logic/lineage.js" },
 				{ f: "src/logic/summarize.js", bytes: 10582, lines: 227, duty: "分层总结 + 分梯度调用", up: "client-entry.js, components/DirectorHierarchy.js", down: "config/model.js, store/hierarchy.js, util/debug.js, util/bus.js" },
-				{ f: "src/store/dispatch-log.js", bytes: 10340, lines: 220, duty: "本次「总监派发」台账（第 17 批）", up: "components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js", down: "（无）" },
 				{ f: "src/components/DirectorFlow.js", bytes: 9873, lines: 181, duty: "E1 小窗总监对话流组件", up: "client-entry.js", down: "store/create-store.js, store/use-store.js, util/debug.js" },
 				{ f: "src/logic/ledger.js", bytes: 9720, lines: 210, duty: "台账 / 文档树取数", up: "components/DirectorPage.js", down: "store/docs-index-inject.js" },
 				{ f: "src/logic/summary-notes.js", bytes: 9713, lines: 189, duty: "**「总监小结里必须出现的那一行」的唯一构造点**", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/MindMap.js", down: "（无）" },
@@ -33803,6 +34754,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/store/create-store.js", bytes: 9555, lines: 226, duty: "A9 `createDirectorStore` store 工厂", up: "client-entry.js, components/DirectorFlow.js, components/DirectorWorkbench.js", down: "store/messages.js, store/persist.js, store/file-adapter.js, store/store-health.js" },
 				{ f: "src/logic/process.js", bytes: 9494, lines: 172, duty: "D1 总监对话核心处理函数", up: "client-entry.js", down: "config/model.js, store/persist.js, store/memory.js" },
 				{ f: "src/logic/discover.js", bytes: 9261, lines: 222, duty: "真实会话 / 文件夹（workspace）数据源发现层", up: "client-entry.js, components/OverviewDialog.js, logic/branch-tree.js, logic/director-inherit.js, logic/sync.js", down: "store/idb.js, logic/host-ctx.js" },
+				{ f: "src/logic/model-tier.js", bytes: 8896, lines: 194, duty: "模型 tier 决策树（**纯函数**：无 DOM / 无 store / 无副作用）", up: "client-entry.js", down: "logic/roles.js" },
 				{ f: "src/components/VersionPanel.js", bytes: 8678, lines: 147, duty: "版本历史面板（\"不同版本的选择\"）", up: "components/DesignStudio.js", down: "（无）" },
 				{ f: "src/logic/scope-tree.js", bytes: 8544, lines: 178, duty: "**作用域**（文件夹 / 项目 / 全局）与血缘树的交叉运算（纯函数）", up: "components/DirectorDialog.js, components/MindMap.js", down: "（无）" },
 				{ f: "src/logic/branch-focus.js", bytes: 8274, lines: 188, duty: "分支链路聚焦（纯函数）", up: "client-entry.js, components/MindMap.js", down: "（无）" },
@@ -33814,6 +34766,7 @@ window.__ModuleLoader__.load({
 				{ f: "src/logic/project-inventory.js", bytes: 7140, lines: 150, duty: "**G7「总监自己把控项目清单」的读数（纯函数）**", up: "client-entry.js, components/DirectorPage.js", down: "（无）" },
 				{ f: "src/logic/duties.js", bytes: 6943, lines: 125, duty: "总监职责配置定义（03号文 §3.1「执行逻辑项」）", up: "components/DirectorWorkbench.js, logic/director-run.js, store/duty-config.js", down: "（无）" },
 				{ f: "src/logic/dim-branch.js", bytes: 6930, lines: 112, duty: "「维度 ↔ 分支节点」绑定的**唯一翻译点**（19 号文 N2 · **纯函数**）", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js", down: "store/hierarchy.js" },
+				{ f: "src/components/Board.js", bytes: 6320, lines: 124, duty: "左侧常驻看板（WS-B · B3）", up: "client-entry.js, components/DirectorPage.js", down: "logic/task-state.js" },
 				{ f: "src/logic/conv-snapshot.js", bytes: 6260, lines: 126, duty: "「对话概况」快照的**唯一提取实现**（纯函数 · 零 import）", up: "bridge/chat-bridge.js, components/DirectorDialog.js, logic/sync.js", down: "（无）" },
 				{ f: "src/logic/director-inherit.js", bytes: 6006, lines: 110, duty: "「总监对话」按分支血缘**继承读**", up: "client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, components/NodeDetailPanel.js", down: "store/plugin-db.js, logic/host-ctx.js, logic/discover.js" },
 				{ f: "src/config/model.js", bytes: 5879, lines: 127, duty: "C2 配置与本地模型", up: "client-entry.js, components/DirectorPage.js, components/DirectorWorkbench.js, components/ModelSeat.js, logic/director-run.js, logic/process.js, logic/review.js, logic/summarize.js", down: "（无）" },
@@ -33837,7 +34790,7 @@ window.__ModuleLoader__.load({
 			]);
 			
 			/** 合计（闸门据此对账，避免各自为政） */
-			const KEY_FILES_TOTAL = Object.freeze({ modules: 99, bytes: 2080974, lines: 37641 });
+			const KEY_FILES_TOTAL = Object.freeze({ modules: 103, bytes: 2154682, lines: 39014 });
 			
 			__defaults["logic/key-files.js"] = KEY_FILES;
 			
@@ -34200,7 +35153,7 @@ window.__ModuleLoader__.load({
 			 * 职责：总监页（宿主原生 tab 环里的第一个视图）
 			 * 引用：—
 			 * 上游：client-entry.js
-			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
+			 * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, components/Board.js, logic/task-state.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 九（编排入口按钮 + 与个性化设定互斥）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -34287,7 +35240,9 @@ window.__ModuleLoader__.load({
 			 *    它们已收进 `logic/director-dispatch.js`（唯一调用点，避免两套实现漂移）。 */
 			const { dispatchBranches } = __m("logic/director-dispatch.js");
 			const { collectBranches, digestMessage, verdictOf } = __m("logic/director-collect.js");
-			const { dispatchLog } = __m("store/dispatch-log.js");
+			const { dispatchLog, readDecisions, decisionRows, subscribeDispatch } = __m("store/dispatch-log.js");
+			const Board = __m("components/Board.js");
+			const { boardTasksFromRows } = __m("logic/task-state.js");
 			const { dshLog } = __m("util/debug.js");
 			const { runDirector } = __m("logic/director-run.js");
 			const { loadDirectorConfig } = __m("config/model.js");
@@ -34523,11 +35478,13 @@ window.__ModuleLoader__.load({
 					() => personalizeStore.getState(),
 					() => personalizeStore.getState()
 				);
-				const fs = react.useSyncExternalStore(
-					(fn) => flowStore.subscribe(fn),
-					() => flowStore.getState(),
-					() => flowStore.getState()
+				/* D2: subscribe to dispatch-log decisions so 思维链路 re-renders; derive 4-col rows (no new store). */
+				const decTick = react.useSyncExternalStore(
+					(fn) => subscribeDispatch(fn),
+					() => dispatchLog.decisions.length,
+					() => dispatchLog.decisions.length
 				);
+				const decRows = decisionRows(readDecisions());
 			
 				const [tree, setTree] = react.useState(null);
 				const [crumbs, setCrumbs] = react.useState([]);
@@ -34604,6 +35561,9 @@ window.__ModuleLoader__.load({
 					return () => clearTimeout(timer);
 				}, [orphanArm]);
 				const [toast, setToast] = react.useState("");
+			// WS-B B5 外层收件箱（骨架）：总监操作台降级为后台面板，外层留一个常驻输入入口。
+				const [outerInbox, setOuterInbox] = react.useState("");
+				const [outerQueue, setOuterQueue] = react.useState(0); // 已入收件箱条数（真机对账用）
 				const [pOpen, setPOpen] = react.useState(false);
 				/* 编排面板（2026-09-14 架构补全）：与个性化面板**互斥**，避免两个浮层叠在一起。
 				 * 🔴 开合型控件：打开一个必须关掉另一个 —— 否则叠层会挡住后续点击（纪律见技能
@@ -36944,6 +37904,32 @@ window.__ModuleLoader__.load({
 					 *      ② 根本没有"缩回 → 弹出 → 固定"这个中间态（R4=200px、R7=210px 恒宽常驻）。
 					 *    ⇒ 这一版两半一起修：`S.cols` 加 `alignItems:stretch` + 每栏 `flex:1` ⇒ 占满整列；
 					 *      并加缩回栏（默认 26px）。 */
+					/* WS-B B5：外层常驻收件箱（骨架 + 派发接线）。
+					 *  总监操作台降级为后台面板；外层只留一个输入入口。
+					 *  🔴 派发接线：入箱即写 B7 决策台账 dispatchLog.recordDecision（via=outer-inbox），
+					 *     不另起 store；真机对账 [data-outer-queue] == 已入箱条数。 */
+					h("div", { key: "inbox", "data-testid": "dp-outer-inbox", "data-outer-queue": String(outerQueue),
+						style: { display: "flex", gap: 6, alignItems: "center", padding: "6px 9px", borderBottom: "1px solid var(--dp-line, #3d4148)" } }, [
+						h("span", { key: "l", style: { fontSize: 12, fontWeight: 700, color: "var(--dp-ac, #79a8ff)" } }, "📥 外层收件箱"),
+						h("input", {
+							key: "i", "data-testid": "dp-outer-inbox-input",
+							value: outerInbox, placeholder: "一句话丢进来（多意图由模型拆分发派；本批为骨架）…",
+							onChange: (e) => setOuterInbox(e.target.value),
+							style: { flex: 1, height: 28, borderRadius: 5, border: "1px solid var(--dp-line, #3d4148)", background: "var(--dp-bg-2, #212429)", color: "var(--dp-t1, #e8eaed)", padding: "0 8px", fontSize: 12 }
+						}),
+						h("button", {
+							key: "b", "data-testid": "dp-outer-inbox-send",
+							onClick: () => {
+								const txt = String(outerInbox || "").trim();
+								if (!txt) return;
+								try { dispatchLog.recordDecision({ input: txt, decision: "queued", reason: "外层收件箱入箱（骨架，待模型路由派发）", via: "outer-inbox", sessionId: "", dim: "outer" }); } catch (e) { dshLog("outer-inbox", e); }
+								setOuterQueue((n) => n + 1);
+								setOuterInbox("");
+								setToast("已入外层收件箱（" + (outerQueue + 1) + "）");
+							},
+							style: { height: 28, padding: "0 12px", borderRadius: 5, border: "1px solid var(--dp-ac, #2f6feb)", background: "var(--dp-ac, #2f6feb)", color: "#fff", fontSize: 12, cursor: "pointer" }
+						}, "送入")
+					]),
 					h("div", {
 						key: "cols", "data-testid": "dp-cols",
 						/* 第 6 批：栏宽取自 store（可拖拽 · 持久化）。
@@ -36951,7 +37937,13 @@ window.__ModuleLoader__.load({
 						 *    两个宽度**同时进 DOM**（`data-w-*`），闸门可直接对账"拖 N px ⇒ 属性变 N"。 */
 						"data-w-r4": directorLayoutStore.getRailWidth("r4"), "data-w-r7": directorLayoutStore.getRailWidth("r7"),
 						"data-gap": 0,
-						style: { ...S.cols, gridTemplateColumns: (railOpen.r4 ? directorLayoutStore.getRailWidth("r4") + "px" : RAIL_WIDTH + "px") + " 1fr " + (railOpen.r7 ? directorLayoutStore.getRailWidth("r7") + "px" : RAIL_WIDTH + "px") }
+						/* 🔴 R4/R5/R7 三栏整体按浮动组横向占位避让（2026-09-20 修 F8 红的真因）：
+						 *   早先 `dockReserve` 只喂给运行窗定位（下方 line 3002），**R5 所在三栏网格一个像素都没吃到**
+						 *   ⇒ R5 流转列 / 空态占位文字（dp-flow-empty）右缘探进浮动盒 rect（实测 63px），
+						 *   被 F8「右端带文字叶子零被压」判红。在 cols 网格 `paddingRight` 叠加 dockReserve，
+						 *   一次把 R4/R5/R7 全推到浮动盒左缘之外（浮动组关闭时 dockReserve=0 ⇒ 回退原 9px）。
+						 *   ⚠️ 读的就是上方 line 880 的 `dockReserve`，不写第二份真相。 */
+						style: { ...S.cols, paddingRight: 9 + dockReserve, gridTemplateColumns: (railOpen.r4 ? directorLayoutStore.getRailWidth("r4") + "px" : RAIL_WIDTH + "px") + " 1fr " + (railOpen.r7 ? directorLayoutStore.getRailWidth("r7") + "px" : RAIL_WIDTH + "px") }
 					}, [
 						/* R4 项目导航 */
 						railOpen.r4
@@ -36960,7 +37952,15 @@ window.__ModuleLoader__.load({
 								onMouseEnter: () => railEnter("r4"), onMouseLeave: () => railLeave("r4")
 							}, [
 								h("div", { key: "s", style: { ...S.sec, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } }, [
-									renderPanelHead("r4", "R4 项目导航"),
+									renderPanelHead("r4", "R4 项目导航"),			/* WS-B B3：左侧常驻看板（只读消费 boardView；主键挂会话 id；点条目定位导图节点）。
+						 *  🔴 不自拼分组：tasks 走唯一适配器 boardTasksFromRows → Board 内部 boardView()。
+						 *  🔴 真机对账：[data-board-total] == 分支行数；点行写 window.__dshBoardFocus 并 openSession。 */
+						h("div", { key: "board", "data-testid": "dp-board-wrap", style: { border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", marginBottom: 6, flex: "0 0 auto", maxHeight: "40%", display: "flex", flexDirection: "column", overflow: "hidden" } },
+							h(Board, {
+								compact: true,
+								tasks: boardTasksFromRows(branch && branch.tree ? branch.tree.rows : []),
+								onSelect: (sid) => { try { window.__dshBoardFocus = { sessionId: sid, at: Date.now() }; openSession(sid); } catch (e) { dshLog("board-focus", e); } }
+							})),
 									h("div", { key: "seg", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
 										R4_TABS.map((tb) => h("button", {
 											key: tb.key, style: S.seg(r4tab === tb.key), "data-testid": "dp-r4-" + tb.key,
@@ -37019,7 +38019,8 @@ window.__ModuleLoader__.load({
 								 *    「对话」视图下也隐藏 —— 那两个 Tab 属"总监侧"内容，留着会与按钮文案打架） */
 								(selectedItem || r5view === "chat") ? null : h("div", { key: "seg2", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6, flex: "0 0 auto" } }, [
 									h("button", { key: "f", style: S.seg(r5tab === "flow"), "data-testid": "dp-r5-flow", onClick: () => setR5tab("flow") }, "流转 " + sessionFlows.length),
-									h("button", { key: "m", style: S.seg(r5tab === "msg"), "data-testid": "dp-r5-msg", onClick: () => setR5tab("msg") }, "总监消息 " + msgs.length)
+									h("button", { key: "m", style: S.seg(r5tab === "msg"), "data-testid": "dp-r5-msg", onClick: () => setR5tab("msg") }, "总监消息 " + msgs.length),
+									h("button", { key: "t", style: S.seg(r5tab === "thread"), "data-testid": "dp-r5-thread", onClick: () => setR5tab("thread") }, "思维链路 " + decRows.length)
 								]),
 			
 								selectedItem ? null : h("div", { key: "b", style: { flex: 1, minHeight: 0, overflowY: "auto" }, className: "dp-scroll", "data-testid": "dp-r5-body", "data-view": r5view },
@@ -37057,6 +38058,21 @@ window.__ModuleLoader__.load({
 											: h("div", { key: "e", style: S.muted, "data-testid": "dp-flow-empty" },
 												"该作用域还没有流转。本轮起，输入走**原生对话框**：写完后点 R8 的「登记为流转」，就会出现在这里，" +
 												"并同步出现在导图右侧面板与设计图底部。"))
+										: r5tab === "thread"
+										? (decRows.length
+											? decRows.slice(-30).reverse().map((d) => h("div", {
+												key: d.seq, "data-testid": "dp-thread-row", "data-input": d.input, "data-decision": d.decision, "data-reason": d.reason, "data-time": d.time,
+												style: { border: "1px solid var(--dp-line,#31343a)", background: "var(--dp-bg-2,#212429)", borderRadius: "var(--dp-radius-sm,5px)", padding: "5px 7px", marginBottom: 5 }
+												}, [
+													h("div", { key: "i", "data-testid": "dp-thread-in", style: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word" } }, d.input || "（空输入）"),
+													h("div", { key: "row", style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 } }, [
+														h("span", { key: "dec", "data-testid": "dp-thread-decision", style: { fontSize: 10.5, padding: "0 4px", borderRadius: 3, border: "1px solid var(--dp-ac-line,rgba(47,111,235,.45))", color: "var(--dp-ac,#79a8ff)" } }, "决策 " + (d.decision || "—")),
+														h("span", { key: "rsn", "data-testid": "dp-thread-reason", style: { ...S.muted } }, "理由 " + (d.reason || "—")),
+														d.dim ? h("span", { key: "dim", style: { ...S.muted, color: "var(--dp-ac2,#7fe3e8)" } }, d.dim) : null,
+														h("span", { key: "tm", style: S.muted }, d.time)
+													])
+												]))
+											: h("div", { key: "te", style: S.muted, "data-testid": "dp-thread-empty" }, "还没有 L0 决策记录。扇发一次后，这里会按「输入 / 决策 / 理由 / 时间」列出每次判断。"))
 										: (msgs.length
 											? msgs.slice(-14).map((m) => {
 												const mine = msgIsMine(m);
@@ -37414,356 +38430,6 @@ window.__ModuleLoader__.load({
 			exports.DirectorPage = DirectorPage;
 		};
 
-		// ── logic/task-state.js ──
-		__defs["logic/task-state.js"] = function (exports) {
-			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
-			 * 职责：任务状态机
-			 * 引用：—
-			 * 上游：client-entry.js
-			 * 下游：（无）
-			 * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 六（A2A 九态机 · 两种暂停态 · 乐观并发）】
-			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
-			 * @map:end */
-			/**
-			 * logic/task-state.js — 任务状态机
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  为什么需要它
-			 * ══════════════════════════════════════════════════════════════════
-			 *  改之前：任务在界面上只有三种样子 —— 「转圈」「有字了」「报错了」。
-			 *  用户看到转圈时无法分辨：是在跑？在等我点确认？还是在等我补一句输入？
-			 *  这三件事在 UI 上**必须不一样**，否则「驾驶舱」这个产品名就落不到实处。
-			 *
-			 *  A2A 协议把这件事定成了九态，其中关键的是把暂停拆成两个：
-			 *    INPUT_REQUIRED（在等你给信息） 与 AUTH_REQUIRED（在等你批准）
-			 *  ⇒ 界面因此可以给出两种不同的动作按钮，而不是一个笼统的「继续」。
-			 *
-			 * ══════════════════════════════════════════════════════════════════
-			 *  九态与三组
-			 * ══════════════════════════════════════════════════════════════════
-			 *   Running   SUBMITTED → WORKING
-			 *   Paused    INPUT_REQUIRED / AUTH_REQUIRED
-			 *   Finished  COMPLETED / FAILED / CANCELED / REJECTED
-			 *
-			 *  🔴 两条规则（都是「防止静默」）：
-			 *   ① **终态不可再转移** —— 已完成的活儿被偷偷改回 WORKING，
-			 *      会让时间线与统计全部失真。
-			 *   ② **自转移只有 WORKING → WORKING 合法**（表示进度更新）；
-			 *      其余自转移一律拒绝，因为它们通常是**状态没变却记了一笔**的 bug。
-			 *
-			 * ⚠️ 本文件**零 import**（同规，便于离线单测）。
-			 */
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 一、状态定义
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/** 九态 */
-			const STATE = Object.freeze({
-				SUBMITTED: "SUBMITTED",
-				WORKING: "WORKING",
-				INPUT_REQUIRED: "INPUT_REQUIRED",
-				AUTH_REQUIRED: "AUTH_REQUIRED",
-				COMPLETED: "COMPLETED",
-				FAILED: "FAILED",
-				CANCELED: "CANCELED",
-				REJECTED: "REJECTED"
-			});
-			
-			/** 状态分组 */
-			const GROUP = Object.freeze({ RUNNING: "running", PAUSED: "paused", FINISHED: "finished" });
-			
-			/** 状态元数据：label 给界面，group 给筛选，action 给按钮文案 */
-			const STATES = Object.freeze([
-				{ key: STATE.SUBMITTED, label: "已提交", group: GROUP.RUNNING, icon: "⏱", action: "" },
-				{ key: STATE.WORKING, label: "执行中", group: GROUP.RUNNING, icon: "▶", action: "" },
-				{ key: STATE.INPUT_REQUIRED, label: "待补充信息", group: GROUP.PAUSED, icon: "✎", action: "补充信息" },
-				{ key: STATE.AUTH_REQUIRED, label: "待批准", group: GROUP.PAUSED, icon: "⛨", action: "批准 / 驳回" },
-				{ key: STATE.COMPLETED, label: "已完成", group: GROUP.FINISHED, icon: "✓", action: "" },
-				{ key: STATE.FAILED, label: "失败", group: GROUP.FINISHED, icon: "✕", action: "重试" },
-				{ key: STATE.CANCELED, label: "已取消", group: GROUP.FINISHED, icon: "⊘", action: "" },
-				{ key: STATE.REJECTED, label: "已驳回", group: GROUP.FINISHED, icon: "⊖", action: "重做" }
-			]);
-			
-			const BY_KEY = new Map(STATES.map((s) => [s.key, s]));
-			
-			/** 取状态元数据（未知态回落 SUBMITTED，不返回 undefined） */
-			function stateOf(key) {
-				return BY_KEY.get(key) || STATES[0];
-			}
-			
-			/** 是否终态（不可再转移） */
-			function isTerminal(key) {
-				return stateOf(key).group === GROUP.FINISHED;
-			}
-			
-			/** 是否暂停态（等人） */
-			function isPaused(key) {
-				return stateOf(key).group === GROUP.PAUSED;
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 二、合法转移表
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 合法转移。
-			 * 🔴 WORKING → WORKING 合法（进度更新，不会推进时间线但会记一笔事件）；
-			 *    其余自转移非法（通常是「状态没变却记了一笔」的 bug）。
-			 */
-			const TRANSITIONS = Object.freeze({
-				SUBMITTED: [STATE.WORKING, STATE.FAILED, STATE.CANCELED, STATE.REJECTED],
-				WORKING: [STATE.WORKING, STATE.INPUT_REQUIRED, STATE.AUTH_REQUIRED, STATE.COMPLETED, STATE.FAILED, STATE.CANCELED],
-				INPUT_REQUIRED: [STATE.WORKING, STATE.CANCELED, STATE.FAILED],
-				AUTH_REQUIRED: [STATE.WORKING, STATE.COMPLETED, STATE.REJECTED, STATE.CANCELED, STATE.FAILED],
-				COMPLETED: [],
-				FAILED: [],
-				CANCELED: [],
-				REJECTED: []
-			});
-			
-			/**
-			 * 能否从 from 转到 to。
-			 * @returns {{ok:boolean, reason:string}}
-			 */
-			function canTransition(from, to) {
-				const a = stateOf(from).key;
-				const b = stateOf(to).key;
-				const allowed = TRANSITIONS[a] || [];
-				if (isTerminal(a)) return { ok: false, reason: "「" + stateOf(a).label + "」是终态，不可再转移" };
-				if (a === b && a !== STATE.WORKING) return { ok: false, reason: "自转移非法（" + stateOf(a).label + " → 自身）；只有执行中→执行中（进度更新）允许" };
-				if (!allowed.includes(b)) {
-					return { ok: false, reason: "非法转移：" + stateOf(a).label + " → " + stateOf(b).label + "（允许：" + (allowed.map((x) => stateOf(x).label).join("、") || "无") + "）" };
-				}
-				return { ok: true, reason: stateOf(a).label + " → " + stateOf(b).label };
-			}
-			
-			/** 所有合法转移（UI 上画状态机图用；来自同一真相源，不单独维护一份） */
-			function transitionTable() {
-				return Object.entries(TRANSITIONS).map(([from, tos]) => ({
-					from,
-					fromLabel: stateOf(from).label,
-					to: tos.slice(),
-					toLabels: tos.map((t) => stateOf(t).label)
-				}));
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 三、任务对象与事件流
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/** 新建一个任务 */
-			function createTask(init = {}) {
-				const t = init && typeof init === "object" ? init : {};
-				return {
-					id: t.id ? String(t.id) : ("task-" + Date.now().toString(36)),
-					title: t.title ? String(t.title) : "",
-					sessionId: t.sessionId ? String(t.sessionId) : "",
-					state: Object.values(STATE).includes(t.state) ? t.state : STATE.SUBMITTED,
-					createdAt: Number.isFinite(t.createdAt) ? t.createdAt : Date.now(),
-					updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : Date.now(),
-					/* 未决的人工请求：**必须跟着任务一起持久化** ——
-					 * 否则用户关掉面板再打开，那个待审批项就丢了（AutoGen/MAF 的 checkpoint 教训） */
-					pending: t.pending && typeof t.pending === "object" ? { ...t.pending } : null,
-					transitions: Array.isArray(t.transitions) ? t.transitions.slice() : [],
-					error: t.error ? String(t.error) : ""
-				};
-			}
-			
-			/**
-			 * 执行一次状态转移。**不做就地修改**（返回新对象），便于快照与撤销。
-			 *
-			 * @param {object} task
-			 * @param {string} to
-			 * @param {object} [meta] { at?:number, expected?:string, note?:string, pending?:object }
-			 * @returns {{ok:boolean, task:object, event:object|null, reason:string}}
-			 */
-			function transition(task, to, meta = {}) {
-				const t = createTask(task);
-				const chk = canTransition(t.state, to);
-				const at = Number.isFinite(meta.at) ? meta.at : Date.now();
-			
-				if (!chk.ok) {
-					return {
-						ok: false, task: t, event: null,
-						reason: chk.reason
-					};
-				}
-			
-				/* 乐观并发：调用方声明的 expected 与当前不符 ⇒ 拒绝（防止基于陈旧状态写入） */
-				if (meta.expected && meta.expected !== t.state) {
-					return {
-						ok: false, task: t, event: null,
-						reason: "状态已变（期望 " + stateOf(meta.expected).label + "，实际 " + stateOf(t.state).label + "）⇒ 拒绝写入"
-					};
-				}
-			
-				const event = {
-					seq: t.transitions.length + 1,
-					from: t.state,
-					to: stateOf(to).key,
-					at,
-					note: meta.note ? String(meta.note) : ""
-				};
-			
-				const next = {
-					...t,
-					state: event.to,
-					updatedAt: at,
-					transitions: t.transitions.concat(event),
-					error: event.to === STATE.FAILED ? (meta.note || t.error || "未说明原因") : t.error,
-					pending: Object.prototype.hasOwnProperty.call(meta, "pending") ? meta.pending : t.pending
-				};
-				/* 离开暂停态 ⇒ 清掉未决请求（否则界面上会一直挂着"待批准"） */
-				if (isPaused(t.state) && !isPaused(event.to)) next.pending = null;
-			
-				return { ok: true, task: next, event, reason: chk.reason };
-			}
-			
-			/**
-			 * 状态时间线（UI 直接渲染）：每条带可读文案。
-			 * @returns {Array<{seq:number, at:number, label:string, fromLabel:string, toLabel:string, note:string, waitMs:number}>}
-			 */
-			function timeline(task) {
-				const t = createTask(task);
-				return t.transitions.map((e, i) => {
-					const prevAt = i > 0 ? t.transitions[i - 1].at : t.createdAt;
-					return {
-						seq: e.seq,
-						at: e.at,
-						fromLabel: stateOf(e.from).label,
-						toLabel: stateOf(e.to).label,
-						label: stateOf(e.from).label + " → " + stateOf(e.to).label,
-						note: e.note,
-						waitMs: Math.max(0, e.at - prevAt)
-					};
-				});
-			}
-			
-			/** 任务摘要（给列表用） */
-			function taskSummary(task) {
-				const t = createTask(task);
-				const meta = stateOf(t.state);
-				const paused = isPaused(t.state);
-				return {
-					id: t.id,
-					title: t.title,
-					state: t.state,
-					label: meta.label,
-					group: meta.group,
-					icon: meta.icon,
-					/* 暂停态时告诉界面该显示什么按钮 —— 两个暂停态的按钮**不一样** */
-					action: paused ? (t.pending && t.pending.action ? String(t.pending.action) : meta.action) : "",
-					pending: paused ? t.pending : null,
-					elapsedMs: Math.max(0, (t.updatedAt || t.createdAt) - t.createdAt),
-					steps: t.transitions.length,
-					error: t.error
-				};
-			}
-			
-			/**
-			 * 按组筛选（界面上的三个筛选页签）。
-			 * @param {Array} tasks
-			 */
-			function groupTasks(tasks) {
-				const out = { [GROUP.RUNNING]: [], [GROUP.PAUSED]: [], [GROUP.FINISHED]: [] };
-				for (const t of (Array.isArray(tasks) ? tasks : [])) {
-					const s = taskSummary(t);
-					out[s.group].push(s);
-				}
-				return out;
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 四、一致性检查（这套状态机自己也要被验）
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/**
-			 * 状态机结构自检。四条：
-			 *   ① 每个状态的转移目标都是**已定义的状态**
-			 *   ② 终态出边为 0
-			 *   ③ 从 SUBMITTED 可达全部**非终态**（否则有些状态永远进不去 = 死代码）
-			 *   ④ 每个非终态都能抵达至少一个终态（否则任务永远结束不了）
-			 * @returns {{ok:boolean, fails:string[]}}
-			 */
-			function auditMachine() {
-				const fails = [];
-				const keys = Object.keys(TRANSITIONS);
-			
-				for (const [from, tos] of Object.entries(TRANSITIONS)) {
-					for (const to of tos) {
-						if (!BY_KEY.has(to)) fails.push(from + " 指向未定义状态：" + to);
-					}
-					if (isTerminal(from) && tos.length > 0) fails.push(from + " 是终态却仍有出边：" + tos.join("、"));
-				}
-			
-				/* ③ 可达性 */
-				const seen = new Set([STATE.SUBMITTED]);
-				const q = [STATE.SUBMITTED];
-				while (q.length) {
-					const cur = q.shift();
-					for (const nxt of (TRANSITIONS[cur] || [])) {
-						if (!seen.has(nxt)) { seen.add(nxt); q.push(nxt); }
-					}
-				}
-				for (const k of keys) {
-					if (!seen.has(k)) fails.push("状态不可达（死代码）：" + k);
-				}
-			
-				/* ④ 每个非终态必须能到某个终态 */
-				for (const k of keys) {
-					if (isTerminal(k)) continue;
-					const seen2 = new Set([k]);
-					const q2 = [k];
-					let canFinish = false;
-					while (q2.length) {
-						const cur = q2.shift();
-						if (isTerminal(cur)) { canFinish = true; break; }
-						for (const nxt of (TRANSITIONS[cur] || [])) {
-							if (!seen2.has(nxt)) { seen2.add(nxt); q2.push(nxt); }
-						}
-					}
-					if (!canFinish) fails.push("非终态无法抵达任何终态（任务永远结束不了）：" + k);
-				}
-			
-				return { ok: fails.length === 0, fails };
-			}
-			
-			/* ══════════════════════════════════════════════════════════════════
-			 * 五、全局契约
-			 * ══════════════════════════════════════════════════════════════════ */
-			
-			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
-			function installTaskStateApi() {
-				if (typeof window === "undefined") return null;
-				window.__dshTaskState = {
-					STATE, GROUP, STATES, TRANSITIONS,
-					stateOf, isTerminal, isPaused,
-					canTransition, transitionTable,
-					createTask, transition, timeline, taskSummary, groupTasks,
-					auditMachine
-				};
-				return window.__dshTaskState;
-			}
-			
-			exports.STATE = STATE;
-			exports.GROUP = GROUP;
-			exports.STATES = STATES;
-			exports.stateOf = stateOf;
-			exports.isTerminal = isTerminal;
-			exports.isPaused = isPaused;
-			exports.TRANSITIONS = TRANSITIONS;
-			exports.canTransition = canTransition;
-			exports.transitionTable = transitionTable;
-			exports.createTask = createTask;
-			exports.transition = transition;
-			exports.timeline = timeline;
-			exports.taskSummary = taskSummary;
-			exports.groupTasks = groupTasks;
-			exports.auditMachine = auditMachine;
-			exports.installTaskStateApi = installTaskStateApi;
-		};
-
 		// ── logic/checkpoint.js ──
 		__defs["logic/checkpoint.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
@@ -38095,13 +38761,451 @@ window.__ModuleLoader__.load({
 			exports.installCheckpointApi = installCheckpointApi;
 		};
 
+		// ── logic/layers.js ──
+		__defs["logic/layers.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：三层职责边界 + 跨层消息信封（**纯函数**：无 DOM / 无 store / 无副作用）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：logic/roles.js, logic/lineage.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/layers.js — 三层职责边界 + 跨层消息信封（**纯函数**：无 DOM / 无 store / 无副作用）
+			 *
+			 * ── 为什么单独一层（WS-B · B6）─────────────────────────────────────
+			 *   最高权重需求：「插件只执行，模型做语义判断」。但"谁能把活派给谁"
+			 *   是一条**结构铁律**，不能让模型自由发挥 —— 否则会出现「执行层反过来
+			 *   指挥治理层」「合规层直接改产出」这种架构倒灌。
+			 *
+			 *   改之前：`roles.js` 里有 `LAYER` 词汇表（governance/orchestration/
+			 *   execution/compliance）和每个角色的 `layer` 字段，但**没有任何函数**
+			 *   回答「从 X 层派到 Y 层合不合法」「一条跨层消息的信封长什么样」。
+			 *   ⇒ 本模块把这条铁律收成**唯一真相源**的纯函数。
+			 *
+			 * ── 复用（纪律 126：同一语义只一处实现）─────────────────────────────
+			 *   · 层词汇 `LAYER` / `LAYERS` 来自 `roles.js`（不另造）；
+			 *   · 信封 `makeEnvelope` / `childEnvelope` / `normalizeEnv` 来自 `lineage.js`
+			 *     （跨层信封 = 信封协议 + 一个 `layer` 元字段，不新发明一套信封格式）。
+			 *
+			 * ── 🔴 三条硬边界 ────────────────────────────────────────────────
+			 *   · 零 DOM / 零 localStorage（离线单测裸跑）；
+			 *   · 复用层词汇与信封协议，不重定义；
+			 *   · `replayLayerChain` 纯函数可回放（同输入必同输出），闸门据此验四层链。
+			 */
+			
+			const { LAYER, LAYERS, layerOf } = __m("logic/roles.js");
+			const { makeEnvelope, childEnvelope, normalizeEnv } = __m("logic/lineage.js");
+			
+			/* 透传层词汇（复用 roles.js，不另造；闸门与 UI 从本模块一处拿全） */
+			// export { LAYER, LAYERS, layerOf };
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 一、派任边界（谁能把活派给谁）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 合法派任目标表（层 → 允许派到的层）。
+			 * 🔴 execution/compliance 无出边：执行层不往上派（它是干活的尽头），
+			 *    合规层只读不派（它验收，不指挥）。
+			 */
+			const DELEGATE_TARGETS = Object.freeze({
+				[LAYER.GOVERNANCE]: [LAYER.ORCHESTRATION, LAYER.EXECUTION],
+				[LAYER.ORCHESTRATION]: [LAYER.EXECUTION],
+				[LAYER.EXECUTION]: [],
+				[LAYER.COMPLIANCE]: []
+			});
+			
+			/**
+			 * 从 fromLayer 派到 toLayer 合不合法。
+			 * @returns {{ok:boolean, reason:string}}
+			 */
+			function canDelegate(fromLayer, toLayer) {
+				const f = layerOf(fromLayer).key;
+				const t = layerOf(toLayer).key;
+				if (f === t) return { ok: false, reason: layerOf(f).label + " 不能派到自己（同层不跨层）" };
+				const allowed = DELEGATE_TARGETS[f] || [];
+				if (!allowed.includes(t)) {
+					return {
+						ok: false,
+						reason: layerOf(f).label + " 无权派到 " + layerOf(t).label
+							+ "（允许：" + (allowed.map((x) => layerOf(x).label).join("、") || "无") + "）"
+					};
+				}
+				return { ok: true, reason: layerOf(f).label + " → " + layerOf(t).label };
+			}
+			
+			/** 某角色属于哪一层（从角色表查；角色表 = roles.js 的 BUILTIN_ROLES 同形） */
+			function layerOfRole(roleId, rolesTable) {
+				const id = String(roleId || "");
+				const table = Array.isArray(rolesTable) ? rolesTable : [];
+				for (let i = 0; i < table.length; i++) {
+					const r = table[i];
+					if (r && (r.id === id || r.name === id)) {
+						/* 命中 ⇒ 返回与 layerOf 同形的层对象，外加 unknown:false */
+						const hit = layerOf(r.layer || LAYER.GOVERNANCE);
+						return Object.assign({}, hit, { unknown: false });
+					}
+				}
+				/* 查不到 ⇒ 回落治理层（不抛；调用方可据 unknown:true 发现"未知角色"） */
+				return Object.assign({}, layerOf(LAYER.GOVERNANCE), { unknown: true });
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 二、跨层消息信封（复用 lineage 信封协议 + layer 元字段）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 构造一条跨层消息信封。
+			 *
+			 * 🔴 不新发明信封格式：在 lineage 的 `makeEnvelope` 之上加一个 `layer` 字段
+			 *   （fromLayer/toLayer），`round` 仍表示血缘代数。这样跨层消息与血缘消息
+			 *   共用同一条 `envOf` 解析路径，闸门和 UI 不用维护两套格式。
+			 *
+			 * @param {{fromLayer?:string,toLayer?:string,id?:string,to?:string,via?:string,cause?:string}} o
+			 * @param {object} [srcEnv] 源消息信封（有则继承 root/parent/round）
+			 * @returns {{env:object, fromLayer:string, toLayer:string, ok:boolean, reason:string}}
+			 */
+			function buildCrossLayerEnvelope(o = {}, srcEnv) {
+				const raw = o && typeof o === "object" ? o : {};
+				const fromLayer = layerOf(raw.fromLayer || (srcEnv && srcEnv.fromLayer) || LAYER.GOVERNANCE).key;
+				const toLayer = layerOf(raw.toLayer || LAYER.EXECUTION).key;
+				const chk = canDelegate(fromLayer, toLayer);
+				const base = srcEnv
+					? childEnvelope(srcEnv, { id: raw.id, to: raw.to, via: raw.via, cause: raw.cause })
+					: makeEnvelope({ id: raw.id, to: raw.to, via: raw.via, cause: raw.cause }, { self: raw.id });
+				const env = Object.assign({}, base, { fromLayer, toLayer });
+				return { env, fromLayer, toLayer, ok: chk.ok, reason: chk.ok ? chk.reason : chk.reason };
+			}
+			
+			/** 从一行消息里取跨层信封（行可能来自 IndexedDB 或内存，两条路径共用） */
+			function layerEnvOf(row) {
+				if (!row || typeof row !== "object") return null;
+				const env = normalizeEnv(row.env, row.nodeId ? String(row.nodeId) : null);
+				if (!env) return null;
+				/* 🔴 normalizeEnv 只保留 lineage 白名单字段（ENV_FIELDS），会剥掉
+				 *    fromLayer/toLayer —— 这两个字段必须从**原始** row.env 直读，
+				 *    否则跨层信封一解析就丢层（闸门量不到层）。 */
+				const rawLayer = (row.env && typeof row.env === "object") ? row.env : {};
+				return Object.assign({}, env, {
+					fromLayer: rawLayer.fromLayer ? String(rawLayer.fromLayer) : null,
+					toLayer: rawLayer.toLayer ? String(rawLayer.toLayer) : null
+				});
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 三、四层链回放（纯函数可回放；闸门据此验「一条活是否走对了层」）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 回放一条跨层调用链。
+			 *
+			 * @param {Array<{fromLayer:string,toLayer:string,at?:number,note?:string}>} steps
+			 *   每一步 = 一次派任。纯函数：不改入参，同输入必同输出。
+			 * @returns {{steps:Array<{seq:number,fromLayer:string,toLayer:string,ok:boolean,reason:string,at:number,note:string}>,
+			 *            ok:boolean, violations:number, layersTouched:number}}
+			 *   🔴 `ok` = **全部步合法**；任一步架构倒灌 ⇒ ok=false，违规步带 reason。
+			 */
+			function replayLayerChain(steps) {
+				const list = Array.isArray(steps) ? steps : [];
+				const touched = new Set();
+				const out = [];
+				let violations = 0;
+				list.forEach((s, i) => {
+					const st = s && typeof s === "object" ? s : {};
+					const f = layerOf(st.fromLayer).key;
+					const t = layerOf(st.toLayer).key;
+					/* 自循环（同层）算违规，但记进回放不抛 */
+					const chk = canDelegate(f, t);
+					if (!chk.ok) violations++;
+					touched.add(f); touched.add(t);
+					out.push({
+						seq: i + 1,
+						fromLayer: f,
+						toLayer: t,
+						ok: chk.ok,
+						reason: chk.reason,
+						at: Number.isFinite(Number(st.at)) ? Number(st.at) : 0,
+						note: st.note ? String(st.note) : ""
+					});
+				});
+				return {
+					steps: out,
+					ok: violations === 0,
+					violations: violations,
+					layersTouched: touched.size
+				};
+			}
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 四、结构自检（这套边界自己也要被验）
+			 * ══════════════════════════════════════════════════════════════════ */
+			
+			/**
+			 * 边界结构自检：
+			 *   ① 每层的派任目标都是已定义层；
+			 *   ② execution / compliance 出边必须为 0；
+			 *   ③ governance 必须能到 orchestration 与 execution（治理是源头）。
+			 * @returns {{ok:boolean, fails:string[]}}
+			 */
+			function auditLayerBoundaries() {
+				const fails = [];
+				const validKeys = LAYERS.map((l) => l.key);
+				for (const [from, tos] of Object.entries(DELEGATE_TARGETS)) {
+					if (!validKeys.includes(from)) fails.push("未知层作为派任源：" + from);
+					for (const to of tos) {
+						if (!validKeys.includes(to)) fails.push(from + " 派到未定义层：" + to);
+					}
+				}
+				const execTargets = DELEGATE_TARGETS[LAYER.EXECUTION] || [];
+				if (execTargets.length > 0) fails.push("执行层不应有派任出边：" + execTargets.join("、"));
+				const compTargets = DELEGATE_TARGETS[LAYER.COMPLIANCE] || [];
+				if (compTargets.length > 0) fails.push("合规层不应有派任出边：" + compTargets.join("、"));
+				const gov = DELEGATE_TARGETS[LAYER.GOVERNANCE] || [];
+				if (!gov.includes(LAYER.ORCHESTRATION) || !gov.includes(LAYER.EXECUTION)) {
+					fails.push("治理层必须能派到编排层与执行层，实得：" + gov.join("、"));
+				}
+				return { ok: fails.length === 0, fails: fails };
+			}
+			
+			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
+			function installLayersApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshLayers = {
+					LAYER, LAYERS, DELEGATE_TARGETS,
+					layerOf, canDelegate, layerOfRole,
+					buildCrossLayerEnvelope, layerEnvOf,
+					replayLayerChain, auditLayerBoundaries
+				};
+				return window.__dshLayers;
+			}
+			
+			exports.DELEGATE_TARGETS = DELEGATE_TARGETS;
+			exports.canDelegate = canDelegate;
+			exports.layerOfRole = layerOfRole;
+			exports.buildCrossLayerEnvelope = buildCrossLayerEnvelope;
+			exports.layerEnvOf = layerEnvOf;
+			exports.replayLayerChain = replayLayerChain;
+			exports.auditLayerBoundaries = auditLayerBoundaries;
+			exports.installLayersApi = installLayersApi;
+			exports.LAYER = LAYER;
+			exports.LAYERS = LAYERS;
+			exports.layerOf = layerOf;
+		};
+
+		// ── logic/model-tier.js ──
+		__defs["logic/model-tier.js"] = function (exports) {
+			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
+			 * 职责：模型 tier 决策树（**纯函数**：无 DOM / 无 store / 无副作用）
+			 * 引用：—
+			 * 上游：client-entry.js
+			 * 下游：logic/roles.js
+			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
+			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
+			 * @map:end */
+			/**
+			 * logic/model-tier.js — 模型 tier 决策树（**纯函数**：无 DOM / 无 store / 无副作用）
+			 *
+			 * ── 为什么单独一层（WS-B · B8）─────────────────────────────────────
+			 *   最高权重需求：「分流/任务判断由模型按语义做，插件只执行」。
+			 *   选哪个档的模型（cheap/standard/strong）是**决策**，不是实现细节。
+			 *   改之前：`roles.js#resolveTierModel()` 只会把抽象档位**落成模型名**
+			 *   （cheap→deepseek-chat、strong→deepseek-reasoner），
+			 *   但「这件事该用哪个档」这个**判断**散落在调用点的 if 里，没有唯一真相源。
+			 *
+			 *   本模块只做一件事：给定**任务信号**（复杂度 / 步数 / 成本敏感度 / 紧迫性…），
+			 *   按一张**外置规则表**纯函数地选档，并给出**为什么选它**（reason）。
+			 *
+			 * ── 🔴 三条硬边界 ────────────────────────────────────────────────
+			 *   · **零 DOM / 零 localStorage**：必须能在 Node 离线单测里裸跑。
+			 *   · **规则表外置**：`DEFAULT_TIER_RULES` 是**纯数据**（不是闭包），
+			 *     调用方可传 `rules` 覆盖 ⇒ 改策略**不改代码**（纪律 126：映射不写死在分支里）。
+			 *   · **复用 roles.js 的档位词汇**：`MODEL_TIER` 来自 roles.js（它本身零 import），
+			 *     本模块**不另造** cheap/standard/strong 三套常量（否则就是纪律 126 的隐式断链）。
+			 */
+			
+			const { MODEL_TIER, TIER_COST } = __m("logic/roles.js");
+			
+			/** 档位优先级（升档用：strong > standard > cheap；同档相等） */
+			const TIER_RANK = Object.freeze({
+				[MODEL_TIER.CHEAP]: 1,
+				[MODEL_TIER.STANDARD]: 2,
+				[MODEL_TIER.STRONG]: 3,
+				[MODEL_TIER.INHERIT]: 2
+			});
+			
+			/* ══════════════════════════════════════════════════════════════════
+			 * 规则表（纯数据；**不写死在 if/else 里**）
+			 * ══════════════════════════════════════════════════════════════════
+			 * 每条规则形状：
+			 *   {
+			 *     id:        string   规则名（reason 里回显，便于审计「为什么升档」）
+			 *     tier:      string    命中时选的档（MODEL_TIER.* 之一）
+			 *     when: {              条件（**全部满足**才命中；缺省字段 = 不限）
+			 *       complexityMin?: number   复杂度 ≥ 此值
+			 *       complexityMax?: number   复杂度 ≤ 此值
+			 *       stepsMin?:     number    步数 ≥ 此值
+			 *       costSensitive?: boolean  成本敏感（true 时倾向降档）
+			 *       urgent?:       boolean   紧急（true 时倾向升档）
+			 *       ambiguous?:    boolean   输入含糊（true 时倾向升档给推理）
+			 *       wordMin?:      number    原文词数 ≥ 此值
+			 *     }
+			 *     reason: string        命中时回显的理由
+			 *   }
+			 *
+			 * 🔴 规则按**数组顺序**自上而下匹配，**首个全条件满足者胜出**（与关键词打分不同：
+			 *    这里是决策树，不是累加）。调用方传自己的 rules 即可改策略，本模块零改动。
+			 */
+			const DEFAULT_TIER_RULES = Object.freeze([
+				{
+					id: "r-urgent-complex",
+					tier: MODEL_TIER.STRONG,
+					when: { urgent: true, complexityMin: 7 },
+					reason: "紧急且复杂（复杂度≥7）⇒ 强档推理，一次做对比省钱重要"
+				},
+				{
+					id: "r-multi-step",
+					tier: MODEL_TIER.STRONG,
+					when: { stepsMin: 4 },
+					reason: "多步任务（≥4 步）⇒ 强档，靠推理维持跨步一致性"
+				},
+				{
+					id: "r-ambiguous",
+					tier: MODEL_TIER.STANDARD,
+					when: { ambiguous: true },
+					reason: "输入含糊/有歧义 ⇒ 升到标准档，给一轮澄清式推理"
+				},
+				{
+					id: "r-cost-sensitive",
+					tier: MODEL_TIER.CHEAP,
+					when: { costSensitive: true, complexityMax: 5 },
+					reason: "成本敏感且不复杂（复杂度≤5）⇒ 便宜档足够"
+				},
+				{
+					id: "r-long-text",
+					tier: MODEL_TIER.STANDARD,
+					when: { wordMin: 400 },
+					reason: "长文（≥400 词）⇒ 标准档，便宜档易在长上下文里漏要点"
+				},
+				{
+					id: "r-trivial",
+					tier: MODEL_TIER.CHEAP,
+					when: { complexityMax: 2 },
+					reason: "琐碎任务（复杂度≤2）⇒ 便宜档，省钱杠杆最大"
+				},
+				{
+					id: "r-fallback",
+					tier: MODEL_TIER.STANDARD,
+					when: {},
+					reason: "未命中任何特定规则 ⇒ 标准档（不便宜不奢侈的默认）"
+				}
+			]);
+			
+			/** 归一化任务信号（缺省给安全值，不抛） */
+			function normalizeSignals(input) {
+				const s = (input && typeof input === "object") ? input : {};
+				const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+				const bool = (v, d) => (v == null ? d : Boolean(v));
+				return {
+					complexity: Math.max(0, Math.min(10, num(s.complexity, 3))),
+					steps: Math.max(0, Math.floor(num(s.steps, 1))),
+					costSensitive: bool(s.costSensitive, false),
+					urgent: bool(s.urgent, false),
+					ambiguous: bool(s.ambiguous, false),
+					wordCount: Math.max(0, Math.floor(num(s.wordCount, 0))),
+					domain: typeof s.domain === "string" ? s.domain : ""
+				};
+			}
+			
+			/** 判断一条规则的 when 是否被信号全部满足（缺省字段 = 不限） */
+			function matchWhen(when, s) {
+				const w = (when && typeof when === "object") ? when : {};
+				if (w.complexityMin != null && s.complexity < Number(w.complexityMin)) return false;
+				if (w.complexityMax != null && s.complexity > Number(w.complexityMax)) return false;
+				if (w.stepsMin != null && s.steps < Number(w.stepsMin)) return false;
+				if (w.costSensitive != null && s.costSensitive !== Boolean(w.costSensitive)) return false;
+				if (w.urgent != null && s.urgent !== Boolean(w.urgent)) return false;
+				if (w.ambiguous != null && s.ambiguous !== Boolean(w.ambiguous)) return false;
+				if (w.wordMin != null && s.wordCount < Number(w.wordMin)) return false;
+				/* 等值字段：domain 精确相等才命中（缺省 = 不限） */
+				if (w.domain != null && String(s.domain || "") !== String(w.domain)) return false;
+				return true;
+			}
+			
+			/**
+			 * 决策树选档。
+			 *
+			 * @param {object} signals 任务信号（见 normalizeSignals）
+			 * @param {Array} [rules] 规则表；缺省用 DEFAULT_TIER_RULES（外置，可覆盖）
+			 * @returns {{tier:string, reason:string, via:string, costRank:number, matchedRule:string}}
+			 *   via = "rule"（命中规则表）—— 台账据此区分「插件决策」vs「模型路由」
+			 */
+			function decideTier(signals, rules) {
+				const s = normalizeSignals(signals);
+				const table = Array.isArray(rules) && rules.length ? rules : DEFAULT_TIER_RULES;
+				for (let i = 0; i < table.length; i++) {
+					const r = table[i];
+					if (!r || typeof r !== "object") continue;
+					if (matchWhen(r.when, s)) {
+						const tier = Object.prototype.hasOwnProperty.call(TIER_RANK, r.tier) ? r.tier : MODEL_TIER.STANDARD;
+						return {
+							tier: tier,
+							reason: String(r.reason || ""),
+							via: "rule",
+							costRank: TIER_RANK[tier] || 2,
+							matchedRule: String(r.id || ("rule-" + i))
+						};
+					}
+				}
+				/* 理论上到不了（末条 when={} 兜底），但 rules 全是坏条目时别抛 */
+				return { tier: MODEL_TIER.STANDARD, reason: "规则表为空/全坏 ⇒ 标准档", via: "fallback", costRank: 2, matchedRule: "empty" };
+			}
+			
+			/**
+			 * 比较两档（用于「不允许降档到比当前还低」的守卫）。
+			 * @returns {number} 正数 = a 比 b 高；0 = 同级；负数 = a 比 b 低
+			 */
+			function tierRankDelta(a, b) {
+				const ra = TIER_RANK[a] != null ? TIER_RANK[a] : 2;
+				const rb = TIER_RANK[b] != null ? TIER_RANK[b] : 2;
+				return ra - rb;
+			}
+			
+			/** 档位成本倍率（直通 roles.js，单一真相源；本模块不另造一份） */
+			function tierCostMultiplier(tier) {
+				return TIER_COST[tier] != null ? TIER_COST[tier] : TIER_COST[MODEL_TIER.STANDARD];
+			}
+			
+			/** 决策树版本（规则表改了就 bump，调用方据此决定是否重选档） */
+			const TIER_DECISION_VERSION = "1.0.0";
+			
+			/** 安装全局契约（供 CDP 真机验证与控制台调用） */
+			function installModelTierApi() {
+				if (typeof window === "undefined") return null;
+				window.__dshModelTier = {
+					TIER_DECISION_VERSION, DEFAULT_TIER_RULES,
+					normalizeSignals, decideTier, tierRankDelta, tierCostMultiplier
+				};
+				return window.__dshModelTier;
+			}
+			
+			exports.DEFAULT_TIER_RULES = DEFAULT_TIER_RULES;
+			exports.normalizeSignals = normalizeSignals;
+			exports.decideTier = decideTier;
+			exports.tierRankDelta = tierRankDelta;
+			exports.tierCostMultiplier = tierCostMultiplier;
+			exports.TIER_DECISION_VERSION = TIER_DECISION_VERSION;
+			exports.installModelTierApi = installModelTierApi;
+		};
+
 		// ── client-entry.js ──
 		__defs["client-entry.js"] = function (exports) {
 			/* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
 			 * 职责：插件浏览器侧入口（批次 1 已落地）
 			 * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
 			 * 上游：（无：插件入口层）
-			 * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
+			 * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, logic/layers.js, logic/model-tier.js, components/OrchestratorPanel.js, components/Board.js
 			 * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 十（7 个内核 API 逐模块 try/catch 挂载）】
 			 * 索引：dsh-director-plugin/docs/12-源码映射索引.md
 			 * @map:end */
@@ -38276,7 +39380,11 @@ window.__ModuleLoader__.load({
 			const { installTaskStateApi } = __m("logic/task-state.js");
 			const { installCheckpointApi } = __m("logic/checkpoint.js");
 			const { installPolicyApi } = __m("logic/policy.js");
+			/* WS-B（B6/B8）：三层职责边界 + 模型 tier 决策树（纯函数契约，供 CDP 真机对账） */
+			const { installLayersApi } = __m("logic/layers.js");
+			const { installModelTierApi } = __m("logic/model-tier.js");
 			const { OrchestratorPanel } = __m("components/OrchestratorPanel.js");
+			const Board = __m("components/Board.js");
 			const PLUGIN_VERSION = "0.15.0-batch15";
 			
 			/** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
@@ -38486,7 +39594,9 @@ window.__ModuleLoader__.load({
 						["__dshDelegate", installDelegateApi],
 						["__dshTaskState", installTaskStateApi],
 						["__dshCheckpoint", installCheckpointApi],
-						["__dshPolicy", installPolicyApi]
+						["__dshPolicy", installPolicyApi],
+						["__dshLayers", installLayersApi],
+						["__dshModelTier", installModelTierApi]
 					]) {
 						try {
 							window[name] = fn();
@@ -38497,6 +39607,7 @@ window.__ModuleLoader__.load({
 						}
 					}
 					window.__dshOrchestratorPanel = OrchestratorPanel;
+						window.__dshBoard = Board; // WS-B B3 左侧常驻看板（只读消费 boardView）
 			
 					/* ── 启动期 cookie **预算自愈**（第 40 轮 · 真机实测发现）────────────────────
 					 * 🔴 缺陷形态：`dshCookieEnforceBudget()` 原先**只在 `dshCookieSave()` 里**调用
@@ -38528,7 +39639,8 @@ window.__ModuleLoader__.load({
 					installProjectInventoryApi();
 					installOrchestrateApi();
 					for (const fn of [installRolesApi, installDagApi, installVerifyApi, installDelegateApi,
-						installTaskStateApi, installCheckpointApi, installPolicyApi]) {
+						installTaskStateApi, installCheckpointApi, installPolicyApi,
+						installLayersApi, installModelTierApi]) {
 						try { fn(); } catch (e) { /* 无 DOM 时 install 只返回 null，此处仅为一致性 */ }
 					}
 				}
@@ -38934,7 +40046,7 @@ window.__ModuleLoader__.load({
 				return out;
 			}
 			
-			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 startConversationMirror, syncConversationMirror, conversationMirror, // 第 6 批需求 7 对话镜像 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns, // 要求 6/10/11 弹窗本体 // ── 批次 10 设计图工作室 + 分支导图 + 总监 tab（T-PLUG-018）── installDesignApi, DESIGN_KEY,                       // 设计图数据层 DesignStudio, STUDIO_ID,                            // 设计图全屏工作室 installBranchTreeApi, MindMap, MINDMAP_ID,          // 分支血缘导图 // ── 第 42 轮（需求 2/3/4）：宿主服务读取 + 总监对话分支继承 ── installHostCtxApi,                                  // 会话显示名 / 血缘 / 工作区真实名 installDirectorInheritApi,                          // 总监对话继承读（只读上溯） FloatDock, FLOATDOCK_ID,                            // 浮动按钮组（设计图 / 导图 / 总监） DirectorPage, DIRECTOR_PAGE_ID,                     // 总监页（R1–R8） // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）── installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID, installFlowApi, flowStore, DIM, DIM_LABEL, // ── 第 40 轮 · 22 号文 G5/G6/G7（小结行与项目清单 · 纯函数）── installSummaryNotesApi, installProjectInventoryApi, NodeDetailPanel, NODE_DETAIL_ID, installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册 // ── 批次 12 · 第 4 批界面调整（2026-09-14）── installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, // 宿主残留区块显示层裁剪 // ── 批次 12 · 第 6 批界面调整（2026-09-14）── installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序 // ── 第 6 批需求 7/9：宿主底部注入条（单按钮视图切换 + 执行/登记流转搬迁）── installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID, // ── 第 6 批需求 6：执行状态（技能 / 智能体调用）数据层 ── installAgentRuns, AGENT_RUNS_KEY, RUN_STATUS, agentRunsState, recordAgentRun, beginChain, fillChainSteps, endChain, listChains, latestChain, activeChain, // ── 第 6 批需求 8：标准模型选择席位 ── installModelSeat, MODEL_SEAT_SLOT, ModelSeat, // ── 第 6 批「完善技能和智能体的指向」── SKILL_CATALOG, CHAIN_STEPS, CHAIN_TARGETS, auditCatalog, installCatalogApi }; 
+			// export { directorLayoutStore, dshThemeStore, directorConfig, directorDocsStore, // ── 批次 3 ── directorStoreFactory, createDirectorStore, useDirectorStore, safeDirectorKey, loadDirectorStore, saveDirectorStore, DIRECTOR_DEFAULT_CONFIG, exportViaFsa, importViaFsa, // ── 批次 4 ── directorProcess, directorReviewReturn, // ── 批次 5 ── DirectorFlow, // ── WS-B B3 左侧常驻看板（只读消费 boardView）── Board, // ── 批次 6 多层级总监结构 ── installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal, LEVEL, GLOBAL_NODE_ID, DirectorHierarchy, // ── 批次 7 自动同步 ── installDiscoverApi, installSyncApi, syncFromSource, auditCoverage, // ── 批次 8 总监逻辑完善 ── installDutyApi, resolveDuties, submitUp, DirectorWorkbench, // ── 批次 9 弹窗式总监架构（T-PLUG-015）── installPluginDbApi, pluginDbStats, PLUGIN_DB_NAME,      // 要求 1 独立数据元 installRoutingApi, route, confirmRoute, review6, REVIEW_DIMS, DESTINATION, // 要求 8 + 3 installSplitApi, applySplit, clearSplit, getSplitRootRect, isSplitActive,  // 要求 5 分屏 installChatBridgeApi, sendToChat, readConversation,     // 要求 5 双向联动 startConversationMirror, syncConversationMirror, conversationMirror, // 第 6 批需求 7 对话镜像 installNavHook, installNavHookApi,                      // 要求 7/9 层级入口 DirectorDialog, DIALOG_ID, AGENTS, SKILLS, listAgentRuns, // 要求 6/10/11 弹窗本体 // ── 批次 10 设计图工作室 + 分支导图 + 总监 tab（T-PLUG-018）── installDesignApi, DESIGN_KEY,                       // 设计图数据层 DesignStudio, STUDIO_ID,                            // 设计图全屏工作室 installBranchTreeApi, MindMap, MINDMAP_ID,          // 分支血缘导图 // ── 第 42 轮（需求 2/3/4）：宿主服务读取 + 总监对话分支继承 ── installHostCtxApi,                                  // 会话显示名 / 血缘 / 工作区真实名 installDirectorInheritApi,                          // 总监对话继承读（只读上溯） FloatDock, FLOATDOCK_ID,                            // 浮动按钮组（设计图 / 导图 / 总监） DirectorPage, DIRECTOR_PAGE_ID,                     // 总监页（R1–R8） // ── 批次 11 个性化设定 + 四维流转（2026-09-12 第三轮）── installPersonalizeApi, personalizeStore, PersonalizePanel, PERSONALIZE_PANEL_ID, installFlowApi, flowStore, DIM, DIM_LABEL, // ── 第 40 轮 · 22 号文 G5/G6/G7（小结行与项目清单 · 纯函数）── installSummaryNotesApi, installProjectInventoryApi, NodeDetailPanel, NODE_DETAIL_ID, installDirectorView, DIRECTOR_VIEW_ID, DIRECTOR_VIEW_ORDER, // 宿主 tab 注册 // ── 批次 12 · 第 4 批界面调整（2026-09-14）── installHostPanelTrim, installHostPanelTrimApi, restoreHostPanelTrim, TRIM_TARGETS, // 宿主残留区块显示层裁剪 // ── 批次 12 · 第 6 批界面调整（2026-09-14）── installHostDirectorColumn, installHostDirectorColumnApi, restoreHostDirectorColumn, hostColumnState, MIN_BTN_ID, COL_RESIZER_ID, MEM_HEIGHT_HANDLE_ID, // 宿主左栏几何接管 + 记忆面板时序 // ── 第 6 批需求 7/9：宿主底部注入条（单按钮视图切换 + 执行/登记流转搬迁）── installHostComposerSlot, installHostComposerSlotApi, restoreHostComposerSlot, composerSlotState, SCOPE_BAR_ID, SCOPE_TOGGLE_ID, HOST_DELIVER_ID, HOST_REGISTER_ID, // ── 第 6 批需求 6：执行状态（技能 / 智能体调用）数据层 ── installAgentRuns, AGENT_RUNS_KEY, RUN_STATUS, agentRunsState, recordAgentRun, beginChain, fillChainSteps, endChain, listChains, latestChain, activeChain, // ── 第 6 批需求 8：标准模型选择席位 ── installModelSeat, MODEL_SEAT_SLOT, ModelSeat, // ── 第 6 批「完善技能和智能体的指向」── SKILL_CATALOG, CHAIN_STEPS, CHAIN_TARGETS, auditCatalog, installCatalogApi }; 
 			exports.PLUGIN_VERSION = PLUGIN_VERSION;
 			exports.installBatch1 = installBatch1;
 			exports.directorLayoutStore = directorLayoutStore;
@@ -38953,6 +40065,7 @@ window.__ModuleLoader__.load({
 			exports.directorProcess = directorProcess;
 			exports.directorReviewReturn = directorReviewReturn;
 			exports.DirectorFlow = DirectorFlow;
+			exports.Board = Board;
 			exports.installHierarchyApi = installHierarchyApi;
 			exports.installSummarizeApi = installSummarizeApi;
 			exports.mountHierarchy = mountHierarchy;
@@ -39118,5 +40231,5 @@ window.__ModuleLoader__.load({
 	}
 });
 
-/* dsh-build-stamp: 32d2254159ec7ec4 */
-(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="32d2254159ec7ec4";}catch(e){}})();
+/* dsh-build-stamp: 121fe1e3183b20d5 */
+(function(){try{if(typeof window!=='undefined')window.__dshBuildStamp="121fe1e3183b20d5";}catch(e){}})();

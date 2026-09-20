@@ -1086,7 +1086,9 @@ export function DesignStudio({ open, onClose }) {
 			key: "top", style: { ...S.top, paddingRight: Math.max(10, inset + 10) }, "data-testid": "ds-top"
 		}, [
 			/* ── 域标识（V17 P0：用户始终知道自己在哪个域） ── */
-			h("span", { key: "dom", style: { fontSize: "calc(10.5px * var(--dp-font))", fontWeight: 600, color: "#7fe3e8", marginRight: 4, letterSpacing: ".3px", whiteSpace: "nowrap" }, "data-testid": "ds-domain" }, "◈ 设计图"),
+			h("span", { key: "dom", style: { fontSize: "calc(10.5px * var(--dp-font))", fontWeight: 600, color: "#7fe3e8", marginRight: 4, letterSpacing: ".3px", whiteSpace: "nowrap" }, "data-testid": "ds-domain" }, "◈ 设计图"),,
+			/* D1: branch/version lineage badge. Hidden when the doc has no branch meta (honest empty state). */
+			(doc && (doc.branchLabel || doc.branchDim)) ? h("span", { key: "bm", "data-testid": "ds-branch-meta", "data-branch-id": doc.branchId || "", "data-branch-dim": doc.branchDim || "", style: { fontSize: "calc(10.5px * var(--dp-font))", color: "#9fb4ff", marginRight: 4, whiteSpace: "nowrap", opacity: .9 } }, "分支 " + (doc.branchDim ? doc.branchDim + " · " : "") + (doc.branchLabel || "")) : null,
 			/* ── ① 保存：**按钮即状态** ────────────────────────────────────────
 			 * 脏（有未保存改动）= 主色实心「● 保存」（最需要被看见）
 			 * 净（已保存）    = 绿色描边「✓ 已保存 vN」

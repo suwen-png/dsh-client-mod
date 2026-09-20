@@ -3,6 +3,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { makeClicker, pressEsc } from "./_cdp-click-until.mjs";
 import { ensureDirectorPage, waitCdpPage } from "./_cdp-startup.mjs";
+import { until } from "./_cdp-wait.mjs"; /* T-PLUG-053 ⑤：until/settle 唯一实现 */
+import { readLastDirectorMessage } from "./_cdp-lastmsg.mjs"; /* T-PLUG-053 ⑤：双通道读消息唯一实现 */
 import { caseAt, caseById } from "./_corpus-director.mjs";
 /**
  * verify-director-logic.mjs —— 第二十三轮真机验收：**总监逻辑链的四项修复**
@@ -204,13 +206,12 @@ const clickJs = (sel, tag) => CL.clickJs(sel);
  *  @returns {Promise<{ok:boolean, rounds:number, info?:any, why?:string}>} */
 const clickUntil = (sel, tag, verifyFn, rounds = 6) => CL.clickUntil({ sel: sel }, verifyFn, { rounds: rounds });
 /** 🔴 纪律 55：有界等待 + 校验返回值（超预算 ⇒ 由调用方判红，不静默当成"还没到"） */
+/* T-PLUG-053 ⑤ until() 推广：本套件原先**手写**了一份轮询循环，与 _cdp-wait#until 同义两处实现。
+ *    改为薄壳委托共享 until —— 语义不变（tries×gap 预算、stepMs=gap、首个真值即返回、超时回 null），
+ *    但循环只此一份。 */
 async function waitFor(fn, tries, gap) {
-	for (let i = 0; i < tries; i++) {
-		const v = await fn();
-		if (v) return v;
-		await sleep(gap);
-	}
-	return null;
+	const r = await until(fn, (v) => !!v, { budgetMs: tries * gap, stepMs: gap, tag: "waitFor" });
+	return r.val;
 }
 function pick(sel) {
 	return js("(function(){var e=document.querySelector(" + JSON.stringify(sel) + ");if(!e) return null;"
@@ -279,6 +280,29 @@ const clickByText = (sel, text) => CL.clickByText(sel, text);
 /** 🔴 第 23 批：按文本 **JS 直点**（`el.click()`）—— 与 `clickJs` 同理，但用于"同一选择器
  *  下有多个候选、只点文本匹配的那个"（宿主页签环）。仍回报 `self`/`at` 作为纪律 22 的证据。 */
 const clickJsByText = (sel, text) => CL.clickJsByText(sel, text);
+
+/* T-PLUG-059 幂等回总监页：派发/回收会让宿主切走（打开对话 => 宿主落到「对话」tab），
+ *    而 MSG_STATE.tab 读的是总监页内部子页签 dp-r5-msg 的计数 —— 不在总监页时它是 null，
+ *    waitFor(tab===before+1) 永不到达 => DL-5a/5b/7a 间歇红（约 1/5，正是派发把视角切走那一轮）。
+ *    => 每次测总监页读数前幂等回总监页：已在则不动，不在则点环上的「总监」并等 dp-root。 */
+const backToDirectorPage = async (tag) => {
+	let st = { sel: [], hasDir: false };
+	try { st = JSON.parse(await js("(function(){var ts=[].slice.call(document.querySelectorAll('[role=\"tab\"']));"
+		+"var sel=ts.filter(function(e){return e.getAttribute('aria-selected')==='true';}).map(function(e){return String(e.textContent||'').trim();});"
+		+"var hasDir=ts.some(function(e){return String(e.textContent||'').trim()==='总监';});"
+		+"return JSON.stringify({sel:sel,hasDir:hasDir});})()")); } catch (_) {}
+	const alreadyOn = Array.isArray(st.sel) && st.sel.indexOf('总监') >= 0;
+	if (!alreadyOn && st.hasDir) {
+		LOG.push("  [" + tag + "] 宿主已切走（sel=" + JSON.stringify(st.sel) + "）=> 幂等回总监页");
+		await clickJsByText('[role="tab"]', "总监");
+	}
+	for (let i = 0; i < 15; i++) {
+		if (await js("(function(){return !!(document.querySelector('[data-testid=\"dp-root\"]')"
+			+"&&document.querySelector('[data-testid=\"dp-r5-msg\"]'));})()")) return true;
+		await sleep(300);
+	}
+	return false;
+};
 let stats = JSON.parse(await js(MSG_STATE));
 /* ① 浮层清场 */
 const ovl0 = await js("['#dsh-mindmap','#dsh-design-studio','#dsh-director-dialog'].filter(function(s){return !!document.querySelector(s);})");
@@ -491,6 +515,7 @@ t("DL-3c", "🔴 **分线口径与需求取集一致**（用例 " + CASE.id + " 
 /* ── C 段：D10 界面滞后 + D8 整理 + D9 项目把控 ─────────────────── */
 console.log("\n【C · 🔴 D10 界面滞后 / D8 语言整理 / D9 项目把控】");
 /* 🔴 派发后的 UI 存在性读数（纪律 54）—— 下面 DL-5a 报红时**必须**能看出"是没更新还是整块没了" */
+await backToDirectorPage("C"); /* T-PLUG-059：测总监页计数前幂等回总监页 */
 const uiAfterSplit = await js(UI_STATE);
 LOG.push("  [C] 派发后 UI 状态 = " + uiAfterSplit);
 console.log("  [C] 派发后 UI 状态 = " + uiAfterSplit);
@@ -544,6 +569,7 @@ const msgBeforeCollect = JSON.parse(await js(MSG_STATE));
 const uiBeforeCollect = await js(UI_STATE);
 LOG.push("  [D] 回收前 UI 状态 = " + uiBeforeCollect);
 console.log("  [D] 回收前 UI 状态 = " + uiBeforeCollect);
+await backToDirectorPage("D-pre"); /* T-PLUG-059：回收按钮在总监页上，先回总监页 */
 const clickCollect = await clickUntil('[data-testid="dp-act-collect"]', "📥 回收", async () => {
 	return await pick('[data-testid="dp-flow-collect"]');
 }, 6);
@@ -553,6 +579,7 @@ t("DL-7a", "回收读数出现且 `total>0`（回收链跑通）",
 	!!collectInfo && Number(collectInfo["data-total"]) > 0,
 	collectInfo && collectInfo["data-total"]
 		|| ("无回收读数 ｜ 命中=" + JSON.stringify(clickCollect.info || null) + " · 回收前 UI=" + String(uiBeforeCollect).slice(0, 220)));
+await backToDirectorPage("D-post"); /* T-PLUG-059：回收后再读计数前幂等回总监页 */
 const msgAfterCollect = await waitFor(async () => {
 	const st = JSON.parse(await js(MSG_STATE));
 	return (st.tab === msgBeforeCollect.tab + 1) ? st : null;
@@ -568,29 +595,13 @@ t("DL-5b", "🔴 **D10 第二处**：回收后页签 = 回收前 + 1（同一根
  *    （`store/plugin-db.js` 的 `appendDirectorMessage`，键 `messageId/nodeId/role/kind/text/at`）
  *    ⇒ 改**双通道**：DOM 优先，库兜底；库取「最新动作所在节点」的最新一条（与界面口径一致）。
  *    双通道都读不到才判红 —— 那才是真的没写。 */
-const LAST_MSG = "(async function(){return new Promise(function(res){var r=indexedDB.open('dsh-director-plugin-db');"
-	+ "r.onerror=function(){res(null)};r.onsuccess=function(){var db=r.result;"
-	+ "var tx=db.transaction(['directorConversations'],'readonly');"
-	+ "var q=tx.objectStore('directorConversations').getAll();"
-	+ "q.onsuccess=function(){var all=q.result||[];if(!all.length)return res(null);"
-	+ "var best=null;all.forEach(function(x){if(!best||(x.at||0)>=(best.at||0))best=x;});"
-	+ "var node=String(best.nodeId||'');"
-	+ "var arr=all.filter(function(x){return String(x.nodeId||'')===node;}).sort(function(a,b){return (a.at||0)-(b.at||0);});"
-	+ "var rec=arr[arr.length-1]||best;"
-	+ "res(JSON.stringify({src:'db',node:node,n:arr.length,at:rec.at,role:String(rec.role||''),kind:String(rec.kind||''),"
-	+ "text:String(rec.text||'').replace(/\\s+/g,' ').trim()}));};"
-	+ "q.onerror=function(){res(null)};};});})()";
-const lastMsgDom = await js("(function(){var rows=document.querySelectorAll('[data-testid=\"dp-dir-msg\"]');"
-	+ "if(!rows.length)return null;var e=rows[rows.length-1];"
-	+ "return String(e.textContent||'').replace(/\\s+/g,' ').trim();})()");
-const lastMsgDb = await js(LAST_MSG);
-let lastMsg = lastMsgDom;
-let lastMsgSrc = lastMsgDom ? "dom" : null;
-if (!lastMsg && lastMsgDb) {
-	try { const o = JSON.parse(lastMsgDb); lastMsg = String(o.text || ""); lastMsgSrc = "db(" + o.node + "/" + o.n + ")"; } catch (_) { /* 解析失败 ⇒ 保持 null，下面判红 */ }
-}
+/* T-PLUG-053 ⑤：双通道实现已抽公共到 _cdp-lastmsg.mjs#readLastDirectorMessage（纪律 126）。
+ *    口径不变：DOM 优先（dp-dir-msg 最后一条），IndexedDB directorConversations 兜底（最新节点最新一条）。 */
+const _lm = await readLastDirectorMessage(js);
+let lastMsg = _lm.text;
+let lastMsgSrc = _lm.src;
 LOG.push("  [D] 最新总监消息来源=" + lastMsgSrc + " · DOM 行数=" + await js("document.querySelectorAll('[data-testid=\"dp-dir-msg\"]').length")
-	+ " · db 读数=" + String(lastMsgDb).slice(0, 60));
+	+ " · text 头=" + String(lastMsg || "").slice(0, 60));
 const dupeWhy = (function () {
 	if (!lastMsg) return null;
 	/* 同因归并判据：任一句子若在文案里出现 >1 次 ⇒ 未归并（旧版 8 条会各印一遍） */

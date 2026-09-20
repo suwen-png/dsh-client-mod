@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：上下游消息一致性与信封协议（19 号文 §3.2 信封 + §3.4 规则 R1–R4 · **纯函数**）
  * 引用：19 号文 §3.2 · 19 号文 §3.4
- * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js
+ * 上游：client-entry.js, components/DirectorDialog.js, components/DirectorPage.js, logic/layers.js, store/dispatch-log.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -357,6 +357,77 @@ export function auditLineage(rows) {
 	};
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 五、统一 id 语义（WS-B · B1：流转/看板/导图主键挂**会话 id**）
+ * ══════════════════════════════════════════════════════════════════
+ *  它治的是什么（T-PLUG-074）：
+ *    改之前有两种 id 混着用 ——
+ *      ① **会话 id**（宿主真会话，board/mindmap/dispatch 真正要挂的主键）；
+ *      ② **作用域 id**（scope-tree 的 `ws_…`，那是"视图作用域"，不是会话）。
+ *    流转记录、看板条目、导图节点若拿 `ws_…` 当主键，
+ *    就会出现「看板有条目、导图找不到节点、dispatch 对不上会话」的三方断链。
+ *
+ *  🔴 铁律：**主键一律是会话 id**。`ws_…` 只允许作视图过滤的作用域标记，
+ *     **绝不**进流转/看板/导图的主键位。下面的纯函数把这条落成可跑判据。
+ */
+
+/** 作用域 id 前缀（ws_… = 视图作用域，不是会话；出现即视为「错把作用域当主键」） */
+export const SCOPE_ID_PREFIX = "ws_";
+
+/** 归一化一个流转主键（取会话 id；空串/null 回落 ""，不抛） */
+export function normalizeFlowSid(raw) {
+	if (raw == null) return "";
+	return String(raw).trim();
+}
+
+/** 这个 id 是不是「作用域 id 误用」（以 ws_ 开头 = 不能当会话主键） */
+export function isScopeIdLeak(id) {
+	const s = normalizeFlowSid(id);
+	return s !== "" && s.indexOf(SCOPE_ID_PREFIX) === 0;
+}
+
+/**
+ * 校验一批流转记录的主键是否全部 ∈ 已知会话 id 集合（**B1 核心判据**）。
+ *
+ * @param {Array<{sid?:string,sessionId?:string,id?:string}>} records 流转记录
+ *   （认 sid / sessionId / id 三个候选键，优先 sid）
+ * @param {Iterable<string>|Array<string>} sessionIds 已知会话 id 集合（host snapshot 的 session ids）
+ * @returns {{ok:boolean, sids:string[], orphaned:string[], leaks:string[],
+ *            missing:string[], accounted:number, total:number}}
+ *   🔴 orphaned = 流转里有、但会话集合里没有 ⇒ **断链**；
+ *   🔴 leaks    = 以 ws_ 开头的作用域 id 误用；
+ *   🔴 missing   = 空主键记录（没建成会话）。
+ *   `ok = orphaned===0 && leaks===0`（missing 是"没建成"，不算断链，单列）。
+ */
+export function validateFlowSids(records, sessionIds) {
+	const list = Array.isArray(records) ? records : [];
+	const known = new Set();
+	(Array.isArray(sessionIds) ? sessionIds : [...(sessionIds || [])]).forEach((s) => {
+		const n = normalizeFlowSid(s);
+		if (n) known.add(n);
+	});
+	const sids = [];
+	const orphaned = [];
+	const leaks = [];
+	const missing = [];
+	for (const r of list) {
+		const sid = normalizeFlowSid((r && (r.sid != null ? r.sid : (r.sessionId != null ? r.sessionId : r.id))) || "");
+		if (!sid) { missing.push(sid); continue; }
+		sids.push(sid);
+		if (isScopeIdLeak(sid)) leaks.push(sid);
+		else if (!known.has(sid)) orphaned.push(sid);
+	}
+	return {
+		ok: orphaned.length === 0 && leaks.length === 0,
+		sids: sids,
+		orphaned: orphaned,
+		leaks: leaks,
+		missing: missing,
+		accounted: sids.length - orphaned.length - leaks.length,
+		total: list.length
+	};
+}
+
 /** 安装全局契约（供真机脚本调用；与 `installBranchFocusApi` 同风格） */
 export function installLineageApi() {
 	if (typeof window === "undefined") return null;
@@ -364,7 +435,9 @@ export function installLineageApi() {
 		VIA, ENV_FIELDS, FACT_FIELDS,
 		makeEnvelope, normalizeEnv, childEnvelope, factOf, factKey, sameFact,
 		envOf, factOfRow, lineageGroups, ancestorsOf, descendantsOf,
-		summaryLine, summariesFor, carriesBound, auditLineage
+		summaryLine, summariesFor, carriesBound, auditLineage,
+		/* B1 统一 id 语义 */
+		SCOPE_ID_PREFIX, normalizeFlowSid, isScopeIdLeak, validateFlowSids
 	};
 	window.__dshLineage = api;
 	return api;

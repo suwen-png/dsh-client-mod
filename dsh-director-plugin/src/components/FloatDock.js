@@ -50,9 +50,14 @@ export const DESIGN_BTN_ID = "dsh-design-studio-launcher";
 export const MINDMAP_BTN_ID = "dsh-mindmap-launcher";
 
 /** 浮动组横向占位（px）—— 页面右端内容按此留白，见下方 🔴 容器 pointerEvents 注释
- *  实测容器宽 98（最长的一颗是「🧠 思维导图」），加 8px 间隙、再取整 ⇒ 108。
- *  由 components/DirectorPage.js 的 R6 / R8 消费（`paddingRight`）。 */
-export const FLOAT_DOCK_RESERVE = 108;
+ *  🔴 真实足迹 = `right:18`（贴视口右的偏移）+ 容器宽 98（最长一颗是「🧠 思维导图」）
+ *     ⇒ 浮动组左边缘距**视口右** = 18 + 98 = 116 px。
+ *     旧值 108 = 98+8，**漏算了 `right:18` 那 18px** ⇒ 内容多探进浮动盒约 8px。
+ *     （2026-09-20 真机取证：dp-flow-empty 叶子右缘 1387 vs 浮动盒左缘 1324，实际压 63px ——
+ *      真因不只是常数少 8，而是这个预留**根本没落到 R5 所在的 cols 网格**，见 DirectorPage.js。）
+ *  消费方：DirectorPage.js 的 cols 网格 `paddingRight`（R4/R5/R7 三栏整体避让）
+ *    与运行窗定位 `right`；client-entry.js 只把它记进几何契约（不写第二份真相）。 */
+export const FLOAT_DOCK_RESERVE = 116;
 
 /* 🔴 字体色**不能写死浅色**（2026-09-12 随总监页背景改浅一起暴露的缺陷）——
  *   三颗药丸原先的 `color: "#7fe3e8" / "#9fc2ff" / "#b794f6"` 是**给深色底配的浅色字**。

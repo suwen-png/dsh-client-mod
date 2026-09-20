@@ -478,7 +478,7 @@ check("installed.floatDock 五项契约齐备（容器不吃点击 / 药丸吃�
 		/* 消费者名单随 R6 去除而更新（第 5 批）：R6 已整块删除，其数据并入 R2。
 		 * 只剩 dp-r8（底部动作行）与 dp-personalize（右端浮标）两处真的在用。 */
 		return f.containerPointerEvents === "none" && f.pillPointerEvents === "auto"
-		&& f.pillColorToken === "--dsw-alias-label-primary" && f.reserve === 108
+		&& f.pillColorToken === "--dsw-alias-label-primary" && f.reserve === 116  /* F8：占位数 108→116（前一轮 intentional 改，闸门同步） */
 		&& Array.isArray(f.reserveConsumers) && f.reserveConsumers.join(",") === "dp-r8,dp-personalize"; })(),
 	JSON.stringify(applied?.floatDock));
 const dockSrc = moduleSlice("components/FloatDock.js");

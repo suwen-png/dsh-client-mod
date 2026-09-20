@@ -2,7 +2,7 @@
  * 职责：总监页（宿主原生 tab 环里的第一个视图）
  * 引用：—
  * 上游：client-entry.js
- * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
+ * 下游：store/layout.js, store/hierarchy.js, util/bus.js, store/plugin-db.js, logic/director-inherit.js, logic/routing.js, logic/branch-tree.js, logic/store-care.js, store/store-health.js, logic/split-dimensions.js, logic/attribution.js, logic/dim-branch.js, store/split-index.js, logic/lineage.js, logic/director-dispatch.js, logic/director-collect.js, store/dispatch-log.js, components/Board.js, logic/task-state.js, util/debug.js, logic/director-run.js, config/model.js, store/duty-config.js, logic/orchestrate.js, logic/flow.js, logic/summary-notes.js, logic/project-inventory.js, bridge/chat-bridge.js, store/personalize.js, components/FloatDock.js, components/PersonalizePanel.js, components/OrchestratorPanel.js, util/safe-area.js, logic/ledger.js, store/docs-index-inject.js, logic/key-files.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, logic/roles.js, components/ModelSeat.js, bridge/host-composer-slot.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（总监页 R1–R8）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 九（编排入口按钮 + 与个性化设定互斥）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -93,7 +93,9 @@ import { makeEnvelope, childEnvelope, VIA } from "../logic/lineage.js";
  *    它们已收进 `logic/director-dispatch.js`（唯一调用点，避免两套实现漂移）。 */
 import { dispatchBranches } from "../logic/director-dispatch.js";
 import { collectBranches, digestMessage, verdictOf } from "../logic/director-collect.js";
-import { dispatchLog } from "../store/dispatch-log.js";
+import { dispatchLog, readDecisions, decisionRows, subscribeDispatch } from "../store/dispatch-log.js";
+import Board from "./Board.js"; // WS-B B3 左侧常驻看板（只读消费 boardView）
+import { boardTasksFromRows } from "../logic/task-state.js"; // WS-B B3 分支行→看板任务唯一适配器
 import { dshLog } from "../util/debug.js";
 import { runDirector } from "../logic/director-run.js";
 import { loadDirectorConfig } from "../config/model.js";
@@ -334,11 +336,13 @@ export function DirectorPage() {
 		() => personalizeStore.getState(),
 		() => personalizeStore.getState()
 	);
-	const fs = react.useSyncExternalStore(
-		(fn) => flowStore.subscribe(fn),
-		() => flowStore.getState(),
-		() => flowStore.getState()
+	/* D2: subscribe to dispatch-log decisions so 思维链路 re-renders; derive 4-col rows (no new store). */
+	const decTick = react.useSyncExternalStore(
+		(fn) => subscribeDispatch(fn),
+		() => dispatchLog.decisions.length,
+		() => dispatchLog.decisions.length
 	);
+	const decRows = decisionRows(readDecisions());
 
 	const [tree, setTree] = react.useState(null);
 	const [crumbs, setCrumbs] = react.useState([]);
@@ -415,6 +419,9 @@ export function DirectorPage() {
 		return () => clearTimeout(timer);
 	}, [orphanArm]);
 	const [toast, setToast] = react.useState("");
+// WS-B B5 外层收件箱（骨架）：总监操作台降级为后台面板，外层留一个常驻输入入口。
+	const [outerInbox, setOuterInbox] = react.useState("");
+	const [outerQueue, setOuterQueue] = react.useState(0); // 已入收件箱条数（真机对账用）
 	const [pOpen, setPOpen] = react.useState(false);
 	/* 编排面板（2026-09-14 架构补全）：与个性化面板**互斥**，避免两个浮层叠在一起。
 	 * 🔴 开合型控件：打开一个必须关掉另一个 —— 否则叠层会挡住后续点击（纪律见技能
@@ -2755,6 +2762,32 @@ export function DirectorPage() {
 		 *      ② 根本没有"缩回 → 弹出 → 固定"这个中间态（R4=200px、R7=210px 恒宽常驻）。
 		 *    ⇒ 这一版两半一起修：`S.cols` 加 `alignItems:stretch` + 每栏 `flex:1` ⇒ 占满整列；
 		 *      并加缩回栏（默认 26px）。 */
+		/* WS-B B5：外层常驻收件箱（骨架 + 派发接线）。
+		 *  总监操作台降级为后台面板；外层只留一个输入入口。
+		 *  🔴 派发接线：入箱即写 B7 决策台账 dispatchLog.recordDecision（via=outer-inbox），
+		 *     不另起 store；真机对账 [data-outer-queue] == 已入箱条数。 */
+		h("div", { key: "inbox", "data-testid": "dp-outer-inbox", "data-outer-queue": String(outerQueue),
+			style: { display: "flex", gap: 6, alignItems: "center", padding: "6px 9px", borderBottom: "1px solid var(--dp-line, #3d4148)" } }, [
+			h("span", { key: "l", style: { fontSize: 12, fontWeight: 700, color: "var(--dp-ac, #79a8ff)" } }, "📥 外层收件箱"),
+			h("input", {
+				key: "i", "data-testid": "dp-outer-inbox-input",
+				value: outerInbox, placeholder: "一句话丢进来（多意图由模型拆分发派；本批为骨架）…",
+				onChange: (e) => setOuterInbox(e.target.value),
+				style: { flex: 1, height: 28, borderRadius: 5, border: "1px solid var(--dp-line, #3d4148)", background: "var(--dp-bg-2, #212429)", color: "var(--dp-t1, #e8eaed)", padding: "0 8px", fontSize: 12 }
+			}),
+			h("button", {
+				key: "b", "data-testid": "dp-outer-inbox-send",
+				onClick: () => {
+					const txt = String(outerInbox || "").trim();
+					if (!txt) return;
+					try { dispatchLog.recordDecision({ input: txt, decision: "queued", reason: "外层收件箱入箱（骨架，待模型路由派发）", via: "outer-inbox", sessionId: "", dim: "outer" }); } catch (e) { dshLog("outer-inbox", e); }
+					setOuterQueue((n) => n + 1);
+					setOuterInbox("");
+					setToast("已入外层收件箱（" + (outerQueue + 1) + "）");
+				},
+				style: { height: 28, padding: "0 12px", borderRadius: 5, border: "1px solid var(--dp-ac, #2f6feb)", background: "var(--dp-ac, #2f6feb)", color: "#fff", fontSize: 12, cursor: "pointer" }
+			}, "送入")
+		]),
 		h("div", {
 			key: "cols", "data-testid": "dp-cols",
 			/* 第 6 批：栏宽取自 store（可拖拽 · 持久化）。
@@ -2762,7 +2795,13 @@ export function DirectorPage() {
 			 *    两个宽度**同时进 DOM**（`data-w-*`），闸门可直接对账"拖 N px ⇒ 属性变 N"。 */
 			"data-w-r4": directorLayoutStore.getRailWidth("r4"), "data-w-r7": directorLayoutStore.getRailWidth("r7"),
 			"data-gap": 0,
-			style: { ...S.cols, gridTemplateColumns: (railOpen.r4 ? directorLayoutStore.getRailWidth("r4") + "px" : RAIL_WIDTH + "px") + " 1fr " + (railOpen.r7 ? directorLayoutStore.getRailWidth("r7") + "px" : RAIL_WIDTH + "px") }
+			/* 🔴 R4/R5/R7 三栏整体按浮动组横向占位避让（2026-09-20 修 F8 红的真因）：
+			 *   早先 `dockReserve` 只喂给运行窗定位（下方 line 3002），**R5 所在三栏网格一个像素都没吃到**
+			 *   ⇒ R5 流转列 / 空态占位文字（dp-flow-empty）右缘探进浮动盒 rect（实测 63px），
+			 *   被 F8「右端带文字叶子零被压」判红。在 cols 网格 `paddingRight` 叠加 dockReserve，
+			 *   一次把 R4/R5/R7 全推到浮动盒左缘之外（浮动组关闭时 dockReserve=0 ⇒ 回退原 9px）。
+			 *   ⚠️ 读的就是上方 line 880 的 `dockReserve`，不写第二份真相。 */
+			style: { ...S.cols, paddingRight: 9 + dockReserve, gridTemplateColumns: (railOpen.r4 ? directorLayoutStore.getRailWidth("r4") + "px" : RAIL_WIDTH + "px") + " 1fr " + (railOpen.r7 ? directorLayoutStore.getRailWidth("r7") + "px" : RAIL_WIDTH + "px") }
 		}, [
 			/* R4 项目导航 */
 			railOpen.r4
@@ -2771,7 +2810,15 @@ export function DirectorPage() {
 					onMouseEnter: () => railEnter("r4"), onMouseLeave: () => railLeave("r4")
 				}, [
 					h("div", { key: "s", style: { ...S.sec, flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } }, [
-						renderPanelHead("r4", "R4 项目导航"),
+						renderPanelHead("r4", "R4 项目导航"),			/* WS-B B3：左侧常驻看板（只读消费 boardView；主键挂会话 id；点条目定位导图节点）。
+			 *  🔴 不自拼分组：tasks 走唯一适配器 boardTasksFromRows → Board 内部 boardView()。
+			 *  🔴 真机对账：[data-board-total] == 分支行数；点行写 window.__dshBoardFocus 并 openSession。 */
+			h("div", { key: "board", "data-testid": "dp-board-wrap", style: { border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", marginBottom: 6, flex: "0 0 auto", maxHeight: "40%", display: "flex", flexDirection: "column", overflow: "hidden" } },
+				h(Board, {
+					compact: true,
+					tasks: boardTasksFromRows(branch && branch.tree ? branch.tree.rows : []),
+					onSelect: (sid) => { try { window.__dshBoardFocus = { sessionId: sid, at: Date.now() }; openSession(sid); } catch (e) { dshLog("board-focus", e); } }
+				})),
 						h("div", { key: "seg", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6 } },
 							R4_TABS.map((tb) => h("button", {
 								key: tb.key, style: S.seg(r4tab === tb.key), "data-testid": "dp-r4-" + tb.key,
@@ -2830,7 +2877,8 @@ export function DirectorPage() {
 					 *    「对话」视图下也隐藏 —— 那两个 Tab 属"总监侧"内容，留着会与按钮文案打架） */
 					(selectedItem || r5view === "chat") ? null : h("div", { key: "seg2", style: { display: "flex", border: "1px solid var(--dp-line, #3d4148)", borderRadius: "var(--dp-radius-sm, 5px)", overflow: "hidden", marginBottom: 6, flex: "0 0 auto" } }, [
 						h("button", { key: "f", style: S.seg(r5tab === "flow"), "data-testid": "dp-r5-flow", onClick: () => setR5tab("flow") }, "流转 " + sessionFlows.length),
-						h("button", { key: "m", style: S.seg(r5tab === "msg"), "data-testid": "dp-r5-msg", onClick: () => setR5tab("msg") }, "总监消息 " + msgs.length)
+						h("button", { key: "m", style: S.seg(r5tab === "msg"), "data-testid": "dp-r5-msg", onClick: () => setR5tab("msg") }, "总监消息 " + msgs.length),
+						h("button", { key: "t", style: S.seg(r5tab === "thread"), "data-testid": "dp-r5-thread", onClick: () => setR5tab("thread") }, "思维链路 " + decRows.length)
 					]),
 
 					selectedItem ? null : h("div", { key: "b", style: { flex: 1, minHeight: 0, overflowY: "auto" }, className: "dp-scroll", "data-testid": "dp-r5-body", "data-view": r5view },
@@ -2868,6 +2916,21 @@ export function DirectorPage() {
 								: h("div", { key: "e", style: S.muted, "data-testid": "dp-flow-empty" },
 									"该作用域还没有流转。本轮起，输入走**原生对话框**：写完后点 R8 的「登记为流转」，就会出现在这里，" +
 									"并同步出现在导图右侧面板与设计图底部。"))
+							: r5tab === "thread"
+							? (decRows.length
+								? decRows.slice(-30).reverse().map((d) => h("div", {
+									key: d.seq, "data-testid": "dp-thread-row", "data-input": d.input, "data-decision": d.decision, "data-reason": d.reason, "data-time": d.time,
+									style: { border: "1px solid var(--dp-line,#31343a)", background: "var(--dp-bg-2,#212429)", borderRadius: "var(--dp-radius-sm,5px)", padding: "5px 7px", marginBottom: 5 }
+									}, [
+										h("div", { key: "i", "data-testid": "dp-thread-in", style: { fontSize: "calc(11.5px * var(--dp-font,1))", lineHeight: 1.5, wordBreak: "break-word" } }, d.input || "（空输入）"),
+										h("div", { key: "row", style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 } }, [
+											h("span", { key: "dec", "data-testid": "dp-thread-decision", style: { fontSize: 10.5, padding: "0 4px", borderRadius: 3, border: "1px solid var(--dp-ac-line,rgba(47,111,235,.45))", color: "var(--dp-ac,#79a8ff)" } }, "决策 " + (d.decision || "—")),
+											h("span", { key: "rsn", "data-testid": "dp-thread-reason", style: { ...S.muted } }, "理由 " + (d.reason || "—")),
+											d.dim ? h("span", { key: "dim", style: { ...S.muted, color: "var(--dp-ac2,#7fe3e8)" } }, d.dim) : null,
+											h("span", { key: "tm", style: S.muted }, d.time)
+										])
+									]))
+								: h("div", { key: "te", style: S.muted, "data-testid": "dp-thread-empty" }, "还没有 L0 决策记录。扇发一次后，这里会按「输入 / 决策 / 理由 / 时间」列出每次判断。"))
 							: (msgs.length
 								? msgs.slice(-14).map((m) => {
 									const mine = msgIsMine(m);

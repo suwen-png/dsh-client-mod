@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：角色注册表（Agent Card）
  * 引用：—
- * 上游：client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/policy.js
+ * 上游：client-entry.js, components/DirectorPage.js, components/OrchestratorPanel.js, logic/layers.js, logic/model-tier.js, logic/policy.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 二（四层组织 · 12 角色 Agent Card · L1 预算）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md

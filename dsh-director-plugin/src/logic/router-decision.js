@@ -1,8 +1,8 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
- * 职责：模型语义路由的**判断层**（纯函数：无 DOM、无 store、无副作用）
+ * 职责：「模型语义路由」判断层（**纯函数**：无 DOM、无 store、无副作用）
  * 引用：—
- * 上游：logic/director-dispatch.js（经 opts.decide 接线缝）
- * 下游：（无 —— 本模块**零 import**，刻意不依赖 split-dimensions / attribution，避免循环依赖）
+ * 上游：（无：插件入口层）
+ * 下游：（无）
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */

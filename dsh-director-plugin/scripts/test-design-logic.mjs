@@ -26,7 +26,7 @@ import {
 	ELEMENT_KINDS, ELEMENT_KIND_KEYS, LOGIC_FIELDS,
 	buildStandardFrame, createElement, normalizeElement, isRenderable, hitTest,
 	MIN_SIZE, CANVAS_W, CANVAS_H, emptyLogic,
-	normalizeDoc, docStats   // 注意：这两个在 schema 层，design.js 只消费不转发
+	normalizeDoc, docStats, createDesignDoc, setBranchMeta   // D1 lineage single write point   // 注意：这两个在 schema 层，design.js 只消费不转发
 } from "../src/store/design-schema.js";
 import {
 	addElement, updateElement, moveElement, nudgeElement, resizeElement,
@@ -180,6 +180,22 @@ t("D5", "异常 op（null / 无 target）跳过，不抛", d5.elements.find((e) 
 // 端到端：解析 → 应用 走通
 const chainDoc = applyOps(baseDoc, P(`移动 ${reg.id} 左 30`).ops);
 t("D6", "解析→应用 串联：左移 30 落地", chainDoc.elements.find((e) => e.id === reg.id).x === reg.x - 30, { from: reg.x, to: chainDoc.elements.find((e) => e.id === reg.id).x });
+
+/* == E. D1: design artifact carries branch/version lineage metadata == */
+section("\u3010E\u3011 D1 \u8bbe\u8ba1\u56fe\u4ea7\u7269\u5e26\u5206\u652f/\u7248\u672c\u5143\u6570\u636e");
+const d1Doc = createDesignDoc({ title: "A4 \u4eba\u7269\u5206\u652f\u56fe", branchId: "sess-a4", branchDim: "A4", branchLabel: "A4 \u4eba\u7269", producedAt: 1700 });
+t("E1", "createDesignDoc \u540c\u65f6\u5199\u5165\u5206\u652f\u8840\u7f18\u56db\u5b57\u6bb5", d1Doc.branchId === "sess-a4" && d1Doc.branchDim === "A4" && d1Doc.branchLabel === "A4 \u4eba\u7269" && d1Doc.producedAt === 1700, d1Doc);
+const d1Empty = createDesignDoc({ title: "\u65e0\u8840\u7f18\u56fe" });
+t("E2", "\u672a\u6e21\u5e26\u5206\u652f\u2192\u56db\u5b57\u6bb5\u9ed8\u7a7a\uff08\u4e0d\u51ed\u7a7a\u9020\u8840\u7f18\uff09", d1Empty.branchId === "" && d1Empty.branchDim === "" && d1Empty.branchLabel === "" && d1Empty.producedAt === 0, d1Empty);
+const d1Norm = normalizeDoc({ docId: "old", title: "\u65e7\u56fe", revision: 0, elements: [] });
+t("E3", "\u65e7\u6570\u636e normalizeDoc \u8865\u9ed8\u7a7a\u5b57\u6bb5\uff08\u5411\u540e\u517c\u5bb9\uff09", d1Norm.branchId === "" && d1Norm.branchDim === "" && d1Norm.producedAt === 0, d1Norm);
+const d1Set = setBranchMeta(d1Empty, { branchId: "sess-x", branchDim: "A1", branchLabel: "A1 \u4e16\u754c\u89c2" });
+t("E4", "\u552f\u4e00\u5199\u5165\u70b9 setBranchMeta \u5199\u5165\u8840\u7f18\u5b57\u6bb5", d1Set.branchId === "sess-x" && d1Set.branchDim === "A1" && d1Set.branchLabel === "A1 \u4e16\u754c\u89c2", d1Set);
+t("E5", "\u4e0d\u5c31\u5730\u6539\u5165\u53c2\uff08\u53ef\u5feb\u7167\u53ef\u56de\u6eda\uff09", d1Empty.branchId === "" && d1Set !== d1Empty, { before: d1Empty.branchId, after: d1Set.branchId });
+t("E6", "\u767d\u540d\u5355\u5916\u4e0d\u8d8a\u6743\uff1abranchLabel=null \u2192 \u7a7a\u4e14 title \u4e0d\u52a8", setBranchMeta(d1Doc, { branchLabel: null }).branchLabel === "" && d1Doc.title === "A4 \u4eba\u7269\u5206\u652f\u56fe", setBranchMeta(d1Doc, { branchLabel: null }).branchLabel);
+if (process.env.D1_NEG === "1") {
+	t("E-N", "\u5fc5\u7ea2\u6821\u51c6: \u6545\u610f\u574f\u5267\u672c\uff08\u5199\u8fdb branchId\uff09\u2192\u672c\u65ad\u8a00\u5e94\u7ea2", setBranchMeta(d1Empty, { branchId: "x", branchDim: "A1" }).branchId === "", "\u5e94\u4e3a\u7a7a\u5374\u5199\u8fdb\u4e86");
+}
 
 /* ══ 汇总 ══ */
 console.log("\n═══════════════════════════════════════════════════════════");

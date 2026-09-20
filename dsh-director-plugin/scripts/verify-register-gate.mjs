@@ -34,16 +34,27 @@ const WAIT = (ms) => new Promise((r) => setTimeout(r, ms));
  * 原先 CDP 没开时直接抛 `TypeError: fetch failed` + ECONNREFUSED 崩栈 ⇒ 读起来像"脚本坏了"，
  * 实际只是 Harness 没运行。用错目标判 INVALID(2)，不判 FAIL(1)。 */
 let pages;
-try {
-	pages = await (await fetch("http://127.0.0.1:" + PORT + "/json/list")).json();
-} catch (e) {
-	console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "）");
-	console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
-	console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
-	console.error("    1) powershell -File scripts/restart-harness.ps1   （推荐，见该脚本头注的遮挡检测根因）");
-	console.error("       或 env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \"D:/软件安装/DeepSeek-Harness-Desktop/DeepSeek Harness\" --remote-debugging-port=9222 &");
-	console.error("    2) node scripts/verify-register-gate.mjs");
-	process.exit(2);
+{
+	const url = "http://127.0.0.1:" + PORT + "/json/list";
+	/* T-PLUG-073 自证式起点：CDP 连不上有两种成因，读数一样（都是 fetch 失败）：
+	 *    (a) Harness 正在重载/重启（瞬态，1-3s 内会恢复）；
+	 *    (b) Harness 根本没运行（永久）。
+	 *    旧版一失败就立即判"未运行"退出 => (a) 被误读成 (b)。
+	 *    => 先有界重试（重载是瞬态的；真没运行则重试耗尽仍失败）。 */
+	let lastErr = null;
+	for (let attempt = 0; attempt < 6; attempt++) {
+		try { pages = await (await fetch(url)).json(); lastErr = null; break; }
+		catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 800)); }
+	}
+	if (lastErr) {
+		console.error("IS_PASS: FALSE（INVALID：连不上 CDP " + PORT + "（有界重试 6x800ms 后仍失败 => 非瞬态重载，判定 Harness 未运行））");
+		console.error("  真因：Harness 未运行，或未带 --remote-debugging-port=9222 启动。");
+		console.error("  正确用法（必须后台启动，且清掉两个环境变量）：");
+		console.error("    1) powershell -File scripts/restart-harness.ps1   （推荐，见该脚本头注的遮挡检测根因）");
+		console.error("       或 env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \"D:/软件安装/DeepSeek-Harness-Desktop/DeepSeek Harness\" --remote-debugging-port=9222 &");
+		console.error("    2) node scripts/verify-register-gate.mjs");
+		process.exit(2);
+	}
 }
 const page = pages.filter((t) => t.type === "page").find((t) => !/devtools/.test(t.url));
 if (!page) { console.error("IS_PASS: FALSE（INVALID：CDP 无 page 目标）"); process.exit(2); }

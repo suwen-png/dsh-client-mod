@@ -2,7 +2,7 @@
  * 职责：本次「总监派发」台账（第 17 批）
  * 引用：—
  * 上游：components/DirectorPage.js, logic/branch-tree.js, logic/director-collect.js, logic/director-dispatch.js
- * 下游：（无）
+ * 下游：logic/lineage.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html（板块 —）
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -31,6 +31,8 @@
  *   ⇒ `title` 单独放 `title` 字段，`say` **只**放真读到的助手正文（读不到就是 `""`）。
  */
 
+import { validateFlowSids, normalizeFlowSid } from "../logic/lineage.js";
+
 const listeners = new Set();
 
 /** 本次运行内的派发台账（**内存单例**；不改 localStorage 冻结契约） */
@@ -46,7 +48,11 @@ export const dispatchLog = {
 	/** 维度维度台账：[{ dim, label, sessionId, sentVia, sentAt, state, stateSource, turns, outputTokens, say, sayReason, title, collectedAt }] */
 	items: [],
 	/** 最近一次「回收产出」的总读数：{at, ok, done, running, blank, partial, failed, nextAction} */
-	collect: null
+	collect: null,
+	/** 🔴 WS-B · B7：思维链路决策台账（**不新建 store**，落这里）。
+	 *   每次 L0 决策留 { 输入, 决策, 理由, 时间, dim/sessionId } ——
+	 *   用户能翻「上次为何派给 A4」。跨批次累积（轨迹页签要翻历史）。 */
+	decisions: []
 };
 
 /** 订阅台账变化（返回退订函数） */
@@ -158,6 +164,97 @@ export function dispatchItemOf(sessionId) {
 	return null;
 }
 
+/**
+ * 🔴 WS-B · B7：记一条 L0 决策（思维链路）。
+ * 「插件只执行、模型做语义判断」⇒ 每次判断都要留痕：{ 输入, 决策, 理由, 时间 }。
+ * 这是**唯一写入点**（UI/闸门不许自己 push 进 decisions）。
+ *
+ * @param {{input?:string, decision?:string, reason?:string, dim?:string, sessionId?:string, via?:string}} d
+ * @returns {object} 落账后的决策记录
+ */
+export function recordDecision(d = {}) {
+	const raw = d && typeof d === "object" ? d : {};
+	const rec = {
+		seq: dispatchLog.decisions.length + 1,
+		at: Date.now(),
+		input: String(raw.input == null ? "" : raw.input),
+		decision: String(raw.decision == null ? "" : raw.decision),
+		reason: String(raw.reason == null ? "" : raw.reason),
+		dim: String(raw.dim == null ? "" : raw.dim),
+		sessionId: String(raw.sessionId == null ? "" : raw.sessionId),
+		via: String(raw.via == null ? "unknown" : raw.via)
+	};
+	dispatchLog.decisions.push(rec);
+	emit();
+	return rec;
+}
+
+/** 读全部决策（时间正序；轨迹页签直接渲染） */
+export function readDecisions() {
+	return dispatchLog.decisions.slice();
+}
+
+/** 某维度/会话的决策（升序）；用户问「上次为何派给 A4」走这里 */
+export function decisionsFor(filter = {}) {
+	const f = filter && typeof filter === "object" ? filter : {};
+	const dim = f.dim == null ? null : String(f.dim);
+	const sid = f.sessionId == null ? null : String(f.sessionId);
+	return dispatchLog.decisions.filter((r) =>
+		(dim == null || r.dim === dim) && (sid == null || r.sessionId === sid));
+}
+
+/** 某维度/会话的**最近一条**决策（空数组返回 null） */
+export function lastDecisionFor(filter = {}) {
+	const list = decisionsFor(filter);
+	return list.length ? list[list.length - 1] : null;
+}
+
+/**
+ * D2: format decisions into a 4-column row list for the thread view (pure; no new store).
+ * Columns: input / decision / reason / time. Empty input -> []. UI renders rows directly.
+ * @param {Array} list raw decision records (e.g. readDecisions() / decisionsFor(...))
+ */
+export function decisionRows(list = []) {
+	const arr = Array.isArray(list) ? list : [];
+	const pad = (n) => String(n).padStart(2, "0");
+	return arr.map((r) => {
+		const rec = r && typeof r === "object" ? r : {};
+		const at = Number(rec.at) || 0;
+		let time = "";
+		if (at) { const d = new Date(at); time = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()); }
+		return {
+			seq: Number(rec.seq) || 0,
+			input: String(rec.input || ""),
+			decision: String(rec.decision || ""),
+			reason: String(rec.reason || ""),
+			dim: String(rec.dim || ""),
+			sessionId: String(rec.sessionId || ""),
+			time: time
+		};
+	});
+}
+
+/**
+ * WS-B · B1：把台账 items 当作「流转记录」做统一 id 语义校验。
+ *
+ * 🔴 主键必须是**会话 id**（sid/sessionId），不是 `ws_…` 作用域 id。
+ *    这里复用 `logic/lineage.js#validateFlowSids`（唯一判据，纪律 126）——
+ *    看板/导图/派发的三方对账都走它，不另写一份"sid 在不在集合里"。
+ *
+ * @param {Iterable<string>} sessionIds host 快照里的真实会话 id 集合
+ * @returns {object} validateFlowSids 的返回体（ok / orphaned / leaks / missing…）
+ */
+export function validateLogSids(sessionIds) {
+	return validateFlowSids(dispatchLog.items || [], sessionIds);
+}
+
+/** 取台账里全部流转主键（sessionId），供看板/导图对账「条目数 == 会话数」 */
+export function flowSids() {
+	return (dispatchLog.items || [])
+		.map((it) => normalizeFlowSid(it && it.sessionId))
+		.filter(Boolean);
+}
+
 /** 清空台账（**只清内存**；宿主里的分支会话不因此消失，这是刻意的） */
 export function clearDispatchLog() {
 	dispatchLog.at = 0;
@@ -166,6 +263,7 @@ export function clearDispatchLog() {
 	dispatchLog.kind = "";
 	dispatchLog.items = [];
 	dispatchLog.collect = null;
+	dispatchLog.decisions = [];
 	emit();
 	return dispatchLog;
 }

@@ -2,7 +2,7 @@
  * 职责：分支导图覆盖层（血缘树 · 缩滚展开 · 待总监路由）
  * 引用：—
  * 上游：client-entry.js, mount.js
- * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, components/PersonalizePanel.js
+ * 下游：logic/branch-tree.js, logic/branch-focus.js, logic/scope-tree.js, store/hierarchy.js, util/bus.js, components/OverviewDialog.js, logic/routing.js, logic/mindmap-render.js, util/debug.js, util/safe-area.js, bridge/chat-bridge.js, store/mindmap-schema.js, logic/flow.js, logic/summary-notes.js, logic/mindmap-group.js, logic/split-dimensions.js, store/layout.js, store/personalize.js, components/NodeDetailPanel.js, logic/task-state.js, components/PersonalizePanel.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A4（分支导图态）· F1–F4（思维导图元素库渲染：节点四型 / 状态四态 / 连线 / 控件）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -89,6 +89,7 @@ import { SPLIT_DIMENSIONS, GENERIC_DIMENSIONS } from "../logic/split-dimensions.
 import { directorLayoutStore } from "../store/layout.js";
 import { personalizeStore } from "../store/personalize.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
+import { boardVisualOfNode, boardBucketOfNode } from "../logic/task-state.js"; // WS-B B4 导图↔看板同源（唯一翻译点）
 import { PersonalizePanel } from "./PersonalizePanel.js";
 
 const h = react.createElement;
@@ -1152,6 +1153,7 @@ export function MindMap({ open, onClose }) {
 							const cDetail = ctrls.find((c) => c.key === "detail");
 							const cFork = ctrls.find((c) => c.key === "fork");
 							const cOpen = ctrls.find((c) => c.key === "open");
+						const bv = boardVisualOfNode(r); // WS-B B4：节点视觉吃唯一翻译点（不另写状态样式）
 							return h("div", {
 								key: r.sessionId,
 								style: {
@@ -1178,6 +1180,8 @@ export function MindMap({ open, onClose }) {
 								 * 🔴 `data-said` 空串 = **确实没读到产出**（不是"未派发"）；
 								 *    未派发的节点该字段也是空串 ⇒ 判"有没有产出"必须**先看 `data-dispatch` 非空**。 */
 								"data-dispatch": r.dispatchId || "", "data-branch-state": r.dispatchState || "",
+							/* WS-B B4：看板同源六档（与 Board.js 同一 boardVisualOfNode），真机可对账 */
+							"data-board-bucket": bv.bucket, "data-board-icon": bv.icon, "data-board-color": bv.color, "data-board-pinned": bv.pinned ? "1" : "0",
 								"data-said": r.dispatchSay || "",
 								/* 第 21 批：**会话档案**（R2/R3）可见性 —— 用户原话「（每个会话）都有自己的
 								 * 总监，存在自己的会话总结文档」。字段由 `applyDossiers` 在**唯一摄取点**

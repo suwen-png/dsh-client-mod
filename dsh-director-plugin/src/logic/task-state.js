@@ -1,7 +1,7 @@
 /* @map:begin —— 由 scripts/gen-source-map.mjs 生成，勿手改（重跑本脚本即可刷新）
  * 职责：任务状态机
  * 引用：—
- * 上游：client-entry.js
+ * 上游：client-entry.js, components/Board.js, components/DirectorPage.js, components/MindMap.js
  * 下游：（无）
  * 设计稿：docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 六（A2A 九态机 · 两种暂停态 · 乐观并发）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
@@ -148,7 +148,12 @@ export function createTask(init = {}) {
 		 * 否则用户关掉面板再打开，那个待审批项就丢了（AutoGen/MAF 的 checkpoint 教训） */
 		pending: t.pending && typeof t.pending === "object" ? { ...t.pending } : null,
 		transitions: Array.isArray(t.transitions) ? t.transitions.slice() : [],
-		error: t.error ? String(t.error) : ""
+		error: t.error ? String(t.error) : "",
+		/* 看板层字段（WS-B · B2；createTask 必须保留，否则 setField 一归一就丢） */
+		pinned: t.pinned === true,
+		summary: t.summary ? String(t.summary) : "",
+		projectRoot: t.projectRoot ? String(t.projectRoot) : "",
+		partial: t.partial === true
 	};
 }
 
@@ -200,6 +205,32 @@ export function transition(task, to, meta = {}) {
 	if (isPaused(t.state) && !isPaused(event.to)) next.pending = null;
 
 	return { ok: true, task: next, event, reason: chk.reason };
+}
+
+/**
+ * D3 执行逻辑：幂等推进薄壳（**复用** transition/canTransition，不另造转移表 —— 纪律126）。
+ *  ① 幂等：已是目标态 ⇒ 原样返回、不记新事件、不报错（WORKING 进度心跳是唯一例外：meta.heartbeat 才记一笔）。
+ *  ② blocked 必带因：to 落到失败态（看板 BLOCKED）时 meta.reason/note 必须非空，否则拒绝 —— 失败不静默。
+ *  ③ 可回放：成功仍走 transition 追加事件，timeline() 可完整重放。
+ * @returns {{ok:boolean, task:object, event:object|null, reason:string}}
+ */
+export function advance(task, to, meta = {}) {
+	const t = createTask(task);
+	const toKey = stateOf(to).key;
+	const reason = meta.reason ? String(meta.reason) : "";
+	/* ① 幂等：已是目标态 ⇒ 无副作用返回 */
+	if (t.state === toKey) {
+		if (t.state === STATE.WORKING && meta.heartbeat === true) return transition(t, to, meta);
+		return { ok: true, task: t, event: null, reason: "幂等：已是「" + stateOf(t.state).label + "」，不重复推进" };
+	}
+	/* ② blocked 必带因 */
+	if (toKey === STATE.FAILED) {
+		const why = (reason || (meta.note ? String(meta.note) : "")).trim();
+		if (!why) return { ok: false, task: t, event: null, reason: "blocked 必带因：转「失败」必须给 meta.reason（失败不静默）" };
+	}
+	/* reason 兜底进 note，让 transition 把原因写进 task.error */
+	const merged = (meta.note || !reason) ? meta : Object.assign({}, meta, { note: reason });
+	return transition(t, to, merged);
 }
 
 /**
@@ -312,18 +343,217 @@ export function auditMachine() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 六、看板层（WS-B · B2：board 只读视图 + 单一写入点）
+ * ══════════════════════════════════════════════════════════════════
+ *  为什么需要它：
+ *    上面九态机是 **A2A 执行态**（SUBMITTED/WORKING/INPUT_REQUIRED…）；
+ *    看板要给人看的是 **六档结果态**（草稿/进行中/完成/部分/阻塞/中止）。
+ *    两者**不是一一对应**，且看板还要带「置顶/摘要/项目根」三个 UI 字段。
+ *
+ *  🔴 两条铁律（贯穿 B2/B3/B4）：
+ *    ① **单一写入点**：pin/summary/projectRoot/partial 一律走 `setPinned()` /
+ *       `setField()` 等纯函数（返回新对象，**绝不就地改**）。
+ *       UI 组件不得自己 `task.pinned = true` —— 那是纪律 126 的隐式断链。
+ *    ② **看板只读 store**：`boardView()` 是**唯一**的分组拼装点。
+ *       Board.js / MindMap.js 只**消费**它的返回值，不自己再 group/sort ——
+ *       否则「看板分组」与「导图分组」又会各长各的。
+ */
+
+/** 看板六档结果态（人读；与九态机解耦，但由它派生） */
+export const BOARD_STATE = Object.freeze({
+	DRAFT: "draft",       // 待办（SUBMITTED：派了还没跑）
+	RUNNING: "running",   // 进行中（WORKING 或暂停态：在跑/在等人）
+	DONE: "done",         // 已完成（COMPLETED）
+	PARTIAL: "partial",   // 部分完成（partial 标记：一部分分支成了一部分没成）
+	BLOCKED: "blocked",   // 阻塞（FAILED：红角标）
+	ABORTED: "aborted"    // 已中止（CANCELED / REJECTED）
+});
+
+/** 看板组（Board.js 的四个折叠段；与 BOARD_STATE 的对应写死在这里，UI 不另推） */
+export const BOARD_GROUP = Object.freeze({
+	PINNED: "pinned",     // 置顶（跨组：任何档只要 pinned 就进这里，显示在最上）
+	RUNNING: "running",   // 进行中
+	TODO: "todo",         // 待完成（draft）
+	DONE: "done"          // 已完成（done/partial；blocked/aborted 仍归原档但带角标）
+});
+
+/**
+ * 九态 → 看板六档（**唯一派生点**）。
+ * 🔴 partial 优先级高于 COMPLETED：一个任务部分分支成、部分没成，
+ *    就该挂「部分」而不是绿勾（否则用户以为全成了）。
+ */
+export function boardBucketOf(task) {
+	const t = createTask(task);
+	if (t.partial === true) return BOARD_STATE.PARTIAL;
+	switch (t.state) {
+		case STATE.COMPLETED: return BOARD_STATE.DONE;
+		case STATE.FAILED: return BOARD_STATE.BLOCKED;
+		case STATE.CANCELED:
+		case STATE.REJECTED: return BOARD_STATE.ABORTED;
+		case STATE.WORKING:
+		case STATE.INPUT_REQUIRED:
+		case STATE.AUTH_REQUIRED: return BOARD_STATE.RUNNING;
+		case STATE.SUBMITTED:
+		default: return BOARD_STATE.DRAFT;
+	}
+}
+
+/** 看板组归位（pinned 单独抽出；其余按六档映射到四个折叠段） */
+export function boardGroupOf(task) {
+	const t = createTask(task);
+	if (t.pinned === true) return BOARD_GROUP.PINNED;
+	const bucket = boardBucketOf(t);
+	if (bucket === BOARD_STATE.RUNNING) return BOARD_GROUP.RUNNING;
+	if (bucket === BOARD_STATE.DRAFT) return BOARD_GROUP.TODO;
+	return BOARD_GROUP.DONE; // done / partial / blocked / aborted 都进「已完成」段（带角标）
+}
+
+/**
+ * 单一写入点：改任务的任意可选字段（pin/summary/projectRoot/partial）。
+ * 🔴 返回**新对象**，不改入参（与 `transition` 同范式：可快照可撤销）。
+ * 只允许改这四个白名单字段，其余字段不许借这个口子写（纪律 126）。
+ */
+export function setField(task, patch = {}) {
+	const t = createTask(task);
+	const p = (patch && typeof patch === "object") ? patch : {};
+	const next = { ...t, transitions: t.transitions.slice() };
+	if (Object.prototype.hasOwnProperty.call(p, "pinned")) next.pinned = Boolean(p.pinned);
+	if (Object.prototype.hasOwnProperty.call(p, "summary")) next.summary = p.summary == null ? "" : String(p.summary);
+	if (Object.prototype.hasOwnProperty.call(p, "projectRoot")) next.projectRoot = p.projectRoot == null ? "" : String(p.projectRoot);
+	if (Object.prototype.hasOwnProperty.call(p, "partial")) next.partial = Boolean(p.partial);
+	return next;
+}
+
+/** 单一写入点：置顶开关（语义糖，走 setField） */
+export function setPinned(task, pinned) {
+	return setField(task, { pinned: pinned });
+}
+
+/**
+ * 看板只读视图（**唯一分组拼装点**）。
+ * Board.js / MindMap.js 只消费它，不自己 group/sort。
+ *
+ * @param {Array} tasks
+ * @returns {{pinned:Array, running:Array, todo:Array, done:Array,
+ *            counts:Object, total:number}}  每元素 = taskSummary + bucket/group
+ */
+export function boardView(tasks) {
+	const all = Array.isArray(tasks) ? tasks : [];
+	const out = {
+		[BOARD_GROUP.PINNED]: [],
+		[BOARD_GROUP.RUNNING]: [],
+		[BOARD_GROUP.TODO]: [],
+		[BOARD_GROUP.DONE]: []
+	};
+	const counts = { pinned: 0, running: 0, todo: 0, done: 0, blocked: 0, aborted: 0, partial: 0 };
+	for (const raw of all) {
+		const t = createTask(raw);
+		const bucket = boardBucketOf(t);
+		const grp = boardGroupOf(t);
+		counts[bucket] = (counts[bucket] || 0) + 1;
+		counts[grp] = (counts[grp] || 0) + 1;
+		out[grp].push({
+			id: t.id,
+			title: t.title,
+			sessionId: t.sessionId,
+			state: t.state,
+			bucket: bucket,
+			pinned: t.pinned === true,
+			partial: t.partial === true,
+			summary: t.summary || "",
+			projectRoot: t.projectRoot || "",
+			updatedAt: t.updatedAt
+		});
+	}
+	/* 组内排序：置顶/进行中按 updatedAt 倒序（新的在前）；已完成同 */
+	for (const k of Object.keys(out)) {
+		out[k].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+	}
+	return {
+		pinned: out[BOARD_GROUP.PINNED],
+		running: out[BOARD_GROUP.RUNNING],
+		todo: out[BOARD_GROUP.TODO],
+		done: out[BOARD_GROUP.DONE],
+		counts: counts,
+		total: all.length
+	};
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 七、导图节点 ↔ 看板同源（WS-B · B4：导图任务态语义与看板同一真相源）
+ * ══════════════════════════════════════════════════════════════════
+ *  导图节点上的 `dispatchState`（来自 store/dispatch-log.js#applyDispatchLabels）
+ *  与看板六档不是同一份字符串：导图用 running/done/failed/blank/partial，
+ *  看板用 draft/running/done/blocked/partial/aborted。
+ *  这个翻译必须只有一处（纪律 126），否则导图和看板又各长各的。
+ */
+
+/** 导图 dispatchState → 看板六档（唯一翻译点；B4 同源渲染的真相源） */
+export function boardBucketOfNode(node) {
+	const n = (node && typeof node === "object") ? node : {};
+	const ds = String(n.dispatchState || "").toLowerCase();
+	if (ds === "done" || ds === "completed" || ds === "success") return BOARD_STATE.DONE;
+	if (ds === "partial") return BOARD_STATE.PARTIAL;
+	if (ds === "failed" || ds === "error" || ds === "blocked") return BOARD_STATE.BLOCKED;
+	if (ds === "running" || ds === "working" || ds === "submitted") return BOARD_STATE.RUNNING;
+	if (ds === "aborted" || ds === "canceled" || ds === "cancelled") return BOARD_STATE.ABORTED;
+	return BOARD_STATE.DRAFT;
+}
+
+/** 导图节点视觉（icon + 颜色；与 Board.js 同语义，B4 同源） */
+export function boardVisualOfNode(node) {
+	const bucket = boardBucketOfNode(node);
+	const n = (node && typeof node === "object") ? node : {};
+	const pinned = n.pinned === true;
+	const V = {
+		done: { icon: "\u2713", color: "#2e7d32" },
+		running: { icon: "\u25b6", color: "#1565c0" },
+		draft: { icon: "\u2610", color: "#8a8a8a" },
+		partial: { icon: "\u25d0", color: "#ef6c00" },
+		blocked: { icon: "\u26a0", color: "#c62828" },
+		aborted: { icon: "\u2298", color: "#6b6b6b" }
+	};
+	const v = V[bucket] || V.draft;
+	return { bucket: bucket, icon: pinned ? "\u2b50" : v.icon, color: pinned ? "#f9a825" : v.color, pinned: pinned };
+}
+/* ══════════════════════════════════════════════════════════════════
  * 五、全局契约
  * ══════════════════════════════════════════════════════════════════ */
 
 /** 安装全局契约（供 CDP 真机验证与控制台调用） */
+/** 分支行（mindmap-schema#stateOfRow：running/review/done/idle）→ 看板任务（唯一适配器）。
+ *  主键挂会话 id（row.sessionId）；UI 不许再各自造 task。
+ *
+ *  🔴 WS-C · C1（G1「结果」采集通道）：L1 回收产出经 `dispatch-log#applyDispatchLabels`
+ *     落到 `row.dispatchSay`（唯一来源 = `it.say`，真读到的助手正文摘要）。
+ *     本适配器把它**经单一写入点 `setField` 写进 task.summary** —— 不另造字段、不另开 store
+ *     （纪律 126）。没有 `dispatchSay` 的行 summary 保持 ""（"没结果"是缺席，不是未知）。 */
+export function boardTasksFromRows(rows) {
+	const arr = Array.isArray(rows) ? rows : [];
+	return arr.map((r) => {
+		const row = r || {};
+		const sid = row.sessionId != null ? String(row.sessionId) : (row.id != null ? String(row.id) : "");
+		let st = STATE.SUBMITTED;
+		if (row.state === "running" || row.running === true) st = STATE.WORKING;
+		else if (row.state === "review" || row.pending === true) st = STATE.INPUT_REQUIRED;
+		else if (row.state === "done" || row.completed === true) st = STATE.COMPLETED;
+		const base = { id: sid, sessionId: sid, title: row.title || row.displayTitle || sid || "(未命名)", state: st, pinned: row.pinned === true, updatedAt: row.updatedAt || 0 };
+		const summary = String(row.dispatchSay || "");
+		/* 🔴 经单一写入点写 summary（即使为空也走同一口子，保持"唯一写入点"承诺） */
+		return setField(base, { summary: summary });
+	});
+}
 export function installTaskStateApi() {
 	if (typeof window === "undefined") return null;
 	window.__dshTaskState = {
 		STATE, GROUP, STATES, TRANSITIONS,
 		stateOf, isTerminal, isPaused,
 		canTransition, transitionTable,
-		createTask, transition, timeline, taskSummary, groupTasks,
-		auditMachine
+		createTask, transition, advance, timeline, taskSummary, groupTasks,
+		auditMachine,
+		/* 看板层（B2） */
+		BOARD_STATE, BOARD_GROUP, boardBucketOf, boardGroupOf,
+		setField, setPinned, boardView, boardBucketOfNode, boardVisualOfNode, boardTasksFromRows
 	};
 	return window.__dshTaskState;
 }

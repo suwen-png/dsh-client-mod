@@ -39,7 +39,7 @@ globalThis.localStorage = {
 const {
 	dispatchLog, subscribeDispatch, readDispatchLog, recordDispatch,
 	refreshStates, patchDispatchItem, setDispatchCollect, dispatchItemOf,
-	clearDispatchLog, applyDispatchLabels
+	clearDispatchLog, applyDispatchLabels, recordDecision, readDecisions, decisionsFor, decisionRows
 } = await import("../src/store/dispatch-log.js");
 
 let pass = 0, fail = 0; const failures = [];
@@ -185,6 +185,24 @@ t("DL-14b", "🔴 **负对照**：未传 brief 的条目落空串（**不是 und
 	dispatchLog.items[1].brief === "" && typeof dispatchLog.items[1].brief === "string",
 	{ v: dispatchLog.items[1].brief, t: typeof dispatchLog.items[1].brief });
 
+/* ── D2: decisionRows 4-column formatter (思维链路 visualization) ── */
+console.log("\n【D2 · decisionRows 四列格式化】");
+clearDispatchLog();
+recordDecision({ input: "帮我写《墟海》人物", decision: "route", reason: "匹配 A4 人物维度", dim: "A4", sessionId: "s-a4", at: 1700000000000, via: "rule" });
+recordDecision({ input: "", decision: "queued", reason: "外层收件箱入箱", dim: "outer", sessionId: "", at: 1700000001000, via: "outer-inbox" });
+const rows = decisionRows(readDecisions());
+t("DL-15a", "decisionRows 输出恰 2 行（recordDecision 入账条数）", rows.length === 2, rows.length);
+t("DL-15b", "🔴 四列齐全：input/decision/reason/time（思维链路可视化契约）", rows.every((r) => "input" in r && "decision" in r && "reason" in r && "time" in r), rows[0]);
+t("DL-15c", "首行内容保真（输入/决策/理由透传）", rows[0].input === "帮我写《墟海》人物" && rows[0].decision === "route" && rows[0].reason.indexOf("A4") >= 0 && rows[0].dim === "A4", rows[0]);
+t("DL-15d", "time 格式 HH:MM:SS（8 字符带两冒号）", /^\d{2}:\d{2}:\d{2}$/.test(rows[0].time), rows[0].time);
+t("DL-15e", "空输入 → input 落空串（不是 undefined）", rows[1].input === "" && typeof rows[1].input === "string", rows[1]);
+t("DL-15f", "空列表 → []（不抛）", decisionRows([]).length === 0 && decisionRows(null).length === 0);
+t("DL-15g", "decisionsFor(dim) 过滤：只留 A4（用户问「上次为何派给 A4」）", decisionsFor({ dim: "A4" }).length === 1 && decisionsFor({ dim: "A4" })[0].dim === "A4");
+/* D4 L0 后置：D2 块反例校准（DL_NEG=1 喂坏副本自证断言是活的） */
+if (process.env.DL_NEG === "1") {
+	const bad = decisionRows([{ input: "x", decision: "route", reason: "r", at: 1700000000000 }]);
+	t("DL-15N", "🔴 必红校准：坏副本（四列缺 time）→ 本断言应红", bad[0].time === "", bad[0]);
+}
 console.log("\n═══════════════════════════════════════════════════════════");
 console.log(`  PASS ${pass} / FAIL ${fail} / 总计 ${pass + fail}`);
 if (fail) { console.log("  失败项："); failures.forEach((f) => console.log("   - " + f)); }

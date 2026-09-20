@@ -343,14 +343,22 @@ async function deliverImpl(text, opts = {}) {
 	const t = String(text == null ? "" : text);
 	if (!t.trim()) return { ok: false, mode: "failed", reason: "empty-text" };
 
-	/* 🔴 干跑（需求 1）：**只填不发** —— 界面反馈照旧（用户/闸门都能看到文本进了输入框），
-	 *    但不点发送、不直投宿主 ⇒ **零模型调用**。
-	 *    返回 `mode:"dry-run"` 而不是 failed：这是**有意为之**的跳过，不是失败
-	 *    （纪律 58：没跑成 ≠ 失败，两者必须可分）。 */
-	if (isDryRun() && opts.autoSend !== false) {
+	/* 🔴 干跑（需求 1）：**零模型调用** —— 只填不发，界面反馈照旧（用户/闸门都能看到文本进了输入框），
+	 *    但不点发送、不直投宿主。返回 `mode:"dry-run"`：这是**有意为之**的跳过，不是失败
+	 *    （纪律 58：没跑成 ≠ 失败，两者必须可分）。
+	 *
+	 * 🔴 T-PLUG-075 可读性收紧：旧守卫 `isDryRun() && opts.autoSend !== false` 把
+	 *    "要不要干跑"与"本会不会自动发"**焊在一起** —— 读起来像"干跑还要看 autoSend"。
+	 *    拆成一句：**干跑判据只看 `isDryRun()`**；`autoSend === false` 是另一件事
+	 *    （调用方本来就只要"填了等我手动发"）⇒ 它的返回**必须仍是 `filled`**，
+	 *    不能被短路成 `dry-run`（verify-flow G2 按 mode∈{sent,filled,failed,dry-run} 对账）。 */
+	if (isDryRun()) {
 		let filled = false;
 		try { filled = Boolean(setComposerText(t)); } catch (e) { filled = false; }
-		return { ok: true, mode: "dry-run", via: "composer-only", dryRun: true, filled, opened: false };
+		/* autoSend===false：契约 = `filled`（填了不发，等用户手动发）；否则 = `dry-run` */
+		return opts.autoSend === false
+			? { ok: true, mode: "filled", via: "composer-only", dryRun: true, filled, opened: false }
+			: { ok: true, mode: "dry-run", via: "composer-only", dryRun: true, filled, opened: false };
 	}
 
 	/* ① 宿主直投：指令已由插件侧处理完，应**直接**进对话域，

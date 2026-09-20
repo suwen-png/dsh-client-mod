@@ -731,6 +731,11 @@ export function createDesignDoc(patch = {}) {
 		thread: Array.isArray(p.thread) ? p.thread : [],
 		/* 版本快照：新建图**无版本**（= 还没保存过）⇒ 顶栏显示"未保存"而不是"v0" */
 		versions: Array.isArray(p.versions) ? p.versions.map(normalizeVersion).filter(Boolean) : [],
+		/* D1: design artifact = L2 output; carry branch/version lineage. Written only via setBranchMeta(). */
+		branchId: p.branchId == null ? "" : String(p.branchId),
+		branchDim: p.branchDim == null ? "" : String(p.branchDim),
+		branchLabel: p.branchLabel == null ? "" : String(p.branchLabel),
+		producedAt: Number.isFinite(p.producedAt) ? Number(p.producedAt) : 0,
 		createdAt: p.createdAt || now,
 		updatedAt: now,
 		revision: Number(p.revision || 0) + 1
@@ -753,10 +758,32 @@ export function normalizeDoc(raw) {
 		 *    此处补空数组而不是补一个"自动版本" —— 补出来的版本会让用户以为曾经保存过。
 		 *    代价是首次升级时所有图显示"未保存"，属**正确**的诚实显示。 */
 		versions: (raw.versions || []).map(normalizeVersion).filter(Boolean),
+		/* D1 back-compat: docs frozen before this change have no branch meta; default empty (no invented lineage). */
+		branchId: raw.branchId == null ? "" : String(raw.branchId),
+		branchDim: raw.branchDim == null ? "" : String(raw.branchDim),
+		branchLabel: raw.branchLabel == null ? "" : String(raw.branchLabel),
+		producedAt: Number.isFinite(raw.producedAt) ? Number(raw.producedAt) : 0,
 		createdAt: raw.createdAt || Date.now(),
 		updatedAt: raw.updatedAt || Date.now(),
 		revision: Number(raw.revision || 0)
 	};
+}
+
+/**
+ * D1 single write point: stamp branch/version lineage onto a design doc (immutable, returns new doc).
+ * Whitelisted fields only; UI must never write doc.branchId directly (discipline 126). Parallels task-state#setField.
+ * @param {object} doc
+ * @param {{branchId?:string,branchDim?:string,branchLabel?:string,producedAt?:number}} meta
+ */
+export function setBranchMeta(doc, meta = {}) {
+	const d = doc && typeof doc === "object" ? doc : {};
+	const m = meta && typeof meta === "object" ? meta : {};
+	const next = { ...d, thread: Array.isArray(d.thread) ? d.thread.slice() : [], versions: Array.isArray(d.versions) ? d.versions.slice() : [] };
+	if (Object.prototype.hasOwnProperty.call(m, "branchId")) next.branchId = m.branchId == null ? "" : String(m.branchId);
+	if (Object.prototype.hasOwnProperty.call(m, "branchDim")) next.branchDim = m.branchDim == null ? "" : String(m.branchDim);
+	if (Object.prototype.hasOwnProperty.call(m, "branchLabel")) next.branchLabel = m.branchLabel == null ? "" : String(m.branchLabel);
+	if (Object.prototype.hasOwnProperty.call(m, "producedAt")) next.producedAt = Number.isFinite(m.producedAt) ? Number(m.producedAt) : (next.producedAt || 0);
+	return next;
 }
 
 /** 文档统计（左侧面板与状态栏显示用） */

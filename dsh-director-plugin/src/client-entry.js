@@ -2,7 +2,7 @@
  * 职责：插件浏览器侧入口（批次 1 已落地）
  * 引用：V16 诉求 1（再审核：注册失败也要能看到原因）+ 2026-09-12 诉求 12（boot 注入 no-drag） · 批次 1 · 批次 2 · 批次 3
  * 上游：（无：插件入口层）
- * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, components/OrchestratorPanel.js
+ * 下游：util/debug.js, util/log-collector.js, util/no-drag.js, store/layout.js, store/theme.js, config/model.js, store/docs-index-inject.js, dev/layout-probe.js, store/messages.js, store/memory.js, store/branch.js, store/docs.js, store/file-adapter.js, store/create-store.js, store/use-store.js, store/persist.js, logic/process.js, logic/review.js, components/DirectorFlow.js, store/hierarchy.js, logic/summarize.js, mount.js, components/DirectorHierarchy.js, logic/discover.js, logic/sync.js, store/duty-config.js, logic/director-run.js, logic/director-dispatch.js, store/session-dossier.js, components/DirectorWorkbench.js, store/plugin-db.js, logic/routing.js, bridge/split.js, bridge/chat-bridge.js, bridge/nav-hook.js, bridge/host-panel-trim.js, bridge/host-director-column.js, bridge/host-composer-slot.js, components/DirectorDialog.js, store/agent-runs.js, logic/catalog.js, store/design.js, components/DesignStudio.js, components/FloatDock.js, components/DirectorPage.js, components/ModelSeat.js, logic/branch-tree.js, logic/host-ctx.js, logic/director-inherit.js, components/MindMap.js, store/personalize.js, components/PersonalizePanel.js, logic/flow.js, logic/branch-focus.js, logic/lineage.js, logic/dim-branch.js, logic/overview.js, logic/summary-notes.js, logic/project-inventory.js, store/cookie.js, logic/orchestrate.js, components/NodeDetailPanel.js, logic/roles.js, logic/dag.js, logic/verify.js, logic/delegate.js, logic/task-state.js, logic/checkpoint.js, logic/policy.js, logic/layers.js, logic/model-tier.js, components/OrchestratorPanel.js, components/Board.js
  * 设计稿：docs/50-信息中心/V16-设计图·需求图·交互逻辑.html【板块 A（tab 环：总监以 order:-1 排最前）】 · docs/50-信息中心/V21-多智能体编排架构补全设计稿.html【板块 十（7 个内核 API 逐模块 try/catch 挂载）】
  * 索引：dsh-director-plugin/docs/12-源码映射索引.md
  * @map:end */
@@ -190,7 +190,11 @@ import { installDelegateApi } from "./logic/delegate.js";
 import { installTaskStateApi } from "./logic/task-state.js";
 import { installCheckpointApi } from "./logic/checkpoint.js";
 import { installPolicyApi } from "./logic/policy.js";
+/* WS-B（B6/B8）：三层职责边界 + 模型 tier 决策树（纯函数契约，供 CDP 真机对账） */
+import { installLayersApi } from "./logic/layers.js";
+import { installModelTierApi } from "./logic/model-tier.js";
 import { OrchestratorPanel } from "./components/OrchestratorPanel.js";
+import Board from "./components/Board.js";
 export const PLUGIN_VERSION = "0.15.0-batch15";
 
 /** 批次 1 安装器：装配零依赖基础层 + 数据层 + 持久化层。返回已安装的能力清单 */
@@ -400,7 +404,9 @@ export function installBatch1(options = {}) {
 			["__dshDelegate", installDelegateApi],
 			["__dshTaskState", installTaskStateApi],
 			["__dshCheckpoint", installCheckpointApi],
-			["__dshPolicy", installPolicyApi]
+			["__dshPolicy", installPolicyApi],
+			["__dshLayers", installLayersApi],
+			["__dshModelTier", installModelTierApi]
 		]) {
 			try {
 				window[name] = fn();
@@ -411,6 +417,7 @@ export function installBatch1(options = {}) {
 			}
 		}
 		window.__dshOrchestratorPanel = OrchestratorPanel;
+			window.__dshBoard = Board; // WS-B B3 左侧常驻看板（只读消费 boardView）
 
 		/* ── 启动期 cookie **预算自愈**（第 40 轮 · 真机实测发现）────────────────────
 		 * 🔴 缺陷形态：`dshCookieEnforceBudget()` 原先**只在 `dshCookieSave()` 里**调用
@@ -442,7 +449,8 @@ export function installBatch1(options = {}) {
 		installProjectInventoryApi();
 		installOrchestrateApi();
 		for (const fn of [installRolesApi, installDagApi, installVerifyApi, installDelegateApi,
-			installTaskStateApi, installCheckpointApi, installPolicyApi]) {
+			installTaskStateApi, installCheckpointApi, installPolicyApi,
+			installLayersApi, installModelTierApi]) {
 			try { fn(); } catch (e) { /* 无 DOM 时 install 只返回 null，此处仅为一致性 */ }
 		}
 	}
@@ -868,6 +876,8 @@ export {
 	directorReviewReturn,
 	// ── 批次 5 ──
 	DirectorFlow,
+	// ── WS-B B3 左侧常驻看板（只读消费 boardView）──
+	Board,
 	// ── 批次 6 多层级总监结构 ──
 	installHierarchyApi, installSummarizeApi, mountHierarchy, summarizeTree, loadTree, ensureGlobal,
 	LEVEL, GLOBAL_NODE_ID,

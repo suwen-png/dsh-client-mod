@@ -24,10 +24,12 @@ import {
 	STATE, GROUP, STATES, TRANSITIONS,
 	stateOf, isTerminal, isPaused,
 	canTransition, transitionTable,
-	createTask, transition, timeline, taskSummary, groupTasks, auditMachine
+	createTask, transition, advance, timeline, taskSummary, groupTasks, auditMachine,
+	/* WS-C · C1：回收摘要经单一写入点进 task.summary */
+	setField, boardView, boardTasksFromRows
 } from "../src/logic/task-state.js";
 
-const EXPECTED_TOTAL = 43;
+const EXPECTED_TOTAL = 57;
 let pass = 0, fail = 0;
 const failures = [];
 function t(id, name, cond, detail) {
@@ -131,6 +133,60 @@ t("TS-10b", "🔴 转移表与 TRANSITIONS 同源（终态 to 为空）",
 	tbl.filter((r) => r.to.length === 0).length === 4, tbl.filter((r) => r.to.length === 0).map((r) => r.from));
 t("TS-10c", "表里带可读标签（UI 直接用）", tbl.every((r) => r.fromLabel && Array.isArray(r.toLabels)));
 
+console.log("\n【G】WS-C · C1：回收摘要经单一写入点 setField 进 task.summary");
+/* 模拟 applyDispatchLabels 落到行上的真产出（row.dispatchSay = 回收读到的助手正文摘要） */
+const rows1 = [
+	{ sessionId: "s-1", title: "A1 世界观", state: "done", dispatchSay: "世界设定：三族鼎立，灵气复苏", updatedAt: 5000 },
+	{ sessionId: "s-2", title: "A2 人物", state: "running", dispatchSay: "", updatedAt: 4000 } /* 尚未回收产出 */
+];
+const tasks1 = boardTasksFromRows(rows1);
+t("TS-11a", "🔴 有 dispatchSay 的行 → task.summary === 回收摘要（C1「结果」通道核心）",
+	tasks1[0].summary === "世界设定：三族鼎立，灵气复苏", tasks1[0].summary);
+t("TS-11b", "无 dispatchSay 的行 → summary 为 \"\"（'没结果'是缺席，不是未知）",
+	tasks1[1].summary === "", tasks1[1].summary);
+t("TS-11c", "summary 经**单一写入点 setField** 得到（与直调 setField 逐字一致，未另造字段）",
+	tasks1[0].summary === setField({ id: "s-1", sessionId: "s-1", title: "A1 世界观", state: STATE.COMPLETED }, { summary: "世界设定：三族鼎立，灵气复苏" }).summary);
+const vw1 = boardView(tasks1);
+t("TS-11d", "boardView 唯一拼装点把 summary 透进行（看板/导图同源，不另拼）",
+	vw1.done.length === 1 && vw1.done[0].summary === "世界设定：三族鼎立，灵气复苏", vw1.done.map((x) => x.summary));
+t("TS-11e", "🔴 主键/标题/状态不被 summary 写入破坏（id = 会话 id）",
+	tasks1[0].id === "s-1" && tasks1[0].sessionId === "s-1" && tasks1[0].title === "A1 世界观" && tasks1[0].state === STATE.COMPLETED, tasks1[0]);
+/* 必红校准（纪律 ⑥/⑫）：若有人把 boardTasksFromRows 退回"丢掉 dispatchSay"，
+ * TS-11a/11d 必红。TS_NEG=1 时喂一个**故意坏的副本**（summary 恒空）自证断言是活的。 */
+if (process.env.TS_NEG === "1") {
+	const bad1 = rows1.map((r) => ({ id: r.sessionId, sessionId: r.sessionId, title: r.title, state: STATE.COMPLETED, summary: "" }));
+	t("TS-11N", "🔴 必红校准：坏副本（丢掉 dispatchSay）→ 本断言应红",
+		bad1[0].summary === "世界设定：三族鼎立，灵气复苏", bad1[0]);
+} else {
+	t("TS-11f", "空行不崩（rows=[] → tasks=[] → boardView total=0）",
+		boardView(boardTasksFromRows([])).total === 0);
+}
+
+/* ── D3: advance() 幂等 / blocked 必带因 / 可回放 ──────────────── */
+console.log("\n【D3 · advance 幂等推进 + blocked 必带因】");
+let a0 = mk(); a0 = transition(a0, STATE.WORKING, { at: T0 + 10 }).task;
+const beforeN = a0.transitions.length;
+const idem = advance(a0, STATE.WORKING, { at: T0 + 11 });
+t("TS-12a", "🔴 幂等：已是 WORKING 再推进 ⇒ ok 且不记新事件（无副作用）", idem.ok === true && idem.event === null && idem.task.transitions.length === beforeN, { idem: idem.ok, n: idem.task.transitions.length, before: beforeN });
+const hb = advance(a0, STATE.WORKING, { at: T0 + 12, heartbeat: true });
+t("TS-12b", "WORKING 心跳是唯一例外：meta.heartbeat=true ⇒ 记一笔", hb.ok === true && hb.event !== null && hb.task.transitions.length === beforeN + 1, hb.task.transitions.length);
+const self = advance(advance(a0, STATE.WORKING, { at: T0 + 13 }).task, STATE.COMPLETED, { at: T0 + 14 });
+t("TS-12c", "正常链路 SUBMITTED→WORKING→COMPLETED 推进成功", self.ok === true && self.task.state === STATE.COMPLETED, self.task.state);
+const noWhy = advance(a0, STATE.FAILED, { at: T0 + 15 });
+t("TS-12d", "🔴 blocked 必带因：转 FAILED 不带 reason ⇒ 拒绝（失败不静默）", noWhy.ok === false && /reason|\u5fc5\u5e26\u56e0/.test(noWhy.reason), noWhy.reason);
+const withWhy = advance(a0, STATE.FAILED, { at: T0 + 16, reason: "QUOTA 402 额度耗尽" });
+t("TS-12e", "带 reason 的 FAILED ⇒ ok 且原因写进 task.error", withWhy.ok === true && withWhy.task.state === STATE.FAILED && withWhy.task.error.indexOf("QUOTA") >= 0, withWhy.task.error);
+const badJump = advance(mk(), STATE.COMPLETED, { at: T0 + 17 });
+t("TS-12f", "🔴 非法迁移必红：SUBMITTED→COMPLETED 走 transition 拒绝", badJump.ok === false, badJump.reason);
+const replay = timeline(self.task).length;
+t("TS-12g", "可回放：推进后的 timeline 能重放整条链（事件数 = 链路步数）", replay >= 2, replay);
+/* 必红校准：TS_NEG=1 时喂「无因 FAILED 却断言成功」自证断言是活的；否则跑空态幂等 */
+if (process.env.TS_NEG === "1") {
+	t("TS-12N", "🔴 必红校准：无因 FAILED 却断言 ok=true → 本断言应红", noWhy.ok === true, noWhy);
+} else {
+	const idle = advance(mk(), STATE.SUBMITTED, {});
+	t("TS-12h", "空任务幂等：已在 SUBMITTED 再推进 ⇒ ok 且不抛", idle.ok === true && idle.event === null, idle);
+}
 console.log("\n───────────────────────────────────────────────────────────");
 const total = pass + fail;
 console.log("  断言总数 " + total + "（声明 " + EXPECTED_TOTAL + "）· 通过 " + pass + " · 失败 " + fail);

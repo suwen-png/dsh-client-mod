@@ -165,14 +165,25 @@ async function awaitForFreshOrigin(budgetMs = 15000, stepMs = 400) {
 	if (o0 === null) return { got: false, reason: "连 performance.timeOrigin 都读不到" };
 	const age = Date.now() - o0;
 	if (age < FRESH_MS) return { got: false, fresh: true, to: o0, age, waitedMs: 0 };
-	console.log("  起点 origin = " + o0 + "（页面已活 " + age + " ms，偏老）· 等它自重载一次再开测…");
+	console.log("  起点 origin = " + o0 + "（页面已活 " + age + " ms，偏老）· 自证：本套件显式 reload 一次再开测…");
+	/* 🔴 T-PLUG-073 自证式起点：旧版"等 app 自重载一次再开测"是**继承式** —— 隐式依赖
+	 *    "前序套件恰好触发过 reload"，或赌 app 的周期性自重载。实测：本套件当第一个跑时
+	 *    页面新鲜 ⇒ OK；跟在早退套件后、页面偏老时就等一个可能**永远不来**的自重载，
+	 *    空耗预算且撞在周期性重载窗口上 ⇒ CDP 断连 INVALID。⇒ 改为**自证**：
+	 *    页面偏老时本套件**自己显式 reload 一次**，把"新的一段"握在自己手里
+	 *    （reload 后 dp-root 随导航卸载 ⇒ 下面 wakeDirector() 自举会重新点会话→总监 tab）。 */
+	try { await send("Page.reload", { ignoreCache: false }); } catch (e) { /* reload 瞬间连接抖动，下一拍再读 */ }
 	while (Date.now() - t0 < budgetMs) {
 		await sleep(stepMs);
 		let o = null;
 		try { o = await js("Math.round(performance.timeOrigin)"); } catch { /* 重载瞬间取不到，下一拍再试 */ }
-		if (o && o !== o0) return { got: true, from: o0, to: o, age: FRESH_MS, waitedMs: Date.now() - t0 };
+		if (o && o !== o0) {
+			/* 导航已切到新一段：给 DOM 一点初始时间，避免紧接 closeFloatLayers 撞到导航中途 */
+			await sleep(800);
+			return { got: true, from: o0, to: o, age: 0, waitedMs: Date.now() - t0, reloaded: true };
+		}
 	}
-	return { got: false, from: o0, waitedMs: Date.now() - t0, reason: "预算内未观测到重载（本次 app 稳定）" };
+	return { got: false, from: o0, waitedMs: Date.now() - t0, reason: "reload 后预算内未读到新 origin" };
 }
 
 /* ── 计数对账（项目既有机制）── */
